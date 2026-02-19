@@ -1,4 +1,4 @@
-export type Language = 'en' | 'is' | 'no' | 'nl';
+export type Language = 'en' | 'no';
 
 type TranslationValue = string | TranslationTree;
 interface TranslationTree {
@@ -10,26 +10,14 @@ const DEFAULT_LANGUAGE: Language = 'en';
 export const translations: Record<Language, TranslationTree> = {
   en: {
     app: {
-      title: 'Vegvisr App Starter',
+      title: 'Agent Builder',
       badge: 'Early access'
-    }
-  },
-  is: {
-    app: {
-      title: 'Vegvisr App Starter',
-      badge: 'Snemma adgangur'
     }
   },
   no: {
     app: {
-      title: 'Vegvisr App Starter',
+      title: 'Agent Builder',
       badge: 'Tidlig tilgang'
-    }
-  },
-  nl: {
-    app: {
-      title: 'Vegvisr App Starter',
-      badge: 'Vroege toegang'
     }
   }
 };

@@ -212,7 +212,7 @@ function App() {
     <LanguageContext.Provider value={contextValue}>
       <div className="min-h-screen bg-slate-950 text-white">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.25),_transparent_55%)]" />
-        <div className="relative mx-auto flex min-h-screen max-w-5xl flex-col px-6 py-12">
+        <div className="relative flex min-h-screen flex-col px-8 py-6">
           <header className="flex flex-wrap items-center justify-between gap-4">
             <img
               src={appLogo}
