@@ -15,6 +15,7 @@ type StreamPhase =
   | 'planning'
   | 'executing_tools'
   | 'generating'
+  | 'building'
   | 'saving'
   | 'complete'
   | 'error';
@@ -36,6 +37,7 @@ const PHASE_LABELS: Record<StreamPhase, string> = {
   planning: 'Agent is planning...',
   executing_tools: 'Executing tools...',
   generating: 'Generating content...',
+  building: 'Building HTML page...',
   saving: 'Saving to graph...',
   complete: 'Done',
   error: 'Error',
@@ -119,6 +121,7 @@ export default function AgentExecutor({ userId, contractId, contractName, graphI
         success: true,
         turns: 0,
         executionLog: [{
+          type: 'build_html',
           phase: 'complete',
           detail: data.message,
           viewUrl: data.viewUrl,

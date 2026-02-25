@@ -6,6 +6,7 @@ import ContractCanvas, { createNewNode } from './ContractCanvas';
 import Sidebar from './Sidebar';
 import StatusBar from './StatusBar';
 import GraphSelector from './GraphSelector';
+import AgentChat from './AgentChat';
 import { contractToReactFlow, DEFAULT_CONTRACT } from '../lib/contractToGraph';
 import type { AgentContract } from '../types/contract';
 
@@ -20,7 +21,10 @@ interface Props {
 const CONTRACT_API = 'https://knowledge.vegvisr.org/getContract';
 const AGENT_API = 'https://agent.vegvisr.org';
 
+type View = 'builder' | 'chat';
+
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
+  const [view, setView] = useState<View>('builder');
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [contractName, setContractName] = useState('Dark Glass');
   const [contractId, setContractId] = useState('contract_dark_glass');
@@ -193,6 +197,21 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           </select>
         </div>
         <div className="flex items-center gap-3">
+          {/* View toggle */}
+          <div className="flex rounded-md border border-white/10 overflow-hidden">
+            <button
+              onClick={() => setView('builder')}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'builder' ? 'bg-purple-600/30 text-purple-300' : 'text-gray-400 hover:bg-white/5'}`}
+            >
+              Builder
+            </button>
+            <button
+              onClick={() => setView('chat')}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'chat' ? 'bg-sky-600/30 text-sky-300' : 'text-gray-400 hover:bg-white/5'}`}
+            >
+              Chat
+            </button>
+          </div>
           <button className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
             Preview
           </button>
@@ -215,47 +234,51 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       {/* Ecosystem Navigation */}
       <EcosystemNav className="border-b border-white/10 bg-slate-950/90" />
 
-      {/* Main Content: Canvas + Sidebar */}
-      <div className="flex flex-1 min-h-0">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-sm text-gray-500">Loading contract...</div>
-          </div>
-        ) : (
-          <ReactFlowProvider>
-            <ContractCanvas
-              initialNodes={graphState.nodes}
-              initialEdges={graphState.edges}
-              onNodeSelect={handleNodeSelect}
-              onNodesChange={handleNodesChange}
-              onEdgesChange={handleEdgesChange}
-              onNodeDragStop={handleNodeDragStop}
-              onDropNode={handleDropNode}
-              onDeleteNodes={handleDeleteNodes}
+      {/* Main Content */}
+      {view === 'chat' ? (
+        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} />
+      ) : (
+        <>
+          <div className="flex flex-1 min-h-0">
+            {loading ? (
+              <div className="flex-1 flex items-center justify-center">
+                <div className="text-sm text-gray-500">Loading contract...</div>
+              </div>
+            ) : (
+              <ReactFlowProvider>
+                <ContractCanvas
+                  initialNodes={graphState.nodes}
+                  initialEdges={graphState.edges}
+                  onNodeSelect={handleNodeSelect}
+                  onNodesChange={handleNodesChange}
+                  onEdgesChange={handleEdgesChange}
+                  onNodeDragStop={handleNodeDragStop}
+                  onDropNode={handleDropNode}
+                  onDeleteNodes={handleDeleteNodes}
+                />
+              </ReactFlowProvider>
+            )}
+            <Sidebar
+              selectedNode={selectedNode}
+              nodes={graphState.nodes}
+              edges={graphState.edges}
+              userId={userId}
+              contractId={contractId}
+              contractName={contractName}
+              graphId={graphId}
+              onUpdateNode={handleUpdateNode}
+              onAddNode={handleAddNode}
+              onDeleteNode={handleDeleteNode}
             />
-          </ReactFlowProvider>
-        )}
-        <Sidebar
-          selectedNode={selectedNode}
-          nodes={graphState.nodes}
-          edges={graphState.edges}
-          userId={userId}
-          contractId={contractId}
-          contractName={contractName}
-          graphId={graphId}
-          onUpdateNode={handleUpdateNode}
-          onAddNode={handleAddNode}
-          onDeleteNode={handleDeleteNode}
-        />
-      </div>
-
-      {/* Status Bar */}
-      <StatusBar
-        graphId={graphId}
-        nodeCount={nodesRef.current.length}
-        edgeCount={edgesRef.current.length}
-        contractName={contractName}
-      />
+          </div>
+          <StatusBar
+            graphId={graphId}
+            nodeCount={nodesRef.current.length}
+            edgeCount={edgesRef.current.length}
+            contractName={contractName}
+          />
+        </>
+      )}
     </div>
   );
 }

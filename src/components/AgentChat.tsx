@@ -1,0 +1,363 @@
+import { useState, useRef, useEffect, useCallback } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeSanitize from 'rehype-sanitize';
+
+const AGENT_API = 'https://agent.vegvisr.org';
+const KG_API = 'https://knowledge.vegvisr.org';
+
+interface Props {
+  userId: string;
+  graphId: string;
+  onGraphChange: (graphId: string) => void;
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface ToolCall {
+  id: string;
+  tool: string;
+  input: unknown;
+  status: 'running' | 'success' | 'error';
+  summary?: string;
+  result?: unknown;
+}
+
+interface StreamEvent {
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'done' | 'error';
+  data: Record<string, unknown>;
+}
+
+interface AssistantState {
+  text: string;
+  toolCalls: ToolCall[];
+  thinking: boolean;
+  error?: string;
+}
+
+interface GraphInfo {
+  id: string;
+  metadata_title?: string;
+}
+
+// ---------- Tool Call Card ----------
+
+function ToolCallCard({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+  let inputStr = '';
+  try { inputStr = JSON.stringify(tc.input, null, 2); } catch { inputStr = String(tc.input); }
+  let resultStr = '';
+  if (tc.result) {
+    try { resultStr = JSON.stringify(tc.result, null, 2).slice(0, 1000); } catch { resultStr = String(tc.result); }
+  }
+
+  return (
+    <div className="my-2 border border-white/10 rounded-lg overflow-hidden text-[13px]">
+      <button
+        type="button"
+        onClick={() => setExpanded(p => !p)}
+        className="w-full flex items-center gap-2 px-3 py-2 bg-white/[0.04] hover:bg-white/[0.07] cursor-pointer select-none text-left"
+      >
+        <span className="text-sm">&#x1f527;</span>
+        <span className="font-semibold text-white">{tc.tool}</span>
+        <span className={`ml-auto text-xs ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {tc.status === 'running' ? 'Running...' : tc.status === 'success' ? (tc.summary || 'Done') : 'Failed'}
+        </span>
+        <span className={`text-[10px] text-white/50 transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
+      </button>
+      {expanded && (
+        <div className="px-3 py-2 border-t border-white/10 bg-black/15">
+          <pre className="whitespace-pre-wrap break-all text-white/60 font-mono text-xs m-0">{inputStr}</pre>
+          {resultStr && (
+            <>
+              <hr className="border-none border-t border-white/10 my-1.5" />
+              <pre className="whitespace-pre-wrap break-all text-white/60 font-mono text-xs m-0">{resultStr}</pre>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------- Thinking Indicator ----------
+
+function ThinkingIndicator() {
+  return (
+    <div className="flex gap-1 py-1">
+      <span className="w-2 h-2 rounded-full bg-sky-400 opacity-40 animate-[pulse_1.4s_ease-in-out_infinite]" />
+      <span className="w-2 h-2 rounded-full bg-sky-400 opacity-40 animate-[pulse_1.4s_ease-in-out_infinite_0.2s]" />
+      <span className="w-2 h-2 rounded-full bg-sky-400 opacity-40 animate-[pulse_1.4s_ease-in-out_infinite_0.4s]" />
+    </div>
+  );
+}
+
+// ---------- Main Component ----------
+
+export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [current, setCurrent] = useState<AssistantState | null>(null);
+  const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load graph list
+  useEffect(() => {
+    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=50`)
+      .then(r => r.json())
+      .then(data => { if (data.results) setGraphs(data.results); })
+      .catch(() => {});
+  }, []);
+
+  // Auto-scroll
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, current]);
+
+  // Auto-resize textarea
+  const handleInput = useCallback((value: string) => {
+    setInput(value);
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
+    }
+  }, []);
+
+  // Parse SSE stream
+  const parseSSE = useCallback(async (
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    onEvent: (ev: StreamEvent) => void,
+  ) => {
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let currentEvent = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEvent = line.slice(7);
+        } else if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            onEvent({ type: currentEvent as StreamEvent['type'], data });
+          } catch {
+            // skip malformed JSON
+          }
+        }
+      }
+    }
+  }, []);
+
+  const sendMessage = useCallback(async () => {
+    const text = input.trim();
+    if (!text || streaming) return;
+
+    setInput('');
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setStreaming(true);
+
+    const userMsg: ChatMessage = { role: 'user', content: text };
+    const updatedMessages = [...messages, userMsg];
+    setMessages(updatedMessages);
+
+    const state: AssistantState = { text: '', toolCalls: [], thinking: false };
+    setCurrent(state);
+
+    try {
+      const res = await fetch(`${AGENT_API}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          messages: updatedMessages,
+          graphId: graphId || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        let errMsg = `Request failed: ${res.status}`;
+        try { const err = await res.json(); errMsg = err.error || errMsg; } catch { /* use default */ }
+        throw new Error(errMsg);
+      }
+
+      const reader = res.body!.getReader();
+      let assistantText = '';
+
+      await parseSSE(reader, (ev) => {
+        setCurrent(prev => {
+          if (!prev) return prev;
+          const next = { ...prev, toolCalls: [...prev.toolCalls] };
+
+          switch (ev.type) {
+            case 'thinking':
+              next.thinking = true;
+              break;
+
+            case 'tool_call':
+              next.thinking = false;
+              next.toolCalls.push({
+                id: `tc_${Date.now()}_${next.toolCalls.length}`,
+                tool: ev.data.tool as string,
+                input: ev.data.input,
+                status: 'running',
+              });
+              break;
+
+            case 'tool_result': {
+              const tool = ev.data.tool as string;
+              for (let i = next.toolCalls.length - 1; i >= 0; i--) {
+                if (next.toolCalls[i].tool === tool && next.toolCalls[i].status === 'running') {
+                  next.toolCalls[i] = {
+                    ...next.toolCalls[i],
+                    status: ev.data.success ? 'success' : 'error',
+                    summary: (ev.data.summary as string) || undefined,
+                    result: ev.data,
+                  };
+                  break;
+                }
+              }
+              break;
+            }
+
+            case 'text':
+              next.thinking = false;
+              assistantText += ev.data.content as string;
+              next.text = assistantText;
+              break;
+
+            case 'error':
+              next.thinking = false;
+              next.error = ev.data.error as string;
+              break;
+          }
+
+          return next;
+        });
+      });
+
+      // Finalize: move current into messages
+      if (assistantText) {
+        setMessages(prev => [...prev, { role: 'assistant', content: assistantText }]);
+      }
+    } catch (err) {
+      setCurrent(prev => prev ? { ...prev, thinking: false, error: err instanceof Error ? err.message : String(err) } : prev);
+    }
+
+    setCurrent(null);
+    setStreaming(false);
+  }, [input, streaming, messages, userId, graphId, parseSSE]);
+
+  const hasMessages = messages.length > 0 || current !== null;
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      {/* Graph selector bar */}
+      <div className="flex items-center justify-center px-4 py-2 border-b border-white/10 bg-slate-950/80">
+        <select
+          value={graphId}
+          onChange={e => onGraphChange(e.target.value)}
+          className="px-3 py-1.5 rounded-full border border-white/10 bg-white/[0.04] text-white text-[13px] max-w-[300px]"
+        >
+          <option value="">No graph context</option>
+          {graphs.map(g => (
+            <option key={g.id} value={g.id} className="bg-slate-900 text-white">
+              {(g.metadata_title || g.id).slice(0, 50)}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-4 py-5 flex flex-col gap-4">
+        {!hasMessages && (
+          <div className="text-center py-16 text-white/60">
+            <h2 className="text-white text-2xl font-semibold mb-3">Agent Chat</h2>
+            <p className="text-base leading-relaxed max-w-[500px] mx-auto">
+              I can help you create knowledge graphs, build HTML pages, modify content, and manage your apps. What would you like to do?
+            </p>
+          </div>
+        )}
+
+        {messages.map((msg, i) => (
+          <div
+            key={i}
+            className={`max-w-[80%] px-4 py-3 rounded-[14px] text-[0.95rem] leading-relaxed break-words ${
+              msg.role === 'user'
+                ? 'self-end bg-sky-400/[0.16] border border-sky-400/30 text-white'
+                : 'self-start bg-white/[0.06] border border-white/[0.12] text-white'
+            }`}
+          >
+            {msg.role === 'assistant' ? (
+              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                  {msg.content}
+                </ReactMarkdown>
+              </div>
+            ) : (
+              msg.content
+            )}
+          </div>
+        ))}
+
+        {/* Current streaming assistant response */}
+        {current && (
+          <div className="self-start max-w-[80%] px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
+            {current.thinking && <ThinkingIndicator />}
+            {current.toolCalls.map(tc => (
+              <ToolCallCard key={tc.id} tc={tc} />
+            ))}
+            {current.text && (
+              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                  {current.text}
+                </ReactMarkdown>
+              </div>
+            )}
+            {current.error && (
+              <p className="text-rose-400">Error: {current.error}</p>
+            )}
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input area */}
+      <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80 flex-shrink-0">
+        <div className="flex gap-2 max-w-[900px] mx-auto items-end">
+          <textarea
+            ref={textareaRef}
+            value={input}
+            onChange={e => handleInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+            }}
+            placeholder="Type your message..."
+            rows={1}
+            className="flex-1 px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
+          />
+          <button
+            type="button"
+            onClick={sendMessage}
+            disabled={streaming || !input.trim()}
+            className="px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {streaming ? '...' : 'Send'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

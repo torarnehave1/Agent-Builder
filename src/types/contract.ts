@@ -86,6 +86,9 @@ export interface ExecutionLogEntry {
   error?: string;
   response?: string;
   stop_reason?: string;
+  phase?: string;
+  detail?: string;
+  viewUrl?: string;
 }
 
 export interface AgentExecutionResult {
