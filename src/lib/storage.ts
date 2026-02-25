@@ -4,7 +4,7 @@ const LANGUAGE_KEY = 'vegvisr_language';
 
 export const getStoredLanguage = (): Language => {
   const stored = localStorage.getItem(LANGUAGE_KEY);
-  if (stored === 'is' || stored === 'en' || stored === 'no' || stored === 'nl') {
+  if (stored === 'en' || stored === 'no') {
     return stored;
   }
   return 'en';

@@ -5,6 +5,7 @@ import { LanguageContext } from './lib/LanguageContext';
 import { readStoredUser, type AuthUser } from './lib/auth';
 import { getStoredLanguage, setStoredLanguage } from './lib/storage';
 import { useTranslation } from './lib/useTranslation';
+import AgentBuilder from './components/AgentBuilder';
 
 const MAGIC_BASE = 'https://cookie.vegvisr.org';
 const DASHBOARD_BASE = 'https://dashboard.vegvisr.org';
@@ -210,29 +211,35 @@ function App() {
 
   return (
     <LanguageContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-slate-950 text-white">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.25),_transparent_55%)]" />
-        <div className="relative flex min-h-screen flex-col px-8 py-6">
-          <header className="flex flex-wrap items-center justify-between gap-4">
-            <img
-              src={appLogo}
-              alt={t('app.title')}
-              className="h-12 w-auto"
-            />
-            <div className="flex items-center gap-3">
-              <LanguageSelector value={language} onChange={setLanguage} />
-              <AuthBar
-                userEmail={authStatus === 'authed' ? authUser?.email : undefined}
-                badgeLabel={t('app.badge')}
-                signInLabel="Sign in"
-                onSignIn={() => setLoginOpen((prev) => !prev)}
-                logoutLabel="Log out"
-                onLogout={handleLogout}
-              />
-            </div>
-          </header>
+      <div className={`bg-slate-950 text-white ${authStatus === 'authed' ? '' : 'min-h-screen'}`}>
+        {authStatus !== 'authed' && (
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.25),_transparent_55%)]" />
+        )}
+        <div className={`relative flex flex-col ${authStatus === 'authed' ? '' : 'min-h-screen px-8 py-6'}`}>
+          {authStatus !== 'authed' && (
+            <>
+              <header className="flex flex-wrap items-center justify-between gap-4">
+                <img
+                  src={appLogo}
+                  alt={t('app.title')}
+                  className="h-12 w-auto"
+                />
+                <div className="flex items-center gap-3">
+                  <LanguageSelector value={language} onChange={setLanguage} />
+                  <AuthBar
+                    userEmail={undefined}
+                    badgeLabel={t('app.badge')}
+                    signInLabel="Sign in"
+                    onSignIn={() => setLoginOpen((prev) => !prev)}
+                    logoutLabel="Log out"
+                    onLogout={handleLogout}
+                  />
+                </div>
+              </header>
 
-          <EcosystemNav className="mt-4" />
+              <EcosystemNav className="mt-4" />
+            </>
+          )}
 
           {authStatus === 'anonymous' && loginOpen && (
             <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-6 py-4 text-sm text-white/80">
@@ -270,32 +277,24 @@ function App() {
             </div>
           )}
 
-          {authStatus === 'anonymous' && (
+          {authStatus === 'anonymous' && !loginOpen && (
             <div className="mt-10 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-6 py-4 text-sm text-rose-100">
-              You are not signed in. Click “Sign in” to continue.
+              You are not signed in. Click "Sign in" to continue.
             </div>
           )}
-
-          <main className="mt-16">
-            <section className="rounded-3xl border border-white/10 bg-white/5 p-8">
-              <h1 className="text-3xl font-semibold text-white">{t('app.title')}</h1>
-              <p className="mt-3 text-sm text-white/70">
-                Starter shell. Replace this section with your app content.
-              </p>
-              <div className="mt-6 rounded-2xl border border-white/10 bg-slate-900/50 px-6 py-5 text-sm text-white/70">
-                <div className="text-xs font-semibold uppercase tracking-[0.3em] text-white/50">
-                  Starter Notes
-                </div>
-                <ul className="mt-3 list-disc space-y-2 pl-5">
-                  <li>Auth + magic link flow is wired.</li>
-                  <li>Language selector and ecosystem nav are ready.</li>
-                  <li>Replace logo + icon assets for your app.</li>
-                </ul>
-              </div>
-            </section>
-          </main>
         </div>
       </div>
+
+      {/* Agent Builder — full screen when authenticated */}
+      {authStatus === 'authed' && authUser && (
+        <AgentBuilder
+          userId={authUser.userId}
+          userEmail={authUser.email}
+          language={language}
+          onLanguageChange={setLanguage}
+          onLogout={handleLogout}
+        />
+      )}
     </LanguageContext.Provider>
   );
 }
