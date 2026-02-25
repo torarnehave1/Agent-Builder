@@ -12,11 +12,6 @@ interface Props {
   onGraphChange: (graphId: string) => void;
 }
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 interface ToolCall {
   id: string;
   tool: string;
@@ -24,6 +19,12 @@ interface ToolCall {
   status: 'running' | 'success' | 'error';
   summary?: string;
   result?: unknown;
+}
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  toolCalls?: ToolCall[];
 }
 
 interface StreamEvent {
@@ -103,6 +104,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
   const [streaming, setStreaming] = useState(false);
   const [current, setCurrent] = useState<AssistantState | null>(null);
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [showLog, setShowLog] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -127,6 +129,61 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       textareaRef.current.style.height = Math.min(textareaRef.current.scrollHeight, 200) + 'px';
     }
   }, []);
+
+  // Build copyable log from messages
+  const buildLog = useCallback(() => {
+    const lines: string[] = [];
+    lines.push(`=== Agent Chat Log ===`);
+    lines.push(`Time: ${new Date().toISOString()}`);
+    lines.push(`Graph: ${graphId || '(none)'}`);
+    lines.push(`User: ${userId}`);
+    lines.push('');
+
+    for (const msg of messages) {
+      lines.push(`--- ${msg.role.toUpperCase()} ---`);
+      if (msg.toolCalls && msg.toolCalls.length > 0) {
+        for (const tc of msg.toolCalls) {
+          lines.push(`  [TOOL] ${tc.tool} (${tc.status})`);
+          try { lines.push(`    Input: ${JSON.stringify(tc.input)}`); } catch { /* skip */ }
+          if (tc.summary) lines.push(`    Summary: ${tc.summary}`);
+          if (tc.result) {
+            try { lines.push(`    Result: ${JSON.stringify(tc.result).slice(0, 500)}`); } catch { /* skip */ }
+          }
+        }
+      }
+      lines.push(msg.content);
+      lines.push('');
+    }
+
+    // Include current streaming state if active
+    if (current) {
+      lines.push(`--- ASSISTANT (streaming) ---`);
+      if (current.toolCalls.length > 0) {
+        for (const tc of current.toolCalls) {
+          lines.push(`  [TOOL] ${tc.tool} (${tc.status})`);
+          try { lines.push(`    Input: ${JSON.stringify(tc.input)}`); } catch { /* skip */ }
+          if (tc.summary) lines.push(`    Summary: ${tc.summary}`);
+          if (tc.result) {
+            try { lines.push(`    Result: ${JSON.stringify(tc.result).slice(0, 500)}`); } catch { /* skip */ }
+          }
+        }
+      }
+      if (current.text) lines.push(current.text);
+      if (current.error) lines.push(`  [ERROR] ${current.error}`);
+    }
+
+    return lines.join('\n');
+  }, [messages, current, graphId, userId]);
+
+  const copyLog = useCallback(() => {
+    const log = buildLog();
+    navigator.clipboard.writeText(log).then(() => {
+      alert('Chat log copied to clipboard!');
+    }).catch(() => {
+      // Fallback: show in a prompt
+      prompt('Copy this log:', log);
+    });
+  }, [buildLog]);
 
   // Parse SSE stream
   const parseSSE = useCallback(async (
@@ -174,6 +231,8 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
     const state: AssistantState = { text: '', toolCalls: [], thinking: false };
     setCurrent(state);
+
+    let finalToolCalls: ToolCall[] = [];
 
     try {
       const res = await fetch(`${AGENT_API}/chat`, {
@@ -243,28 +302,39 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
               break;
           }
 
+          // Keep a copy of tool calls for finalization
+          finalToolCalls = next.toolCalls;
           return next;
         });
       });
 
-      // Finalize: move current into messages
-      if (assistantText) {
-        setMessages(prev => [...prev, { role: 'assistant', content: assistantText }]);
-      }
+      // Finalize: move current into messages — preserve tool calls AND text
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: assistantText,
+        toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+      }]);
     } catch (err) {
       setCurrent(prev => prev ? { ...prev, thinking: false, error: err instanceof Error ? err.message : String(err) } : prev);
+      // Still save what we have
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: current?.text || `Error: ${err instanceof Error ? err.message : String(err)}`,
+        toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+      }]);
     }
 
     setCurrent(null);
     setStreaming(false);
-  }, [input, streaming, messages, userId, graphId, parseSSE]);
+  }, [input, streaming, messages, userId, graphId, parseSSE, current]);
 
   const hasMessages = messages.length > 0 || current !== null;
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Graph selector bar */}
-      <div className="flex items-center justify-center px-4 py-2 border-b border-white/10 bg-slate-950/80">
+      {/* Graph selector bar + Copy Log */}
+      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-slate-950/80">
+        <div className="flex-1" />
         <select
           value={graphId}
           onChange={e => onGraphChange(e.target.value)}
@@ -277,7 +347,38 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             </option>
           ))}
         </select>
+        <div className="flex-1 flex justify-end gap-2">
+          {hasMessages && (
+            <>
+              <button
+                type="button"
+                onClick={copyLog}
+                className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+                title="Copy chat log to clipboard"
+              >
+                Copy Log
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowLog(p => !p)}
+                className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+                title="Toggle raw log view"
+              >
+                {showLog ? 'Hide Log' : 'View Log'}
+              </button>
+            </>
+          )}
+        </div>
       </div>
+
+      {/* Raw Log Panel */}
+      {showLog && (
+        <div className="max-h-[300px] overflow-y-auto border-b border-white/10 bg-black/40 px-4 py-3">
+          <pre className="whitespace-pre-wrap break-all text-white/50 font-mono text-xs m-0">
+            {buildLog()}
+          </pre>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-5 flex flex-col gap-4">
@@ -299,10 +400,18 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
                 : 'self-start bg-white/[0.06] border border-white/[0.12] text-white'
             }`}
           >
+            {/* Show tool calls for completed assistant messages */}
+            {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
+              <div className="mb-2">
+                {msg.toolCalls.map(tc => (
+                  <ToolCallCard key={tc.id} tc={tc} />
+                ))}
+              </div>
+            )}
             {msg.role === 'assistant' ? (
               <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
-                  {msg.content}
+                  {msg.content || '_(completed with tool calls only)_'}
                 </ReactMarkdown>
               </div>
             ) : (
