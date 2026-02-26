@@ -59,12 +59,20 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const maxTurns = options.maxTurns || 8
   const model = options.model || 'claude-haiku-4-5-20251001'
   let turn = 0
+  const startTime = Date.now()
+
+  const log = (msg) => {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+    console.log(`[agent-loop +${elapsed}s] ${msg}`)
+  }
 
   const { allTools, operationMap } = await loadAllTools(env)
+  log(`started | model=${model} maxTurns=${maxTurns} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
 
   try {
     while (turn < maxTurns) {
       turn++
+      log(`turn ${turn}/${maxTurns} — calling Anthropic`)
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
       const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
@@ -82,13 +90,18 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       })
 
       const data = await response.json()
+      log(`turn ${turn} response: status=${response.status} stop_reason=${data.stop_reason} content_blocks=${(data.content||[]).length}`)
+
       if (!response.ok) {
+        log(`ERROR: Anthropic API error — ${JSON.stringify(data.error || 'unknown')}`)
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Anthropic API error' })}\n\n`))
         break
       }
 
       if (data.stop_reason === 'end_turn') {
         const textBlocks = (data.content || []).filter(c => c.type === 'text')
+        const textLen = textBlocks.reduce((sum, b) => sum + b.text.length, 0)
+        log(`end_turn — ${textBlocks.length} text blocks (${textLen} chars)`)
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
@@ -100,6 +113,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const toolUses = (data.content || []).filter(c => c.type === 'tool_use')
         const textBlocks = (data.content || []).filter(c => c.type === 'text')
 
+        log(`tool_use — ${toolUses.length} tools: [${toolUses.map(t => t.name).join(', ')}]`)
+
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
@@ -108,14 +123,19 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const otherTools = toolUses.filter(t => t.name !== 'create_graph')
 
         const executeAndStream = async (toolUse) => {
+          const toolStart = Date.now()
+          log(`executing ${toolUse.name} (input: ${JSON.stringify(toolUse.input).slice(0, 200)})`)
           writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolUse.name, input: toolUse.input })}\n\n`))
           try {
             const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
             const summary = result.message || `${toolUse.name} completed`
+            const resultLen = JSON.stringify(result).length
+            log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: true, summary })}\n\n`))
             const resultStr = truncateResult(result)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: resultStr }
           } catch (error) {
+            log(`${toolUse.name} FAILED (${((Date.now() - toolStart) / 1000).toFixed(1)}s): ${error.message}`)
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, error: error.message })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
           }
@@ -130,6 +150,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           { role: 'user', content: toolResults },
         )
       } else if (data.stop_reason === 'max_tokens') {
+        log(`max_tokens hit on turn ${turn} — sending continuation`)
         const textBlocks = (data.content || []).filter(c => c.type === 'text')
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
@@ -139,17 +160,21 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           { role: 'user', content: 'Continue. Do not repeat what you already said.' },
         )
       } else {
+        log(`unexpected stop_reason: ${data.stop_reason}`)
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: 'Unexpected stop: ' + data.stop_reason })}\n\n`))
         break
       }
     }
 
     if (turn >= maxTurns) {
+      log(`max turns reached (${maxTurns})`)
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
+    log(`FATAL ERROR: ${err.message}\n${err.stack}`)
     writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
   } finally {
+    log(`stream closed — ${turn} turns, ${((Date.now() - startTime) / 1000).toFixed(1)}s total`)
     writer.close()
   }
 }

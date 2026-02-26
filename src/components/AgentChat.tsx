@@ -378,6 +378,10 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     const decoder = new TextDecoder();
     let buffer = '';
     let currentEvent = '';
+    let eventCount = 0;
+    let lastEventType = '';
+    let gotDone = false;
+    const sseStart = Date.now();
 
     while (true) {
       const { done, value } = await reader.read();
@@ -393,12 +397,21 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         } else if (line.startsWith('data: ')) {
           try {
             const data = JSON.parse(line.slice(6));
+            eventCount++;
+            lastEventType = currentEvent;
+            if (currentEvent === 'done') gotDone = true;
             onEvent({ type: currentEvent as StreamEvent['type'], data });
           } catch {
-            // skip malformed JSON
+            console.warn('[AgentChat SSE] malformed JSON:', line.slice(6).slice(0, 200));
           }
         }
       }
+    }
+
+    const elapsed = ((Date.now() - sseStart) / 1000).toFixed(1);
+    console.log(`[AgentChat SSE] stream ended — ${eventCount} events, ${elapsed}s, lastEvent=${lastEventType}, gotDone=${gotDone}`);
+    if (!gotDone) {
+      console.warn('[AgentChat SSE] stream ended WITHOUT done event — possible timeout or error');
     }
   }, []);
 
