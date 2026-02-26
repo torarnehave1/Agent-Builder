@@ -7,6 +7,20 @@ import remarkGfm from 'remark-gfm';
 
 const AGENT_API = 'https://agent.vegvisr.org';
 const KG_API = 'https://knowledge.vegvisr.org';
+const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
+
+function historyFetch(path: string, userId: string, options: RequestInit = {}) {
+  const headers = new Headers(options.headers as HeadersInit || {});
+  headers.set('x-user-id', userId);
+  headers.set('Content-Type', 'application/json');
+  return fetch(`${CHAT_HISTORY_API}${path}`, { ...options, headers });
+}
+
+interface SessionInfo {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
 
 interface Props {
   userId: string;
@@ -92,7 +106,7 @@ function extractText(children: React.ReactNode): string {
   if (typeof children === 'string') return children;
   if (Array.isArray(children)) return children.map(extractText).join('');
   if (children && typeof children === 'object' && 'props' in children) {
-    return extractText((children as React.ReactElement).props.children);
+    return extractText((children as React.ReactElement<{ children?: React.ReactNode }>).props.children);
   }
   return String(children || '');
 }
@@ -215,8 +229,15 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
   const [current, setCurrent] = useState<AssistantState | null>(null);
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
   const [showLog, setShowLog] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const sessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Keep ref in sync for use inside callbacks
+  useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   // Load graph list
   useEffect(() => {
@@ -225,6 +246,60 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       .then(data => { if (data.results) setGraphs(data.results); })
       .catch(() => {});
   }, []);
+
+  // Load agent chat sessions
+  useEffect(() => {
+    if (!userId) return;
+    historyFetch('/sessions', userId)
+      .then(r => r.json())
+      .then(data => {
+        const agentSessions = (data.sessions || [])
+          .filter((s: { provider?: string }) => s.provider === 'agent')
+          .map((s: { id: string; title?: string; updated_at?: string }) => ({
+            id: s.id,
+            title: s.title || 'Untitled',
+            updatedAt: s.updated_at || '',
+          }));
+        setSessions(agentSessions);
+      })
+      .catch(() => {});
+  }, [userId]);
+
+  // Load a saved session's messages
+  const loadSession = useCallback(async (sid: string) => {
+    try {
+      const res = await historyFetch(`/messages?sessionId=${sid}&decrypt=1&limit=200`, userId);
+      const data = await res.json();
+      const loaded: ChatMessage[] = (data.messages || [])
+        .reverse()
+        .map((m: { role: string; content?: string; proffData?: { toolCalls?: ToolCall[] } }) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content || '',
+          toolCalls: m.proffData?.toolCalls || undefined,
+        }));
+      setMessages(loaded);
+      setSessionId(sid);
+      setSessionsOpen(false);
+    } catch { /* ignore */ }
+  }, [userId]);
+
+  // Delete a session
+  const deleteSession = useCallback(async (sid: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await historyFetch(`/sessions/${sid}`, userId, { method: 'DELETE' });
+      setSessions(prev => prev.filter(s => s.id !== sid));
+      if (sessionIdRef.current === sid) { setSessionId(null); setMessages([]); }
+    } catch { /* ignore */ }
+  }, [userId]);
+
+  // Close sessions dropdown on outside click
+  useEffect(() => {
+    if (!sessionsOpen) return;
+    const close = () => setSessionsOpen(false);
+    const timer = setTimeout(() => document.addEventListener('click', close), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('click', close); };
+  }, [sessionsOpen]);
 
   // Auto-scroll
   useEffect(() => {
@@ -335,9 +410,38 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setStreaming(true);
 
+    // Lazy session creation
+    let activeSession = sessionIdRef.current;
+    if (!activeSession) {
+      try {
+        const sRes = await historyFetch('/sessions', userId, {
+          method: 'POST',
+          body: JSON.stringify({
+            graphId: graphId || null,
+            provider: 'agent',
+            title: text.slice(0, 60),
+          }),
+        });
+        const sData = await sRes.json();
+        activeSession = sData.session?.id || null;
+        if (activeSession) {
+          setSessionId(activeSession);
+          setSessions(prev => [{ id: activeSession!, title: text.slice(0, 60), updatedAt: new Date().toISOString() }, ...prev]);
+        }
+      } catch { /* continue without persistence */ }
+    }
+
     const userMsg: ChatMessage = { role: 'user', content: text };
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
+
+    // Persist user message
+    if (activeSession) {
+      historyFetch('/messages', userId, {
+        method: 'POST',
+        body: JSON.stringify({ sessionId: activeSession, role: 'user', content: text }),
+      }).catch(() => {});
+    }
 
     const state: AssistantState = { text: '', toolCalls: [], thinking: false };
     setCurrent(state);
@@ -436,6 +540,20 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         content: assistantText,
         toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
       }]);
+
+      // Persist assistant message with tool metadata
+      if (activeSession) {
+        historyFetch('/messages', userId, {
+          method: 'POST',
+          body: JSON.stringify({
+            sessionId: activeSession,
+            role: 'assistant',
+            content: assistantText,
+            provider: 'agent',
+            proffData: finalToolCalls.length > 0 ? { toolCalls: finalToolCalls } : null,
+          }),
+        }).catch(() => {});
+      }
     } catch (err) {
       setCurrent(prev => prev ? { ...prev, thinking: false, error: err instanceof Error ? err.message : String(err) } : prev);
       // Still save what we have
@@ -454,9 +572,54 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
-      {/* Graph selector bar + Copy Log */}
+      {/* Graph selector bar + Sessions + Copy Log */}
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-slate-950/80">
-        <div className="flex-1" />
+        <div className="flex-1 flex items-center gap-2">
+          {/* Session picker */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setSessionsOpen(p => !p)}
+              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+            >
+              Sessions ({sessions.length})
+            </button>
+            {sessionsOpen && (
+              <div className="absolute top-full mt-1 left-0 w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => { setMessages([]); setSessionId(null); setSessionsOpen(false); }}
+                  className="w-full px-3 py-2 text-left text-xs text-sky-400 hover:bg-white/[0.06] border-b border-white/10"
+                >
+                  + New Session
+                </button>
+                {sessions.length === 0 && (
+                  <div className="px-3 py-3 text-white/30 text-xs">No saved sessions</div>
+                )}
+                {sessions.map(s => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => loadSession(s.id)}
+                    className={`w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] flex items-center gap-2 ${s.id === sessionId ? 'text-sky-400 bg-sky-400/[0.06]' : 'text-white/60'}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="truncate">{s.title}</div>
+                      {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
+                    </div>
+                    <span
+                      onClick={(e) => deleteSession(s.id, e)}
+                      className="flex-shrink-0 text-white/20 hover:text-rose-400 text-sm px-1 cursor-pointer"
+                      title="Delete session"
+                    >
+                      &times;
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
         <select
           value={graphId}
           onChange={e => onGraphChange(e.target.value)}
