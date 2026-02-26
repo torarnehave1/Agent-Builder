@@ -247,7 +247,11 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
       if (!res.ok) {
         let errMsg = `Request failed: ${res.status}`;
-        try { const err = await res.json(); errMsg = err.error || errMsg; } catch { /* use default */ }
+        try {
+          const err = await res.json();
+          const e = err.error;
+          errMsg = typeof e === 'string' ? e : (e && typeof e === 'object' ? JSON.stringify(e) : errMsg);
+        } catch { /* use default */ }
         throw new Error(errMsg);
       }
 
@@ -292,13 +296,21 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
             case 'text':
               next.thinking = false;
-              assistantText += ev.data.content as string;
+              {
+                const content = ev.data.content;
+                assistantText += typeof content === 'string' ? content : JSON.stringify(content);
+              }
               next.text = assistantText;
               break;
 
             case 'error':
               next.thinking = false;
-              next.error = ev.data.error as string;
+              {
+                const errVal = ev.data.error;
+                next.error = typeof errVal === 'string' ? errVal
+                  : (errVal && typeof errVal === 'object' && 'message' in errVal) ? String((errVal as { message: unknown }).message)
+                  : JSON.stringify(errVal);
+              }
               break;
           }
 
