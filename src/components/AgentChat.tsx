@@ -159,13 +159,26 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
   );
 }
 
+// Pre-process markdown: convert any link containing a UUID into a proper viewer URL
+// so rehype-sanitize won't strip it and the custom component can detect it
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+function preprocessGraphLinks(text: string): string {
+  return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, title, url) => {
+    const uuidMatch = url.match(UUID_RE);
+    if (uuidMatch) {
+      return `[${title}](https://www.vegvisr.org/gnew-viewer?graphId=${uuidMatch[0]})`;
+    }
+    return match;
+  });
+}
+
 const markdownComponents = {
   a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
     if (href) {
       try {
         const url = new URL(href);
         if (url.hostname.includes('vegvisr.org')) {
-          // Detect any vegvisr link with a graph ID (graphId or id param)
           const graphId = url.searchParams.get('graphId') || url.searchParams.get('id');
           if (graphId) {
             const viewerHref = `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`;
