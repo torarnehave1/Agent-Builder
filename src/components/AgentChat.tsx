@@ -84,6 +84,101 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
   );
 }
 
+// ---------- Graph Card ----------
+
+function extractText(children: React.ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (Array.isArray(children)) return children.map(extractText).join('');
+  if (children && typeof children === 'object' && 'props' in children) {
+    return extractText((children as React.ReactElement).props.children);
+  }
+  return String(children || '');
+}
+
+interface GraphMeta {
+  title: string;
+  description: string;
+  category: string;
+  nodeCount: number;
+  nodeTypes: string[];
+}
+
+function GraphCard({ graphId, title, href }: { graphId: string; title: string; href: string }) {
+  const [meta, setMeta] = useState<GraphMeta | null>(null);
+
+  useEffect(() => {
+    if (!graphId) return;
+    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+      .then(r => r.json())
+      .then(data => {
+        const nodes = data.nodes || [];
+        const types = [...new Set(nodes.map((n: { type?: string }) => n.type).filter(Boolean))] as string[];
+        setMeta({
+          title: data.metadata?.title || title,
+          description: data.metadata?.description || '',
+          category: data.metadata?.category || '',
+          nodeCount: nodes.length,
+          nodeTypes: types,
+        });
+      })
+      .catch(() => {});
+  }, [graphId, title]);
+
+  const categoryTags = meta?.category ? meta.category.split(/\s+/).filter(t => t.startsWith('#')) : [];
+
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="block my-3 p-4 rounded-lg border border-sky-400/20 bg-sky-400/[0.06] hover:bg-sky-400/[0.12] transition-colors no-underline group"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-white font-semibold text-sm">{meta?.title || title}</div>
+          {meta?.description && (
+            <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
+          )}
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {categoryTags.map(tag => (
+              <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
+            ))}
+            {meta?.nodeTypes.map(type => (
+              <span key={type} className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px]">{type}</span>
+            ))}
+            {meta && (
+              <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{meta.nodeCount} nodes</span>
+            )}
+          </div>
+        </div>
+        <span className="flex-shrink-0 mt-1 px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium group-hover:bg-sky-400/30 transition-colors">
+          View Graph &rarr;
+        </span>
+      </div>
+    </a>
+  );
+}
+
+const markdownComponents = {
+  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
+    if (href) {
+      try {
+        const url = new URL(href);
+        if (url.hostname.includes('vegvisr.org')) {
+          // Detect any vegvisr link with a graph ID (graphId or id param)
+          const graphId = url.searchParams.get('graphId') || url.searchParams.get('id');
+          if (graphId) {
+            const viewerHref = `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`;
+            const title = extractText(children);
+            return <GraphCard graphId={graphId} title={title} href={viewerHref} />;
+          }
+        }
+      } catch { /* not a valid URL, render normally */ }
+    }
+    return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+  },
+};
+
 // ---------- Thinking Indicator ----------
 
 function ThinkingIndicator() {
@@ -422,7 +517,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             )}
             {msg.role === 'assistant' ? (
               <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={markdownComponents}>
                   {msg.content || '_(completed with tool calls only)_'}
                 </ReactMarkdown>
               </div>
@@ -441,7 +536,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             ))}
             {current.text && (
               <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={markdownComponents}>
                   {current.text}
                 </ReactMarkdown>
               </div>

@@ -1,0 +1,662 @@
+/**
+ * Tool executors — runtime functions that execute each tool
+ *
+ * Each execute* function calls service bindings (KG_WORKER, ANTHROPIC, etc.)
+ * and returns a result object. The executeTool() dispatcher routes by name.
+ */
+
+import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
+import { isOpenAPITool, executeOpenAPITool } from './openapi-tools.js'
+import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE } from './system-prompt.js'
+
+// ── Graph operations ──────────────────────────────────────────────
+
+async function executeCreateGraph(input, env) {
+  const existsRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+
+  if (existsRes.ok) {
+    const existing = await existsRes.json()
+    if (existing && existing.nodes) {
+      return {
+        graphId: input.graphId,
+        version: existing.metadata?.version || 0,
+        alreadyExists: true,
+        nodeCount: existing.nodes.length,
+        edgeCount: existing.edges?.length || 0,
+        message: `Graph "${input.graphId}" already exists (${existing.nodes.length} nodes). You can add nodes to it directly.`,
+        viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
+      }
+    }
+  }
+
+  const graphData = {
+    metadata: {
+      title: input.title,
+      description: input.description || '',
+      category: input.category || '',
+      metaArea: input.metaArea || '',
+      createdBy: input.userId || 'agent-worker',
+      version: 0,
+      userId: input.userId || 'agent-system',
+      tags: input.tags || []
+    },
+    nodes: [],
+    edges: []
+  }
+
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: input.graphId, graphData })
+  })
+
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data.error || `Failed to create graph (status: ${response.status})`)
+  }
+  return {
+    graphId: data.id || input.graphId,
+    version: data.newVersion || 1,
+    message: `Graph "${input.title}" created successfully`,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
+  }
+}
+
+async function executeReadGraph(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Graph not found: ${err}`)
+  }
+  const graphData = await res.json()
+  const nodes = (graphData.nodes || []).map(n => ({
+    id: n.id,
+    label: n.label,
+    type: n.type,
+    info: n.info ? n.info.slice(0, 500) + (n.info.length > 500 ? '...' : '') : '',
+    path: n.path || undefined,
+    color: n.color || undefined,
+  }))
+  return {
+    graphId: input.graphId,
+    metadata: graphData.metadata || {},
+    nodeCount: nodes.length,
+    edgeCount: (graphData.edges || []).length,
+    nodes,
+    edges: (graphData.edges || []).slice(0, 50),
+  }
+}
+
+async function executeReadNode(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  if (!res.ok) throw new Error('Graph not found')
+  const graphData = await res.json()
+  const node = (graphData.nodes || []).find(n => String(n.id) === String(input.nodeId))
+  if (!node) throw new Error(`Node "${input.nodeId}" not found in graph "${input.graphId}"`)
+  return {
+    graphId: input.graphId,
+    node: {
+      id: node.id,
+      label: node.label,
+      type: node.type,
+      info: node.info || '',
+      path: node.path || undefined,
+      color: node.color || undefined,
+      metadata: node.metadata || undefined,
+      bibl: node.bibl || [],
+      position: node.position || {},
+      visible: node.visible,
+    },
+  }
+}
+
+async function executePatchNode(input, env) {
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      fields: input.fields,
+    }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `patchNode failed (${res.status})`)
+  return {
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    updatedFields: Object.keys(input.fields),
+    version: data.newVersion,
+    message: `Node "${input.nodeId}" updated: ${Object.keys(input.fields).join(', ')}`,
+  }
+}
+
+async function executeListGraphs(input, env) {
+  const limit = input.limit || 20
+  const offset = input.offset || 0
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphsummaries?offset=${offset}&limit=${limit}`
+  )
+  if (!res.ok) throw new Error('Failed to fetch graph summaries')
+  const data = await res.json()
+  const results = (data.results || []).map(g => ({
+    id: g.id,
+    title: g.metadata_title || g.id,
+    description: g.metadata_description || '',
+    category: g.metadata_category || '',
+    nodeCount: g.node_count || 0,
+    updatedAt: g.updated_at || '',
+  }))
+  return {
+    total: data.total || results.length,
+    offset,
+    limit,
+    graphs: results,
+  }
+}
+
+// ── Node operations ───────────────────────────────────────────────
+
+async function executeCreateHtmlNode(input, env) {
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: input.graphId,
+      node: {
+        id: input.nodeId,
+        label: input.label,
+        type: 'html-node',
+        info: input.htmlContent,
+        bibl: input.references || [],
+        position: { x: 0, y: 0 },
+        visible: true
+      }
+    })
+  })
+
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data.error || `Failed to add node (status: ${response.status})`)
+  }
+  return {
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    version: data.newVersion,
+    message: `HTML node "${input.label}" added successfully`
+  }
+}
+
+async function executeCreateNode(input, env) {
+  const node = {
+    id: input.nodeId,
+    label: input.label,
+    type: input.nodeType || 'fulltext',
+    info: input.content || '',
+    bibl: input.references || [],
+    position: { x: input.positionX || 0, y: input.positionY || 0 },
+    visible: true
+  }
+  if (input.path) node.path = input.path
+  if (input.imageWidth) node.imageWidth = input.imageWidth
+  if (input.imageHeight) node.imageHeight = input.imageHeight
+  if (input.color) node.color = input.color
+  if (input.metadata) node.metadata = input.metadata
+
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graphId: input.graphId, node })
+  })
+
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data.error || `Failed to add node (status: ${response.status})`)
+  }
+  return {
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    nodeType: node.type,
+    version: data.newVersion,
+    message: `Node "${input.label}" (${node.type}) added successfully`
+  }
+}
+
+async function executeAddEdge(input, env) {
+  const getRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  const graphData = await getRes.json()
+  if (!getRes.ok || !graphData.nodes) {
+    throw new Error(graphData.error || 'Graph not found')
+  }
+
+  const edgeId = `${input.sourceId}_${input.targetId}`
+  const existingEdge = graphData.edges.find(e => e.id === edgeId)
+  if (existingEdge) {
+    return { graphId: input.graphId, edgeId, message: 'Edge already exists' }
+  }
+
+  graphData.edges.push({
+    id: edgeId,
+    source: input.sourceId,
+    target: input.targetId,
+    label: input.label || ''
+  })
+
+  const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: input.graphId, graphData, override: true })
+  })
+
+  const saveData = await saveRes.json()
+  if (!saveRes.ok) {
+    throw new Error(saveData.error || `Failed to save edge (status: ${saveRes.status})`)
+  }
+  return {
+    graphId: input.graphId,
+    edgeId,
+    version: saveData.newVersion,
+    message: `Edge ${input.sourceId} -> ${input.targetId} added`
+  }
+}
+
+// ── Contract & template operations ────────────────────────────────
+
+function deepMerge(source, target) {
+  const result = { ...source }
+  for (const key of Object.keys(target)) {
+    if (target[key] && typeof target[key] === 'object' && !Array.isArray(target[key])
+        && source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      result[key] = deepMerge(source[key], target[key])
+    } else {
+      result[key] = target[key]
+    }
+  }
+  return result
+}
+
+async function executeGetContract(input, env) {
+  let contract = null
+
+  if (input.contractId) {
+    contract = await env.DB.prepare(
+      'SELECT * FROM agent_contracts WHERE id = ?1'
+    ).bind(input.contractId).first()
+  } else if (input.templateName) {
+    contract = await env.DB.prepare(
+      'SELECT * FROM agent_contracts WHERE name = ?1'
+    ).bind(input.templateName).first()
+  }
+
+  if (contract) {
+    let contractJson = JSON.parse(contract.contract_json)
+
+    if (contract.parent_contract_id) {
+      const parent = await env.DB.prepare(
+        'SELECT contract_json FROM agent_contracts WHERE id = ?1'
+      ).bind(contract.parent_contract_id).first()
+      if (parent) {
+        const parentJson = JSON.parse(parent.contract_json)
+        contractJson = deepMerge(parentJson, contractJson)
+      }
+    }
+
+    if (contract.template_id) {
+      const template = await env.DB.prepare(
+        'SELECT name, nodes, ai_instructions FROM graphTemplates WHERE id = ?1'
+      ).bind(contract.template_id).first()
+      if (template) {
+        contractJson._templateExample = {
+          name: template.name,
+          nodes: template.nodes ? JSON.parse(template.nodes) : null
+        }
+      }
+    }
+
+    return contractJson
+  }
+
+  if (input.templateName) {
+    const template = await env.DB.prepare(
+      'SELECT name, nodes, ai_instructions FROM graphTemplates WHERE name = ?1'
+    ).bind(input.templateName).first()
+    if (template && template.ai_instructions) {
+      try {
+        return JSON.parse(template.ai_instructions)
+      } catch {
+        return { rawInstructions: template.ai_instructions }
+      }
+    }
+  }
+
+  return { error: 'Contract not found' }
+}
+
+async function executeGetHtmlTemplate(input, env) {
+  let contractInfo = null
+  let templateId = input.templateId || DEFAULT_TEMPLATE_ID
+
+  if (input.contractId) {
+    const row = await env.DB.prepare(
+      'SELECT contract_json FROM agent_contracts WHERE id = ?1'
+    ).bind(input.contractId).first()
+    if (row) {
+      contractInfo = JSON.parse(row.contract_json)
+      if (contractInfo.node?.templateId && !input.templateId) {
+        templateId = contractInfo.node.templateId
+      }
+    }
+  }
+
+  const entry = getTemplate(templateId)
+
+  return {
+    templateId: entry.id,
+    templateSize: entry.template.length,
+    placeholders: entry.placeholders,
+    description: entry.description,
+    version: getTemplateVersion(templateId),
+    instructions: 'Use create_html_from_template to create the HTML node. Pass the placeholder values and the worker fills them into the template server-side. CSS must be created as a SEPARATE css-node.',
+    contractInfo,
+    availableTemplates: listTemplates(),
+  }
+}
+
+async function executeCreateHtmlFromTemplate(input, env) {
+  const templateId = input.templateId || DEFAULT_TEMPLATE_ID
+  const entry = getTemplate(templateId)
+
+  let html = entry.template
+  html = html.replaceAll('{{TITLE}}', input.title || 'Untitled')
+  html = html.replaceAll('{{DESCRIPTION}}', input.description || '')
+  html = html.replaceAll('{{FOOTER_TEXT}}', input.footerText || '')
+  html = html.replaceAll('{{GRAPH_ID_DEFAULT}}', input.graphId || '')
+
+  const nodeId = input.nodeId || `html-node-${Date.now()}`
+  html = html.replaceAll('{{NODE_ID}}', nodeId)
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: input.graphId,
+      node: {
+        id: nodeId,
+        label: input.title || 'Untitled Page',
+        type: 'html-node',
+        info: html,
+        bibl: [],
+        position: { x: 0, y: 0 },
+        visible: true
+      }
+    })
+  })
+
+  const data = await response.json()
+  if (!response.ok) {
+    throw new Error(data.error || `Failed to create HTML node (status: ${response.status})`)
+  }
+
+  const createdSections = []
+  if (Array.isArray(input.sections) && input.sections.length > 0) {
+    for (let i = 0; i < input.sections.length; i++) {
+      const section = input.sections[i]
+      const sectionTitle = section.title || `Section ${i + 1}`
+      const sectionContent = section.content || ''
+      const sectionId = `section-${i + 1}-${Date.now()}`
+
+      const sectionRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          graphId: input.graphId,
+          node: {
+            id: sectionId,
+            label: `# ${sectionTitle}`,
+            type: 'fulltext',
+            info: sectionContent,
+            bibl: [],
+            position: { x: 200, y: 100 + (i * 150) },
+            visible: true
+          }
+        })
+      })
+
+      if (sectionRes.ok) {
+        createdSections.push({ id: sectionId, label: `# ${sectionTitle}` })
+      }
+    }
+  }
+
+  let headerImageNodeId = null
+  if (input.headerImage) {
+    headerImageNodeId = `header-image-${Date.now()}`
+    const imgRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graphId: input.graphId,
+        node: {
+          id: headerImageNodeId,
+          label: 'Header Image',
+          type: 'markdown-image',
+          info: `![Header Image|width:100%;height:400px;object-fit:cover](${input.headerImage})`,
+          path: input.headerImage,
+          bibl: [],
+          position: { x: -200, y: 0 },
+          visible: true,
+          imageWidth: '1536',
+          imageHeight: '400'
+        }
+      })
+    })
+    if (!imgRes.ok) {
+      console.warn('Failed to create header image node')
+      headerImageNodeId = null
+    }
+  }
+
+  return {
+    graphId: input.graphId,
+    nodeId: nodeId,
+    version: data.newVersion,
+    htmlSize: html.length,
+    sectionsCreated: createdSections.length,
+    headerImageNodeId: headerImageNodeId,
+    message: `Editable HTML page "${input.title}" created (${html.length} bytes) with ${createdSections.length} content sections${headerImageNodeId ? ' and a header image node' : ''}. The page discovers nodes with # prefix labels.`,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
+  }
+}
+
+// ── Search & media operations ─────────────────────────────────────
+
+async function executePerplexitySearch(input, env) {
+  const query = input.query
+  if (!query) throw new Error('query is required')
+
+  const model = input.model || 'sonar'
+  const validModels = ['sonar', 'sonar-pro', 'sonar-reasoning']
+  if (!validModels.includes(model)) {
+    throw new Error(`Invalid model: ${model}. Use one of: ${validModels.join(', ')}`)
+  }
+
+  const endpoint = model === 'sonar' ? '/sonar' : model === 'sonar-pro' ? '/sonar-pro' : '/sonar-reasoning'
+
+  const body = {
+    userId: input.userId,
+    messages: [{ role: 'user', content: query }],
+  }
+  if (input.search_recency_filter) body.search_recency_filter = input.search_recency_filter
+
+  const res = await env.PERPLEXITY.fetch(`https://perplexity-worker${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || `Perplexity API error (${res.status})`)
+  }
+
+  const choice = data.choices?.[0]?.message?.content || ''
+  const citations = data.citations || []
+  const searchResults = data.search_results || []
+
+  return {
+    message: `Perplexity search completed (${model})`,
+    model: data.model,
+    content: choice,
+    citations,
+    sources: searchResults.map(s => ({ title: s.title, url: s.url, snippet: s.snippet })),
+    usage: data.usage,
+  }
+}
+
+async function executeSearchPexels(input, env) {
+  const query = input.query
+  if (!query) throw new Error('query is required')
+
+  const res = await env.API_WORKER.fetch('https://vegvisr-api-worker/pexels-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, count: input.count || 5 }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `Pexels API error (${res.status})`)
+
+  return {
+    message: `Found ${data.total || 0} Pexels images for "${query}"`,
+    query: data.query,
+    total: data.total,
+    images: (data.images || []).map(img => ({
+      url: img.src?.large || img.url,
+      alt: img.alt,
+      photographer: img.photographer,
+      width: img.width,
+      height: img.height,
+      pexels_url: img.pexels_url,
+    })),
+  }
+}
+
+async function executeSearchUnsplash(input, env) {
+  const query = input.query
+  if (!query) throw new Error('query is required')
+
+  const res = await env.API_WORKER.fetch('https://vegvisr-api-worker/unsplash-search', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, count: input.count || 5 }),
+  })
+
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `Unsplash API error (${res.status})`)
+
+  return {
+    message: `Found ${data.total || 0} Unsplash images for "${query}"`,
+    query: data.query,
+    total: data.total,
+    images: (data.images || []).map(img => ({
+      url: img.urls?.regular || img.url,
+      alt: img.alt,
+      photographer: img.photographer,
+      width: img.width,
+      height: img.height,
+      unsplash_url: img.unsplash_url,
+    })),
+  }
+}
+
+async function executeGetAlbumImages(input, env) {
+  const albumName = input.albumName
+  if (!albumName) throw new Error('albumName is required')
+
+  const userId = input.userId
+  if (!userId) throw new Error('userId is required for album access')
+
+  // Look up the user's API token from D1 config table
+  const userRecord = await env.DB.prepare(
+    'SELECT emailVerificationToken FROM config WHERE user_id = ?'
+  ).bind(userId).first()
+
+  if (!userRecord?.emailVerificationToken) {
+    throw new Error('No API token found for user — please log in again')
+  }
+
+  const res = await env.ALBUMS_WORKER.fetch(
+    `https://vegvisr-albums-worker/photo-album?name=${encodeURIComponent(albumName)}`,
+    { headers: { 'X-API-Token': userRecord.emailVerificationToken } }
+  )
+
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `Albums API error (${res.status})`)
+
+  const images = (data.images || []).map(key => ({
+    key,
+    url: `https://vegvisr.imgix.net/${key}`,
+  }))
+
+  return {
+    message: `Album "${albumName}" has ${images.length} images`,
+    albumName,
+    imageCount: images.length,
+    images,
+  }
+}
+
+// ── Tool dispatcher ───────────────────────────────────────────────
+
+async function executeTool(toolName, toolInput, env, operationMap) {
+  switch (toolName) {
+    case 'create_graph':
+      return await executeCreateGraph(toolInput, env)
+    case 'create_html_node':
+      return await executeCreateHtmlNode(toolInput, env)
+    case 'create_node':
+      return await executeCreateNode(toolInput, env)
+    case 'add_edge':
+      return await executeAddEdge(toolInput, env)
+    case 'get_contract':
+      return await executeGetContract(toolInput, env)
+    case 'get_html_template':
+      return await executeGetHtmlTemplate(toolInput, env)
+    case 'create_html_from_template':
+      return await executeCreateHtmlFromTemplate(toolInput, env)
+    case 'read_graph':
+      return await executeReadGraph(toolInput, env)
+    case 'read_node':
+      return await executeReadNode(toolInput, env)
+    case 'patch_node':
+      return await executePatchNode(toolInput, env)
+    case 'list_graphs':
+      return await executeListGraphs(toolInput, env)
+    case 'perplexity_search':
+      return await executePerplexitySearch(toolInput, env)
+    case 'search_pexels':
+      return await executeSearchPexels(toolInput, env)
+    case 'search_unsplash':
+      return await executeSearchUnsplash(toolInput, env)
+    case 'get_album_images':
+      return await executeGetAlbumImages(toolInput, env)
+    case 'get_formatting_reference':
+      return { reference: FORMATTING_REFERENCE }
+    case 'get_node_types_reference':
+      return { reference: NODE_TYPES_REFERENCE }
+    default:
+      if (isOpenAPITool(toolName) && operationMap) {
+        return await executeOpenAPITool(toolName, toolInput, env, operationMap)
+      }
+      throw new Error(`Unknown tool: ${toolName}`)
+  }
+}
+
+export { executeTool, executeCreateHtmlFromTemplate }
