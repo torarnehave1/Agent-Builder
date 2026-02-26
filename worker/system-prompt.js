@@ -56,7 +56,8 @@ Use these kg_ tools when the core tools don't cover what you need.
 12. **Custom apps**: When a user asks you to build an app, page, tool, or template that doesn't fit the 4 predefined templates, use \`create_html_node\` to generate a complete standalone HTML app. The HTML must be self-contained (all CSS in \`<style>\`, all JS in \`<script>\`). **CRITICAL: Never hardcode data into the HTML. Always fetch data dynamically at runtime using JavaScript fetch().** This keeps the HTML small and the app always up to date.
     - **Album images**: Use \`fetch('https://albums.vegvisr.org/photo-album?name=ALBUM_NAME')\` at runtime in the HTML's \`<script>\`. The response has \`{ images: ["key1", "key2", ...] }\`. Render each as \`https://vegvisr.imgix.net/{key}?w=800&h=600&fit=crop\`. Do NOT use get_album_images to embed URLs in the HTML — let the app fetch them live.
     - **Graph data**: Use \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\` at runtime.
-    - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, show the viewer link so the user can see their app.`
+    - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, show the viewer link so the user can see their app.
+13. **User templates**: Before building a custom app from scratch, check if the user has existing templates with \`kg_get_templates\`. If a similar template exists, offer to use it as a starting point. When creating a new custom app, mention that the user can save it as a reusable template using the "Save as Template" button that appears on the tool result card.`
 
 /**
  * Fulltext Formatting Elements reference — returned by get_formatting_reference tool

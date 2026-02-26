@@ -62,14 +62,35 @@ interface GraphInfo {
 
 // ---------- Tool Call Card ----------
 
-function ToolCallCard({ tc }: { tc: ToolCall }) {
+function ToolCallCard({ tc, userId }: { tc: ToolCall; userId: string }) {
   const [expanded, setExpanded] = useState(false);
+  const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   let inputStr = '';
   try { inputStr = JSON.stringify(tc.input, null, 2); } catch { inputStr = String(tc.input); }
   let resultStr = '';
   if (tc.result) {
     try { resultStr = JSON.stringify(tc.result, null, 2).slice(0, 1000); } catch { resultStr = String(tc.result); }
   }
+
+  const canSaveAsTemplate = tc.tool === 'create_html_node' && tc.status === 'success';
+
+  const saveAsTemplate = async () => {
+    const input = tc.input as Record<string, unknown>;
+    try {
+      const res = await fetch('https://knowledge.vegvisr.org/addTemplate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': userId },
+        body: JSON.stringify({
+          name: (input.label as string) || 'Custom App Template',
+          node: { id: input.nodeId, label: input.label, type: 'html-node', info: input.htmlContent },
+          category: 'Custom Apps',
+          userId,
+          ai_instructions: { description: `Custom HTML app template: ${input.label}`, sourceGraphId: input.graphId },
+        }),
+      });
+      if (res.ok) setSavedAsTemplate(true);
+    } catch { /* silently fail */ }
+  };
 
   return (
     <div className="my-2 border border-white/10 rounded-lg overflow-hidden text-[13px]">
@@ -95,6 +116,15 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
             </>
           )}
         </div>
+      )}
+      {canSaveAsTemplate && !savedAsTemplate && (
+        <button type="button" onClick={saveAsTemplate}
+          className="mx-3 my-2 px-2 py-1 text-xs rounded bg-violet-600/20 text-violet-300 hover:bg-violet-600/30 border border-violet-500/20">
+          Save as Template
+        </button>
+      )}
+      {savedAsTemplate && (
+        <span className="mx-3 my-2 inline-block text-xs text-emerald-400">Saved as template</span>
       )}
     </div>
   );
@@ -702,7 +732,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
               <div className="mb-2">
                 {msg.toolCalls.map(tc => (
-                  <ToolCallCard key={tc.id} tc={tc} />
+                  <ToolCallCard key={tc.id} tc={tc} userId={userId} />
                 ))}
               </div>
             )}
@@ -723,7 +753,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           <div className="self-start max-w-[80%] px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
-              <ToolCallCard key={tc.id} tc={tc} />
+              <ToolCallCard key={tc.id} tc={tc} userId={userId} />
             ))}
             {current.text && (
               <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
