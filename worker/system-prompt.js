@@ -52,7 +52,8 @@ Use these kg_ tools when the core tools don't cover what you need.
 10. **Formatting**: By default, use plain markdown for node content. When the user asks for styled/formatted content, call get_formatting_reference first to get the syntax.
 11. **Graph results — IMPORTANT**: When showing graph search results or listing graphs, you MUST format each graph as a markdown link using this exact URL pattern:
     \`[Graph Title](https://www.vegvisr.org/gnew-viewer?graphId=THE_GRAPH_ID)\`
-    Replace THE_GRAPH_ID with the actual graph ID. The chat UI detects these links and renders them as rich interactive cards with metadata badges and a "View Graph" button. Without this exact URL format, results show as plain text. Include description and details as text around each link.`
+    Replace THE_GRAPH_ID with the actual graph ID. The chat UI detects these links and renders them as rich interactive cards with metadata badges and a "View Graph" button. Without this exact URL format, results show as plain text. Include description and details as text around each link.
+12. **Custom apps**: When a user asks you to build an app, page, tool, or template that doesn't fit the 4 predefined templates, use \`create_html_node\` to generate a complete standalone HTML app. The HTML must be self-contained (all CSS in \`<style>\`, all JS in \`<script>\`). To fetch data at runtime (album images, graph nodes, etc.), use the KG API at \`https://knowledge.vegvisr.org\`. For album images, fetch from \`https://albums.vegvisr.org/photo-album?name=ALBUM_NAME\`. Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, show the viewer link so the user can see their app.`
 
 /**
  * Fulltext Formatting Elements reference — returned by get_formatting_reference tool

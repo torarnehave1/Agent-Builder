@@ -101,6 +101,37 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'create_html_node',
+    description: 'Create a custom HTML app/page as a node in a knowledge graph. Use this when the user wants a custom app that does NOT fit the 4 predefined templates (landing-page, editable-page, theme-builder, agent-chat). Generate a complete, standalone HTML document with inline CSS and JavaScript. The HTML is stored as an html-node and viewable at vegvisr.org/gnew-viewer?graphId=GRAPH_ID. Examples: portfolio gallery, dashboard, interactive tool, quiz, calculator, custom form.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'Graph ID (UUID). Create the graph first with create_graph.'
+        },
+        nodeId: {
+          type: 'string',
+          description: 'Unique node ID (kebab-case, e.g. "node-portfolio-app")'
+        },
+        label: {
+          type: 'string',
+          description: 'Display title for this app/page'
+        },
+        htmlContent: {
+          type: 'string',
+          description: 'Complete HTML document. Must be standalone — include all CSS inline in <style> and all JS inline in <script>. Use the KG API (knowledge.vegvisr.org) to fetch data at runtime if needed (e.g. album images, graph nodes).'
+        },
+        references: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional source URLs'
+        }
+      },
+      required: ['graphId', 'nodeId', 'label', 'htmlContent']
+    }
+  },
+  {
     name: 'add_edge',
     description: 'Connect two nodes in a knowledge graph with a directed edge. Both nodes must already exist in the graph.',
     input_schema: {
