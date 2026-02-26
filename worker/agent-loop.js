@@ -82,7 +82,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           userId,
           messages,
           model,
-          max_tokens: 4096,
+          max_tokens: 16384,
           temperature: 0.3,
           system: systemPrompt,
           tools: allTools,
