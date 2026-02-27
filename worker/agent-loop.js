@@ -131,7 +131,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const summary = result.message || `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
-            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: true, summary })}\n\n`))
+            const ssePayload = { tool: toolUse.name, success: true, summary }
+            // Pass clientSideRequired data to frontend so it can handle transcription
+            if (result.clientSideRequired) {
+              ssePayload.clientSideRequired = true
+              ssePayload.audioUrl = result.audioUrl
+              ssePayload.language = result.language
+              ssePayload.recordingId = result.recordingId
+            }
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
             const resultStr = truncateResult(result)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: resultStr }
           } catch (error) {

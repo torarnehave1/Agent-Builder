@@ -823,6 +823,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     setCurrent(state);
 
     let finalToolCalls: ToolCall[] = [];
+    let pendingClientTranscription: { audioUrl: string; recordingId: string | null; language: string | null } | null = null;
 
     try {
       const res = await fetch(`${AGENT_API}/chat`, {
@@ -849,6 +850,15 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       let assistantText = '';
 
       await parseSSE(reader, (ev) => {
+        // Detect clientSideRequired from transcribe_audio tool result
+        if (ev.type === 'tool_result' && ev.data.tool === 'transcribe_audio' && ev.data.clientSideRequired) {
+          pendingClientTranscription = {
+            audioUrl: ev.data.audioUrl as string,
+            recordingId: (ev.data.recordingId as string) || null,
+            language: (ev.data.language as string) || null,
+          };
+        }
+
         setCurrent(prev => {
           if (!prev) return prev;
           const next = { ...prev, toolCalls: [...prev.toolCalls] };
@@ -930,6 +940,86 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           }),
         }).catch(() => {});
       }
+
+      // Handle client-side transcription if the tool requested it
+      // (TypeScript can't track mutation inside callbacks, so cast to check)
+      const clientTx = pendingClientTranscription as { audioUrl: string; recordingId: string | null; language: string | null } | null;
+      if (clientTx) {
+        const txAudioUrl = clientTx.audioUrl;
+        const txLang = clientTx.language;
+        setCurrent({ text: 'Downloading audio for browser-based transcription...', toolCalls: [], thinking: false });
+
+        try {
+          // Download audio as File
+          const audioResponse = await fetch(txAudioUrl);
+          const audioArrayBuffer = await audioResponse.arrayBuffer();
+          const txContentType = audioResponse.headers.get('content-type') || 'audio/webm';
+          const txFileName = txAudioUrl.split('/').pop() || 'audio.webm';
+          const audioFile = new File([audioArrayBuffer], txFileName, { type: txContentType });
+
+          // Split into 120s WAV chunks using AudioContext
+          setCurrent(prev => prev ? { ...prev, text: 'Splitting audio into 2-minute chunks...' } : prev);
+          const chunks = await splitAudioIntoChunks(audioFile, CHUNK_DURATION_SECONDS, (progress) => {
+            if (progress.phase === 'creating' && progress.current && progress.total) {
+              setCurrent(prev => prev ? { ...prev, text: `Preparing chunk ${progress.current}/${progress.total}...` } : prev);
+            }
+          });
+
+          if (!chunks.length) throw new Error('Audio could not be chunked');
+
+          // Transcribe each WAV chunk via openai.vegvisr.org/audio
+          const segments: string[] = [];
+          const baseName = txFileName.includes('.') ? txFileName.substring(0, txFileName.lastIndexOf('.')) : txFileName;
+
+          // Temporarily set language if the tool provided one
+          const prevAutoDetect = audioAutoDetect;
+          const prevLang = audioLanguage;
+          if (txLang) {
+            setAudioAutoDetect(false);
+            setAudioLanguage(txLang);
+          }
+
+          for (let i = 0; i < chunks.length; i++) {
+            setCurrent(prev => prev ? { ...prev, text: `Transcribing chunk ${i + 1}/${chunks.length}...` } : prev);
+
+            try {
+              const chunkResult = await callWhisperTranscription(
+                chunks[i].blob,
+                `${baseName}_chunk_${i + 1}.wav`,
+              );
+              const chunkText = ((chunkResult.text as string) || '').trim();
+              const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
+              if (chunkText) {
+                segments.push(`${chunkLabel} ${chunkText}`);
+              }
+            } catch (chunkErr) {
+              const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
+              segments.push(`${chunkLabel} [Error: ${chunkErr instanceof Error ? chunkErr.message : 'unknown'}]`);
+            }
+          }
+
+          // Restore language settings
+          setAudioAutoDetect(prevAutoDetect);
+          setAudioLanguage(prevLang);
+
+          const txText = segments.join('\n\n');
+          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)\n\n${txText || '(No speech detected)'}`;
+
+          setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
+
+          if (activeSession) {
+            historyFetch('/messages', userId, {
+              method: 'POST',
+              body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: txContent, provider: 'agent' }),
+            }).catch(() => {});
+          }
+        } catch (txErr) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: `Client-side transcription failed: ${txErr instanceof Error ? txErr.message : String(txErr)}`,
+          }]);
+        }
+      }
     } catch (err) {
       setCurrent(prev => prev ? { ...prev, thinking: false, error: err instanceof Error ? err.message : String(err) } : prev);
       // Still save what we have
@@ -942,7 +1032,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
     setCurrent(null);
     setStreaming(false);
-  }, [input, streaming, messages, userId, graphId, parseSSE, current]);
+  }, [input, streaming, messages, userId, graphId, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
 
   const hasMessages = messages.length > 0 || current !== null;
 

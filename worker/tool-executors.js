@@ -868,65 +868,74 @@ async function executeTranscribeAudio(input, env) {
     throw new Error('Provide either recordingId + userEmail or audioUrl')
   }
 
-  // 2. Download the audio file
+  // 2. Download audio to check format and size
   const audioRes = await fetch(resolvedUrl)
   if (!audioRes.ok) throw new Error(`Failed to download audio file: ${audioRes.status}`)
   const audioBlob = await audioRes.blob()
-  const fileName = resolvedUrl.split('/').pop() || 'audio.wav'
+  const urlFileName = resolvedUrl.split('/').pop() || 'audio'
+  const fileSize = audioBlob.size
 
-  // 3. Chunk if > 24MB, then send each chunk to openai-worker via service binding
-  const MAX_CHUNK_SIZE = 24 * 1024 * 1024 // 24MB (OpenAI limit is 25MB)
-  const chunks = []
+  // Detect format from extension and content type
+  const ext = (urlFileName.match(/\.(\w+)$/)?.[1] || '').toLowerCase()
+  const contentType = (audioBlob.type || '').toLowerCase()
+  const isContainerFormat = ['webm', 'ogg', 'opus', 'm4a', 'aac', 'mp4'].includes(ext)
+    || contentType.includes('webm') || contentType.includes('ogg') || contentType.includes('mp4')
+    || contentType.includes('m4a') || contentType.includes('aac')
 
-  if (audioBlob.size <= MAX_CHUNK_SIZE) {
-    chunks.push({ blob: audioBlob, index: 0 })
-  } else {
-    // Byte-level chunking for server-side (no AudioContext available in Workers)
-    const totalChunks = Math.ceil(audioBlob.size / MAX_CHUNK_SIZE)
-    const arrayBuf = await audioBlob.arrayBuffer()
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * MAX_CHUNK_SIZE
-      const end = Math.min(start + MAX_CHUNK_SIZE, audioBlob.size)
-      const chunkBlob = new Blob([arrayBuf.slice(start, end)], { type: audioBlob.type || 'audio/webm' })
-      chunks.push({ blob: chunkBlob, index: i })
+  // 3. For large container formats that can't be split server-side,
+  //    delegate to the frontend browser (which has AudioContext)
+  if (isContainerFormat && fileSize > 25 * 1024 * 1024) {
+    return {
+      clientSideRequired: true,
+      audioUrl: resolvedUrl,
+      recordingId: resolvedRecordingId || null,
+      format: ext || contentType,
+      fileSize,
+      language: language || null,
+      message: `This ${(ext || 'audio').toUpperCase()} file (${(fileSize / 1024 / 1024).toFixed(1)}MB) needs browser-based processing. Transcribing on your device...`,
     }
   }
 
+  // 4. For WAV, MP3, or small container files — use server-side chunked transcription
+  const formData = new FormData()
+  formData.append('file', audioBlob, urlFileName)
+  formData.append('userId', userEmail || input.userId)
+  formData.append('chunkDuration', '120')
+  if (language) formData.append('language', language)
+
+  const transcribeRes = await env.OPENAI_WORKER.fetch('https://openai-worker/audio/chunked-transcribe', {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!transcribeRes.ok) {
+    const err = await transcribeRes.text()
+    throw new Error(`Chunked transcription failed: ${err}`)
+  }
+
+  const transcription = await transcribeRes.json()
+  if (transcription.error) throw new Error(transcription.error)
+
+  const formatTime = (s) => {
+    const m = Math.floor(s / 60)
+    const sec = Math.floor(s % 60)
+    return `${m}:${sec.toString().padStart(2, '0')}`
+  }
+
   const segments = []
-  for (const chunk of chunks) {
-    const formData = new FormData()
-    const chunkFileName = chunks.length > 1
-      ? `${fileName.replace(/\.[^.]+$/, '')}_chunk_${chunk.index + 1}.wav`
-      : fileName
-    formData.append('file', chunk.blob, chunkFileName)
-    formData.append('model', 'whisper-1')
-    formData.append('userId', userEmail || input.userId)
-    if (language) formData.append('language', language)
-
-    const transcribeRes = await env.OPENAI_WORKER.fetch('https://openai-worker/audio', {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!transcribeRes.ok) {
-      const err = await transcribeRes.text()
-      throw new Error(`Transcription failed (chunk ${chunk.index + 1}/${chunks.length}): ${err}`)
-    }
-
-    const result = await transcribeRes.json()
-    const chunkText = (result.text || '').trim()
-    if (chunkText) {
-      if (chunks.length > 1) {
-        segments.push(`[Chunk ${chunk.index + 1}/${chunks.length}] ${chunkText}`)
-      } else {
-        segments.push(chunkText)
-      }
+  for (const seg of (transcription.segments || [])) {
+    const segText = (seg.text || '').trim()
+    if (!segText) continue
+    if (transcription.totalChunks > 1) {
+      segments.push(`[${formatTime(seg.startTime)} - ${formatTime(seg.endTime)}] ${segText}`)
+    } else {
+      segments.push(segText)
     }
   }
 
   const text = segments.join('\n\n')
 
-  // 4. Optionally save back to portfolio
+  // 3. Optionally save back to portfolio
   let savedToPortfolio = false
   if (saveToPortfolio && resolvedRecordingId && userEmail && text) {
     const updateRes = await env.AUDIO_PORTFOLIO.fetch('https://audio-portfolio-worker/update-recording', {
@@ -943,11 +952,12 @@ async function executeTranscribeAudio(input, env) {
 
   return {
     text,
-    chunks: chunks.length,
+    chunks: transcription.totalChunks || 1,
+    format: transcription.format || 'unknown',
     recordingId: resolvedRecordingId || null,
     audioUrl: resolvedUrl,
     savedToPortfolio,
-    message: `Transcribed ${text.length} characters (${chunks.length} chunk${chunks.length > 1 ? 's' : ''}) via openai-worker${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
+    message: `Transcribed ${text.length} characters (${transcription.totalChunks || 1} chunk${(transcription.totalChunks || 1) > 1 ? 's' : ''}) via openai-worker${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
   }
 }
 
