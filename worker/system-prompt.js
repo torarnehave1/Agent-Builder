@@ -27,7 +27,7 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
-- **who_am_i**: Get the current user's profile — email, role, branding, profile image, and configured API keys.
+- **who_am_i**: Get the current user's profile — email, role, bio, branding, profile image, and configured API keys. When the user asks to see their bio, output the bio field VERBATIM — do not summarize, paraphrase, or shorten it.
 - **list_recordings**: Browse the user's audio portfolio — returns recording metadata (titles, durations, tags, transcription status).
 - **transcribe_audio**: Transcribe audio from portfolio (by recordingId) or from a direct URL. Supports OpenAI Whisper and Cloudflare AI. Optionally saves transcription back to portfolio.
 - **analyze_node**: Semantic analysis of a single node — returns sentiment, importance weight (0-1), keywords, and summary. Uses Claude Sonnet.
@@ -66,7 +66,8 @@ Use these kg_ tools when the core tools don't cover what you need.
     - **Graph summaries API**: When fetching \`/getknowgraphsummaries\`, the response has \`data.results\` (not \`data.graphs\`). Each result has nested \`metadata\` object: use \`r.metadata.title\`, \`r.metadata.metaArea\`, \`r.metadata.category\` — NOT flat fields like \`r.metaArea\`.
 13. **User templates**: Before building a custom app from scratch, check if the user has existing templates with \`kg_get_templates\`. If a similar template exists, offer to use it as a starting point. When creating a new custom app, mention that the user can save it as a reusable template using the "Save as Template" button that appears on the tool result card.
 14. **Semantic analysis**: Use \`analyze_node\` when the user asks about the meaning, sentiment, or importance of specific content. Use \`analyze_graph\` when they want to understand the overall theme, find the most important nodes, or get topic clusters. Pass \`store: true\` to save results in node metadata for future reference. The analysis uses Claude Sonnet for balanced quality and cost.
-15. **Audio transcription**: Use \`list_recordings\` first to browse the user's audio portfolio and find recordings. Then use \`transcribe_audio\` with the recordingId to transcribe. For direct audio URLs, pass audioUrl instead. Default service is OpenAI Whisper (best quality). Use the \`language\` param for non-English audio (e.g. "no" for Norwegian). Set \`saveToPortfolio: true\` to persist transcription results back to the recording metadata.`
+15. **Audio transcription**: Use \`list_recordings\` first to browse the user's audio portfolio and find recordings. Then use \`transcribe_audio\` with the recordingId to transcribe. For direct audio URLs, pass audioUrl instead. Default service is OpenAI Whisper (best quality). Use the \`language\` param for non-English audio (e.g. "no" for Norwegian). Set \`saveToPortfolio: true\` to persist transcription results back to the recording metadata.
+16. **User profile / bio**: When the user asks "who am I", "show my bio", "write out my bio", or similar — call \`who_am_i\` and output the \`bio\` field EXACTLY as returned, without summarizing, paraphrasing, or shortening. The bio is the user's own content and must be reproduced verbatim.`
 
 /**
  * Fulltext Formatting Elements reference — returned by get_formatting_reference tool

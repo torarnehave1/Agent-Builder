@@ -471,7 +471,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'who_am_i',
-    description: 'Get the current logged-in user\'s profile information including email, role, branding, profile image, and configured API keys. No parameters needed — automatically uses the current user context.',
+    description: 'Get the current logged-in user\'s profile information including email, role, bio, branding, profile image, and configured API keys. No parameters needed — automatically uses the current user context. The bio field contains the user\'s full biography — always output it verbatim when asked.',
     input_schema: {
       type: 'object',
       properties: {}

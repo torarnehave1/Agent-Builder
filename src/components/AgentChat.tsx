@@ -781,6 +781,15 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       {/* Input area */}
       <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80 flex-shrink-0">
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
+          <button
+            type="button"
+            onClick={() => { setMessages([]); setSessionId(null); }}
+            disabled={streaming}
+            className="px-2.5 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 text-lg font-medium cursor-pointer transition-all hover:bg-white/[0.08] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            title="New chat"
+          >
+            +
+          </button>
           <textarea
             ref={textareaRef}
             value={input}
