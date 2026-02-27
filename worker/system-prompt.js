@@ -27,6 +27,7 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
+- **who_am_i**: Get the current user's profile — email, role, branding, profile image, and configured API keys.
 - **list_recordings**: Browse the user's audio portfolio — returns recording metadata (titles, durations, tags, transcription status).
 - **transcribe_audio**: Transcribe audio from portfolio (by recordingId) or from a direct URL. Supports OpenAI Whisper and Cloudflare AI. Optionally saves transcription back to portfolio.
 - **analyze_node**: Semantic analysis of a single node — returns sentiment, importance weight (0-1), keywords, and summary. Uses Claude Sonnet.

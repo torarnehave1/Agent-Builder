@@ -27,6 +27,7 @@ export const TOOL_CATALOG: ToolCatalogEntry[] = [
   { name: 'get_album_images', displayName: 'Get Album Images', description: 'Get images from a photo album' },
   { name: 'get_formatting_reference', displayName: 'Formatting Reference', description: 'Get fulltext formatting syntax' },
   { name: 'get_node_types_reference', displayName: 'Node Types Reference', description: 'Get node type data formats' },
+  { name: 'who_am_i', displayName: 'Who Am I', description: 'Get current user profile information' },
   { name: 'list_recordings', displayName: 'List Recordings', description: 'Browse audio portfolio recordings' },
   { name: 'transcribe_audio', displayName: 'Transcribe Audio', description: 'Transcribe audio from portfolio or URL' },
   { name: 'analyze_node', displayName: 'Analyze Node', description: 'Semantic analysis of a single node' },

@@ -680,10 +680,58 @@ async function executeGetAlbumImages(input, env) {
   }
 }
 
+// ── User profile operations ───────────────────────────────────────
+
+async function executeWhoAmI(input, env) {
+  const userId = input.userId
+  if (!userId) throw new Error('No user context available')
+
+  // 1. Fetch profile from dashboard API
+  let profile = {}
+  try {
+    const profileRes = await fetch(`https://dashboard.vegvisr.org/userdata?email=${encodeURIComponent(userId)}`)
+    if (profileRes.ok) {
+      profile = await profileRes.json()
+    }
+  } catch {
+    // Dashboard may be unreachable — continue with partial data
+  }
+
+  // 2. Query D1 for configured API keys
+  let apiKeys = []
+  try {
+    const keysResult = await env.DB.prepare(
+      'SELECT provider, enabled, last_used FROM user_api_keys WHERE user_id = ?'
+    ).bind(userId).all()
+    apiKeys = (keysResult.results || []).map(k => ({
+      provider: k.provider,
+      enabled: !!k.enabled,
+      lastUsed: k.last_used || null,
+    }))
+  } catch {
+    // Table may not exist yet — continue without keys
+  }
+
+  return {
+    email: userId,
+    role: profile.role || 'user',
+    phone: profile.phone || null,
+    phoneVerifiedAt: profile.phoneVerifiedAt || null,
+    profileImage: profile.profileimage || null,
+    branding: {
+      mySite: profile.branding?.mySite || null,
+      myLogo: profile.branding?.myLogo || null,
+    },
+    apiKeys,
+    message: `User: ${userId}, Role: ${profile.role || 'user'}, API keys: ${apiKeys.length} configured`,
+  }
+}
+
 // ── Audio operations ──────────────────────────────────────────────
 
 async function executeListRecordings(input, env) {
-  const { userEmail, limit = 20, query } = input
+  const { limit = 20, query } = input
+  const userEmail = input.userEmail || input.userId
   if (!userEmail) throw new Error('userEmail is required')
 
   let url
@@ -721,7 +769,8 @@ async function executeListRecordings(input, env) {
 }
 
 async function executeTranscribeAudio(input, env) {
-  const { recordingId, userEmail, audioUrl, service = 'openai', language, saveToPortfolio = false } = input
+  const { recordingId, audioUrl, service = 'openai', language, saveToPortfolio = false } = input
+  const userEmail = input.userEmail || input.userId
 
   let resolvedUrl = audioUrl
   let resolvedRecordingId = recordingId
@@ -1032,6 +1081,8 @@ async function executeTool(toolName, toolInput, env, operationMap) {
       return { reference: FORMATTING_REFERENCE }
     case 'get_node_types_reference':
       return { reference: NODE_TYPES_REFERENCE }
+    case 'who_am_i':
+      return await executeWhoAmI(toolInput, env)
     case 'list_recordings':
       return await executeListRecordings(toolInput, env)
     case 'transcribe_audio':
