@@ -680,6 +680,110 @@ async function executeGetAlbumImages(input, env) {
   }
 }
 
+// ── Audio operations ──────────────────────────────────────────────
+
+async function executeListRecordings(input, env) {
+  const { userEmail, limit = 20, query } = input
+  if (!userEmail) throw new Error('userEmail is required')
+
+  let url
+  if (query) {
+    url = `https://audio-portfolio-worker/search-recordings?userEmail=${encodeURIComponent(userEmail)}&query=${encodeURIComponent(query)}`
+  } else {
+    url = `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(userEmail)}&limit=${limit}`
+  }
+
+  const res = await env.AUDIO_PORTFOLIO.fetch(url)
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Failed to list recordings: ${err}`)
+  }
+
+  const data = await res.json()
+  const recordings = (data.recordings || []).map(r => ({
+    recordingId: r.recordingId,
+    displayName: r.displayName || r.fileName,
+    fileName: r.fileName,
+    duration: r.duration,
+    fileSize: r.fileSize,
+    tags: r.tags || [],
+    category: r.category || '',
+    hasTranscription: !!(r.transcriptionText),
+    audioUrl: r.r2Url || '',
+    createdAt: r.createdAt || '',
+  }))
+
+  return {
+    message: `Found ${recordings.length} recording(s) for ${userEmail}`,
+    total: data.total || recordings.length,
+    recordings,
+  }
+}
+
+async function executeTranscribeAudio(input, env) {
+  const { recordingId, userEmail, audioUrl, service = 'openai', language, saveToPortfolio = false } = input
+
+  let resolvedUrl = audioUrl
+  let resolvedRecordingId = recordingId
+
+  // 1. Resolve audio URL from portfolio if recordingId provided
+  if (recordingId && userEmail && !audioUrl) {
+    const listRes = await env.AUDIO_PORTFOLIO.fetch(
+      `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(userEmail)}&limit=200`
+    )
+    if (!listRes.ok) throw new Error('Failed to fetch recordings from portfolio')
+    const listData = await listRes.json()
+    const recording = (listData.recordings || []).find(r => r.recordingId === recordingId)
+    if (!recording) throw new Error(`Recording "${recordingId}" not found in portfolio`)
+    resolvedUrl = recording.r2Url
+    if (!resolvedUrl) throw new Error(`Recording "${recordingId}" has no audio URL`)
+  }
+
+  if (!resolvedUrl) {
+    throw new Error('Provide either recordingId + userEmail or audioUrl')
+  }
+
+  // 2. Call whisper-worker for transcription
+  const params = new URLSearchParams({ url: resolvedUrl, service })
+  if (language) params.set('language', language)
+
+  const transcribeRes = await env.WHISPER_WORKER.fetch(
+    `https://whisper-worker/transcribe?${params.toString()}`
+  )
+
+  if (!transcribeRes.ok) {
+    const err = await transcribeRes.text()
+    throw new Error(`Transcription failed: ${err}`)
+  }
+
+  const transcribeData = await transcribeRes.json()
+  const text = transcribeData.text || ''
+
+  // 3. Optionally save back to portfolio
+  let savedToPortfolio = false
+  if (saveToPortfolio && resolvedRecordingId && userEmail && text) {
+    const updateRes = await env.AUDIO_PORTFOLIO.fetch('https://audio-portfolio-worker/update-recording', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userEmail,
+        recordingId: resolvedRecordingId,
+        transcriptionText: text,
+      }),
+    })
+    savedToPortfolio = updateRes.ok
+  }
+
+  return {
+    text,
+    recordingId: resolvedRecordingId || null,
+    audioUrl: resolvedUrl,
+    service,
+    savedToPortfolio,
+    message: `Transcribed ${text.length} characters via ${service}${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
+  }
+}
+
 // ── Semantic analysis operations ──────────────────────────────────
 
 const ANALYSIS_MODEL = 'claude-sonnet-4-20250514'
@@ -813,7 +917,7 @@ async function executeAnalyzeGraph(input, env) {
 - sentiment: overall sentiment ("positive", "negative", "neutral", "mixed")
 - summary: 2-3 sentence summary of what this graph is about
 - topicClusters: array of { "topic": string, "nodeIds": string[], "description": string } grouping related nodes
-- nodeRankings: array of { "nodeId": string, "label": string, "weight": number (0.0-1.0), "reason": string } sorted by weight descending (most important first)
+- nodeRankings: array of { "nodeId": string, "label": string, "weight": number (0.0-1.0), "sentiment": "positive"|"negative"|"neutral"|"mixed", "reason": string } sorted by weight descending (most important first). Each node MUST have its own sentiment.
 - language: primary language code of the content
 
 Graph title: ${graphData.title || graphData.metadata?.title || 'Untitled'}
@@ -928,6 +1032,10 @@ async function executeTool(toolName, toolInput, env, operationMap) {
       return { reference: FORMATTING_REFERENCE }
     case 'get_node_types_reference':
       return { reference: NODE_TYPES_REFERENCE }
+    case 'list_recordings':
+      return await executeListRecordings(toolInput, env)
+    case 'transcribe_audio':
+      return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':
       return await executeAnalyzeNode(toolInput, env)
     case 'analyze_graph':
@@ -940,4 +1048,4 @@ async function executeTool(toolName, toolInput, env, operationMap) {
   }
 }
 
-export { executeTool, executeCreateHtmlFromTemplate }
+export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }

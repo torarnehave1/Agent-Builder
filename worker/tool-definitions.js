@@ -409,6 +409,34 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'list_recordings',
+    description: 'List audio recordings from the user audio portfolio. Returns recording metadata including titles, durations, tags, and transcription status. Use this to find recordings before transcribing them.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'Email of the user whose recordings to list' },
+        limit: { type: 'number', description: 'Max recordings to return (default 20)' },
+        query: { type: 'string', description: 'Optional search query to filter recordings by name, tags, or transcription text' }
+      },
+      required: ['userEmail']
+    }
+  },
+  {
+    name: 'transcribe_audio',
+    description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Returns the transcription text. Optionally saves the transcription back to the portfolio recording.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        recordingId: { type: 'string', description: 'Portfolio recording ID (e.g. rec_1709123456_abc). If provided, fetches the audio URL from portfolio metadata.' },
+        userEmail: { type: 'string', description: 'User email (required when using recordingId)' },
+        audioUrl: { type: 'string', description: 'Direct URL to audio file (e.g. https://audio.vegvisr.org/audio/...). Use this for files not in the portfolio.' },
+        service: { type: 'string', enum: ['openai', 'cloudflare'], description: 'Transcription service. Default: openai (higher quality)' },
+        language: { type: 'string', description: 'Language code hint (e.g. "en", "no"). Improves accuracy.' },
+        saveToPortfolio: { type: 'boolean', description: 'If true and recordingId provided, save transcription text back to portfolio metadata. Default: false' }
+      }
+    }
+  },
+  {
     name: 'analyze_node',
     description: 'Analyze semantic content of a single knowledge graph node using Claude. Returns sentiment, importance weight (0-1), keywords, and a brief summary. Optionally stores results in node metadata.',
     input_schema: {

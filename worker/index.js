@@ -13,7 +13,7 @@
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL } from './tool-definitions.js'
-import { executeTool, executeCreateHtmlFromTemplate } from './tool-executors.js'
+import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 
@@ -109,6 +109,32 @@ export default {
             'Access-Control-Allow-Headers': 'Content-Type, Authorization',
           },
         })
+      }
+
+      // POST /analyze - Direct semantic analysis (no agent loop)
+      if (pathname === '/analyze' && request.method === 'POST') {
+        const body = await request.json()
+        const { graphId, nodeId } = body
+
+        if (!graphId) {
+          return new Response(JSON.stringify({ error: 'graphId is required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+
+        try {
+          let result
+          if (nodeId) {
+            result = await executeAnalyzeNode({ graphId, nodeId, analysisType: 'all', store: false, userId: 'viewer' }, env)
+          } else {
+            result = await executeAnalyzeGraph({ graphId, store: false, userId: 'viewer' }, env)
+          }
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), {
+            status: 500, headers: corsHeaders
+          })
+        }
       }
 
       // GET /layout?contractId=xxx - Get saved node layout
