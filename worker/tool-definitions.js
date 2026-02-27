@@ -407,6 +407,42 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'analyze_node',
+    description: 'Analyze semantic content of a single knowledge graph node using Claude. Returns sentiment, importance weight (0-1), keywords, and a brief summary. Optionally stores results in node metadata.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph containing the node' },
+        nodeId: { type: 'string', description: 'The node to analyze' },
+        analysisType: {
+          type: 'string',
+          enum: ['sentiment', 'keywords', 'weight', 'summary', 'all'],
+          description: 'What to analyze. Default: "all"'
+        },
+        store: {
+          type: 'boolean',
+          description: 'If true, store results in node.metadata.analysis. Default: false'
+        }
+      },
+      required: ['graphId', 'nodeId']
+    }
+  },
+  {
+    name: 'analyze_graph',
+    description: 'Analyze all nodes in a knowledge graph using Claude. Returns graph-level sentiment, topic clusters, node importance rankings, and an overall summary. Best for understanding the full meaning of a graph.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph to analyze' },
+        store: {
+          type: 'boolean',
+          description: 'If true, store per-node weights in each node metadata. Default: false'
+        }
+      },
+      required: ['graphId']
+    }
   }
 ]
 

@@ -27,6 +27,8 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
+- **analyze_node**: Semantic analysis of a single node — returns sentiment, importance weight (0-1), keywords, and summary. Uses Claude Sonnet.
+- **analyze_graph**: Full graph semantic analysis — returns topic clusters, node importance rankings, overall sentiment, and summary. Uses Claude Sonnet.
 
 ## Dynamic KG API Tools (auto-loaded from OpenAPI spec)
 You also have access to tools prefixed with "kg_" that map directly to Knowledge Graph API endpoints.
@@ -57,8 +59,10 @@ Use these kg_ tools when the core tools don't cover what you need.
 12. **Custom apps**: When a user asks you to build an app, page, tool, or template that doesn't fit the 4 predefined templates, use \`create_html_node\` to generate a complete standalone HTML app. The HTML must be self-contained (all CSS in \`<style>\`, all JS in \`<script>\`). **CRITICAL: Never hardcode data into the HTML. Always fetch data dynamically at runtime using JavaScript fetch().** This keeps the HTML small and the app always up to date.
     - **Album images**: Use \`fetch('https://albums.vegvisr.org/photo-album?name=ALBUM_NAME')\` at runtime in the HTML's \`<script>\`. The response has \`{ images: ["key1", "key2", ...] }\`. Render each as \`https://vegvisr.imgix.net/{key}?w=800&h=600&fit=crop\`. Do NOT use get_album_images to embed URLs in the HTML — let the app fetch them live.
     - **Graph data**: Use \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\` at runtime.
-    - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, show the viewer link so the user can see their app.
-13. **User templates**: Before building a custom app from scratch, check if the user has existing templates with \`kg_get_templates\`. If a similar template exists, offer to use it as a starting point. When creating a new custom app, mention that the user can save it as a reusable template using the "Save as Template" button that appears on the tool result card.`
+    - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, ALWAYS include the viewUrl from the tool result as a markdown link so the user gets a clickable graph card: \`[App Title](viewUrl)\`.
+    - **Graph summaries API**: When fetching \`/getknowgraphsummaries\`, the response has \`data.results\` (not \`data.graphs\`). Each result has nested \`metadata\` object: use \`r.metadata.title\`, \`r.metadata.metaArea\`, \`r.metadata.category\` — NOT flat fields like \`r.metaArea\`.
+13. **User templates**: Before building a custom app from scratch, check if the user has existing templates with \`kg_get_templates\`. If a similar template exists, offer to use it as a starting point. When creating a new custom app, mention that the user can save it as a reusable template using the "Save as Template" button that appears on the tool result card.
+14. **Semantic analysis**: Use \`analyze_node\` when the user asks about the meaning, sentiment, or importance of specific content. Use \`analyze_graph\` when they want to understand the overall theme, find the most important nodes, or get topic clusters. Pass \`store: true\` to save results in node metadata for future reference. The analysis uses Claude Sonnet for balanced quality and cost.`
 
 /**
  * Fulltext Formatting Elements reference — returned by get_formatting_reference tool

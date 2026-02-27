@@ -145,15 +145,18 @@ async function executeListGraphs(input, env) {
   )
   if (!res.ok) throw new Error('Failed to fetch graph summaries')
   const data = await res.json()
-  let results = (data.results || []).map(g => ({
-    id: g.id,
-    title: g.metadata_title || g.id,
-    description: g.metadata_description || '',
-    category: g.metadata_category || '',
-    metaArea: g.metadata_meta_area || '',
-    nodeCount: g.node_count || 0,
-    updatedAt: g.updated_at || '',
-  }))
+  let results = (data.results || []).map(g => {
+    const meta = g.metadata || {}
+    return {
+      id: g.id,
+      title: meta.title || g.title || g.id,
+      description: meta.description || '',
+      category: meta.category || '',
+      metaArea: meta.metaArea || '',
+      nodeCount: g.nodeCount || g.node_count || 0,
+      updatedAt: meta.updatedAt || g.updatedAt || '',
+    }
+  })
 
   // Filter by metaArea if provided (case-insensitive partial match)
   if (input.metaArea) {
@@ -181,15 +184,22 @@ async function executeListMetaAreas(input, env) {
   const categoryCounts = {}
 
   for (const g of (data.results || [])) {
-    // Parse meta areas (stored as "#TAG1 #TAG2" or "#TAG1#TAG2")
-    const rawMeta = g.metadata_meta_area || ''
+    // metadata is a nested object: g.metadata.metaArea, g.metadata.category
+    const meta = g.metadata || {}
+
+    // Parse meta areas (stored as "TAG1" or "TAG1 TAG2")
+    const rawMeta = meta.metaArea || ''
     const areas = rawMeta.split('#').map(s => s.trim().toUpperCase()).filter(Boolean)
+    // If no # delimiters, treat the whole string as one area
+    if (areas.length === 0 && rawMeta.trim()) {
+      areas.push(rawMeta.trim().toUpperCase())
+    }
     for (const area of areas) {
       metaAreaCounts[area] = (metaAreaCounts[area] || 0) + 1
     }
 
-    // Parse categories (stored as "#Cat1 #Cat2" or single string)
-    const rawCat = g.metadata_category || ''
+    // Parse categories (stored as "#Cat1 #Cat2")
+    const rawCat = meta.category || ''
     const cats = rawCat.split('#').map(s => s.trim()).filter(Boolean)
     for (const cat of cats) {
       categoryCounts[cat] = (categoryCounts[cat] || 0) + 1
@@ -227,7 +237,8 @@ async function executeCreateHtmlNode(input, env) {
         info: input.htmlContent,
         bibl: input.references || [],
         position: { x: 0, y: 0 },
-        visible: true
+        visible: true,
+        metadata: { origin: 'custom', createdAt: new Date().toISOString() }
       }
     })
   })
@@ -239,8 +250,10 @@ async function executeCreateHtmlNode(input, env) {
   return {
     graphId: input.graphId,
     nodeId: input.nodeId,
+    origin: 'custom',
     version: data.newVersion,
-    message: `HTML node "${input.label}" added successfully`
+    message: `HTML node "${input.label}" added successfully`,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
   }
 }
 
@@ -445,7 +458,8 @@ async function executeCreateHtmlFromTemplate(input, env) {
         info: html,
         bibl: [],
         position: { x: 0, y: 0 },
-        visible: true
+        visible: true,
+        metadata: { origin: 'template', templateId, createdAt: new Date().toISOString() }
       }
     })
   })
@@ -517,11 +531,13 @@ async function executeCreateHtmlFromTemplate(input, env) {
   return {
     graphId: input.graphId,
     nodeId: nodeId,
+    origin: 'template',
+    templateId,
     version: data.newVersion,
     htmlSize: html.length,
     sectionsCreated: createdSections.length,
     headerImageNodeId: headerImageNodeId,
-    message: `Editable HTML page "${input.title}" created (${html.length} bytes) with ${createdSections.length} content sections${headerImageNodeId ? ' and a header image node' : ''}. The page discovers nodes with # prefix labels.`,
+    message: `Editable HTML page "${input.title}" created from template "${templateId}" (${html.length} bytes) with ${createdSections.length} content sections${headerImageNodeId ? ' and a header image node' : ''}. The page discovers nodes with # prefix labels.`,
     viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
   }
 }
@@ -664,6 +680,214 @@ async function executeGetAlbumImages(input, env) {
   }
 }
 
+// ── Semantic analysis operations ──────────────────────────────────
+
+const ANALYSIS_MODEL = 'claude-sonnet-4-20250514'
+
+async function executeAnalyzeNode(input, env) {
+  const { graphId, nodeId, analysisType = 'all', store = false } = input
+
+  // 1. Fetch the graph and find the node
+  const graphRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${graphId}`
+  )
+  if (!graphRes.ok) throw new Error('Failed to fetch graph')
+  const graphData = await graphRes.json()
+  const node = (graphData.nodes || []).find(n => n.id === nodeId)
+  if (!node) throw new Error(`Node "${nodeId}" not found in graph`)
+
+  // 2. Prepare content (truncate for cost control)
+  const content = (node.info || '').slice(0, 4000)
+  if (!content.trim()) {
+    return { graphId, nodeId, analysis: null, message: 'Node has no content to analyze' }
+  }
+
+  // 3. Call Claude for analysis
+  const analysisPrompt = `Analyze this content and return a JSON object with:
+- sentiment: "positive", "negative", "neutral", or "mixed"
+- sentimentScore: number from -1.0 to 1.0
+- weight: number from 0.0 to 1.0 (importance/significance of this content)
+- keywords: array of 3-8 key terms extracted from the content
+- summary: 1-2 sentence summary of the content's meaning
+- language: detected language code (e.g. "en", "no", "de")
+
+Content type: ${node.type || 'unknown'}
+Title: ${node.label || 'Untitled'}
+Content:
+${content}
+
+Return ONLY the JSON object, no markdown fences or explanation.`
+
+  const claudeRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'system-analysis',
+      messages: [{ role: 'user', content: analysisPrompt }],
+      model: ANALYSIS_MODEL,
+      max_tokens: 1000,
+      temperature: 0.1,
+    }),
+  })
+
+  if (!claudeRes.ok) throw new Error(`Claude analysis failed (status: ${claudeRes.status})`)
+  const claudeData = await claudeRes.json()
+
+  // 4. Parse response
+  const textBlock = (claudeData.content || []).find(b => b.type === 'text')
+  if (!textBlock) throw new Error('No analysis response from Claude')
+
+  let analysis
+  try {
+    analysis = JSON.parse(textBlock.text.trim())
+  } catch {
+    // If Claude didn't return clean JSON, wrap it
+    analysis = { raw: textBlock.text.trim(), parseError: true }
+  }
+
+  // Filter to requested type
+  if (analysisType !== 'all' && !analysis.parseError) {
+    const filtered = {}
+    if (analysisType === 'sentiment') {
+      filtered.sentiment = analysis.sentiment
+      filtered.sentimentScore = analysis.sentimentScore
+    } else if (analysisType === 'keywords') {
+      filtered.keywords = analysis.keywords
+    } else if (analysisType === 'weight') {
+      filtered.weight = analysis.weight
+    } else if (analysisType === 'summary') {
+      filtered.summary = analysis.summary
+    }
+    analysis = filtered
+  }
+
+  // 5. Optionally store in node metadata
+  if (store && !analysis.parseError) {
+    const existingMeta = node.metadata || {}
+    await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graphId,
+        nodeId,
+        fields: {
+          metadata: { ...existingMeta, analysis: { ...analysis, analyzedAt: new Date().toISOString() } }
+        }
+      }),
+    })
+  }
+
+  return {
+    graphId,
+    nodeId,
+    nodeLabel: node.label,
+    analysis,
+    stored: store,
+    message: `Analyzed node "${node.label}" — sentiment: ${analysis.sentiment || 'n/a'}, weight: ${analysis.weight || 'n/a'}`
+  }
+}
+
+async function executeAnalyzeGraph(input, env) {
+  const { graphId, store = false } = input
+
+  // 1. Fetch full graph
+  const graphRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${graphId}`
+  )
+  if (!graphRes.ok) throw new Error('Failed to fetch graph')
+  const graphData = await graphRes.json()
+  const nodes = graphData.nodes || []
+
+  if (nodes.length === 0) {
+    return { graphId, analysis: null, message: 'Graph has no nodes to analyze' }
+  }
+
+  // 2. Build condensed node list for Claude (limit content preview)
+  const nodeDescriptions = nodes.map(n => {
+    const preview = (n.info || '').replace(/<[^>]*>/g, '').slice(0, 200)
+    return `- [${n.id}] ${n.label || 'Untitled'} (${n.type || 'unknown'}): ${preview}`
+  }).join('\n')
+
+  // 3. Call Claude for graph-level analysis
+  const analysisPrompt = `Analyze this knowledge graph and return a JSON object with:
+- sentiment: overall sentiment ("positive", "negative", "neutral", "mixed")
+- summary: 2-3 sentence summary of what this graph is about
+- topicClusters: array of { "topic": string, "nodeIds": string[], "description": string } grouping related nodes
+- nodeRankings: array of { "nodeId": string, "label": string, "weight": number (0.0-1.0), "reason": string } sorted by weight descending (most important first)
+- language: primary language code of the content
+
+Graph title: ${graphData.title || graphData.metadata?.title || 'Untitled'}
+Total nodes: ${nodes.length}
+Total edges: ${(graphData.edges || []).length}
+
+Nodes:
+${nodeDescriptions}
+
+Return ONLY the JSON object, no markdown fences or explanation.`
+
+  const claudeRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'system-analysis',
+      messages: [{ role: 'user', content: analysisPrompt }],
+      model: ANALYSIS_MODEL,
+      max_tokens: 4000,
+      temperature: 0.1,
+    }),
+  })
+
+  if (!claudeRes.ok) throw new Error(`Claude analysis failed (status: ${claudeRes.status})`)
+  const claudeData = await claudeRes.json()
+
+  // 4. Parse response
+  const textBlock = (claudeData.content || []).find(b => b.type === 'text')
+  if (!textBlock) throw new Error('No analysis response from Claude')
+
+  let analysis
+  try {
+    analysis = JSON.parse(textBlock.text.trim())
+  } catch {
+    analysis = { raw: textBlock.text.trim(), parseError: true }
+  }
+
+  // 5. Optionally store per-node weights
+  if (store && !analysis.parseError && analysis.nodeRankings) {
+    for (const ranking of analysis.nodeRankings) {
+      const node = nodes.find(n => n.id === ranking.nodeId)
+      if (!node) continue
+      const existingMeta = node.metadata || {}
+      await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          graphId,
+          nodeId: ranking.nodeId,
+          fields: {
+            metadata: {
+              ...existingMeta,
+              analysis: {
+                weight: ranking.weight,
+                reason: ranking.reason,
+                analyzedAt: new Date().toISOString()
+              }
+            }
+          }
+        }),
+      })
+    }
+  }
+
+  return {
+    graphId,
+    nodeCount: nodes.length,
+    edgeCount: (graphData.edges || []).length,
+    analysis,
+    stored: store,
+    message: `Analyzed graph "${graphData.title || graphId}" — ${analysis.topicClusters?.length || 0} topic clusters, ${analysis.nodeRankings?.length || 0} nodes ranked`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap) {
@@ -704,6 +928,10 @@ async function executeTool(toolName, toolInput, env, operationMap) {
       return { reference: FORMATTING_REFERENCE }
     case 'get_node_types_reference':
       return { reference: NODE_TYPES_REFERENCE }
+    case 'analyze_node':
+      return await executeAnalyzeNode(toolInput, env)
+    case 'analyze_graph':
+      return await executeAnalyzeGraph(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
