@@ -49,11 +49,16 @@ export interface ContractGraph {
   tags?: string[];
 }
 
+export interface ContractTools {
+  enabled?: string[];
+}
+
 export interface AgentContract {
   version?: string;
   type?: string;
   graph?: ContractGraph;
   node?: ContractNode;
+  tools?: ContractTools;
   userPrompt?: string;
   _templateExample?: {
     name: string;

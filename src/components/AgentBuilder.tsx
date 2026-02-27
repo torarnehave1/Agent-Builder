@@ -34,6 +34,23 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const edgesRef = useRef<Edge[]>([]);
   const [graphState, setGraphState] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [templates, setTemplates] = useState<Array<{ id: string; name: string; category: string }>>([]);
+
+  // Fetch saved templates on mount
+  useEffect(() => {
+    fetch('https://knowledge.vegvisr.org/getAITemplates')
+      .then(res => res.json())
+      .then(data => {
+        if (data.results) {
+          setTemplates(data.results.map((t: { id: string; name: string; category?: string }) => ({
+            id: t.id,
+            name: t.name,
+            category: t.category || 'General',
+          })));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Apply saved layout positions over computed defaults
   const applyLayout = (nodes: Node[], layout: Record<string, { x: number; y: number }> | null): Node[] => {
@@ -77,20 +94,20 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         if (contractRes.ok) {
           const data = await contractRes.json();
           const contract: AgentContract = data.contract ?? data;
-          const { nodes, edges } = contractToReactFlow(contract, contractName);
+          const { nodes, edges } = contractToReactFlow(contract, contractName, templates);
           const finalNodes = applyLayout(nodes, savedLayout);
           nodesRef.current = finalNodes;
           edgesRef.current = edges;
           setGraphState({ nodes: finalNodes, edges });
         } else {
-          const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName);
+          const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName, templates);
           const finalNodes = applyLayout(nodes, savedLayout);
           nodesRef.current = finalNodes;
           edgesRef.current = edges;
           setGraphState({ nodes: finalNodes, edges });
         }
       } catch {
-        const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName);
+        const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName, templates);
         nodesRef.current = nodes;
         edgesRef.current = edges;
         setGraphState({ nodes, edges });
@@ -99,7 +116,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       }
     };
     loadContract();
-  }, [contractId, contractName]);
+  }, [contractId, contractName, templates]);
 
   const handleNodeSelect = useCallback((node: Node | null) => {
     setSelectedNode(node);

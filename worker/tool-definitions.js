@@ -291,7 +291,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_graphs',
-    description: 'List available knowledge graphs with summaries. Returns graph IDs, titles, categories, and node counts.',
+    description: 'List available knowledge graphs with summaries. Returns graph IDs, titles, categories, meta areas, and node counts. Use metaArea to filter by a specific meta area (e.g. "NEUROSCIENCE", "AI TECHNOLOGY").',
     input_schema: {
       type: 'object',
       properties: {
@@ -302,8 +302,20 @@ const TOOL_DEFINITIONS = [
         offset: {
           type: 'number',
           description: 'Offset for pagination (default 0)'
+        },
+        metaArea: {
+          type: 'string',
+          description: 'Filter by meta area (e.g. "NEUROSCIENCE", "AI TECHNOLOGY"). Case-insensitive partial match.'
         }
       }
+    }
+  },
+  {
+    name: 'list_meta_areas',
+    description: 'List all unique meta areas and categories across knowledge graphs. Returns sorted lists with graph counts for each. Use this when the user asks "what topics exist?", "what meta areas are available?", or wants to browse/discover content by topic.',
+    input_schema: {
+      type: 'object',
+      properties: {}
     }
   },
   {

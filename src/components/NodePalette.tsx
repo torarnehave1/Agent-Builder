@@ -10,7 +10,9 @@ const paletteItems = [
   { type: 'section', label: '+ Section', color: 'blue' },
   { type: 'token-rule', label: '+ Rule', color: 'green' },
   { type: 'contractRoot', label: '+ Contract', color: 'purple' },
-  { type: 'category', label: '+ Template', color: 'amber' },
+  { type: 'category', label: '+ Category', color: 'purple' },
+  { type: 'tool', label: '+ Tool', color: 'amber' },
+  { type: 'template', label: '+ Template', color: 'rose' },
 ];
 
 const colorClasses: Record<string, string> = {
@@ -18,6 +20,7 @@ const colorClasses: Record<string, string> = {
   green: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20',
   purple: 'border-purple-500/30 bg-purple-500/10 text-purple-400 hover:bg-purple-500/20',
   amber: 'border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20',
+  rose: 'border-rose-500/30 bg-rose-500/10 text-rose-400 hover:bg-rose-500/20',
 };
 
 export default function NodePalette({ onAddNode }: Props) {

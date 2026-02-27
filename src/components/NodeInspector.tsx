@@ -1,5 +1,5 @@
 import type { Node } from '@xyflow/react';
-import type { ContractRootData, CategoryData, TokenData, ToggleData, SectionData } from '../lib/contractToGraph';
+import type { ContractRootData, CategoryData, TokenData, ToggleData, SectionData, ToolNodeData, TemplateNodeData } from '../lib/contractToGraph';
 
 interface Props {
   selectedNode: Node | null;
@@ -25,6 +25,8 @@ export default function NodeInspector({ selectedNode, onUpdateNode, onDeleteNode
       {type === 'token' && <TokenInspector id={id} data={data as TokenData} onUpdate={onUpdateNode} />}
       {type === 'toggle' && <ToggleInspector id={id} data={data as ToggleData} onUpdate={onUpdateNode} />}
       {type === 'section' && <SectionInspector id={id} data={data as SectionData} onUpdate={onUpdateNode} />}
+      {type === 'tool' && <ToolInspector data={data as ToolNodeData} />}
+      {type === 'template' && <TemplateInspector data={data as TemplateNodeData} />}
       <button
         type="button"
         onClick={() => onDeleteNode(id)}
@@ -109,6 +111,32 @@ function SectionInspector({ id, data, onUpdate }: { id: string; data: SectionDat
       <div className="text-[11px] text-gray-400">Type: content section</div>
       <FieldLabel label="SECTION NAME" />
       <FieldInput value={data.sectionName} onChange={(v) => onUpdate(id, { ...data, sectionName: v })} />
+    </>
+  );
+}
+
+function ToolInspector({ data }: { data: ToolNodeData }) {
+  return (
+    <>
+      <div className="text-sm font-bold text-white">{data.displayName}</div>
+      <div className="text-[11px] text-gray-400">Type: agent tool</div>
+      <div className="text-[11px] text-gray-500 mt-1">{data.description}</div>
+      <div className="flex items-center gap-2 mt-2">
+        <div className={`w-2 h-2 rounded-full ${data.enabled ? 'bg-amber-500' : 'bg-gray-600'}`} />
+        <span className="text-[11px] text-gray-400">{data.enabled ? 'Enabled' : 'Disabled'}</span>
+      </div>
+      <div className="text-[10px] text-gray-600 font-mono mt-1">{data.toolName}</div>
+    </>
+  );
+}
+
+function TemplateInspector({ data }: { data: TemplateNodeData }) {
+  return (
+    <>
+      <div className="text-sm font-bold text-white">{data.templateName}</div>
+      <div className="text-[11px] text-gray-400">Type: template</div>
+      <div className="text-[11px] text-gray-500">Category: {data.category}</div>
+      <div className="text-[10px] text-gray-600 font-mono mt-1">ID: {data.templateId}</div>
     </>
   );
 }

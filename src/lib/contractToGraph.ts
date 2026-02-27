@@ -4,6 +4,7 @@
  */
 import type { Node, Edge } from '@xyflow/react';
 import type { AgentContract } from '../types/contract';
+import { TOOL_CATALOG } from './toolCatalog';
 
 // Node data types for custom nodes
 export interface ContractRootData { label: string; contractType: string; version?: string; [key: string]: unknown }
@@ -11,6 +12,8 @@ export interface CategoryData { label: string; description: string; color: strin
 export interface TokenData { tokenKey: string; tokenValue: string; [key: string]: unknown }
 export interface ToggleData { featureName: string; enabled: boolean; [key: string]: unknown }
 export interface SectionData { sectionName: string; [key: string]: unknown }
+export interface ToolNodeData { toolName: string; displayName: string; description: string; enabled: boolean; [key: string]: unknown }
+export interface TemplateNodeData { templateId: string; templateName: string; category: string; [key: string]: unknown }
 
 const POSITIONS = {
   root: { x: 400, y: 280 },
@@ -18,6 +21,8 @@ const POSITIONS = {
   features: { x: 80, y: 420 },
   content: { x: 620, y: 420 },
   validation: { x: 620, y: 130 },
+  tools: { x: 1100, y: 130 },
+  templates: { x: 1100, y: 420 },
 };
 
 /**
@@ -25,7 +30,8 @@ const POSITIONS = {
  */
 export function contractToReactFlow(
   contract: AgentContract,
-  contractName: string = 'Untitled Contract'
+  contractName: string = 'Untitled Contract',
+  templates?: Array<{ id: string; name: string; category: string }>,
 ): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
@@ -270,6 +276,98 @@ export function contractToReactFlow(
     }
   }
 
+  // Tools category — always shown
+  {
+    const enabledTools = contract.tools?.enabled || [];
+    const enabledCount = enabledTools.length;
+
+    nodes.push({
+      id: 'cat-tools',
+      type: 'category',
+      position: POSITIONS.tools,
+      data: {
+        label: 'Tools',
+        description: `${enabledCount}/${TOOL_CATALOG.length} enabled`,
+        color: 'amber',
+      } satisfies CategoryData,
+    });
+    edges.push({
+      id: 'e-root-tools',
+      source: 'contract-root',
+      target: 'cat-tools',
+      style: { stroke: 'rgba(124,58,237,0.4)', strokeWidth: 2 },
+      animated: true,
+    });
+
+    TOOL_CATALOG.forEach((tool, i) => {
+      const toolId = `tool-${tool.name}`;
+      nodes.push({
+        id: toolId,
+        type: 'tool',
+        position: {
+          x: POSITIONS.tools.x - 60 + (i % 2) * 180,
+          y: POSITIONS.tools.y + 90 + Math.floor(i / 2) * 55,
+        },
+        data: {
+          toolName: tool.name,
+          displayName: tool.displayName,
+          description: tool.description,
+          enabled: enabledTools.includes(tool.name),
+        } satisfies ToolNodeData,
+      });
+      edges.push({
+        id: `e-tools-${tool.name}`,
+        source: 'cat-tools',
+        target: toolId,
+        style: { stroke: 'rgba(245,158,11,0.3)', strokeWidth: 1.5 },
+      });
+    });
+  }
+
+  // Templates category — shown when template data is provided
+  if (templates && templates.length > 0) {
+    nodes.push({
+      id: 'cat-templates',
+      type: 'category',
+      position: POSITIONS.templates,
+      data: {
+        label: 'Templates',
+        description: `${templates.length} available`,
+        color: 'rose',
+      } satisfies CategoryData,
+    });
+    edges.push({
+      id: 'e-root-templates',
+      source: 'contract-root',
+      target: 'cat-templates',
+      style: { stroke: 'rgba(124,58,237,0.4)', strokeWidth: 2 },
+      animated: true,
+    });
+
+    templates.forEach((tmpl, i) => {
+      const tmplId = `template-${tmpl.id}`;
+      nodes.push({
+        id: tmplId,
+        type: 'template',
+        position: {
+          x: POSITIONS.templates.x - 40 + (i % 3) * 140,
+          y: POSITIONS.templates.y + 90 + Math.floor(i / 3) * 55,
+        },
+        data: {
+          templateId: tmpl.id,
+          templateName: tmpl.name,
+          category: tmpl.category || 'General',
+        } satisfies TemplateNodeData,
+      });
+      edges.push({
+        id: `e-templates-${tmpl.id}`,
+        source: 'cat-templates',
+        target: tmplId,
+        style: { stroke: 'rgba(244,63,94,0.3)', strokeWidth: 1.5 },
+      });
+    });
+  }
+
   return { nodes, edges };
 }
 
@@ -314,6 +412,13 @@ export function reactFlowToContract(nodes: Node[], _edges: Edge[]): AgentContrac
       const data = node.data as SectionData;
       contract.node?.content?.sections?.push(data.sectionName);
     }
+    if (node.type === 'tool') {
+      const data = node.data as ToolNodeData;
+      if (data.enabled) {
+        if (!contract.tools) contract.tools = { enabled: [] };
+        contract.tools.enabled!.push(data.toolName);
+      }
+    }
   }
 
   return contract;
@@ -325,6 +430,13 @@ export function reactFlowToContract(nodes: Node[], _edges: Edge[]): AgentContrac
 export const DEFAULT_CONTRACT: AgentContract = {
   version: '1.0',
   type: 'html-node',
+  tools: {
+    enabled: [
+      'create_graph', 'create_node', 'create_html_node',
+      'create_html_from_template', 'read_graph', 'read_node',
+      'patch_node', 'add_edge', 'list_graphs',
+    ],
+  },
   node: {
     css: {
       designSystem: 'dark-glass',

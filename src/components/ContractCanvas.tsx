@@ -21,6 +21,8 @@ import CategoryNode from './nodes/CategoryNode';
 import TokenNode from './nodes/TokenNode';
 import ToggleNode from './nodes/ToggleNode';
 import SectionNode from './nodes/SectionNode';
+import ToolNode from './nodes/ToolNode';
+import TemplateNode from './nodes/TemplateNode';
 
 interface Props {
   initialNodes: Node[];
@@ -95,6 +97,8 @@ export default function ContractCanvas({
     token: TokenNode,
     toggle: ToggleNode,
     section: SectionNode,
+    tool: ToolNode,
+    template: TemplateNode,
   }), []);
 
   const onConnect: OnConnect = useCallback(
@@ -180,6 +184,8 @@ export default function ContractCanvas({
               case 'token': return '#60a5fa';
               case 'toggle': return '#22c55e';
               case 'section': return '#3b82f6';
+              case 'tool': return '#f59e0b';
+              case 'template': return '#f43f5e';
               default: return '#6b7280';
             }
           }}
@@ -241,6 +247,20 @@ export function createNewNode(type: string, existingNodes: Node[]): Node {
         type: 'category',
         position: basePosition,
         data: { label: 'New Category', description: 'description', color: 'purple' },
+      };
+    case 'tool':
+      return {
+        id,
+        type: 'tool',
+        position: basePosition,
+        data: { toolName: 'new_tool', displayName: 'New Tool', description: '', enabled: false },
+      };
+    case 'template':
+      return {
+        id,
+        type: 'template',
+        position: basePosition,
+        data: { templateId: 'new', templateName: 'New Template', category: 'General' },
       };
     default:
       return {

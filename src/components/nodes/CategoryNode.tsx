@@ -20,6 +20,18 @@ const colorMap: Record<string, { bg: string; border: string; dot: string; text: 
     dot: 'bg-purple-500',
     text: 'text-purple-300',
   },
+  amber: {
+    bg: 'bg-amber-500/10',
+    border: 'border-amber-500/50',
+    dot: 'bg-amber-500',
+    text: 'text-amber-300',
+  },
+  rose: {
+    bg: 'bg-rose-500/10',
+    border: 'border-rose-500/50',
+    dot: 'bg-rose-500',
+    text: 'text-rose-300',
+  },
 };
 
 export default function CategoryNode({ data }: { data: CategoryData }) {

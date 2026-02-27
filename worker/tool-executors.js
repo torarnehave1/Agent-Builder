@@ -145,19 +145,70 @@ async function executeListGraphs(input, env) {
   )
   if (!res.ok) throw new Error('Failed to fetch graph summaries')
   const data = await res.json()
-  const results = (data.results || []).map(g => ({
+  let results = (data.results || []).map(g => ({
     id: g.id,
     title: g.metadata_title || g.id,
     description: g.metadata_description || '',
     category: g.metadata_category || '',
+    metaArea: g.metadata_meta_area || '',
     nodeCount: g.node_count || 0,
     updatedAt: g.updated_at || '',
   }))
+
+  // Filter by metaArea if provided (case-insensitive partial match)
+  if (input.metaArea) {
+    const filter = input.metaArea.toLowerCase()
+    results = results.filter(g => g.metaArea.toLowerCase().includes(filter))
+  }
+
   return {
     total: data.total || results.length,
     offset,
     limit,
     graphs: results,
+  }
+}
+
+async function executeListMetaAreas(input, env) {
+  // Fetch a large batch of summaries to aggregate meta areas and categories
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500`
+  )
+  if (!res.ok) throw new Error('Failed to fetch graph summaries')
+  const data = await res.json()
+
+  const metaAreaCounts = {}
+  const categoryCounts = {}
+
+  for (const g of (data.results || [])) {
+    // Parse meta areas (stored as "#TAG1 #TAG2" or "#TAG1#TAG2")
+    const rawMeta = g.metadata_meta_area || ''
+    const areas = rawMeta.split('#').map(s => s.trim().toUpperCase()).filter(Boolean)
+    for (const area of areas) {
+      metaAreaCounts[area] = (metaAreaCounts[area] || 0) + 1
+    }
+
+    // Parse categories (stored as "#Cat1 #Cat2" or single string)
+    const rawCat = g.metadata_category || ''
+    const cats = rawCat.split('#').map(s => s.trim()).filter(Boolean)
+    for (const cat of cats) {
+      categoryCounts[cat] = (categoryCounts[cat] || 0) + 1
+    }
+  }
+
+  // Sort by count descending
+  const metaAreas = Object.entries(metaAreaCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }))
+
+  const categories = Object.entries(categoryCounts)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, count]) => ({ name, count }))
+
+  return {
+    message: `Found ${metaAreas.length} meta areas and ${categories.length} categories`,
+    metaAreas,
+    categories,
   }
 }
 
@@ -639,6 +690,8 @@ async function executeTool(toolName, toolInput, env, operationMap) {
       return await executePatchNode(toolInput, env)
     case 'list_graphs':
       return await executeListGraphs(toolInput, env)
+    case 'list_meta_areas':
+      return await executeListMetaAreas(toolInput, env)
     case 'perplexity_search':
       return await executePerplexitySearch(toolInput, env)
     case 'search_pexels':
