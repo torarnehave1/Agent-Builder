@@ -72,20 +72,27 @@ function ToolCallCard({ tc, userId }: { tc: ToolCall; userId: string }) {
     try { resultStr = JSON.stringify(tc.result, null, 2).slice(0, 1000); } catch { resultStr = String(tc.result); }
   }
 
-  const canSaveAsTemplate = tc.tool === 'create_html_node' && tc.status === 'success';
+  const input = tc.input as Record<string, unknown>;
+  const isHtmlNode = tc.tool === 'create_html_node'
+    || (tc.tool === 'create_node' && (input.nodeType === 'html-node' || input.type === 'html-node'))
+    || tc.tool === 'create_html_from_template';
+  const canSaveAsTemplate = isHtmlNode && tc.status === 'success';
 
   const saveAsTemplate = async () => {
-    const input = tc.input as Record<string, unknown>;
+    // Get the HTML content from whichever tool was used
+    const htmlContent = (input.htmlContent || input.content || input.info || '') as string;
+    const label = (input.label || input.title || 'Custom App Template') as string;
+    const nodeId = (input.nodeId || input.node_id || `node-${Date.now()}`) as string;
     try {
       const res = await fetch('https://knowledge.vegvisr.org/addTemplate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-Token': userId },
         body: JSON.stringify({
-          name: (input.label as string) || 'Custom App Template',
-          node: { id: input.nodeId, label: input.label, type: 'html-node', info: input.htmlContent },
+          name: label,
+          node: { id: nodeId, label, type: 'html-node', info: htmlContent },
           category: 'Custom Apps',
           userId,
-          ai_instructions: { description: `Custom HTML app template: ${input.label}`, sourceGraphId: input.graphId },
+          ai_instructions: { description: `Custom HTML app template: ${label}`, sourceGraphId: input.graphId },
         }),
       });
       if (res.ok) setSavedAsTemplate(true);
