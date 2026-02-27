@@ -868,96 +868,17 @@ async function executeTranscribeAudio(input, env) {
     throw new Error('Provide either recordingId + userEmail or audioUrl')
   }
 
-  // 2. Download audio to check format and size
-  const audioRes = await fetch(resolvedUrl)
-  if (!audioRes.ok) throw new Error(`Failed to download audio file: ${audioRes.status}`)
-  const audioBlob = await audioRes.blob()
-  const urlFileName = resolvedUrl.split('/').pop() || 'audio'
-  const fileSize = audioBlob.size
-
-  // Detect format from extension and content type
-  const ext = (urlFileName.match(/\.(\w+)$/)?.[1] || '').toLowerCase()
-  const contentType = (audioBlob.type || '').toLowerCase()
-  const isContainerFormat = ['webm', 'ogg', 'opus', 'm4a', 'aac', 'mp4'].includes(ext)
-    || contentType.includes('webm') || contentType.includes('ogg') || contentType.includes('mp4')
-    || contentType.includes('m4a') || contentType.includes('aac')
-
-  // 3. For large container formats that can't be split server-side,
-  //    delegate to the frontend browser (which has AudioContext)
-  if (isContainerFormat && fileSize > 25 * 1024 * 1024) {
-    return {
-      clientSideRequired: true,
-      audioUrl: resolvedUrl,
-      recordingId: resolvedRecordingId || null,
-      format: ext || contentType,
-      fileSize,
-      language: language || null,
-      message: `This ${(ext || 'audio').toUpperCase()} file (${(fileSize / 1024 / 1024).toFixed(1)}MB) needs browser-based processing. Transcribing on your device...`,
-    }
-  }
-
-  // 4. For WAV, MP3, or small container files — use server-side chunked transcription
-  const formData = new FormData()
-  formData.append('file', audioBlob, urlFileName)
-  formData.append('userId', userEmail || input.userId)
-  formData.append('chunkDuration', '120')
-  if (language) formData.append('language', language)
-
-  const transcribeRes = await env.OPENAI_WORKER.fetch('https://openai-worker/audio/chunked-transcribe', {
-    method: 'POST',
-    body: formData,
-  })
-
-  if (!transcribeRes.ok) {
-    const err = await transcribeRes.text()
-    throw new Error(`Chunked transcription failed: ${err}`)
-  }
-
-  const transcription = await transcribeRes.json()
-  if (transcription.error) throw new Error(transcription.error)
-
-  const formatTime = (s) => {
-    const m = Math.floor(s / 60)
-    const sec = Math.floor(s % 60)
-    return `${m}:${sec.toString().padStart(2, '0')}`
-  }
-
-  const segments = []
-  for (const seg of (transcription.segments || [])) {
-    const segText = (seg.text || '').trim()
-    if (!segText) continue
-    if (transcription.totalChunks > 1) {
-      segments.push(`[${formatTime(seg.startTime)} - ${formatTime(seg.endTime)}] ${segText}`)
-    } else {
-      segments.push(segText)
-    }
-  }
-
-  const text = segments.join('\n\n')
-
-  // 3. Optionally save back to portfolio
-  let savedToPortfolio = false
-  if (saveToPortfolio && resolvedRecordingId && userEmail && text) {
-    const updateRes = await env.AUDIO_PORTFOLIO.fetch('https://audio-portfolio-worker/update-recording', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userEmail,
-        recordingId: resolvedRecordingId,
-        transcriptionText: text,
-      }),
-    })
-    savedToPortfolio = updateRes.ok
-  }
-
+  // 2. Always delegate transcription to the frontend browser.
+  //    The browser has AudioContext which can decode ANY audio format,
+  //    split into 120s WAV chunks, and send each to /audio — same as GrokChatPanel.
   return {
-    text,
-    chunks: transcription.totalChunks || 1,
-    format: transcription.format || 'unknown',
-    recordingId: resolvedRecordingId || null,
+    clientSideRequired: true,
     audioUrl: resolvedUrl,
-    savedToPortfolio,
-    message: `Transcribed ${text.length} characters (${transcription.totalChunks || 1} chunk${(transcription.totalChunks || 1) > 1 ? 's' : ''}) via openai-worker${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
+    recordingId: resolvedRecordingId || null,
+    language: language || null,
+    saveToPortfolio,
+    userEmail,
+    message: `Audio file found. Transcribing on your device...`,
   }
 }
 
