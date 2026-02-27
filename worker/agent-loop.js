@@ -126,8 +126,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           const toolStart = Date.now()
           log(`executing ${toolUse.name} (input: ${JSON.stringify(toolUse.input).slice(0, 200)})`)
           writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolUse.name, input: toolUse.input })}\n\n`))
+          // Progress callback for long-running tools
+          const onProgress = (msg) => {
+            writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ tool: toolUse.name, message: msg })}\n\n`))
+          }
           try {
-            const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
+            const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap, onProgress)
             const summary = result.message || `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)

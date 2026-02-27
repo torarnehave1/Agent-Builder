@@ -1094,9 +1094,205 @@ Return ONLY the JSON object, no markdown fences or explanation.`
   }
 }
 
+// ── Transcription analysis (Enkel Endring) ──────────────────────
+
+const TRANSCRIPTION_PROMPT_1_1 = `Analyser denne samtalen fra Enkel Endring-programmet og gi en strukturert rapport
+på norsk med følgende fem seksjoner:
+
+---
+
+## 1. 🔑 Nøkkeltemaer
+Hvilke hovedtemaer ble berørt i samtalen?
+List opp 3–6 temaer med en kort forklaring (2–3 setninger) for hvert tema.
+
+---
+
+## 2. ✅ Suksessmålinger
+Identifiser tegn på innsikt, fremgang eller positiv endring hos deltageren.
+Se etter:
+- Uttrykk for ny forståelse eller innsikt
+- Tegn på mer ro, harmoni eller lettelse
+- Utsagn om mindre stress eller bekymring
+- Øyeblikk der deltager opplever en "shift" i tankegang
+
+For hvert suksessmoment: beskriv hva som skjedde og hva det kan bety for deltagerens utvikling.
+
+---
+
+## 3. 🌟 Gullkorn
+Plukk ut 3–7 kraftfulle sitater fra samtalen – både fra mentor og deltager.
+Format:
+> "Sitat her" — [Mentor / Deltager]
+
+Velg sitater som er:
+- Innsiktsfulle eller tankevekkende
+- Morsomme eller menneskelige
+- Beskriver en viktig sannhet eller vendepunkt
+
+---
+
+## 4. 🎯 Handlingspunkter
+Hva er de konkrete neste stegene som kom frem i samtalen?
+List opp handlingspunkter for:
+- Deltager: hva de skal gjøre, utforske eller reflektere over
+- Mentor (Tor Arne): oppfølgingspunkter eller ting å ta med til neste samtale
+
+---
+
+## 5. 🪞 Mentorfeedback – Selvrefleksjon
+Gi konstruktiv tilbakemelding til Tor Arne som mentor.
+Vurder:
+- Hva fungerte bra? (lytting, spørsmål, timing, rom for innsikt)
+- Hva kan gjøres annerledes eller bedre neste gang?
+- Ble Tre Prinsippene (Sinn, Bevissthet, Tanke) brukt naturlig og effektivt?
+- Var det øyeblikk der samtalens retning kunne vært annerledes?
+
+Hold tilbakemeldingen støttende, konkret og fremadrettet.`
+
+const TRANSCRIPTION_PROMPT_GROUP = `Analyser denne gruppesamtalen fra Enkel Endring-programmet og gi en strukturert rapport
+på norsk med følgende fem seksjoner:
+
+---
+
+## 1. 🔑 Nøkkeltemaer
+Hvilke hovedtemaer ble berørt i gruppesamtalen?
+List opp 3–6 temaer med en kort forklaring (2–3 setninger) for hvert tema.
+Merk hvilke temaer som engasjerte flere deltagere.
+
+---
+
+## 2. ✅ Suksessmålinger
+Identifiser tegn på innsikt, fremgang eller positiv endring hos deltagerne.
+Se etter:
+- Uttrykk for ny forståelse eller innsikt hos enkeltpersoner
+- Tegn på mer ro, harmoni eller lettelse i gruppen
+- Øyeblikk der en deltagers deling utløste gjenkjennelse hos andre
+- Gruppedynamikk som fremmet åpenhet og trygghet
+
+For hvert suksessmoment: beskriv hva som skjedde, hvem som var involvert, og hva det kan bety.
+
+---
+
+## 3. 🌟 Gullkorn
+Plukk ut 3–7 kraftfulle sitater fra samtalen – fra mentor og deltagere.
+Format:
+> "Sitat her" — [Mentor / Deltager]
+
+Velg sitater som er:
+- Innsiktsfulle eller tankevekkende
+- Morsomme eller menneskelige
+- Beskriver en viktig sannhet eller vendepunkt
+- Skapte resonans i gruppen
+
+---
+
+## 4. 🎯 Handlingspunkter
+Hva er de konkrete neste stegene som kom frem i samtalen?
+List opp handlingspunkter for:
+- Deltagerne: felles og individuelle refleksjoner eller oppgaver
+- Mentor (Tor Arne): oppfølgingspunkter, temaer å ta videre, eller individuelle behov å følge opp
+
+---
+
+## 5. 🪞 Mentorfeedback – Selvrefleksjon
+Gi konstruktiv tilbakemelding til Tor Arne som mentor/fasilitator.
+Vurder:
+- Hva fungerte bra? (rommet som ble skapt, balanse mellom deltagere, timing)
+- Ble alle deltagere inkludert og sett?
+- Ble Tre Prinsippene (Sinn, Bevissthet, Tanke) brukt naturlig og effektivt?
+- Hva kan gjøres annerledes for å styrke gruppedynamikken neste gang?
+
+Hold tilbakemeldingen støttende, konkret og fremadrettet.`
+
+async function executeAnalyzeTranscription(input, env, progress = () => {}) {
+  const { graphId, nodeId, conversationType = '1-1', saveToGraph = true } = input
+
+  // 1. Fetch graph and find transcription node
+  progress('Henter transkripsjon fra graf...')
+  const graphRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${graphId}`
+  )
+  if (!graphRes.ok) throw new Error('Failed to fetch graph')
+  const graphData = await graphRes.json()
+  const nodes = graphData.nodes || []
+
+  let node
+  if (nodeId) {
+    node = nodes.find(n => n.id === nodeId)
+    if (!node) throw new Error(`Node "${nodeId}" not found in graph`)
+  } else {
+    // Find first fulltext node
+    node = nodes.find(n => n.type === 'fulltext')
+    if (!node) throw new Error('No fulltext node found in graph. Provide a nodeId.')
+  }
+
+  const transcriptionText = (node.info || '').trim()
+  if (!transcriptionText) {
+    return { graphId, nodeId: node.id, message: 'Node has no transcription text to analyze' }
+  }
+
+  // 2. Select prompt template based on conversation type
+  const systemPrompt = conversationType === 'group'
+    ? TRANSCRIPTION_PROMPT_GROUP
+    : TRANSCRIPTION_PROMPT_1_1
+
+  // 3. Send to Claude for analysis
+  progress('Analyserer samtalen med Claude...')
+  const claudeRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'system-analysis',
+      messages: [{ role: 'user', content: `${systemPrompt}\n\n---\n\nTranskripsjon:\n\n${transcriptionText}` }],
+      model: ANALYSIS_MODEL,
+      max_tokens: 4000,
+      temperature: 0.3,
+    }),
+  })
+
+  if (!claudeRes.ok) throw new Error(`Claude analysis failed (status: ${claudeRes.status})`)
+  const claudeData = await claudeRes.json()
+
+  const textBlock = (claudeData.content || []).find(b => b.type === 'text')
+  if (!textBlock) throw new Error('No analysis response from Claude')
+
+  const analysisText = textBlock.text.trim()
+
+  // 4. Optionally save analysis as a new fulltext node in the same graph
+  if (saveToGraph) {
+    progress('Lagrer analyse i grafen...')
+    const analysisNodeId = `node-analysis-${Date.now()}`
+    const typeLabel = conversationType === 'group' ? 'Gruppesamtale' : '1-1 Samtale'
+    await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graphId,
+        node: {
+          id: analysisNodeId,
+          label: `# Analyse – ${typeLabel}`,
+          type: 'fulltext',
+          info: analysisText,
+          color: '#E8A838',
+        }
+      }),
+    })
+  }
+
+  return {
+    graphId,
+    nodeId: node.id,
+    conversationType,
+    savedToGraph: saveToGraph,
+    analysisText,
+    message: `Analyserte ${conversationType === 'group' ? 'gruppesamtale' : '1-1 samtale'} transkripsjon${saveToGraph ? ' og lagret analysen i grafen' : ''}`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
-async function executeTool(toolName, toolInput, env, operationMap) {
+async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
+  const progress = typeof onProgress === 'function' ? onProgress : () => {}
   switch (toolName) {
     case 'create_graph':
       return await executeCreateGraph(toolInput, env)
@@ -1144,6 +1340,8 @@ async function executeTool(toolName, toolInput, env, operationMap) {
       return await executeAnalyzeNode(toolInput, env)
     case 'analyze_graph':
       return await executeAnalyzeGraph(toolInput, env)
+    case 'analyze_transcription':
+      return await executeAnalyzeTranscription(toolInput, env, progress)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

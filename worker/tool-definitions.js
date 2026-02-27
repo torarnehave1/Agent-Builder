@@ -478,6 +478,27 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'analyze_transcription',
+    description: 'Analyze a conversation transcription from the Enkel Endring program. Fetches the transcription from a graph node and produces a structured Norwegian-language report with: key themes, success indicators, powerful quotes, action points, and mentor feedback. Use this when the user asks for a "vurdering", "analyse", or "rapport" of a transcription.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph containing the transcription node' },
+        nodeId: { type: 'string', description: 'The node with the transcription text. If not provided, uses the first fulltext node in the graph.' },
+        conversationType: {
+          type: 'string',
+          enum: ['1-1', 'group'],
+          description: 'Type of conversation. "1-1" for individual sessions, "group" for group sessions. Affects analysis focus. Default: "1-1"'
+        },
+        saveToGraph: {
+          type: 'boolean',
+          description: 'If true, save the analysis as a new fulltext node in the same graph. Default: true'
+        }
+      },
+      required: ['graphId']
+    }
   }
 ]
 

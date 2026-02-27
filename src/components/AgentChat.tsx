@@ -45,6 +45,7 @@ interface ToolCall {
   status: 'running' | 'success' | 'error';
   summary?: string;
   result?: unknown;
+  progress?: string;
 }
 
 interface ChatMessage {
@@ -54,7 +55,7 @@ interface ChatMessage {
 }
 
 interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'text' | 'done' | 'error';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error';
   data: Record<string, unknown>;
 }
 
@@ -119,7 +120,7 @@ function ToolCallCard({ tc, userId }: { tc: ToolCall; userId: string }) {
         <span className="text-sm">&#x1f527;</span>
         <span className="font-semibold text-white">{tc.tool}</span>
         <span className={`ml-auto text-xs ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
-          {tc.status === 'running' ? 'Running...' : tc.status === 'success' ? (tc.summary || 'Done') : 'Failed'}
+          {tc.status === 'running' ? (tc.progress || 'Running...') : tc.status === 'success' ? (tc.summary || 'Done') : 'Failed'}
         </span>
         <span className={`text-[10px] text-white/50 transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
       </button>
@@ -880,6 +881,18 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
               });
               break;
 
+            case 'tool_progress': {
+              const progressTool = ev.data.tool as string;
+              const progressMsg = ev.data.message as string;
+              for (let i = next.toolCalls.length - 1; i >= 0; i--) {
+                if (next.toolCalls[i].tool === progressTool && next.toolCalls[i].status === 'running') {
+                  next.toolCalls[i] = { ...next.toolCalls[i], progress: progressMsg };
+                  break;
+                }
+              }
+              break;
+            }
+
             case 'tool_result': {
               const tool = ev.data.tool as string;
               for (let i = next.toolCalls.length - 1; i >= 0; i--) {
@@ -889,6 +902,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
                     status: ev.data.success ? 'success' : 'error',
                     summary: (ev.data.summary as string) || undefined,
                     result: ev.data,
+                    progress: undefined,
                   };
                   break;
                 }
