@@ -823,7 +823,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     setCurrent(state);
 
     let finalToolCalls: ToolCall[] = [];
-    let pendingClientTranscription: { audioUrl: string; recordingId: string | null; language: string | null } | null = null;
+    let pendingClientTranscription: { audioUrl: string; recordingId: string | null; language: string | null; saveToGraph: boolean; graphTitle: string | null } | null = null;
 
     try {
       const res = await fetch(`${AGENT_API}/chat`, {
@@ -856,6 +856,8 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             audioUrl: ev.data.audioUrl as string,
             recordingId: (ev.data.recordingId as string) || null,
             language: (ev.data.language as string) || null,
+            saveToGraph: !!ev.data.saveToGraph,
+            graphTitle: (ev.data.graphTitle as string) || null,
           };
         }
 
@@ -943,7 +945,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
       // Handle client-side transcription if the tool requested it
       // (TypeScript can't track mutation inside callbacks, so cast to check)
-      const clientTx = pendingClientTranscription as { audioUrl: string; recordingId: string | null; language: string | null } | null;
+      const clientTx = pendingClientTranscription as { audioUrl: string; recordingId: string | null; language: string | null; saveToGraph: boolean; graphTitle: string | null } | null;
       if (clientTx) {
         const txAudioUrl = clientTx.audioUrl;
         const txLang = clientTx.language;
@@ -1003,7 +1005,40 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           setAudioLanguage(prevLang);
 
           const txText = segments.join('\n\n');
-          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)\n\n${txText || '(No speech detected)'}`;
+
+          // If saveToGraph requested, create graph + fulltext node directly (no LLM round-trip)
+          let graphLink = '';
+          if (clientTx.saveToGraph && txText) {
+            setCurrent(prev => prev ? { ...prev, text: 'Saving transcription to graph...' } : prev);
+            const newGraphId = crypto.randomUUID();
+            const title = clientTx.graphTitle || `Transcription - ${txFileName.replace(/\.[^.]+$/, '')}`;
+            try {
+              await fetch(`${KG_API}/saveGraphWithHistory`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: newGraphId,
+                  graphData: {
+                    nodes: [{
+                      id: 'node-transcription',
+                      label: '# Full Transcription',
+                      type: 'fulltext',
+                      info: txText,
+                      color: '#4A90D9',
+                    }],
+                    edges: [],
+                    metadata: { title, description: `Audio transcription (${chunks.length} chunks)`, category: '#Transcription #Audio' },
+                  },
+                  override: true,
+                }),
+              });
+              graphLink = `\n\n[View Graph: ${title}](https://www.vegvisr.org/gnew-viewer?graphId=${newGraphId})`;
+            } catch {
+              graphLink = '\n\n(Failed to save graph)';
+            }
+          }
+
+          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n${txText || '(No speech detected)'}`;
 
           setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
 

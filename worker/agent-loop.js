@@ -138,6 +138,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ssePayload.audioUrl = result.audioUrl
               ssePayload.language = result.language
               ssePayload.recordingId = result.recordingId
+              ssePayload.saveToGraph = result.saveToGraph || false
+              ssePayload.graphTitle = result.graphTitle || null
             }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
             const resultStr = truncateResult(result)

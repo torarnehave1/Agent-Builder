@@ -836,7 +836,7 @@ async function executeListRecordings(input, env) {
 }
 
 async function executeTranscribeAudio(input, env) {
-  const { recordingId, audioUrl, language, saveToPortfolio = false } = input
+  const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
   let userEmail = input.userEmail || input.userId
   if (userEmail && !userEmail.includes('@')) {
@@ -877,8 +877,12 @@ async function executeTranscribeAudio(input, env) {
     recordingId: resolvedRecordingId || null,
     language: language || null,
     saveToPortfolio,
+    saveToGraph,
+    graphTitle: graphTitle || null,
     userEmail,
-    message: `Audio file found. Transcribing on your device...`,
+    message: saveToGraph
+      ? `Audio file found. Transcribing on your device and saving to a new graph...`
+      : `Audio file found. Transcribing on your device...`,
   }
 }
 
