@@ -683,8 +683,8 @@ async function executeGetAlbumImages(input, env) {
 // ── Shared: resolve userId (UUID or email) to profile via D1 ─────
 
 async function resolveUserProfile(userId, env) {
-  // Retry once on failure (handles D1 cold-start timeouts)
-  for (let attempt = 0; attempt < 2; attempt++) {
+  // Retry up to 3 times with increasing delay (handles D1 cold-start timeouts)
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       // Try by email first
       let profile = await env.DB.prepare(
@@ -698,12 +698,12 @@ async function resolveUserProfile(userId, env) {
       }
       return profile // may be null if user not in config
     } catch (err) {
-      if (attempt === 0) {
-        // First attempt failed (likely D1 cold start) — wait briefly and retry
-        await new Promise(r => setTimeout(r, 200))
+      if (attempt < 2) {
+        // Wait with increasing delay: 300ms, 600ms
+        await new Promise(r => setTimeout(r, 300 * (attempt + 1)))
         continue
       }
-      // Second attempt also failed — give up
+      // All attempts failed — give up
       return null
     }
   }
@@ -779,7 +779,11 @@ async function executeListRecordings(input, env) {
   if (!userEmail) throw new Error('userEmail is required')
   if (!userEmail.includes('@')) {
     const profile = await resolveUserProfile(userEmail, env)
-    if (profile?.email) userEmail = profile.email
+    if (profile?.email) {
+      userEmail = profile.email
+    } else {
+      throw new Error('Could not resolve user identity. Please try again.')
+    }
   }
 
   // Agent-worker is a trusted internal service (service binding) — always use
@@ -832,12 +836,16 @@ async function executeListRecordings(input, env) {
 }
 
 async function executeTranscribeAudio(input, env) {
-  const { recordingId, audioUrl, service = 'openai', language, saveToPortfolio = false } = input
+  const { recordingId, audioUrl, language, saveToPortfolio = false } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
   let userEmail = input.userEmail || input.userId
   if (userEmail && !userEmail.includes('@')) {
     const profile = await resolveUserProfile(userEmail, env)
-    if (profile?.email) userEmail = profile.email
+    if (profile?.email) {
+      userEmail = profile.email
+    } else {
+      throw new Error('Could not resolve user identity. Please try again.')
+    }
   }
 
   let resolvedUrl = audioUrl
@@ -860,23 +868,65 @@ async function executeTranscribeAudio(input, env) {
     throw new Error('Provide either recordingId + userEmail or audioUrl')
   }
 
-  // 2. Call whisper-worker for transcription
-  const params = new URLSearchParams({ url: resolvedUrl, service })
-  if (language) params.set('language', language)
+  // 2. Download the audio file
+  const audioRes = await fetch(resolvedUrl)
+  if (!audioRes.ok) throw new Error(`Failed to download audio file: ${audioRes.status}`)
+  const audioBlob = await audioRes.blob()
+  const fileName = resolvedUrl.split('/').pop() || 'audio.wav'
 
-  const transcribeRes = await env.WHISPER_WORKER.fetch(
-    `https://whisper-worker/transcribe?${params.toString()}`
-  )
+  // 3. Chunk if > 24MB, then send each chunk to openai-worker via service binding
+  const MAX_CHUNK_SIZE = 24 * 1024 * 1024 // 24MB (OpenAI limit is 25MB)
+  const chunks = []
 
-  if (!transcribeRes.ok) {
-    const err = await transcribeRes.text()
-    throw new Error(`Transcription failed: ${err}`)
+  if (audioBlob.size <= MAX_CHUNK_SIZE) {
+    chunks.push({ blob: audioBlob, index: 0 })
+  } else {
+    // Byte-level chunking for server-side (no AudioContext available in Workers)
+    const totalChunks = Math.ceil(audioBlob.size / MAX_CHUNK_SIZE)
+    const arrayBuf = await audioBlob.arrayBuffer()
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * MAX_CHUNK_SIZE
+      const end = Math.min(start + MAX_CHUNK_SIZE, audioBlob.size)
+      const chunkBlob = new Blob([arrayBuf.slice(start, end)], { type: audioBlob.type || 'audio/webm' })
+      chunks.push({ blob: chunkBlob, index: i })
+    }
   }
 
-  const transcribeData = await transcribeRes.json()
-  const text = transcribeData.text || ''
+  const segments = []
+  for (const chunk of chunks) {
+    const formData = new FormData()
+    const chunkFileName = chunks.length > 1
+      ? `${fileName.replace(/\.[^.]+$/, '')}_chunk_${chunk.index + 1}.wav`
+      : fileName
+    formData.append('file', chunk.blob, chunkFileName)
+    formData.append('model', 'whisper-1')
+    formData.append('userId', userEmail || input.userId)
+    if (language) formData.append('language', language)
 
-  // 3. Optionally save back to portfolio
+    const transcribeRes = await env.OPENAI_WORKER.fetch('https://openai-worker/audio', {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!transcribeRes.ok) {
+      const err = await transcribeRes.text()
+      throw new Error(`Transcription failed (chunk ${chunk.index + 1}/${chunks.length}): ${err}`)
+    }
+
+    const result = await transcribeRes.json()
+    const chunkText = (result.text || '').trim()
+    if (chunkText) {
+      if (chunks.length > 1) {
+        segments.push(`[Chunk ${chunk.index + 1}/${chunks.length}] ${chunkText}`)
+      } else {
+        segments.push(chunkText)
+      }
+    }
+  }
+
+  const text = segments.join('\n\n')
+
+  // 4. Optionally save back to portfolio
   let savedToPortfolio = false
   if (saveToPortfolio && resolvedRecordingId && userEmail && text) {
     const updateRes = await env.AUDIO_PORTFOLIO.fetch('https://audio-portfolio-worker/update-recording', {
@@ -893,11 +943,11 @@ async function executeTranscribeAudio(input, env) {
 
   return {
     text,
+    chunks: chunks.length,
     recordingId: resolvedRecordingId || null,
     audioUrl: resolvedUrl,
-    service,
     savedToPortfolio,
-    message: `Transcribed ${text.length} characters via ${service}${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
+    message: `Transcribed ${text.length} characters (${chunks.length} chunk${chunks.length > 1 ? 's' : ''}) via openai-worker${savedToPortfolio ? ' (saved to portfolio)' : ''}`,
   }
 }
 

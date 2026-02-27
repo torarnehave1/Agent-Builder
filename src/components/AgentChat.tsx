@@ -8,6 +8,16 @@ import remarkGfm from 'remark-gfm';
 const AGENT_API = 'https://agent.vegvisr.org';
 const KG_API = 'https://knowledge.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
+const AUDIO_ENDPOINT = 'https://openai.vegvisr.org/audio';
+const CHUNK_DURATION_SECONDS = 120;
+
+interface AudioFileInfo {
+  file: File;
+  name: string;
+  size: number;
+  type: string;
+  duration: number | null;
+}
 
 function historyFetch(path: string, userId: string, options: RequestInit = {}) {
   const headers = new Headers(options.headers as HeadersInit || {});
@@ -272,6 +282,26 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
   const sessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+
+  // Audio transcription state (same UX as GrokChatPanel)
+  const [selectedAudioFile, setSelectedAudioFile] = useState<AudioFileInfo | null>(null);
+  const [audioProcessing, setAudioProcessing] = useState(false);
+  const [audioTranscriptionStatus, setAudioTranscriptionStatus] = useState('');
+  const [audioChunkProgress, setAudioChunkProgress] = useState({ current: 0, total: 0 });
+  const [audioAutoDetect, setAudioAutoDetect] = useState(true);
+  const [audioLanguage, setAudioLanguage] = useState('no');
+
+  const audioLanguageOptions = [
+    { code: 'no', label: 'Norwegian' },
+    { code: 'en', label: 'English' },
+    { code: 'sv', label: 'Swedish' },
+    { code: 'da', label: 'Danish' },
+    { code: 'de', label: 'German' },
+    { code: 'fr', label: 'French' },
+    { code: 'es', label: 'Spanish' },
+    { code: 'it', label: 'Italian' },
+  ];
 
   // Keep ref in sync for use inside callbacks
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
@@ -451,6 +481,302 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       console.warn('[AgentChat SSE] stream ended WITHOUT done event — possible timeout or error');
     }
   }, []);
+
+  // ── Audio helpers (ported from GrokChatPanel) ──────────────────
+
+  const getAudioDurationSeconds = useCallback((file: File) => {
+    return new Promise<number>((resolve, reject) => {
+      try {
+        const audio = document.createElement('audio');
+        audio.preload = 'metadata';
+        audio.onloadedmetadata = () => {
+          URL.revokeObjectURL(audio.src);
+          resolve(audio.duration || 0);
+        };
+        audio.onerror = (event) => {
+          URL.revokeObjectURL(audio.src);
+          reject((event as ErrorEvent).error || new Error('Unable to read audio metadata'));
+        };
+        audio.src = URL.createObjectURL(file);
+      } catch (err) {
+        reject(err as Error);
+      }
+    });
+  }, []);
+
+  const formatFileSize = useCallback((bytes: number) => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const value = bytes / Math.pow(1024, exponent);
+    return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
+  }, []);
+
+  const formatDuration = useCallback((seconds: number | null) => {
+    if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return 'unknown';
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  }, []);
+
+  const formatChunkTimestamp = useCallback((seconds = 0) => {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  }, []);
+
+  const handleAudioFileSelect = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setAudioTranscriptionStatus('');
+    setAudioChunkProgress({ current: 0, total: 0 });
+
+    try {
+      const duration = await getAudioDurationSeconds(file).catch(() => null);
+      setSelectedAudioFile({
+        file,
+        name: file.name || 'audio-file',
+        size: file.size,
+        type: file.type || 'audio/wav',
+        duration: typeof duration === 'number' && Number.isFinite(duration) ? duration : null,
+      });
+      setAudioAutoDetect(true);
+      setAudioLanguage('no');
+    } catch {
+      setSelectedAudioFile(null);
+      setAudioTranscriptionStatus('Failed to read audio file');
+    }
+  }, [getAudioDurationSeconds]);
+
+  const clearSelectedAudio = useCallback(() => {
+    setSelectedAudioFile(null);
+    setAudioProcessing(false);
+    setAudioTranscriptionStatus('');
+    setAudioChunkProgress({ current: 0, total: 0 });
+  }, []);
+
+  const audioBufferToWavBlob = useCallback((audioBuffer: AudioBuffer) => {
+    return new Promise<Blob>((resolve) => {
+      const numberOfChannels = audioBuffer.numberOfChannels;
+      const sampleRate = audioBuffer.sampleRate;
+      const length = audioBuffer.length;
+      const buffer = new ArrayBuffer(44 + length * numberOfChannels * 2);
+      const view = new DataView(buffer);
+
+      const writeString = (offset: number, str: string) => {
+        for (let i = 0; i < str.length; i++) {
+          view.setUint8(offset + i, str.charCodeAt(i));
+        }
+      };
+
+      writeString(0, 'RIFF');
+      view.setUint32(4, 36 + length * numberOfChannels * 2, true);
+      writeString(8, 'WAVE');
+      writeString(12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, numberOfChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * numberOfChannels * 2, true);
+      view.setUint16(32, numberOfChannels * 2, true);
+      view.setUint16(34, 16, true);
+      writeString(36, 'data');
+      view.setUint32(40, length * numberOfChannels * 2, true);
+
+      let offset = 44;
+      for (let i = 0; i < length; i++) {
+        for (let channel = 0; channel < numberOfChannels; channel++) {
+          const sample = Math.max(-1, Math.min(1, audioBuffer.getChannelData(channel)[i]));
+          view.setInt16(offset, sample * 0x7fff, true);
+          offset += 2;
+        }
+      }
+
+      resolve(new Blob([buffer], { type: 'audio/wav' }));
+    });
+  }, []);
+
+  const splitAudioIntoChunks = useCallback(async (
+    file: File,
+    chunkDurationSeconds = CHUNK_DURATION_SECONDS,
+    onProgress?: (progress: { phase: string; current?: number; total?: number }) => void,
+  ) => {
+    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) throw new Error('Browser does not support audio processing');
+
+    const arrayBuffer = await file.arrayBuffer();
+    const audioContext = new AudioContextClass();
+
+    try {
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      const sampleRate = audioBuffer.sampleRate;
+      const chunkSamples = chunkDurationSeconds * sampleRate;
+      const totalSamples = audioBuffer.length;
+      const totalChunks = Math.max(Math.ceil(totalSamples / chunkSamples), 1);
+
+      onProgress?.({ phase: 'info', total: totalChunks });
+
+      const chunks: Array<{ blob: Blob; startTime: number; endTime: number }> = [];
+      for (let i = 0; i < totalChunks; i++) {
+        const startSample = i * chunkSamples;
+        const endSample = Math.min(startSample + chunkSamples, totalSamples);
+        const chunkLength = endSample - startSample;
+        const chunkBuffer = audioContext.createBuffer(
+          audioBuffer.numberOfChannels,
+          chunkLength,
+          sampleRate,
+        );
+
+        for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+          const channelData = audioBuffer.getChannelData(channel);
+          const chunkData = chunkBuffer.getChannelData(channel);
+          for (let sample = 0; sample < chunkLength; sample++) {
+            chunkData[sample] = channelData[startSample + sample];
+          }
+        }
+
+        const blob = await audioBufferToWavBlob(chunkBuffer);
+        chunks.push({
+          blob,
+          startTime: startSample / sampleRate,
+          endTime: endSample / sampleRate,
+        });
+
+        onProgress?.({ phase: 'creating', current: i + 1, total: totalChunks });
+      }
+
+      return chunks;
+    } finally {
+      await audioContext.close();
+    }
+  }, [audioBufferToWavBlob]);
+
+  const callWhisperTranscription = useCallback(async (blob: Blob, fileName: string) => {
+    const formData = new FormData();
+    formData.append('file', blob, fileName);
+    formData.append('model', 'whisper-1');
+    formData.append('userId', userId);
+    if (!audioAutoDetect && audioLanguage) {
+      formData.append('language', audioLanguage);
+    }
+
+    const response = await fetch(AUDIO_ENDPOINT, {
+      method: 'POST',
+      body: formData,
+    });
+
+    const payloadText = await response.text();
+    let parsed: Record<string, unknown> | null;
+    try {
+      parsed = JSON.parse(payloadText);
+    } catch {
+      parsed = null;
+    }
+
+    if (!response.ok) {
+      const detail = (parsed?.error as string) || (parsed?.message as string) || payloadText || 'Audio transcription failed';
+      throw new Error(typeof detail === 'string' ? detail : 'Audio transcription failed');
+    }
+
+    return parsed || { text: payloadText };
+  }, [userId, audioAutoDetect, audioLanguage]);
+
+  const startAudioTranscription = useCallback(async () => {
+    if (!selectedAudioFile || audioProcessing) return;
+
+    setAudioProcessing(true);
+    setAudioTranscriptionStatus('Preparing audio...');
+    setAudioChunkProgress({ current: 0, total: 0 });
+
+    const { file, name } = selectedAudioFile;
+
+    // Add user message to chat
+    const userMsg: ChatMessage = { role: 'user', content: `Transcribe audio: "${name}"` };
+    setMessages(prev => [...prev, userMsg]);
+
+    try {
+      const duration = selectedAudioFile.duration ?? (await getAudioDurationSeconds(file).catch(() => null));
+      const hasDuration = typeof duration === 'number' && Number.isFinite(duration);
+      const shouldChunk = hasDuration ? duration > CHUNK_DURATION_SECONDS : file.size > 8 * 1024 * 1024;
+
+      let transcriptText: string;
+
+      if (shouldChunk) {
+        // Chunked transcription with progress
+        setAudioTranscriptionStatus('Splitting audio into chunks...');
+        const chunks = await splitAudioIntoChunks(file, CHUNK_DURATION_SECONDS, (progress) => {
+          if (progress.phase === 'creating') {
+            setAudioTranscriptionStatus(`Preparing chunk ${progress.current}/${progress.total}...`);
+          }
+        });
+
+        if (!chunks.length) throw new Error('Audio could not be chunked');
+
+        setAudioChunkProgress({ current: 0, total: chunks.length });
+        const segments: string[] = [];
+        const baseName = name.includes('.') ? name.substring(0, name.lastIndexOf('.')) : name;
+
+        for (let i = 0; i < chunks.length; i++) {
+          setAudioChunkProgress({ current: i + 1, total: chunks.length });
+          setAudioTranscriptionStatus(`Processing chunk ${i + 1}/${chunks.length}...`);
+
+          try {
+            const chunkResult = await callWhisperTranscription(
+              chunks[i].blob,
+              `${baseName || 'audio'}_chunk_${i + 1}.wav`,
+            );
+            const chunkText = ((chunkResult.text as string) || '').trim();
+            const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
+            if (chunkText) {
+              segments.push(`${chunkLabel} ${chunkText}`);
+            }
+            setAudioTranscriptionStatus(`Completed chunk ${i + 1}/${chunks.length}`);
+          } catch (error) {
+            const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
+            segments.push(`${chunkLabel} [Error: ${error instanceof Error ? error.message : 'unknown'}]`);
+            setAudioTranscriptionStatus(`Chunk ${i + 1}/${chunks.length} failed`);
+          }
+        }
+
+        transcriptText = segments.join('\n\n');
+      } else {
+        // Single file transcription
+        setAudioTranscriptionStatus('Uploading and transcribing...');
+        const result = await callWhisperTranscription(file, name);
+        transcriptText = ((result.text as string) || '').trim();
+      }
+
+      // Detect language label
+      const langLabel = audioAutoDetect ? 'Auto-detected' : (audioLanguageOptions.find(o => o.code === audioLanguage)?.label || audioLanguage);
+
+      // Add assistant message with transcription
+      const assistantMsg: ChatMessage = {
+        role: 'assistant',
+        content: `**Transcription of "${name}"**\nLanguage: ${langLabel}\n\n${transcriptText || '(No speech detected)'}`,
+      };
+      setMessages(prev => [...prev, assistantMsg]);
+
+      clearSelectedAudio();
+    } catch (error) {
+      setAudioTranscriptionStatus(`Transcription failed: ${error instanceof Error ? error.message : 'unknown error'}`);
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `Transcription failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+      }]);
+    } finally {
+      setAudioProcessing(false);
+      setAudioTranscriptionStatus('');
+      setAudioChunkProgress({ current: 0, total: 0 });
+    }
+  }, [selectedAudioFile, audioProcessing, userId, audioAutoDetect, audioLanguage, audioLanguageOptions, getAudioDurationSeconds, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, clearSelectedAudio]);
 
   const sendMessage = useCallback(async () => {
     const text = input.trim();
@@ -750,7 +1076,18 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
                 </ReactMarkdown>
               </div>
             ) : (
-              msg.content
+              <div className="flex items-start gap-2">
+                <span className="flex-1">{msg.content}</span>
+                <button
+                  type="button"
+                  onClick={() => handleInput(msg.content)}
+                  disabled={streaming}
+                  className="flex-shrink-0 mt-0.5 text-white/30 hover:text-sky-400 transition-colors disabled:opacity-30"
+                  title="Use this prompt again"
+                >
+                  +
+                </button>
+              </div>
             )}
           </div>
         ))}
@@ -778,17 +1115,86 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Audio file panel */}
+      {selectedAudioFile && (
+        <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80">
+          <div className="max-w-[900px] mx-auto rounded-xl border border-white/10 bg-white/[0.04] p-4 text-xs text-white/70">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold text-white">{selectedAudioFile.name}</div>
+                <div className="mt-1 text-white/60">
+                  {formatFileSize(selectedAudioFile.size)}
+                  {selectedAudioFile.duration !== null && (
+                    <> &bull; Duration: {formatDuration(selectedAudioFile.duration)}</>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={clearSelectedAudio}
+                disabled={audioProcessing}
+                className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-60"
+              >
+                &times;
+              </button>
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-white/70">
+                <input
+                  type="checkbox"
+                  checked={audioAutoDetect}
+                  onChange={e => setAudioAutoDetect(e.target.checked)}
+                  disabled={audioProcessing}
+                  aria-label="Auto-detect language"
+                  className="h-4 w-4 rounded border-white/30 bg-white/10"
+                />
+                Auto-detect language
+              </label>
+              <select
+                value={audioLanguage}
+                onChange={e => setAudioLanguage(e.target.value)}
+                disabled={audioAutoDetect || audioProcessing}
+                className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-white"
+                aria-label="Audio language"
+              >
+                {audioLanguageOptions.map(lang => (
+                  <option key={lang.code} value={lang.code} className="bg-slate-900 text-white">
+                    {lang.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={startAudioTranscription}
+                disabled={audioProcessing}
+                className="rounded-full border border-white/20 bg-white/10 px-4 py-1 text-xs text-white/80 hover:bg-white/20 disabled:opacity-60"
+              >
+                {audioProcessing ? 'Transcribing...' : 'Transcribe'}
+              </button>
+            </div>
+            {audioTranscriptionStatus && (
+              <div className="mt-3 text-xs text-white/60">
+                {audioTranscriptionStatus}
+                {audioChunkProgress.total > 0 && (
+                  <span> &bull; Chunk {audioChunkProgress.current}/{audioChunkProgress.total}</span>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Input area */}
       <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80 flex-shrink-0">
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           <button
             type="button"
-            onClick={() => { setMessages([]); setSessionId(null); }}
-            disabled={streaming}
-            className="px-2.5 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 text-lg font-medium cursor-pointer transition-all hover:bg-white/[0.08] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
-            title="New chat"
+            onClick={() => audioInputRef.current?.click()}
+            disabled={audioProcessing}
+            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors disabled:opacity-40"
+            title="Upload audio file for transcription"
           >
-            +
+            &#x1F3A4;
           </button>
           <textarea
             ref={textareaRef}
@@ -810,6 +1216,14 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             {streaming ? '...' : 'Send'}
           </button>
         </div>
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept=".wav,.mp3,.m4a,.aac,.ogg,.opus,.mp4,.webm"
+          disabled={audioProcessing}
+          onChange={handleAudioFileSelect}
+          className="hidden"
+        />
       </div>
     </div>
   );
