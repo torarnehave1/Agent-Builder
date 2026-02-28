@@ -110,7 +110,16 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         try {
           const lastAssistantText = textBlocks.map(b => b.text).join('\n')
           const recentContext = messages.slice(-4).map(m => {
-            const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            let content
+            if (typeof m.content === 'string') {
+              content = m.content
+            } else if (Array.isArray(m.content)) {
+              content = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+              const imgCount = m.content.filter(b => b.type === 'image').length
+              if (imgCount > 0) content = `[${imgCount} image(s)] ${content}`
+            } else {
+              content = JSON.stringify(m.content)
+            }
             return `${m.role}: ${content.slice(0, 300)}`
           }).join('\n')
 

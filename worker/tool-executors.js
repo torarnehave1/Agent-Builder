@@ -750,6 +750,41 @@ async function executeGetAlbumImages(input, env) {
   }
 }
 
+// ── analyze_image: vision analysis via Haiku ─────────────────────
+
+async function executeAnalyzeImage(input, env) {
+  const imageUrl = input.imageUrl
+  if (!imageUrl) throw new Error('imageUrl is required')
+  const question = input.question || 'Describe this image in detail.'
+
+  const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'url', url: imageUrl } },
+          { type: 'text', text: question }
+        ]
+      }],
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+    })
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Image analysis failed (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  const analysis = (data.content || []).find(c => c.type === 'text')?.text || 'No analysis available'
+
+  return { imageUrl, question, analysis }
+}
+
 // ── Shared: resolve userId (UUID or email) to profile via D1 ─────
 
 async function resolveUserProfile(userId, env) {
@@ -1400,6 +1435,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeSearchUnsplash(toolInput, env)
     case 'get_album_images':
       return await executeGetAlbumImages(toolInput, env)
+    case 'analyze_image':
+      return await executeAnalyzeImage(toolInput, env)
     case 'get_formatting_reference':
       return { reference: FORMATTING_REFERENCE }
     case 'get_node_types_reference':

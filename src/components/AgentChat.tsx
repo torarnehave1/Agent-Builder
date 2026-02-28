@@ -48,9 +48,18 @@ interface ToolCall {
   progress?: string;
 }
 
+interface ImageAttachment {
+  type: 'url' | 'base64';
+  url?: string;
+  mediaType?: string;
+  data?: string;
+  label?: string;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+  images?: ImageAttachment[];
   toolCalls?: ToolCall[];
 }
 
@@ -287,6 +296,11 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Image attachment state
+  const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Audio transcription state (same UX as GrokChatPanel)
   const [selectedAudioFile, setSelectedAudioFile] = useState<AudioFileInfo | null>(null);
@@ -782,12 +796,97 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     }
   }, [selectedAudioFile, audioProcessing, userId, audioAutoDetect, audioLanguage, audioLanguageOptions, getAudioDurationSeconds, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, clearSelectedAudio]);
 
+  // ── Image attachment helpers ──────────────────────────────────────
+  const isImageUrl = useCallback((url: string) => /\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?|$)/i.test(url) || url.includes('imgix.net'), []);
+
+  const addImageFromUrl = useCallback((url: string, label?: string) => {
+    setPendingImages(prev => [...prev, { type: 'url', url, label: label || url.split('/').pop() || 'image' }]);
+  }, []);
+
+  const addImageFromFile = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      setPendingImages(prev => [...prev, { type: 'base64', mediaType: file.type || 'image/png', data: base64, label: file.name }]);
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleImageDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setImageDragActive(false);
+
+    // Check for photos-vegvisr app drag data (application/x-photo-keys or application/x-photo-key)
+    const keysJson = e.dataTransfer.getData('application/x-photo-keys');
+    const singleKey = e.dataTransfer.getData('application/x-photo-key');
+    if (keysJson || singleKey) {
+      const keys: string[] = keysJson ? JSON.parse(keysJson) : [singleKey].filter(Boolean);
+      for (const key of keys) {
+        addImageFromUrl(`https://vegvisr.imgix.net/${key}`, key);
+      }
+      return;
+    }
+
+    // Check for URL drops
+    const textData = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+    if (textData) {
+      const urls = textData.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      const imageUrls = urls.filter(u => isImageUrl(u));
+      if (imageUrls.length > 0) {
+        for (const url of imageUrls) addImageFromUrl(url);
+        return;
+      }
+    }
+
+    // Check for file drops
+    const files = Array.from(e.dataTransfer.files || []).filter(f => f.type.startsWith('image/'));
+    for (const file of files) addImageFromFile(file);
+  }, [addImageFromUrl, addImageFromFile, isImageUrl]);
+
+  const handleImagePaste = useCallback((e: React.ClipboardEvent) => {
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+
+    // Check for pasted image files
+    const files: File[] = [];
+    for (const item of Array.from(clipboard.items || [])) {
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+    if (files.length > 0) {
+      e.preventDefault();
+      for (const file of files) addImageFromFile(file);
+      return;
+    }
+
+    // Check for pasted image URL
+    const text = clipboard.getData('text/plain');
+    if (text && isImageUrl(text.trim())) {
+      e.preventDefault();
+      addImageFromUrl(text.trim());
+    }
+  }, [addImageFromFile, addImageFromUrl, isImageUrl]);
+
+  const handleImageFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []).filter(f => f.type.startsWith('image/'));
+    for (const file of files) addImageFromFile(file);
+    if (e.target) e.target.value = '';
+  }, [addImageFromFile]);
+
+  const removeImage = useCallback((index: number) => {
+    setPendingImages(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
   const sendMessage = useCallback(async (overrideText?: string) => {
     const text = (overrideText || input).trim();
-    if (!text || streaming) return;
+    const images = pendingImages;
+    if ((!text && images.length === 0) || streaming) return;
 
     setInput('');
     setSuggestions([]);
+    setPendingImages([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setStreaming(true);
 
@@ -812,15 +911,29 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
       } catch { /* continue without persistence */ }
     }
 
-    const userMsg: ChatMessage = { role: 'user', content: text };
+    const userMsg: ChatMessage = { role: 'user', content: text || '(image attached)', images: images.length > 0 ? images : undefined };
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
+
+    // Build multimodal content for the API when images are present
+    const apiMessages = updatedMessages.map(m => {
+      if (m.images && m.images.length > 0) {
+        const contentBlocks: unknown[] = m.images.map(img =>
+          img.type === 'url'
+            ? { type: 'image', source: { type: 'url', url: img.url } }
+            : { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } }
+        );
+        contentBlocks.push({ type: 'text', text: m.content || 'What do you see in this image?' });
+        return { role: m.role, content: contentBlocks };
+      }
+      return { role: m.role, content: m.content };
+    });
 
     // Persist user message
     if (activeSession) {
       historyFetch('/messages', userId, {
         method: 'POST',
-        body: JSON.stringify({ sessionId: activeSession, role: 'user', content: text }),
+        body: JSON.stringify({ sessionId: activeSession, role: 'user', content: text || '(image attached)' }),
       }).catch(() => {});
     }
 
@@ -836,7 +949,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          messages: updatedMessages,
+          messages: apiMessages,
           graphId: graphId || undefined,
         }),
       });
@@ -1224,17 +1337,31 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
                 </ReactMarkdown>
               </div>
             ) : (
-              <div className="flex items-start gap-2">
-                <span className="flex-1">{msg.content}</span>
-                <button
-                  type="button"
-                  onClick={() => handleInput(msg.content)}
-                  disabled={streaming}
-                  className="flex-shrink-0 mt-0.5 text-white/30 hover:text-sky-400 transition-colors disabled:opacity-30"
-                  title="Use this prompt again"
-                >
+              <div className="flex flex-col gap-2">
+                {msg.images && msg.images.length > 0 && (
+                  <div className="flex gap-2 flex-wrap">
+                    {msg.images.map((img, imgIdx) => (
+                      <img
+                        key={imgIdx}
+                        src={img.type === 'url' ? img.url : `data:${img.mediaType};base64,${img.data}`}
+                        alt={img.label || 'attached'}
+                        className="max-h-40 max-w-[200px] rounded-lg border border-white/20 object-cover"
+                      />
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-start gap-2">
+                  <span className="flex-1">{msg.content}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleInput(msg.content)}
+                    disabled={streaming}
+                    className="flex-shrink-0 mt-0.5 text-white/30 hover:text-sky-400 transition-colors disabled:opacity-30"
+                    title="Use this prompt again"
+                  >
                   +
-                </button>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1350,8 +1477,43 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         </div>
       )}
 
+      {/* Pending image thumbnails */}
+      {pendingImages.length > 0 && (
+        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+          <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
+            {pendingImages.map((img, i) => (
+              <div key={i} className="relative group">
+                <img
+                  src={img.type === 'url' ? img.url : `data:${img.mediaType};base64,${img.data}`}
+                  alt={img.label || 'attached'}
+                  className="h-16 w-16 object-cover rounded-lg border border-white/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(i)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  &times;
+                </button>
+                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white/80 px-1 py-0.5 rounded-b-lg truncate">
+                  {img.label}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input area */}
-      <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80 flex-shrink-0">
+      <div
+        className={`px-4 py-3 border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
+        onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setImageDragActive(true); }}
+        onDragLeave={() => setImageDragActive(false)}
+        onDrop={handleImageDrop}
+      >
+        {imageDragActive && (
+          <div className="text-center text-sky-300 text-sm py-1 mb-2">Drop images here</div>
+        )}
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           <button
             type="button"
@@ -1362,6 +1524,14 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           >
             &#x1F3A4;
           </button>
+          <button
+            type="button"
+            onClick={() => imageInputRef.current?.click()}
+            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+            title="Attach image"
+          >
+            &#x1F5BC;
+          </button>
           <textarea
             ref={textareaRef}
             value={input}
@@ -1369,19 +1539,28 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
             }}
-            placeholder="Type your message..."
+            onPaste={handleImagePaste}
+            placeholder={pendingImages.length > 0 ? 'Ask about the image(s)...' : 'Type your message...'}
             rows={1}
             className="flex-1 px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
           />
           <button
             type="button"
             onClick={() => sendMessage()}
-            disabled={streaming || !input.trim()}
+            disabled={streaming || (!input.trim() && pendingImages.length === 0)}
             className="px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {streaming ? '...' : 'Send'}
           </button>
         </div>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          multiple
+          onChange={handleImageFileSelect}
+          className="hidden"
+        />
         <input
           ref={audioInputRef}
           type="file"

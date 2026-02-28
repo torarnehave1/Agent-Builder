@@ -436,6 +436,24 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'analyze_image',
+    description: 'Analyze an image by URL. Useful for describing photos, extracting text (OCR), identifying objects, or answering questions about visual content. Works with imgix CDN URLs (vegvisr.imgix.net) and any public image URL.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        imageUrl: {
+          type: 'string',
+          description: 'URL of the image to analyze (must be publicly accessible, e.g. https://vegvisr.imgix.net/<key>)'
+        },
+        question: {
+          type: 'string',
+          description: 'What to analyze or ask about the image. Default: "Describe this image in detail."'
+        }
+      },
+      required: ['imageUrl']
+    }
+  },
+  {
     name: 'get_formatting_reference',
     description: 'Get the fulltext formatting syntax reference (SECTION, FANCY, QUOTE, IMAGEQUOTE, positioned images, FLEXBOX layouts). Call this BEFORE creating styled/formatted content in fulltext nodes.',
     input_schema: {
