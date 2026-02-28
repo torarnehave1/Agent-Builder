@@ -64,6 +64,21 @@ async function executeCreateGraph(input, env) {
   }
 }
 
+// Type-aware truncation for read_graph (structure overview)
+function truncateNodeInfo(info, type) {
+  if (!info) return { text: '', truncated: false }
+  const limits = {
+    'html-node': 200,
+    'css-node': 200,
+    'fulltext': 2000,
+    'info': 2000,
+    'mermaid-diagram': 500,
+  }
+  const limit = limits[type] || 500
+  if (info.length <= limit) return { text: info, truncated: false }
+  return { text: info.slice(0, limit) + '...', truncated: true }
+}
+
 async function executeReadGraph(input, env) {
   const res = await env.KG_WORKER.fetch(
     `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
@@ -73,14 +88,22 @@ async function executeReadGraph(input, env) {
     throw new Error(`Graph not found: ${err}`)
   }
   const graphData = await res.json()
-  const nodes = (graphData.nodes || []).map(n => ({
-    id: n.id,
-    label: n.label,
-    type: n.type,
-    info: n.info ? n.info.slice(0, 500) + (n.info.length > 500 ? '...' : '') : '',
-    path: n.path || undefined,
-    color: n.color || undefined,
-  }))
+  const nodes = (graphData.nodes || []).map(n => {
+    const { text, truncated } = truncateNodeInfo(n.info, n.type)
+    const node = {
+      id: n.id,
+      label: n.label,
+      type: n.type,
+      info: text,
+      path: n.path || undefined,
+      color: n.color || undefined,
+    }
+    if (truncated) {
+      node.info_truncated = true
+      node.info_full_length = n.info.length
+    }
+    return node
+  })
   return {
     graphId: input.graphId,
     metadata: graphData.metadata || {},
@@ -88,6 +111,38 @@ async function executeReadGraph(input, env) {
     edgeCount: (graphData.edges || []).length,
     nodes,
     edges: (graphData.edges || []).slice(0, 50),
+  }
+}
+
+async function executeReadGraphContent(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Graph not found: ${err}`)
+  }
+  const graphData = await res.json()
+  let nodes = graphData.nodes || []
+
+  // Optional: filter to specific node types
+  if (input.nodeTypes && Array.isArray(input.nodeTypes) && input.nodeTypes.length > 0) {
+    nodes = nodes.filter(n => input.nodeTypes.includes(n.type))
+  }
+
+  return {
+    graphId: input.graphId,
+    metadata: graphData.metadata || {},
+    nodeCount: nodes.length,
+    nodes: nodes.map(n => ({
+      id: n.id,
+      label: n.label,
+      type: n.type,
+      info: n.info || '',
+      path: n.path || undefined,
+      color: n.color || undefined,
+      metadata: n.metadata || undefined,
+    })),
   }
 }
 
@@ -137,15 +192,36 @@ async function executePatchNode(input, env) {
   }
 }
 
+async function executePatchGraphMetadata(input, env) {
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchGraphMetadata', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: input.graphId,
+      fields: input.fields,
+    }),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `patchGraphMetadata failed (${res.status})`)
+  return {
+    graphId: input.graphId,
+    updatedFields: data.updatedFields || Object.keys(input.fields),
+    version: data.newVersion,
+    message: `Graph metadata updated: ${Object.keys(input.fields).join(', ')}`,
+  }
+}
+
 async function executeListGraphs(input, env) {
-  const limit = input.limit || 20
+  const limit = Math.max(input.limit || 20, 10)
   const offset = input.offset || 0
-  const res = await env.KG_WORKER.fetch(
-    `https://knowledge-graph-worker/getknowgraphsummaries?offset=${offset}&limit=${limit}`
-  )
+  let apiUrl = `https://knowledge-graph-worker/getknowgraphsummaries?offset=${offset}&limit=${limit}`
+  if (input.metaArea) {
+    apiUrl += `&metaArea=${encodeURIComponent(input.metaArea)}`
+  }
+  const res = await env.KG_WORKER.fetch(apiUrl)
   if (!res.ok) throw new Error('Failed to fetch graph summaries')
   const data = await res.json()
-  let results = (data.results || []).map(g => {
+  const results = (data.results || []).map(g => {
     const meta = g.metadata || {}
     return {
       id: g.id,
@@ -157,12 +233,6 @@ async function executeListGraphs(input, env) {
       updatedAt: meta.updatedAt || g.updatedAt || '',
     }
   })
-
-  // Filter by metaArea if provided (case-insensitive partial match)
-  if (input.metaArea) {
-    const filter = input.metaArea.toLowerCase()
-    results = results.filter(g => g.metaArea.toLowerCase().includes(filter))
-  }
 
   return {
     total: data.total || results.length,
@@ -1310,10 +1380,14 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCreateHtmlFromTemplate(toolInput, env)
     case 'read_graph':
       return await executeReadGraph(toolInput, env)
+    case 'read_graph_content':
+      return await executeReadGraphContent(toolInput, env)
     case 'read_node':
       return await executeReadNode(toolInput, env)
     case 'patch_node':
       return await executePatchNode(toolInput, env)
+    case 'patch_graph_metadata':
+      return await executePatchGraphMetadata(toolInput, env)
     case 'list_graphs':
       return await executeListGraphs(toolInput, env)
     case 'list_meta_areas':

@@ -229,13 +229,32 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'read_graph',
-    description: 'Read a knowledge graph: metadata, nodes (with type, label, and truncated info), and edges. Use this to inspect a graph before making changes. The response includes each node\'s type field — check this to find specific node types without re-fetching.',
+    description: 'Read graph STRUCTURE: metadata, node list (id, label, type, truncated info preview), and edges. Use this to see what a graph contains. Content nodes (fulltext, info) show up to 2000 chars; HTML/CSS nodes show 200 chars. If info_truncated=true, use read_node or read_graph_content to get the full text.',
     input_schema: {
       type: 'object',
       properties: {
         graphId: {
           type: 'string',
           description: 'The graph ID to read'
+        }
+      },
+      required: ['graphId']
+    }
+  },
+  {
+    name: 'read_graph_content',
+    description: 'Read FULL CONTENT of all nodes in a graph — no truncation. Use this when you need to analyze, compare, or work with the actual text content. Optionally filter by node type. WARNING: can return large results for graphs with many nodes.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The graph ID to read'
+        },
+        nodeTypes: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional: only return nodes of these types (e.g. ["fulltext", "info"]). Omit to get all nodes.'
         }
       },
       required: ['graphId']
@@ -287,6 +306,30 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['graphId', 'nodeId', 'fields']
+    }
+  },
+  {
+    name: 'patch_graph_metadata',
+    description: 'Update graph-level metadata fields (title, description, category, metaArea, etc.) without re-sending all nodes and edges. Only the provided fields are changed; others are preserved.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The graph ID to update'
+        },
+        fields: {
+          type: 'object',
+          description: 'Metadata fields to update. Valid keys: title, description, category, metaArea, createdBy, graphType, seoSlug, publicationState.',
+          properties: {
+            title: { type: 'string', description: 'Graph title' },
+            description: { type: 'string', description: 'Graph description' },
+            category: { type: 'string', description: 'Category tags (e.g. "#AI #Research")' },
+            metaArea: { type: 'string', description: 'Meta area tag in ALL CAPS (e.g. "#NINE", "#SANSKRIT")' }
+          }
+        }
+      },
+      required: ['graphId', 'fields']
     }
   },
   {

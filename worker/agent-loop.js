@@ -105,6 +105,49 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
+
+        // Generate follow-up suggestions using a fast Haiku call
+        try {
+          const lastAssistantText = textBlocks.map(b => b.text).join('\n')
+          const recentContext = messages.slice(-4).map(m => {
+            const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            return `${m.role}: ${content.slice(0, 300)}`
+          }).join('\n')
+
+          const suggestRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId,
+              messages: [{
+                role: 'user',
+                content: `Based on this conversation context and the assistant's last response, suggest exactly 3 short follow-up prompts the user might want to ask next. Each should be a natural next step, question, or action. Return ONLY a JSON array of 3 strings, no explanation.\n\nRecent conversation:\n${recentContext}\n\nAssistant's response:\n${lastAssistantText.slice(0, 500)}`
+              }],
+              model: 'claude-haiku-4-5-20251001',
+              max_tokens: 256,
+              temperature: 0.7,
+            }),
+          })
+
+          if (suggestRes.ok) {
+            const suggestData = await suggestRes.json()
+            const suggestText = (suggestData.content || []).find(c => c.type === 'text')?.text || ''
+            const jsonMatch = suggestText.match(/\[[\s\S]*\]/)
+            if (jsonMatch) {
+              const suggestions = JSON.parse(jsonMatch[0])
+              if (Array.isArray(suggestions) && suggestions.length > 0) {
+                const cleaned = suggestions.slice(0, 3).map(s => String(s).trim()).filter(s => s.length > 0)
+                if (cleaned.length > 0) {
+                  log(`suggestions generated: ${cleaned.length}`)
+                  writer.write(encoder.encode(`event: suggestions\ndata: ${JSON.stringify({ suggestions: cleaned })}\n\n`))
+                }
+              }
+            }
+          }
+        } catch (sugErr) {
+          log(`suggestions generation failed (non-fatal): ${sugErr.message}`)
+        }
+
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn })}\n\n`))
         break
       }

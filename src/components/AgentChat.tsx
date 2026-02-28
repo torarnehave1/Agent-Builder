@@ -55,7 +55,7 @@ interface ChatMessage {
 }
 
 interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions';
   data: Record<string, unknown>;
 }
 
@@ -284,6 +284,9 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
+
+  // Prompt suggestions state
+  const [suggestions, setSuggestions] = useState<string[]>([]);
 
   // Audio transcription state (same UX as GrokChatPanel)
   const [selectedAudioFile, setSelectedAudioFile] = useState<AudioFileInfo | null>(null);
@@ -779,11 +782,12 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     }
   }, [selectedAudioFile, audioProcessing, userId, audioAutoDetect, audioLanguage, audioLanguageOptions, getAudioDurationSeconds, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, clearSelectedAudio]);
 
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  const sendMessage = useCallback(async (overrideText?: string) => {
+    const text = (overrideText || input).trim();
     if (!text || streaming) return;
 
     setInput('');
+    setSuggestions([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setStreaming(true);
 
@@ -934,6 +938,11 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           finalToolCalls = next.toolCalls;
           return next;
         });
+
+        // Handle suggestions event outside setCurrent (separate state)
+        if (ev.type === 'suggestions' && Array.isArray(ev.data.suggestions)) {
+          setSuggestions(ev.data.suggestions as string[]);
+        }
       });
 
       // Finalize: move current into messages — preserve tool calls AND text
@@ -1323,6 +1332,24 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         </div>
       )}
 
+      {/* Suggestion chips */}
+      {suggestions.length > 0 && !streaming && (
+        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+          <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
+            {suggestions.map((s, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => sendMessage(s)}
+                className="px-3 py-1.5 rounded-full border border-sky-400/30 bg-sky-400/[0.08] text-sky-300 text-sm hover:bg-sky-400/[0.16] hover:border-sky-400/50 transition-all cursor-pointer"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Input area */}
       <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80 flex-shrink-0">
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
@@ -1348,7 +1375,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           />
           <button
             type="button"
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={streaming || !input.trim()}
             className="px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
           >
