@@ -755,6 +755,9 @@ async function executeGetAlbumImages(input, env) {
 async function executeAnalyzeImage(input, env) {
   const imageUrl = input.imageUrl
   if (!imageUrl) throw new Error('imageUrl is required')
+  if (!imageUrl.startsWith('https://')) {
+    throw new Error('analyze_image requires an HTTPS URL (e.g. https://vegvisr.imgix.net/...). If the image was pasted directly in chat, you can already see it — no need to call this tool. For base64/data URIs, the user must upload the image to their photo album first.')
+  }
   const question = input.question || 'Describe this image in detail.'
 
   const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {

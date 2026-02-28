@@ -923,7 +923,13 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             ? { type: 'image', source: { type: 'url', url: img.url } }
             : { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } }
         );
-        contentBlocks.push({ type: 'text', text: m.content || 'What do you see in this image?' });
+        // Include image metadata so the agent knows URLs vs pastes
+        const imageMeta = m.images.map((img, i) => {
+          if (img.type === 'url') return `[Image ${i + 1}: ${img.url} — use this URL for graph nodes (type: markdown-image, path: "${img.url}")]`;
+          return `[Image ${i + 1}: pasted/uploaded from clipboard — NO persistent URL. You can see this image directly. To save it as a graph node, the user must upload it to their photo album first.]`;
+        }).join('\n');
+        const userText = m.content || 'What do you see in this image?';
+        contentBlocks.push({ type: 'text', text: `${imageMeta}\n\n${userText}` });
         return { role: m.role, content: contentBlocks };
       }
       return { role: m.role, content: m.content };
