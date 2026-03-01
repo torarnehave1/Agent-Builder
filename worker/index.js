@@ -167,7 +167,8 @@ export default {
         formData.append('file', blob, uploadName)
         if (userEmail) formData.append('userEmail', userEmail)
 
-        const uploadRes = await fetch('https://photos-api.vegvisr.org/upload', {
+        // Use service binding (avoids 522 worker-to-worker via public URL)
+        const uploadRes = await env.PHOTOS_WORKER.fetch('https://photos-api.vegvisr.org/upload', {
           method: 'POST',
           body: formData
         })
@@ -180,8 +181,9 @@ export default {
         }
 
         const uploadData = await uploadRes.json()
-        const key = uploadData.key || uploadData.r2Key || uploadName
-        const url = `https://vegvisr.imgix.net/${key}`
+        // photos-worker returns { urls: [...], keys: [...] } or { key, r2Key }
+        const key = uploadData.keys?.[0] || uploadData.key || uploadData.r2Key || uploadName
+        const url = uploadData.urls?.[0] || `https://vegvisr.imgix.net/${key}`
 
         return new Response(JSON.stringify({ key, url }), { headers: corsHeaders })
       }

@@ -305,6 +305,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   // Image attachment state
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
   const [imageDragActive, setImageDragActive] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Audio transcription state (same UX as GrokChatPanel)
@@ -842,8 +843,11 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         img.url === tempUrl ? { type: 'url', url: imgixUrl, label: file.name } : img
       ));
     } catch (err) {
-      // Remove failed upload from pending
+      // Remove failed upload from pending and show error
       setPendingImages(prev => prev.filter(img => img.url !== tempUrl));
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      setUploadError(msg);
+      setTimeout(() => setUploadError(null), 5000);
       console.error('Image upload failed:', err);
     } finally {
       URL.revokeObjectURL(tempUrl);
@@ -1550,6 +1554,16 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                 {s}
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Upload error banner */}
+      {uploadError && (
+        <div className="px-4 py-2 border-t border-red-500/30 bg-red-500/10 flex-shrink-0">
+          <div className="max-w-[900px] mx-auto flex items-center gap-2 text-[12px] text-red-300">
+            <span>Image upload failed: {uploadError}</span>
+            <button type="button" onClick={() => setUploadError(null)} className="text-red-400 hover:text-red-200 ml-auto">&times;</button>
           </div>
         </div>
       )}
