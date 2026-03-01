@@ -6,6 +6,8 @@ import ContractCanvas, { createNewNode } from './ContractCanvas';
 import Sidebar from './Sidebar';
 import StatusBar from './StatusBar';
 import GraphSelector from './GraphSelector';
+import AgentSelector from './AgentSelector';
+import AgentSettings from './AgentSettings';
 import AgentChat from './AgentChat';
 import { contractToReactFlow, DEFAULT_CONTRACT } from '../lib/contractToGraph';
 import type { AgentContract } from '../types/contract';
@@ -21,11 +23,20 @@ interface Props {
 const CONTRACT_API = 'https://knowledge.vegvisr.org/getContract';
 const AGENT_API = 'https://agent.vegvisr.org';
 
-type View = 'builder' | 'chat';
+type View = 'builder' | 'chat' | 'settings';
+
+interface SelectedAgent {
+  id: string;
+  name: string;
+  avatar_url?: string | null;
+}
 
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
   const [view, setView] = useState<View>('builder');
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<SelectedAgent | null>(null);
+  const [editingAgentId, setEditingAgentId] = useState<string | null | undefined>(undefined);
   const [contractName, setContractName] = useState('Dark Glass');
   const [contractId, setContractId] = useState('contract_dark_glass');
   const [graphId, setGraphId] = useState('graph_agent_builder_development');
@@ -201,6 +212,18 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className="text-base text-purple-500">Agent Builder</span>
           <GraphSelector graphId={graphId} onGraphChange={setGraphId} />
           <span className="text-xs text-gray-600">/</span>
+          <AgentSelector
+            agentId={selectedAgentId}
+            onAgentChange={(id) => {
+              setSelectedAgentId(id);
+              if (!id) setSelectedAgent(null);
+            }}
+            onNewAgent={() => {
+              setEditingAgentId(null);
+              setView('settings');
+            }}
+          />
+          <span className="text-xs text-gray-600">/</span>
           <select
             value={contractId}
             onChange={handleContractChange}
@@ -228,6 +251,15 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
             >
               Chat
             </button>
+            <button
+              onClick={() => {
+                setEditingAgentId(selectedAgentId);
+                setView('settings');
+              }}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'settings' ? 'bg-emerald-600/30 text-emerald-300' : 'text-gray-400 hover:bg-white/5'}`}
+            >
+              Agents
+            </button>
           </div>
           <button className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
             Preview
@@ -252,8 +284,19 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       <EcosystemNav className="border-b border-white/10 bg-slate-950/90" />
 
       {/* Main Content */}
-      {view === 'chat' ? (
-        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} />
+      {view === 'settings' ? (
+        <AgentSettings
+          agentId={editingAgentId === undefined ? selectedAgentId : editingAgentId}
+          userId={userId}
+          onSave={(agent) => {
+            setSelectedAgentId(agent.id);
+            setSelectedAgent({ id: agent.id, name: agent.name, avatar_url: agent.avatar_url });
+            setView('chat');
+          }}
+          onCancel={() => setView('builder')}
+        />
+      ) : view === 'chat' ? (
+        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
       ) : (
         <>
           <div className="flex flex-1 min-h-0">

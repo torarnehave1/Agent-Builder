@@ -73,7 +73,7 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId } = body
 
         if (!userId || !userMessages || !Array.isArray(userMessages)) {
           return new Response(JSON.stringify({
@@ -82,6 +82,24 @@ export default {
         }
 
         let systemPrompt = CHAT_SYSTEM_PROMPT
+        let toolFilter = null
+        let agentAvatarUrl = null
+        let agentModel = model || 'claude-haiku-4-5-20251001'
+
+        // Load per-agent config if agentId provided
+        if (agentId) {
+          const agentConfig = await env.DB.prepare(
+            'SELECT * FROM agent_configs WHERE id = ?1 AND is_active = 1'
+          ).bind(agentId).first()
+          if (agentConfig) {
+            if (agentConfig.system_prompt) systemPrompt = agentConfig.system_prompt
+            agentAvatarUrl = agentConfig.avatar_url || null
+            if (agentConfig.model) agentModel = agentConfig.model
+            const tools = JSON.parse(agentConfig.tools || '[]')
+            if (tools.length > 0) toolFilter = tools
+          }
+        }
+
         if (graphId) {
           systemPrompt += `\n\n## Current Context\nThe user has selected graph "${graphId}". Use this graphId for operations unless they specify otherwise.`
         }
@@ -94,8 +112,10 @@ export default {
 
         ctx.waitUntil(
           streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, userId, env, {
-            model: model || 'claude-haiku-4-5-20251001',
+            model: agentModel,
             maxTurns: maxTurns || 8,
+            toolFilter,
+            avatarUrl: agentAvatarUrl,
           })
         )
 
@@ -398,6 +418,97 @@ export default {
         }), { headers: corsHeaders })
       }
 
+      // GET /agents — List all active agents
+      if (pathname === '/agents' && request.method === 'GET') {
+        const { results } = await env.DB.prepare(
+          `SELECT id, name, description, avatar_url, model, tools, is_active
+           FROM agent_configs WHERE is_active = 1 ORDER BY name`
+        ).all()
+        return new Response(JSON.stringify({ agents: results || [] }), { headers: corsHeaders })
+      }
+
+      // POST /agents — Create a new agent
+      if (pathname === '/agents' && request.method === 'POST') {
+        const body = await request.json()
+        const { name, description, system_prompt, model, max_tokens, temperature, tools, metadata, avatar_url } = body
+        if (!name) {
+          return new Response(JSON.stringify({ error: 'name is required' }), { status: 400, headers: corsHeaders })
+        }
+        const id = `agent_${crypto.randomUUID().slice(0, 8)}`
+        await env.DB.prepare(
+          `INSERT INTO agent_configs (id, name, description, system_prompt, model, max_tokens, temperature, tools, metadata, is_active, avatar_url)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)`
+        ).bind(
+          id,
+          name,
+          description || '',
+          system_prompt || '',
+          model || 'claude-haiku-4-5-20251001',
+          max_tokens || 4096,
+          temperature ?? 0.3,
+          JSON.stringify(tools || []),
+          JSON.stringify(metadata || {}),
+          avatar_url || null
+        ).run()
+        return new Response(JSON.stringify({ id, name, created: true }), { status: 201, headers: corsHeaders })
+      }
+
+      // GET /agent?id=xxx — Get single agent details
+      if (pathname === '/agent' && request.method === 'GET') {
+        const agentId = url.searchParams.get('id')
+        if (!agentId) {
+          return new Response(JSON.stringify({ error: 'id query param required' }), { status: 400, headers: corsHeaders })
+        }
+        const agent = await env.DB.prepare(
+          'SELECT * FROM agent_configs WHERE id = ?1'
+        ).bind(agentId).first()
+        if (!agent) {
+          return new Response(JSON.stringify({ error: 'Agent not found' }), { status: 404, headers: corsHeaders })
+        }
+        return new Response(JSON.stringify({ agent }), { headers: corsHeaders })
+      }
+
+      // PUT /agent — Update agent fields
+      if (pathname === '/agent' && request.method === 'PUT') {
+        const body = await request.json()
+        const { id: agentId } = body
+        if (!agentId) {
+          return new Response(JSON.stringify({ error: 'id is required' }), { status: 400, headers: corsHeaders })
+        }
+        const allowedFields = ['name', 'description', 'system_prompt', 'model', 'max_tokens', 'temperature', 'avatar_url', 'is_active']
+        const sets = []
+        const values = []
+        for (const key of allowedFields) {
+          if (body[key] !== undefined) {
+            sets.push(`${key} = ?`)
+            values.push(body[key])
+          }
+        }
+        if (body.tools !== undefined) { sets.push('tools = ?'); values.push(JSON.stringify(body.tools)) }
+        if (body.metadata !== undefined) { sets.push('metadata = ?'); values.push(JSON.stringify(body.metadata)) }
+        if (sets.length === 0) {
+          return new Response(JSON.stringify({ error: 'No fields to update' }), { status: 400, headers: corsHeaders })
+        }
+        values.push(agentId)
+        await env.DB.prepare(
+          `UPDATE agent_configs SET ${sets.join(', ')} WHERE id = ?`
+        ).bind(...values).run()
+        return new Response(JSON.stringify({ id: agentId, updated: true }), { headers: corsHeaders })
+      }
+
+      // DELETE /agent — Soft-delete agent (set is_active = 0)
+      if (pathname === '/agent' && request.method === 'DELETE') {
+        const body = await request.json()
+        const { id: agentId } = body
+        if (!agentId) {
+          return new Response(JSON.stringify({ error: 'id is required' }), { status: 400, headers: corsHeaders })
+        }
+        await env.DB.prepare(
+          'UPDATE agent_configs SET is_active = 0 WHERE id = ?1'
+        ).bind(agentId).run()
+        return new Response(JSON.stringify({ id: agentId, deleted: true }), { headers: corsHeaders })
+      }
+
       // GET /health - Health check
       if (pathname === '/health' && request.method === 'GET') {
         return new Response(JSON.stringify({
@@ -409,7 +520,7 @@ export default {
 
       return new Response(JSON.stringify({
         error: 'Not found',
-        available_endpoints: ['/execute', '/chat', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/health']
+        available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/health']
       }), { status: 404, headers: corsHeaders })
 
     } catch (error) {

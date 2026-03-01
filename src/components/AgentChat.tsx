@@ -36,6 +36,8 @@ interface Props {
   userId: string;
   graphId: string;
   onGraphChange: (graphId: string) => void;
+  agentId?: string | null;
+  agentAvatarUrl?: string | null;
 }
 
 interface ToolCall {
@@ -64,7 +66,7 @@ interface ChatMessage {
 }
 
 interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions' | 'agent_info';
   data: Record<string, unknown>;
 }
 
@@ -279,7 +281,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
+export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -296,6 +298,9 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
 
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Agent avatar state (from props or SSE agent_info event)
+  const [agentAvatar, setAgentAvatar] = useState<string | null>(agentAvatarUrl || null);
 
   // Image attachment state
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -987,6 +992,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           userId,
           messages: apiMessages,
           graphId: graphId || undefined,
+          agentId: agentId || undefined,
         }),
       });
 
@@ -1087,6 +1093,11 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
           finalToolCalls = next.toolCalls;
           return next;
         });
+
+        // Handle agent_info event (avatar, etc.)
+        if (ev.type === 'agent_info' && ev.data.avatarUrl) {
+          setAgentAvatar(ev.data.avatarUrl as string);
+        }
 
         // Handle suggestions event outside setCurrent (separate state)
         if (ev.type === 'suggestions' && Array.isArray(ev.data.suggestions)) {
@@ -1352,10 +1363,27 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`max-w-[80%] px-4 py-3 rounded-[14px] text-[0.95rem] leading-relaxed break-words ${
+            className={`flex gap-2.5 max-w-[80%] ${
+              msg.role === 'user' ? 'self-end flex-row-reverse' : 'self-start'
+            }`}
+          >
+            {/* Agent avatar for assistant messages */}
+            {msg.role === 'assistant' && (
+              <div className="flex-shrink-0 mt-1">
+                {agentAvatar ? (
+                  <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border border-white/20 object-cover" />
+                ) : (
+                  <div className="w-7 h-7 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-purple-300 text-[10px] font-bold">
+                    A
+                  </div>
+                )}
+              </div>
+            )}
+          <div
+            className={`px-4 py-3 rounded-[14px] text-[0.95rem] leading-relaxed break-words ${
               msg.role === 'user'
-                ? 'self-end bg-sky-400/[0.16] border border-sky-400/30 text-white'
-                : 'self-start bg-white/[0.06] border border-white/[0.12] text-white'
+                ? 'bg-sky-400/[0.16] border border-sky-400/30 text-white'
+                : 'bg-white/[0.06] border border-white/[0.12] text-white'
             }`}
           >
             {/* Show tool calls for completed assistant messages */}
@@ -1401,11 +1429,23 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
               </div>
             )}
           </div>
+          </div>
         ))}
 
         {/* Current streaming assistant response */}
         {current && (
-          <div className="self-start max-w-[80%] px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
+          <div className="flex gap-2.5 self-start max-w-[80%]">
+            {/* Agent avatar */}
+            <div className="flex-shrink-0 mt-1">
+              {agentAvatar ? (
+                <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border border-white/20 object-cover" />
+              ) : (
+                <div className="w-7 h-7 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-purple-300 text-[10px] font-bold">
+                  A
+                </div>
+              )}
+            </div>
+          <div className="px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
               <ToolCallCard key={tc.id} tc={tc} userId={userId} />
@@ -1420,6 +1460,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             {current.error && (
               <p className="text-rose-400">Error: {current.error}</p>
             )}
+          </div>
           </div>
         )}
 

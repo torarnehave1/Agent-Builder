@@ -66,10 +66,23 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     console.log(`[agent-loop +${elapsed}s] ${msg}`)
   }
 
-  const { allTools, operationMap } = await loadAllTools(env)
+  let { allTools, operationMap } = await loadAllTools(env)
+
+  // Filter tools per-agent if toolFilter provided
+  if (options.toolFilter && options.toolFilter.length > 0) {
+    const allowed = new Set(options.toolFilter)
+    allTools = allTools.filter(t => allowed.has(t.name))
+    log(`tool filter applied: ${options.toolFilter.length} allowed → ${allTools.length} tools`)
+  }
+
   log(`started | model=${model} maxTurns=${maxTurns} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
 
   try {
+    // Emit agent identity info if available (avatar, etc.)
+    if (options.avatarUrl) {
+      writer.write(encoder.encode(`event: agent_info\ndata: ${JSON.stringify({ avatarUrl: options.avatarUrl })}\n\n`))
+    }
+
     while (turn < maxTurns) {
       turn++
       log(`turn ${turn}/${maxTurns} — calling Anthropic`)
