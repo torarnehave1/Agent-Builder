@@ -803,14 +803,47 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     setPendingImages(prev => [...prev, { type: 'url', url, label: label || url.split('/').pop() || 'image' }]);
   }, []);
 
-  const addImageFromFile = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1];
-      setPendingImages(prev => [...prev, { type: 'base64', mediaType: file.type || 'image/png', data: base64, label: file.name }]);
-    };
-    reader.readAsDataURL(file);
-  }, []);
+  const addImageFromFile = useCallback(async (file: File) => {
+    // Show a temporary preview while uploading
+    const tempUrl = URL.createObjectURL(file);
+    setPendingImages(prev => [...prev, { type: 'url', url: tempUrl, label: `Uploading ${file.name}...` }]);
+
+    try {
+      // Read file as base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+
+      // Upload to photos API via agent-worker
+      const res = await fetch(`${AGENT_API}/upload-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, base64, mediaType: file.type || 'image/png', filename: file.name }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(err.error || `Upload failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      const imgixUrl = data.url;
+
+      // Replace temp preview with real imgix URL
+      setPendingImages(prev => prev.map(img =>
+        img.url === tempUrl ? { type: 'url', url: imgixUrl, label: file.name } : img
+      ));
+    } catch (err) {
+      // Remove failed upload from pending
+      setPendingImages(prev => prev.filter(img => img.url !== tempUrl));
+      console.error('Image upload failed:', err);
+    } finally {
+      URL.revokeObjectURL(tempUrl);
+    }
+  }, [userId]);
 
   const handleImageDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -916,18 +949,15 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
     setMessages(updatedMessages);
 
     // Build multimodal content for the API when images are present
+    // All images are URL-based (pasted files are auto-uploaded to photos API)
     const apiMessages = updatedMessages.map(m => {
       if (m.images && m.images.length > 0) {
         const contentBlocks: unknown[] = m.images.map(img =>
-          img.type === 'url'
-            ? { type: 'image', source: { type: 'url', url: img.url } }
-            : { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } }
+          ({ type: 'image', source: { type: 'url', url: img.url } })
         );
-        // Include image metadata so the agent knows URLs vs pastes
-        const imageMeta = m.images.map((img, i) => {
-          if (img.type === 'url') return `[Image ${i + 1}: ${img.url} — use this URL for graph nodes (type: markdown-image, path: "${img.url}")]`;
-          return `[Image ${i + 1}: pasted/uploaded from clipboard — NO persistent URL. You can see this image directly. To save it as a graph node, the user must upload it to their photo album first.]`;
-        }).join('\n');
+        const imageMeta = m.images.map((img, i) =>
+          `[Image ${i + 1}: ${img.url} — use this URL for graph nodes (type: markdown-image, path: "${img.url}")]`
+        ).join('\n');
         const userText = m.content || 'What do you see in this image?';
         contentBlocks.push({ type: 'text', text: `${imageMeta}\n\n${userText}` });
         return { role: m.role, content: contentBlocks };
@@ -1349,7 +1379,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
                     {msg.images.map((img, imgIdx) => (
                       <img
                         key={imgIdx}
-                        src={img.type === 'url' ? img.url : `data:${img.mediaType};base64,${img.data}`}
+                        src={img.url}
                         alt={img.label || 'attached'}
                         className="max-h-40 max-w-[200px] rounded-lg border border-white/20 object-cover"
                       />
@@ -1490,7 +1520,7 @@ export default function AgentChat({ userId, graphId, onGraphChange }: Props) {
             {pendingImages.map((img, i) => (
               <div key={i} className="relative group">
                 <img
-                  src={img.type === 'url' ? img.url : `data:${img.mediaType};base64,${img.data}`}
+                  src={img.url}
                   alt={img.label || 'attached'}
                   className="h-16 w-16 object-cover rounded-lg border border-white/20"
                 />

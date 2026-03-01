@@ -111,6 +111,61 @@ export default {
         })
       }
 
+      // POST /upload-image - Upload base64 image to photos API, return imgix URL
+      if (pathname === '/upload-image' && request.method === 'POST') {
+        const body = await request.json()
+        const { userId, base64, mediaType, filename } = body
+
+        if (!userId || !base64) {
+          return new Response(JSON.stringify({ error: 'userId and base64 are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+
+        // Look up user email from D1
+        let userEmail = null
+        try {
+          const profile = await env.DB.prepare(
+            'SELECT email FROM config WHERE user_id = ?'
+          ).bind(userId).first()
+          if (!profile) {
+            const profileByEmail = await env.DB.prepare(
+              'SELECT email FROM config WHERE email = ?'
+            ).bind(userId).first()
+            userEmail = profileByEmail?.email || userId
+          } else {
+            userEmail = profile.email
+          }
+        } catch { userEmail = userId }
+
+        // Convert base64 to binary and build FormData
+        const binaryData = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+        const blob = new Blob([binaryData], { type: mediaType || 'image/png' })
+        const uploadName = filename || `agent-upload-${Date.now()}.${(mediaType || 'image/png').split('/')[1] || 'png'}`
+
+        const formData = new FormData()
+        formData.append('file', blob, uploadName)
+        if (userEmail) formData.append('userEmail', userEmail)
+
+        const uploadRes = await fetch('https://photos-api.vegvisr.org/upload', {
+          method: 'POST',
+          body: formData
+        })
+
+        if (!uploadRes.ok) {
+          const errText = await uploadRes.text()
+          return new Response(JSON.stringify({ error: `Upload failed: ${errText}` }), {
+            status: uploadRes.status, headers: corsHeaders
+          })
+        }
+
+        const uploadData = await uploadRes.json()
+        const key = uploadData.key || uploadData.r2Key || uploadName
+        const url = `https://vegvisr.imgix.net/${key}`
+
+        return new Response(JSON.stringify({ key, url }), { headers: corsHeaders })
+      }
+
       // POST /analyze - Direct semantic analysis (no agent loop)
       if (pathname === '/analyze' && request.method === 'POST') {
         const body = await request.json()
