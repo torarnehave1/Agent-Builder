@@ -13,6 +13,13 @@ interface AgentConfig {
   is_active: number;
 }
 
+interface AgentListItem {
+  id: string;
+  name: string;
+  description?: string;
+  avatar_url?: string;
+}
+
 interface ToolInfo {
   name: string;
   description: string;
@@ -23,11 +30,13 @@ interface Props {
   userId: string;
   onSave: (agent: AgentConfig) => void;
   onCancel: () => void;
+  onSelectAgent: (agentId: string | null) => void;
 }
 
 const AGENT_API = 'https://agent.vegvisr.org';
 
-export default function AgentSettings({ agentId, userId, onSave, onCancel }: Props) {
+export default function AgentSettings({ agentId, userId, onSave, onCancel, onSelectAgent }: Props) {
+  const [agents, setAgents] = useState<AgentListItem[]>([]);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
@@ -40,6 +49,32 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel }: Pro
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [urlInput, setUrlInput] = useState('');
+
+  // Load agent list
+  const loadAgents = useCallback(() => {
+    fetch(`${AGENT_API}/agents`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.agents) setAgents(data.agents);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    loadAgents();
+  }, [loadAgents]);
+
+  // Reset form for new agent
+  const resetForm = () => {
+    setName('');
+    setDescription('');
+    setSystemPrompt('');
+    setModel('claude-haiku-4-5-20251001');
+    setTemperature(0.3);
+    setAvatarUrl(null);
+    setSelectedTools([]);
+    setUrlInput('');
+  };
 
   // Load agent config if editing
   useEffect(() => {
@@ -61,6 +96,8 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel }: Pro
           }
         })
         .catch(() => {});
+    } else {
+      resetForm();
     }
   }, [agentId]);
 
@@ -143,7 +180,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel }: Pro
       }
       const data = await res.json();
       const savedId = agentId || data.id;
-      onSave({
+      const savedAgent: AgentConfig = {
         id: savedId,
         name: name.trim(),
         description: description.trim(),
@@ -154,7 +191,12 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel }: Pro
         tools: selectedTools,
         avatar_url: avatarUrl,
         is_active: 1,
-      });
+      };
+      onSave(savedAgent);
+      // Refresh agent list after save
+      loadAgents();
+      // Select the saved agent
+      onSelectAgent(savedId);
     } catch (err) {
       console.error('Save failed:', err);
     } finally {
@@ -171,212 +213,260 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel }: Pro
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-2xl mx-auto space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">
-            {agentId ? 'Edit Agent' : 'New Agent'}
-          </h2>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onCancel}
-              className="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-white/10 rounded-md hover:bg-white/5"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!name.trim() || saving}
-              className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-md hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {saving ? 'Saving...' : 'Save Agent'}
-            </button>
-          </div>
+    <div className="flex flex-1 min-h-0">
+      {/* Left sidebar — Agent list */}
+      <div className="w-[240px] flex-shrink-0 border-r border-white/10 bg-slate-950/80 flex flex-col">
+        <div className="p-3 border-b border-white/10">
+          <button
+            onClick={() => onSelectAgent(null)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-semibold text-emerald-400 hover:bg-emerald-600/10 rounded-md transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            New Agent
+          </button>
         </div>
-
-        {/* Avatar */}
-        <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4">
-          <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3 block">Avatar</label>
-          <div className="flex items-start gap-4">
-            {/* Preview */}
-            <div
-              className={`w-20 h-20 rounded-full border-2 flex items-center justify-center overflow-hidden flex-shrink-0 cursor-pointer transition-colors ${
-                dragOver ? 'border-emerald-400 bg-emerald-600/20' : 'border-white/20 bg-slate-800'
+        <div className="flex-1 overflow-y-auto">
+          {agents.map(a => (
+            <button
+              key={a.id}
+              onClick={() => onSelectAgent(a.id)}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-white/5 transition-colors ${
+                a.id === agentId ? 'bg-emerald-600/10 border-l-2 border-emerald-500' : 'border-l-2 border-transparent'
               }`}
-              onDragOver={e => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => document.getElementById('avatar-file-input')?.click()}
             >
-              {uploading ? (
-                <span className="text-[10px] text-gray-400">Uploading...</span>
-              ) : avatarUrl ? (
-                <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+              {a.avatar_url ? (
+                <img src={a.avatar_url} alt="" className="w-8 h-8 rounded-full object-cover flex-shrink-0" />
               ) : (
-                <span className="text-2xl text-gray-500">
-                  {name ? name.charAt(0).toUpperCase() : '?'}
-                </span>
+                <div className="w-8 h-8 rounded-full bg-emerald-600/30 flex items-center justify-center text-[10px] text-emerald-300 font-bold flex-shrink-0">
+                  {a.name.charAt(0).toUpperCase()}
+                </div>
               )}
-            </div>
-            <input
-              id="avatar-file-input"
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={e => {
-                const file = e.target.files?.[0];
-                if (file) uploadAvatar(file);
-              }}
-            />
-            <div className="flex-1 space-y-2">
-              <p className="text-[11px] text-gray-500">
-                Click or drag & drop an image to upload, or paste a URL below.
-              </p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={urlInput}
-                  onChange={e => setUrlInput(e.target.value)}
-                  placeholder="https://vegvisr.imgix.net/..."
-                  className="flex-1 rounded-md bg-slate-950/60 border border-white/8 px-3 py-1.5 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40"
-                />
-                <button
-                  onClick={() => {
-                    if (urlInput.trim()) {
-                      setAvatarUrl(urlInput.trim());
-                      setUrlInput('');
-                    }
-                  }}
-                  disabled={!urlInput.trim()}
-                  className="px-3 py-1.5 text-[10px] font-semibold text-emerald-400 border border-emerald-600/30 rounded-md hover:bg-emerald-600/10 disabled:opacity-40"
-                >
-                  Set
-                </button>
+              <div className="flex flex-col gap-0.5 min-w-0">
+                <span className="text-[11px] text-white truncate">{a.name}</span>
+                {a.description && (
+                  <span className="text-[9px] text-gray-500 truncate">{a.description}</span>
+                )}
               </div>
-              {avatarUrl && (
-                <button
-                  onClick={() => setAvatarUrl(null)}
-                  className="text-[10px] text-red-400 hover:text-red-300"
-                >
-                  Remove avatar
-                </button>
-              )}
+            </button>
+          ))}
+          {agents.length === 0 && (
+            <div className="px-3 py-6 text-[11px] text-gray-600 text-center">
+              No agents yet
             </div>
-          </div>
+          )}
         </div>
+      </div>
 
-        {/* Name & Description */}
-        <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">Identity</label>
-          <div>
-            <label className="text-[10px] text-gray-500 block mb-1">Name *</label>
-            <input
-              type="text"
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="e.g. Book Writer, Market Analyst..."
-              className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40"
-            />
-          </div>
-          <div>
-            <label className="text-[10px] text-gray-500 block mb-1">Description</label>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="What this agent specializes in..."
-              rows={2}
-              className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 resize-none"
-            />
-          </div>
-        </div>
-
-        {/* Model & Temperature */}
-        <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
-          <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">Model</label>
-          <div className="flex items-center gap-4">
-            <div className="flex-1">
-              <label className="text-[10px] text-gray-500 block mb-1">Model</label>
-              <select
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white focus:outline-none focus:border-emerald-500/40"
+      {/* Right panel — Settings form */}
+      <div className="flex-1 overflow-y-auto p-6">
+        <div className="max-w-2xl mx-auto space-y-6">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-white">
+              {agentId ? 'Edit Agent' : 'New Agent'}
+            </h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onCancel}
+                className="px-3 py-1.5 text-xs text-gray-400 hover:text-white border border-white/10 rounded-md hover:bg-white/5"
               >
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
-                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-                <option value="claude-opus-4-6">Claude Opus 4.6</option>
-              </select>
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!name.trim() || saving}
+                className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 rounded-md hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {saving ? 'Saving...' : 'Save Agent'}
+              </button>
             </div>
-            <div className="w-32">
-              <label className="text-[10px] text-gray-500 block mb-1">Temperature: {temperature}</label>
+          </div>
+
+          {/* Avatar */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4">
+            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-3 block">Avatar</label>
+            <div className="flex items-start gap-4">
+              {/* Preview */}
+              <div
+                className={`w-20 h-20 rounded-full border-2 flex items-center justify-center overflow-hidden flex-shrink-0 cursor-pointer transition-colors ${
+                  dragOver ? 'border-emerald-400 bg-emerald-600/20' : 'border-white/20 bg-slate-800'
+                }`}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                onClick={() => document.getElementById('avatar-file-input')?.click()}
+              >
+                {uploading ? (
+                  <span className="text-[10px] text-gray-400">Uploading...</span>
+                ) : avatarUrl ? (
+                  <img src={avatarUrl} alt="Avatar" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-2xl text-gray-500">
+                    {name ? name.charAt(0).toUpperCase() : '?'}
+                  </span>
+                )}
+              </div>
               <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={temperature}
-                onChange={e => setTemperature(parseFloat(e.target.value))}
-                className="w-full"
+                id="avatar-file-input"
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadAvatar(file);
+                }}
+              />
+              <div className="flex-1 space-y-2">
+                <p className="text-[11px] text-gray-500">
+                  Click or drag & drop an image to upload, or paste a URL below.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={urlInput}
+                    onChange={e => setUrlInput(e.target.value)}
+                    placeholder="https://vegvisr.imgix.net/..."
+                    className="flex-1 rounded-md bg-slate-950/60 border border-white/8 px-3 py-1.5 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40"
+                  />
+                  <button
+                    onClick={() => {
+                      if (urlInput.trim()) {
+                        setAvatarUrl(urlInput.trim());
+                        setUrlInput('');
+                      }
+                    }}
+                    disabled={!urlInput.trim()}
+                    className="px-3 py-1.5 text-[10px] font-semibold text-emerald-400 border border-emerald-600/30 rounded-md hover:bg-emerald-600/10 disabled:opacity-40"
+                  >
+                    Set
+                  </button>
+                </div>
+                {avatarUrl && (
+                  <button
+                    onClick={() => setAvatarUrl(null)}
+                    className="text-[10px] text-red-400 hover:text-red-300"
+                  >
+                    Remove avatar
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Name & Description */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
+            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">Identity</label>
+            <div>
+              <label className="text-[10px] text-gray-500 block mb-1">Name *</label>
+              <input
+                type="text"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                placeholder="e.g. Book Writer, Market Analyst..."
+                className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-gray-500 block mb-1">Description</label>
+              <textarea
+                value={description}
+                onChange={e => setDescription(e.target.value)}
+                placeholder="What this agent specializes in..."
+                rows={2}
+                className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 resize-none"
               />
             </div>
           </div>
-        </div>
 
-        {/* System Prompt */}
-        <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-2">
-          <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">
-            System Prompt
-            <span className="text-[9px] text-gray-600 font-normal ml-2">
-              Leave empty to use the default prompt
-            </span>
-          </label>
-          <textarea
-            value={systemPrompt}
-            onChange={e => setSystemPrompt(e.target.value)}
-            placeholder="You are a specialized agent that..."
-            rows={8}
-            className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 resize-y font-mono"
-          />
-        </div>
+          {/* Model & Temperature */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
+            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">Model</label>
+            <div className="flex items-center gap-4">
+              <div className="flex-1">
+                <label className="text-[10px] text-gray-500 block mb-1">Model</label>
+                <select
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white focus:outline-none focus:border-emerald-500/40"
+                >
+                  <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (fast)</option>
+                  <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
+                  <option value="claude-opus-4-6">Claude Opus 4.6</option>
+                </select>
+              </div>
+              <div className="w-32">
+                <label className="text-[10px] text-gray-500 block mb-1">Temperature: {temperature}</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={temperature}
+                  onChange={e => setTemperature(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
+            </div>
+          </div>
 
-        {/* Tools */}
-        <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-2">
-          <div className="flex items-center justify-between mb-2">
-            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-              Tools
+          {/* System Prompt */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-2">
+            <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">
+              System Prompt
               <span className="text-[9px] text-gray-600 font-normal ml-2">
-                {selectedTools.length === 0 ? 'All tools enabled (default)' : `${selectedTools.length} selected`}
+                Leave empty to use the default prompt
               </span>
             </label>
-            {selectedTools.length > 0 && (
-              <button
-                onClick={() => setSelectedTools([])}
-                className="text-[10px] text-gray-500 hover:text-white"
-              >
-                Clear all (use default)
-              </button>
-            )}
+            <textarea
+              value={systemPrompt}
+              onChange={e => setSystemPrompt(e.target.value)}
+              placeholder="You are a specialized agent that..."
+              rows={8}
+              className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 resize-y font-mono"
+            />
           </div>
-          <div className="grid grid-cols-2 gap-1 max-h-[240px] overflow-y-auto">
-            {availableTools.map(tool => (
-              <label
-                key={tool.name}
-                className={`flex items-start gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-white/5 ${
-                  selectedTools.includes(tool.name) ? 'bg-emerald-600/10' : ''
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedTools.includes(tool.name)}
-                  onChange={() => toggleTool(tool.name)}
-                  className="mt-0.5 rounded border-gray-600"
-                />
-                <div className="min-w-0">
-                  <span className="text-[10px] text-white block truncate">{tool.name}</span>
-                  <span className="text-[9px] text-gray-600 block truncate">{tool.description}</span>
-                </div>
+
+          {/* Tools */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-2">
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                Tools
+                <span className="text-[9px] text-gray-600 font-normal ml-2">
+                  {selectedTools.length === 0 ? 'All tools enabled (default)' : `${selectedTools.length} selected`}
+                </span>
               </label>
-            ))}
+              {selectedTools.length > 0 && (
+                <button
+                  onClick={() => setSelectedTools([])}
+                  className="text-[10px] text-gray-500 hover:text-white"
+                >
+                  Clear all (use default)
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-1 max-h-[240px] overflow-y-auto">
+              {availableTools.map(tool => (
+                <label
+                  key={tool.name}
+                  className={`flex items-start gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-white/5 ${
+                    selectedTools.includes(tool.name) ? 'bg-emerald-600/10' : ''
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedTools.includes(tool.name)}
+                    onChange={() => toggleTool(tool.name)}
+                    className="mt-0.5 rounded border-gray-600"
+                  />
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-white block truncate">{tool.name}</span>
+                    <span className="text-[9px] text-gray-600 block truncate">{tool.description}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       </div>

@@ -291,9 +291,9 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           onSave={(agent) => {
             setSelectedAgentId(agent.id);
             setSelectedAgent({ id: agent.id, name: agent.name, avatar_url: agent.avatar_url });
-            setView('chat');
           }}
           onCancel={() => setView('builder')}
+          onSelectAgent={(id) => setEditingAgentId(id)}
         />
       ) : view === 'chat' ? (
         <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
