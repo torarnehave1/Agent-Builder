@@ -184,8 +184,13 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
 
-        const graphTools = toolUses.filter(t => t.name === 'create_graph')
-        const otherTools = toolUses.filter(t => t.name !== 'create_graph')
+        // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
+        const SEQUENTIAL_TOOLS = new Set([
+          'create_graph', 'create_node', 'create_html_node', 'add_edge',
+          'patch_node', 'patch_graph_metadata'
+        ])
+        const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
+        const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
 
         const executeAndStream = async (toolUse) => {
           const toolStart = Date.now()
@@ -220,9 +225,14 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           }
         }
 
-        const phase1Results = await Promise.all(graphTools.map(executeAndStream))
-        const phase2Results = await Promise.all(otherTools.map(executeAndStream))
-        const toolResults = [...phase1Results, ...phase2Results]
+        // Phase 1: Run graph-mutating tools sequentially (one at a time) to prevent race conditions
+        const sequentialResults = []
+        for (const toolUse of sequentialTools) {
+          sequentialResults.push(await executeAndStream(toolUse))
+        }
+        // Phase 2: Run all other tools in parallel (safe — they don't mutate graph state concurrently)
+        const parallelResults = await Promise.all(parallelTools.map(executeAndStream))
+        const toolResults = [...sequentialResults, ...parallelResults]
 
         messages.push(
           { role: 'assistant', content: data.content },
@@ -355,10 +365,29 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         })
       }
 
-      const graphTools = toolUses.filter(t => t.name === 'create_graph')
-      const otherTools = toolUses.filter(t => t.name !== 'create_graph')
+      // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
+      const SEQUENTIAL_TOOLS = new Set([
+        'create_graph', 'create_node', 'create_html_node', 'add_edge',
+        'patch_node', 'patch_graph_metadata'
+      ])
+      const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
+      const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
 
-      const phase1Results = await Promise.all(graphTools.map(async (toolUse) => {
+      // Phase 1: Run graph-mutating tools sequentially (one at a time)
+      const sequentialResults = []
+      for (const toolUse of sequentialTools) {
+        try {
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
+          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
+          sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) })
+        } catch (error) {
+          executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
+          sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) })
+        }
+      }
+
+      // Phase 2: Run non-mutating tools in parallel
+      const parallelResults = await Promise.all(parallelTools.map(async (toolUse) => {
         try {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
           executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
@@ -369,18 +398,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         }
       }))
 
-      const phase2Results = await Promise.all(otherTools.map(async (toolUse) => {
-        try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
-          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
-          return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) }
-        } catch (error) {
-          executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
-          return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
-        }
-      }))
-
-      const toolResults = [...phase1Results, ...phase2Results]
+      const toolResults = [...sequentialResults, ...parallelResults]
 
       messages.push(
         { role: 'assistant', content: data.content },

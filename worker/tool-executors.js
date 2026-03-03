@@ -182,7 +182,25 @@ async function executePatchNode(input, env) {
     }),
   })
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || `patchNode failed (${res.status})`)
+  if (!res.ok) {
+    const errMsg = data.error || `patchNode failed (${res.status})`
+    // If node not found, fetch graph to show valid node IDs for self-correction
+    if (errMsg.toLowerCase().includes('not found')) {
+      try {
+        const graphRes = await env.KG_WORKER.fetch(
+          `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+        )
+        const graphData = await graphRes.json()
+        if (graphRes.ok && graphData.nodes) {
+          const nodeIds = graphData.nodes.map(n => `"${n.id}" (${n.label})`).join(', ')
+          throw new Error(`${errMsg}. Valid node IDs in this graph: ${nodeIds}`)
+        }
+      } catch (e) {
+        if (e.message.includes('Valid node IDs')) throw e
+      }
+    }
+    throw new Error(errMsg)
+  }
   return {
     graphId: input.graphId,
     nodeId: input.nodeId,
@@ -369,6 +387,16 @@ async function executeAddEdge(input, env) {
   const graphData = await getRes.json()
   if (!getRes.ok || !graphData.nodes) {
     throw new Error(graphData.error || 'Graph not found')
+  }
+
+  // Validate that source and target nodes exist
+  const nodeIds = graphData.nodes.map(n => n.id)
+  const missing = []
+  if (!nodeIds.includes(input.sourceId)) missing.push(`sourceId "${input.sourceId}"`)
+  if (!nodeIds.includes(input.targetId)) missing.push(`targetId "${input.targetId}"`)
+  if (missing.length > 0) {
+    const validIds = graphData.nodes.map(n => `"${n.id}" (${n.label})`).join(', ')
+    throw new Error(`${missing.join(' and ')} not found in graph. Valid node IDs: ${validIds}`)
   }
 
   const edgeId = `${input.sourceId}_${input.targetId}`
@@ -907,6 +935,22 @@ async function executeListRecordings(input, env) {
   const data = await res.json()
   let allRecordings = data.recordings || []
 
+  // Also include Sonic Wisdom recordings (saved under sonic-wisdom@vegvisr.org)
+  const sonicEmail = 'sonic-wisdom@vegvisr.org'
+  if (userEmail.toLowerCase() !== sonicEmail) {
+    try {
+      const sonicUrl = `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(sonicEmail)}&limit=200&userRole=Superadmin&ownerEmail=${encodeURIComponent(sonicEmail)}`
+      const sonicRes = await env.AUDIO_PORTFOLIO.fetch(sonicUrl)
+      if (sonicRes.ok) {
+        const sonicData = await sonicRes.json()
+        const sonicRecordings = (sonicData.recordings || []).map(r => ({ ...r, source: 'Sonic Wisdom' }))
+        allRecordings = allRecordings.concat(sonicRecordings)
+      }
+    } catch (e) {
+      // Sonic Wisdom fetch failed — continue with user's recordings only
+    }
+  }
+
   // Client-side filtering if query provided (search-recordings endpoint also has broken index)
   if (query) {
     const q = query.toLowerCase().trim()
@@ -922,6 +966,9 @@ async function executeListRecordings(input, env) {
       return searchable.includes(q)
     })
   }
+
+  // Sort by newest first so "last N recordings" returns the most recent
+  allRecordings.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 
   const recordings = allRecordings.slice(0, limit).map(r => ({
     recordingId: r.recordingId,
