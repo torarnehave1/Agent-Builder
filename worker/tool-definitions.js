@@ -729,6 +729,19 @@ const TOOL_DEFINITIONS = [
       },
       required: ['email']
     }
+  },
+  {
+    name: 'get_group_messages',
+    description: 'Get recent messages from a Hallo Vegvisr chat group. Returns message text, sender email, and timestamp. Use this to read, analyze, summarize, or do sentiment analysis on group conversations.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' },
+        limit: { type: 'number', description: 'Number of messages to return (default 10, max 100)' }
+      },
+      required: []
+    }
   }
 ]
 

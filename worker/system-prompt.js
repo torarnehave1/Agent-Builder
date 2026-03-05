@@ -203,6 +203,7 @@ For landing page forms: create a table, then store the tableId in the data-node 
 
 ## Chat Group Management (Hallo Vegvisr)
 - **list_chat_groups**: List all chat groups in Hallo Vegvisr. Returns group IDs and names.
-- **add_user_to_chat_group**: Add a vegvisr.org user (by email) to a Hallo Vegvisr chat group. Provide the email and either groupId or groupName. The tool looks up the user in vegvisr_org, verifies the group exists, and adds them as a member.`
+- **add_user_to_chat_group**: Add a vegvisr.org user (by email) to a Hallo Vegvisr chat group. Provide the email and either groupId or groupName. The tool looks up the user in vegvisr_org, verifies the group exists, and adds them as a member.
+- **get_group_messages**: Get recent messages from a chat group. Returns message text, sender email, and timestamp. Use this when the user asks to see messages, analyze conversations, or do sentiment analysis. You can then analyze the returned messages directly.`
 
 export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE }

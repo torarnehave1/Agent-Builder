@@ -1849,6 +1849,26 @@ async function executeAddUserToChatGroup(input, env) {
   }
 }
 
+async function executeGetGroupMessages(input, env) {
+  const params = new URLSearchParams()
+  if (input.groupId) params.set('groupId', input.groupId)
+  if (input.groupName) params.set('groupName', input.groupName)
+  if (input.limit) params.set('limit', String(input.limit))
+
+  const res = await env.DRIZZLE_WORKER.fetch(
+    `https://drizzle-worker/group-messages?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get group messages')
+
+  return {
+    groupName: data.groupName,
+    groupId: data.groupId,
+    messages: data.messages,
+    count: data.count,
+    message: `Retrieved ${data.count} messages from "${data.groupName}"`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -1926,6 +1946,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListChatGroups(toolInput, env)
     case 'add_user_to_chat_group':
       return await executeAddUserToChatGroup(toolInput, env)
+    case 'get_group_messages':
+      return await executeGetGroupMessages(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
