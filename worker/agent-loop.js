@@ -188,7 +188,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const SEQUENTIAL_TOOLS = new Set([
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'save_form_data',
-          'create_app_table', 'insert_app_record', 'add_user_to_chat_group'
+          'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
@@ -370,7 +370,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
       const SEQUENTIAL_TOOLS = new Set([
         'create_graph', 'create_node', 'create_html_node', 'add_edge',
         'patch_node', 'patch_graph_metadata', 'save_form_data',
-        'create_app_table', 'insert_app_record', 'add_user_to_chat_group'
+        'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message'
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

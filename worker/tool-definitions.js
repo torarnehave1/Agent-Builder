@@ -742,6 +742,34 @@ const TOOL_DEFINITIONS = [
       },
       required: []
     }
+  },
+  {
+    name: 'get_group_stats',
+    description: 'Get activity statistics for all Hallo Vegvisr chat groups. Returns message count, member count, last message time, and creator for each group, sorted by most active.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'send_group_message',
+    description: 'Send a text or voice message to a Hallo Vegvisr chat group on behalf of a user. The user must be a member of the group. For voice messages, use list_recordings to get the audioUrl first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Sender email address (must exist in vegvisr.org and be a group member)' },
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' },
+        body: { type: 'string', description: 'Message text to send (required for text, optional for voice)' },
+        messageType: { type: 'string', enum: ['text', 'voice'], description: 'Message type (default: text)' },
+        audioUrl: { type: 'string', description: 'URL to audio file (required for voice messages). Get from list_recordings.' },
+        audioDurationMs: { type: 'number', description: 'Audio duration in milliseconds' },
+        transcriptText: { type: 'string', description: 'Transcription of the voice message' },
+        transcriptLang: { type: 'string', description: 'Language code of transcript (e.g. "en", "no")' }
+      },
+      required: ['email']
+    }
   }
 ]
 

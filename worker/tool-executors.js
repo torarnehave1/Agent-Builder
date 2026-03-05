@@ -1869,6 +1869,76 @@ async function executeGetGroupMessages(input, env) {
   }
 }
 
+async function executeGetGroupStats(input, env) {
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/group-stats')
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get group stats')
+
+  const mostActive = data.groups[0]
+  return {
+    groups: data.groups,
+    count: data.groups.length,
+    message: mostActive
+      ? `${data.groups.length} groups. Most active: "${mostActive.name}" with ${mostActive.messageCount} messages`
+      : 'No groups found'
+  }
+}
+
+async function executeSendGroupMessage(input, env) {
+  const email = (input.email || '').trim()
+  const body = (input.body || '').trim()
+  const messageType = (input.messageType || 'text').trim()
+  if (!email) throw new Error('email is required')
+  if (messageType === 'voice') {
+    if (!input.audioUrl) throw new Error('audioUrl is required for voice messages')
+  } else {
+    if (!body) throw new Error('body (message text) is required')
+  }
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+
+  const payload = {
+    email,
+    groupId: input.groupId || undefined,
+    groupName: input.groupName || undefined,
+    body,
+    messageType
+  }
+  if (messageType === 'voice') {
+    payload.audioUrl = input.audioUrl
+    if (input.audioDurationMs) payload.audioDurationMs = input.audioDurationMs
+    if (input.transcriptText) payload.transcriptText = input.transcriptText
+    if (input.transcriptLang) payload.transcriptLang = input.transcriptLang
+  }
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/send-group-message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to send message')
+
+  const result = {
+    success: true,
+    messageId: data.messageId,
+    groupId: data.groupId,
+    groupName: data.groupName,
+    email: data.email,
+    body: data.body,
+    messageType: data.messageType,
+    createdAt: data.createdAt,
+    message: messageType === 'voice'
+      ? `Sent voice message to "${data.groupName}" as ${data.email}`
+      : `Sent message to "${data.groupName}" as ${data.email}`
+  }
+  if (messageType === 'voice') {
+    result.audioUrl = data.audioUrl
+    result.transcriptText = data.transcriptText
+    result.transcriptionStatus = data.transcriptionStatus
+  }
+  return result
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -1948,6 +2018,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAddUserToChatGroup(toolInput, env)
     case 'get_group_messages':
       return await executeGetGroupMessages(toolInput, env)
+    case 'get_group_stats':
+      return await executeGetGroupStats(toolInput, env)
+    case 'send_group_message':
+      return await executeSendGroupMessage(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
