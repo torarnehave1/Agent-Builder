@@ -32,6 +32,10 @@ interface QueryResult {
 type TableFilter = 'all' | 'app';
 
 export default function DataExplorer() {
+  // Database state
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [selectedDb, setSelectedDb] = useState('vegvisr_org');
+
   // Tables state
   const [d1Tables, setD1Tables] = useState<D1Table[]>([]);
   const [appTables, setAppTables] = useState<AppTableMeta[]>([]);
@@ -50,18 +54,41 @@ export default function DataExplorer() {
   const [tableData, setTableData] = useState<QueryResult | null>(null);
   const [tableColumns, setTableColumns] = useState<ColumnMeta[]>([]);
 
-  // Load tables on mount
+  // Fetch available databases on mount
   useEffect(() => {
+    fetch(`${DRIZZLE_API}/databases`)
+      .then(r => r.json())
+      .then(data => setDatabases(data.databases || []))
+      .catch(() => setDatabases(['vegvisr_org']));
+  }, []);
+
+  // Load tables when database changes
+  const loadTables = useCallback(async (dbName: string) => {
     setLoading(true);
-    Promise.all([
-      fetch(`${DRIZZLE_API}/d1-tables`).then(r => r.json()).catch(() => ({ tables: [] })),
-      fetch(`${DRIZZLE_API}/tables`).then(r => r.json()).catch(() => ({ tables: [] })),
-    ]).then(([d1Data, appData]) => {
+    setSelectedTable(null);
+    setTableData(null);
+    setQueryResult(null);
+    setTableColumns([]);
+    setSqlInput('');
+    try {
+      const [d1Data, appData] = await Promise.all([
+        fetch(`${DRIZZLE_API}/d1-tables?database=${dbName}`).then(r => r.json()).catch(() => ({ tables: [] })),
+        dbName === 'vegvisr_org'
+          ? fetch(`${DRIZZLE_API}/tables?database=${dbName}`).then(r => r.json()).catch(() => ({ tables: [] }))
+          : Promise.resolve({ tables: [] }),
+      ]);
       setD1Tables(d1Data.tables || []);
       setAppTables(appData.tables || []);
-    }).catch(err => setError(err.message))
-      .finally(() => setLoading(false));
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to load tables');
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    loadTables(selectedDb);
+  }, [selectedDb, loadTables]);
 
   // Filtered table list
   const displayTables = tableFilter === 'all'
@@ -78,14 +105,14 @@ export default function DataExplorer() {
     setQueryError(null);
     setQueryLoading(true);
 
-    // Set a default query
-    setSqlInput(`SELECT * FROM "${tableName}" LIMIT 100`);
+    const query = `SELECT * FROM "${tableName}" LIMIT 100`;
+    setSqlInput(query);
 
     try {
       // Check if it's an app table with schema info
       const appMeta = appTables.find(a => a.tableName === tableName);
       if (appMeta) {
-        const detailRes = await fetch(`${DRIZZLE_API}/table/${appMeta.id}`);
+        const detailRes = await fetch(`${DRIZZLE_API}/table/${appMeta.id}?database=${selectedDb}`);
         if (detailRes.ok) {
           const detail = await detailRes.json();
           setTableColumns(detail.columns || []);
@@ -95,10 +122,10 @@ export default function DataExplorer() {
       }
 
       // Query the table data
-      const res = await fetch(`${DRIZZLE_API}/raw-query`, {
+      const res = await fetch(`${DRIZZLE_API}/raw-query?database=${selectedDb}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql: `SELECT * FROM "${tableName}" LIMIT 100` }),
+        body: JSON.stringify({ sql: query }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Query failed');
@@ -109,7 +136,7 @@ export default function DataExplorer() {
     } finally {
       setQueryLoading(false);
     }
-  }, [appTables]);
+  }, [appTables, selectedDb]);
 
   // Execute custom SQL
   const handleExecuteQuery = async () => {
@@ -120,7 +147,7 @@ export default function DataExplorer() {
     setTableData(null);
 
     try {
-      const res = await fetch(`${DRIZZLE_API}/raw-query`, {
+      const res = await fetch(`${DRIZZLE_API}/raw-query?database=${selectedDb}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sql: sqlInput.trim() }),
@@ -151,13 +178,26 @@ export default function DataExplorer() {
       {/* Left sidebar — table list */}
       <div className="w-72 border-r border-white/10 flex flex-col bg-slate-950/50 flex-shrink-0">
         <div className="px-4 py-3 border-b border-white/10">
-          <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center justify-between mb-2">
             <h2 className="text-sm font-semibold text-white">D1 Tables</h2>
-            <span className="text-[10px] text-gray-500 font-mono">vegvisr_org</span>
           </div>
+          {/* Database selector */}
+          <select
+            value={selectedDb}
+            onChange={e => setSelectedDb(e.target.value)}
+            title="Select database"
+            className="w-full text-xs bg-slate-900 border border-white/10 rounded px-2 py-1.5 text-amber-300 font-mono focus:outline-none focus:border-amber-500/50 mb-2"
+          >
+            {databases.map(db => (
+              <option key={db} value={db} className="bg-slate-900 text-white">
+                {db}
+              </option>
+            ))}
+          </select>
           {/* Filter toggle */}
-          <div className="flex rounded-md border border-white/10 overflow-hidden mt-2">
+          <div className="flex rounded-md border border-white/10 overflow-hidden">
             <button
+              type="button"
               onClick={() => setTableFilter('all')}
               className={`flex-1 px-2 py-1 text-[10px] font-medium transition-colors ${
                 tableFilter === 'all'
@@ -168,6 +208,7 @@ export default function DataExplorer() {
               All ({d1Tables.length})
             </button>
             <button
+              type="button"
               onClick={() => setTableFilter('app')}
               className={`flex-1 px-2 py-1 text-[10px] font-medium transition-colors ${
                 tableFilter === 'app'
@@ -188,9 +229,10 @@ export default function DataExplorer() {
           )}
           {displayTables.map(t => {
             const meta = getAppMeta(t.name);
-            const isSystem = t.name.startsWith('app_tables') || t.name.startsWith('app_columns');
+            const isSystem = t.name === 'app_tables' || t.name === 'app_columns';
             return (
               <button
+                type="button"
                 key={t.name}
                 onClick={() => handleSelectTable(t.name)}
                 className={`w-full text-left px-4 py-2.5 border-b border-white/5 transition-colors ${
@@ -234,6 +276,7 @@ export default function DataExplorer() {
             />
             <div className="flex flex-col gap-1">
               <button
+                type="button"
                 onClick={handleExecuteQuery}
                 disabled={queryLoading || !sqlInput.trim()}
                 className="px-4 py-2 text-xs font-semibold rounded-md bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
@@ -250,7 +293,7 @@ export default function DataExplorer() {
         {(error || queryError) && (
           <div className="px-4 py-2 bg-red-900/30 border-b border-red-600/30 text-xs text-red-300">
             {error || queryError}
-            <button onClick={() => { setError(null); setQueryError(null); }} className="ml-2 text-red-400 hover:text-red-200">dismiss</button>
+            <button type="button" onClick={() => { setError(null); setQueryError(null); }} className="ml-2 text-red-400 hover:text-red-200">dismiss</button>
           </div>
         )}
 
@@ -320,7 +363,7 @@ export default function DataExplorer() {
               {activeResult.rowCount} row{activeResult.rowCount !== 1 ? 's' : ''} returned
               {activeResult.columns.length > 0 && ` \u00b7 ${activeResult.columns.length} columns`}
             </span>
-            <span className="text-[10px] text-gray-600 font-mono">vegvisr_org</span>
+            <span className="text-[10px] text-gray-600 font-mono">{selectedDb}</span>
           </div>
         )}
       </div>
