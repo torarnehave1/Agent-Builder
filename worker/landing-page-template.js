@@ -16,7 +16,8 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <meta name="template-version" content="1.5.0" />
+  <meta name="template-version" content="1.7.0" />
+  <meta name="default-theme" content="{{DEFAULT_THEME}}" />
   <meta name="template-id" content="landing-page" />
   <title>{{TITLE}}</title>
 
@@ -490,6 +491,36 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       height: auto;
     }
 
+/* data-node table + form */
+    .data-node-container { margin: 1rem 0; }
+    .data-node-table-wrap { overflow-x: auto; }
+    .data-node-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    .data-node-table th { background: var(--accent, #2563eb); color: #fff; padding: 0.5rem 0.75rem; text-align: left; font-weight: 600; }
+    .data-node-table td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line, #e5e7eb); }
+    .data-node-table tr:nth-child(even) { background: var(--surface, rgba(0,0,0,0.02)); }
+    .data-node-table tr:hover { background: var(--surface, rgba(0,0,0,0.04)); }
+    .data-node-empty { color: var(--soft, #6b7280); font-style: italic; margin-bottom: 1rem; }
+    .data-node-header-image { margin-bottom: 1rem; border-radius: 8px; overflow: hidden; }
+    .data-node-header-image img { width: 100%; max-height: 240px; object-fit: cover; display: block; }
+    .data-node-form { margin-top: 1.5rem; max-width: 480px; }
+    .data-node-form h3 { margin-bottom: 0.75rem; font-size: 1.1rem; }
+    .data-node-field { margin-bottom: 0.75rem; }
+    .data-node-field label { display: block; font-weight: 600; margin-bottom: 0.25rem; font-size: 0.85rem; }
+    .data-node-field input, .data-node-field textarea, .data-node-field select {
+      width: 100%; padding: 0.5rem; border: 1px solid var(--line, #d1d5db); border-radius: 6px;
+      font-size: 0.9rem; background: #fff; color: #111;
+    }
+    .data-node-field textarea { min-height: 80px; resize: vertical; }
+    .data-node-form button[type="submit"] {
+      background: var(--accent, #2563eb); color: #fff; border: none; padding: 0.5rem 1.5rem;
+      border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600;
+    }
+    .data-node-form button[type="submit"]:hover { opacity: 0.9; }
+    .data-node-form button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+    .data-node-msg { margin-top: 0.5rem; font-size: 0.85rem; }
+    .data-node-msg.success { color: #16a34a; }
+    .data-node-msg.error { color: #dc2626; }
+
 /* Footer */
     .landing-footer {
       text-align: center;
@@ -878,8 +909,8 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
   <!-- Footer -->
   <footer class="landing-footer" id="landingFooter">{{FOOTER_TEXT}}</footer>
 
-  <!-- Theme Picker -->
-  <button id="btnThemePicker" class="theme-picker-btn" title="Change theme">🎨</button>
+  <!-- Theme Picker (visible to Superadmin only) -->
+  <button id="btnThemePicker" class="theme-picker-btn hidden" title="Change theme">🎨</button>
   <div id="themePickerPanel" class="theme-picker-panel hidden">
     <div class="theme-picker-header">
       <span>Theme Catalog</span>
@@ -1164,6 +1195,11 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       return false;
     }
 
+    function getAuthHeaders() {
+      if (authToken) return { 'Authorization': 'Bearer ' + authToken };
+      return {};
+    }
+
     function loadUserFromStorage() {
       try {
         var keys = ['userStore', 'user', 'currentUser', 'auth', 'authUser'];
@@ -1271,9 +1307,11 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         // 7. Set up scroll observer for active nav highlighting
         setupScrollObserver();
 
-        // 8. Show edit buttons if Superadmin
+        // 8. Show edit buttons + theme picker if Superadmin
         if (isSuperadmin()) {
           document.body.classList.add('landing-admin');
+          var tpBtn = document.getElementById('btnThemePicker');
+          if (tpBtn) tpBtn.classList.remove('hidden');
         }
 
       } catch (err) {
@@ -1333,7 +1371,10 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         var content = document.createElement('div');
         content.className = 'landing-section-content';
 
-        if (node.type === 'mermaid-diagram') {
+        if (node.type === 'data-node') {
+          content.className += ' landing-data-node';
+          await renderDataNodeSection(content, node);
+        } else if (node.type === 'mermaid-diagram') {
           content.className += ' landing-mermaid';
           await renderMermaidInSection(content, node.info || '', i);
         } else if (isYouTubeNode(node)) {
@@ -1366,6 +1407,150 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         console.error('Mermaid render error:', err);
         container.innerHTML = '<pre style="color:#ef4444; font-size:13px;">Mermaid error: ' + escapeHtml(err.message) + '</pre>';
       }
+    }
+
+    // ========== DATA-NODE RENDERING ==========
+    async function renderDataNodeSection(container, node) {
+      var records = [];
+      try { records = JSON.parse(node.info || '[]'); } catch(e) { records = []; }
+      if (!Array.isArray(records)) records = [];
+
+      var schema = (node.metadata && node.metadata.schema) ? node.metadata.schema : null;
+      var columns = (schema && Array.isArray(schema.columns)) ? schema.columns : null;
+
+      // Auto-detect columns from first record if no schema
+      if (!columns && records.length > 0) {
+        columns = Object.keys(records[0]).filter(function(k) { return k.charAt(0) !== '_'; }).map(function(k) {
+          return { key: k, label: k, type: 'text' };
+        });
+      }
+      if (!columns) columns = [];
+
+      var formTitle = (node.metadata && node.metadata.formTitle) ? node.metadata.formTitle : 'Submit';
+
+      var drizzleTableId = (node.metadata && node.metadata.drizzleTableId) ? node.metadata.drizzleTableId : '';
+      var html = '<div class="data-node-container" data-node-id="' + escapeHtml(node.id) + '" data-graph-id="' + escapeHtml(GRAPH_ID) + '"' + (drizzleTableId ? ' data-drizzle-table-id="' + escapeHtml(drizzleTableId) + '"' : '') + '>';
+
+      // Header image
+      var headerImage = (node.metadata && node.metadata.headerImage) ? node.metadata.headerImage : '';
+      if (headerImage) {
+        html += '<div class="data-node-header-image"><img src="' + escapeHtml(headerImage) + '" alt="' + escapeHtml(formTitle) + '"></div>';
+      }
+
+      // Table — only visible to Superadmin
+      if (isSuperadmin() && records.length > 0) {
+        html += '<div class="data-node-table-wrap"><table class="data-node-table"><thead><tr>';
+        for (var c = 0; c < columns.length; c++) {
+          html += '<th>' + escapeHtml(columns[c].label || columns[c].key) + '</th>';
+        }
+        html += '<th>Date</th></tr></thead><tbody>';
+        for (var r = 0; r < records.length; r++) {
+          html += '<tr>';
+          for (var c2 = 0; c2 < columns.length; c2++) {
+            var val = records[r][columns[c2].key];
+            html += '<td>' + escapeHtml(val != null ? String(val) : '') + '</td>';
+          }
+          var ts = records[r]._ts ? new Date(records[r]._ts).toLocaleDateString() : '';
+          html += '<td>' + escapeHtml(ts) + '</td>';
+          html += '</tr>';
+        }
+        html += '</tbody></table></div>';
+      } else if (isSuperadmin()) {
+        html += '<p class="data-node-empty">No submissions yet.</p>';
+      }
+
+      // Form
+      html += '<form class="data-node-form" autocomplete="off" onsubmit="event.preventDefault(); submitDataNodeForm(this)">';
+      html += '<h3>' + escapeHtml(formTitle) + '</h3>';
+      for (var f = 0; f < columns.length; f++) {
+        var col = columns[f];
+        var inputType = col.type || 'text';
+        html += '<div class="data-node-field">';
+        html += '<label>' + escapeHtml(col.label || col.key) + '</label>';
+        if (inputType === 'textarea') {
+          html += '<textarea name="' + escapeHtml(col.key) + '" autocomplete="off"></textarea>';
+        } else if (inputType === 'select' && Array.isArray(col.options)) {
+          html += '<select name="' + escapeHtml(col.key) + '">';
+          for (var o = 0; o < col.options.length; o++) {
+            html += '<option value="' + escapeHtml(col.options[o]) + '">' + escapeHtml(col.options[o]) + '</option>';
+          }
+          html += '</select>';
+        } else {
+          html += '<input type="' + escapeHtml(inputType) + '" name="' + escapeHtml(col.key) + '" autocomplete="off">';
+        }
+        html += '</div>';
+      }
+      html += '<button type="submit">Submit</button>';
+      html += '<div class="data-node-msg" style="display:none;"></div>';
+      html += '</form>';
+      html += '</div>';
+
+      container.innerHTML = html;
+    }
+
+    async function submitDataNodeForm(formEl) {
+      var AGENT_API = 'https://agent.vegvisr.org';
+      var container = formEl.closest('.data-node-container');
+      var nodeId = container.dataset.nodeId;
+      var graphId = container.dataset.graphId;
+      var submitBtn = formEl.querySelector('button[type="submit"]');
+      var msgEl = formEl.querySelector('.data-node-msg');
+
+      submitBtn.disabled = true;
+      msgEl.style.display = 'none';
+
+      // Collect form values
+      var record = {};
+      var inputs = formEl.querySelectorAll('input, textarea, select');
+      for (var i = 0; i < inputs.length; i++) {
+        if (inputs[i].name) {
+          record[inputs[i].name] = inputs[i].value;
+        }
+      }
+
+      try {
+        // Check if form is backed by a Drizzle D1 table
+        var drizzleTableId = container.dataset.drizzleTableId;
+        var res;
+        if (drizzleTableId) {
+          // Submit directly to drizzle-worker
+          res = await fetch('https://drizzle.vegvisr.org/insert', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tableId: drizzleTableId, record: record })
+          });
+        } else {
+          // Fallback: submit via agent-worker proxy (data-node, handles encryption)
+          res = await fetch(AGENT_API + '/api/data-node/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ graphId: graphId, nodeId: nodeId, record: record })
+          });
+        }
+        if (!res.ok) {
+          var errData = await res.json().catch(function() { return {}; });
+          throw new Error(errData.error || 'Failed to save data');
+        }
+        var result = await res.json();
+
+        // Reload page to show updated table with new record
+        setTimeout(function() { window.location.reload(); }, 1500);
+
+        // Clear form and show success
+        formEl.reset();
+        msgEl.className = 'data-node-msg success';
+        msgEl.textContent = 'Submitted successfully!';
+        msgEl.style.display = 'block';
+        setTimeout(function() { msgEl.style.display = 'none'; }, 3000);
+      } catch (err) {
+        console.error('Data node submit error:', err);
+        msgEl.className = 'data-node-msg error';
+        msgEl.textContent = 'Error: ' + err.message;
+        msgEl.style.display = 'block';
+      } finally {
+        submitBtn.disabled = false;
+      }
+      return false;
     }
 
     // ========== SCROLL OBSERVER ==========
@@ -1463,7 +1648,10 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
     async function exitSectionEditMode(sectionIndex, contentDiv, node, editBtn, isMermaid) {
       contentDiv.innerHTML = '';
       contentDiv.className = 'landing-section-content';
-      if (isMermaid) {
+      if (node.type === 'data-node') {
+        contentDiv.className += ' landing-data-node';
+        await renderDataNodeSection(contentDiv, node);
+      } else if (isMermaid) {
         contentDiv.className += ' landing-mermaid';
         await renderMermaidInSection(contentDiv, node.info || '', sectionIndex);
       } else if (isYouTubeNode(node)) {
@@ -1842,6 +2030,28 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       }
 
       loadSavedTheme();
+
+      // Auto-apply default theme from meta tag if no theme is already saved in the HTML
+      (async function loadDefaultTheme() {
+        var existing = document.querySelector('style[data-vegvisr-theme]');
+        if (existing) return; // already has a theme saved — skip
+        var meta = document.querySelector('meta[name="default-theme"]');
+        var defaultThemeId = meta ? meta.getAttribute('content') : '';
+        if (!defaultThemeId) return;
+        try {
+          await fetchCatalogs();
+          for (var c = 0; c < catalogs.length; c++) {
+            var themes = await fetchThemes(catalogs[c].id);
+            for (var t = 0; t < themes.length; t++) {
+              if (themes[t].id === defaultThemeId || themes[t].label.toLowerCase() === defaultThemeId.toLowerCase()) {
+                applyTokens(themes[t].vars);
+                injectThemeCss(themes[t].id, themes[t].vars);
+                return;
+              }
+            }
+          }
+        } catch (e) { console.warn('Default theme load failed:', e); }
+      })();
     })();
 
     // ========== LOGIN / LOGOUT ==========
@@ -1940,9 +2150,11 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         updateLoginButton();
         hideLoginModal();
 
-        // Show edit buttons if Superadmin
+        // Show edit buttons + theme picker if Superadmin
         if (isSuperadmin()) {
           document.body.classList.add('landing-admin');
+          var tpBtn2 = document.getElementById('btnThemePicker');
+          if (tpBtn2) tpBtn2.classList.remove('hidden');
         }
 
         // Clear magic token from URL
@@ -2016,10 +2228,13 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       if (e.key === 'userStore' || e.key === 'token' || e.key === 'user') {
         loadUserFromStorage();
         updateLoginButton();
+        var tpBtn3 = document.getElementById('btnThemePicker');
         if (isSuperadmin()) {
           document.body.classList.add('landing-admin');
+          if (tpBtn3) tpBtn3.classList.remove('hidden');
         } else {
           document.body.classList.remove('landing-admin');
+          if (tpBtn3) tpBtn3.classList.add('hidden');
         }
       }
     });

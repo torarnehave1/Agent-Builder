@@ -44,6 +44,7 @@ const TEMPLATES = {
       '{{TITLE}}': 'Page title shown in hero section',
       '{{DESCRIPTION}}': 'Subtitle/tagline shown below the title',
       '{{FOOTER_TEXT}}': 'Footer text content',
+      '{{DEFAULT_THEME}}': 'Default theme ID or label (hides picker for non-Superadmin)',
       '{{GRAPH_ID_DEFAULT}}': 'Fallback graph ID for loading content',
     },
   },

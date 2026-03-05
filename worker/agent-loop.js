@@ -187,7 +187,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
         const SEQUENTIAL_TOOLS = new Set([
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
-          'patch_node', 'patch_graph_metadata'
+          'patch_node', 'patch_graph_metadata', 'save_form_data',
+          'create_app_table', 'insert_app_record'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
@@ -368,7 +369,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
       // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
       const SEQUENTIAL_TOOLS = new Set([
         'create_graph', 'create_node', 'create_html_node', 'add_edge',
-        'patch_node', 'patch_graph_metadata'
+        'patch_node', 'patch_graph_metadata', 'save_form_data'
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

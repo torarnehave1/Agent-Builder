@@ -540,6 +540,7 @@ async function executeCreateHtmlFromTemplate(input, env) {
   html = html.replaceAll('{{TITLE}}', input.title || 'Untitled')
   html = html.replaceAll('{{DESCRIPTION}}', input.description || '')
   html = html.replaceAll('{{FOOTER_TEXT}}', input.footerText || '')
+  html = html.replaceAll('{{DEFAULT_THEME}}', input.defaultTheme || '')
   html = html.replaceAll('{{GRAPH_ID_DEFAULT}}', input.graphId || '')
 
   const nodeId = input.nodeId || `html-node-${Date.now()}`
@@ -903,6 +904,132 @@ async function executeWhoAmI(input, env) {
     },
     apiKeys,
     message: `User: ${email || userId}, Role: ${profile?.role || 'user'}, API keys: ${apiKeys.length} configured${profile?.bio ? ', Bio: included (output it verbatim when the user asks)' : ''}`,
+  }
+}
+
+// ── Admin operations ──────────────────────────────────────────────
+
+async function executeAdminRegisterUser(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  // Verify caller is Superadmin
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') {
+    throw new Error('Superadmin role required to register users')
+  }
+
+  const email = (input.email || '').trim().toLowerCase()
+  if (!email) throw new Error('Email is required')
+
+  const name = (input.name || '').trim() || null
+  const phone = (input.phone || '').trim() || null
+  const role = (input.role || 'Admin').trim()
+
+  // Check if user already exists
+  const existing = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(email).first()
+  if (existing) {
+    return { success: false, error: 'User with this email already exists', email }
+  }
+
+  // Generate user_id and emailVerificationToken
+  const user_id = crypto.randomUUID()
+  const emailVerificationToken = Array.from(crypto.getRandomValues(new Uint8Array(20)))
+    .map(b => b.toString(16).padStart(2, '0')).join('')
+
+  const data = JSON.stringify({ profile: { user_id, email, name, phone }, settings: {} })
+
+  await env.DB.prepare(`
+    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, data)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(user_id, email, emailVerificationToken, role, phone, data).run()
+
+  return {
+    success: true,
+    user_id,
+    email,
+    name,
+    phone,
+    role,
+    emailVerificationToken,
+    loginUrl: `https://login.vegvisr.org`,
+    message: `User ${email} (${name || 'no name'}) registered with role "${role}". They can log in at login.vegvisr.org by entering their email.`
+  }
+}
+
+// ── Email operations ──────────────────────────────────────────────
+
+async function executeSendEmail(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  // Resolve user profile to find their email accounts
+  const profile = await resolveUserProfile(callerUserId, env)
+  if (!profile) throw new Error('Could not resolve user profile')
+
+  // Parse the data column to get email accounts
+  let userData = {}
+  if (profile.data) {
+    try { userData = JSON.parse(profile.data) } catch { /* ignore */ }
+  }
+  const accounts = userData?.settings?.emailAccounts || []
+  if (accounts.length === 0) {
+    throw new Error('No email accounts configured. Please set up an email account in vemail.vegvisr.org first.')
+  }
+
+  // Find the right account: use fromEmail if specified, otherwise default account
+  const requestedFrom = (input.fromEmail || '').trim().toLowerCase()
+  let account
+  if (requestedFrom) {
+    account = accounts.find(a => a.email.toLowerCase() === requestedFrom)
+    if (!account) throw new Error(`No configured account matches "${requestedFrom}". Available: ${accounts.map(a => a.email).join(', ')}`)
+  } else {
+    // Prefer @vegvisr.org accounts (SMTP relay, no app password needed)
+    account = accounts.find(a => a.email.endsWith('@vegvisr.org')) || accounts.find(a => a.isDefault) || accounts[0]
+  }
+
+  const toEmail = (input.to || '').trim()
+  const subject = (input.subject || '').trim()
+  const html = input.html || ''
+
+  if (!toEmail) throw new Error('Recipient email (to) is required')
+  if (!subject) throw new Error('Subject is required')
+  if (!html) throw new Error('Email body (html) is required')
+
+  // Determine endpoint based on account type
+  const isGmail = (account.accountType || '').toLowerCase() === 'gmail' || account.email.endsWith('@gmail.com')
+  const endpoint = isGmail ? '/send-gmail-email' : '/send-email'
+
+  const payload = {
+    userEmail: profile.email,
+    accountId: account.id,
+    fromEmail: account.email,
+    toEmail,
+    subject,
+    html,
+  }
+
+  const res = await env.EMAIL_WORKER.fetch(`https://email-worker.internal${endpoint}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+
+  const responseText = await res.text()
+  let result
+  try { result = JSON.parse(responseText) } catch { result = { raw: responseText } }
+
+  if (!res.ok || result.success === false) {
+    throw new Error(`Failed to send email: ${result.error || result.details || responseText}`)
+  }
+
+  return {
+    success: true,
+    from: account.email,
+    to: toEmail,
+    subject,
+    message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}".`
   }
 }
 
@@ -1444,6 +1571,241 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
   }
 }
 
+// ── data-node tools ──────────────────────────────────────────────
+
+async function executeSaveFormData(input, env) {
+  const graphId = (input.graphId || '').trim()
+  if (!graphId) throw new Error('graphId is required')
+
+  const record = input.record
+  if (!record || typeof record !== 'object') throw new Error('record must be an object')
+
+  const nodeId = (input.nodeId || '').trim() || crypto.randomUUID()
+
+  // Add metadata to record
+  record._id = crypto.randomUUID()
+  record._ts = new Date().toISOString()
+
+  // Fetch graph to check if data-node exists
+  const getRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  if (!getRes.ok) {
+    const err = await getRes.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to fetch graph')
+  }
+  const graphData = await getRes.json()
+  const existingNode = (graphData.nodes || []).find(n => n.id === nodeId)
+
+  if (existingNode) {
+    // Append to existing data-node
+    let records = []
+    try { records = JSON.parse(existingNode.info || '[]') } catch { records = [] }
+    if (!Array.isArray(records)) records = []
+    records.push(record)
+
+    const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graphId,
+        nodeId,
+        fields: { info: JSON.stringify(records) }
+      })
+    })
+    if (!patchRes.ok) {
+      const err = await patchRes.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to update data-node')
+    }
+
+    return {
+      success: true,
+      graphId,
+      nodeId,
+      recordId: record._id,
+      recordCount: records.length,
+      message: `Record appended to data-node "${nodeId}" (${records.length} total records)`
+    }
+  } else {
+    // Create new data-node
+    const schema = input.schema || { columns: Object.keys(record).filter(k => !k.startsWith('_')).map(k => ({ key: k, label: k, type: 'text' })) }
+    const label = input.label || '#Data'
+    const metadata = { schema, encrypted: true }
+    if (input.formTitle) metadata.formTitle = input.formTitle
+
+    const addRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        graphId,
+        node: {
+          id: nodeId,
+          label,
+          type: 'data-node',
+          info: JSON.stringify([record]),
+          color: '#2563eb',
+          position: { x: 0, y: 0 },
+          visible: true,
+          metadata
+        }
+      })
+    })
+    if (!addRes.ok) {
+      const err = await addRes.json().catch(() => ({}))
+      throw new Error(err.error || 'Failed to create data-node')
+    }
+
+    return {
+      success: true,
+      graphId,
+      nodeId,
+      recordId: record._id,
+      recordCount: 1,
+      message: `Created new data-node "${nodeId}" with label "${label}" and 1 record`
+    }
+  }
+}
+
+async function executeQueryDataNodes(input, env) {
+  const graphId = (input.graphId || '').trim()
+  const nodeId = (input.nodeId || '').trim()
+  if (!graphId) throw new Error('graphId is required')
+  if (!nodeId) throw new Error('nodeId is required')
+
+  const limit = Math.min(Math.max(input.limit || 50, 1), 200)
+  const offset = Math.max(input.offset || 0, 0)
+
+  // Fetch graph (KG worker decrypts data-node info automatically)
+  const getRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  if (!getRes.ok) {
+    const err = await getRes.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to fetch graph')
+  }
+  const graphData = await getRes.json()
+  const node = (graphData.nodes || []).find(n => n.id === nodeId)
+  if (!node) throw new Error(`Node "${nodeId}" not found in graph "${graphId}"`)
+  if (node.type !== 'data-node') throw new Error(`Node "${nodeId}" is type "${node.type}", not data-node`)
+
+  let records = []
+  try { records = JSON.parse(node.info || '[]') } catch { records = [] }
+  if (!Array.isArray(records)) records = []
+
+  const total = records.length
+
+  // Apply optional filter
+  if (input.filterKey && input.filterValue) {
+    const fk = input.filterKey
+    const fv = input.filterValue.toLowerCase()
+    records = records.filter(r => {
+      const val = r[fk]
+      return val != null && String(val).toLowerCase().includes(fv)
+    })
+  }
+
+  const filtered = records.length
+  records = records.slice(offset, offset + limit)
+
+  return {
+    graphId,
+    nodeId,
+    records,
+    total,
+    filtered,
+    returned: records.length,
+    schema: node.metadata?.schema || null,
+    message: `Returned ${records.length} of ${total} records from data-node "${nodeId}"${input.filterKey ? ` (filtered: ${filtered} matches)` : ''}`
+  }
+}
+
+// ── Drizzle worker executors (relational D1 tables) ──────────────
+
+async function executeCreateAppTable(input, env) {
+  const graphId = (input.graphId || '').trim()
+  const displayName = (input.displayName || '').trim()
+  if (!graphId) throw new Error('graphId is required')
+  if (!displayName) throw new Error('displayName is required')
+  if (!Array.isArray(input.columns) || input.columns.length === 0) {
+    throw new Error('columns array is required and must not be empty')
+  }
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/create-table', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId,
+      displayName,
+      columns: input.columns
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to create table')
+
+  return {
+    success: true,
+    tableId: data.id,
+    tableName: data.tableName,
+    displayName: data.displayName,
+    columnCount: data.columnCount,
+    message: `Created table "${displayName}" (${data.tableName}) with ${data.columnCount} columns. Table ID: ${data.id}`
+  }
+}
+
+async function executeInsertAppRecord(input, env) {
+  const tableId = (input.tableId || '').trim()
+  if (!tableId) throw new Error('tableId is required')
+  if (!input.record || typeof input.record !== 'object') {
+    throw new Error('record object is required')
+  }
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/insert', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tableId,
+      record: input.record
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to insert record')
+
+  return {
+    success: true,
+    _id: data._id,
+    _created_at: data._created_at,
+    message: `Inserted record ${data._id} into table ${tableId}`
+  }
+}
+
+async function executeQueryAppTable(input, env) {
+  const tableId = (input.tableId || '').trim()
+  if (!tableId) throw new Error('tableId is required')
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/query', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tableId,
+      where: input.where || undefined,
+      orderBy: input.orderBy || undefined,
+      order: input.order || undefined,
+      limit: input.limit || 50,
+      offset: input.offset || 0
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to query table')
+
+  return {
+    records: data.records,
+    total: data.total,
+    returned: data.records.length,
+    columns: data.columns,
+    message: `Returned ${data.records.length} of ${data.total} records from table ${tableId}`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -1503,6 +1865,20 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAnalyzeGraph(toolInput, env)
     case 'analyze_transcription':
       return await executeAnalyzeTranscription(toolInput, env, progress)
+    case 'admin_register_user':
+      return await executeAdminRegisterUser(toolInput, env)
+    case 'send_email':
+      return await executeSendEmail(toolInput, env)
+    case 'save_form_data':
+      return await executeSaveFormData(toolInput, env)
+    case 'query_data_nodes':
+      return await executeQueryDataNodes(toolInput, env)
+    case 'create_app_table':
+      return await executeCreateAppTable(toolInput, env)
+    case 'insert_app_record':
+      return await executeInsertAppRecord(toolInput, env)
+    case 'query_app_table':
+      return await executeQueryAppTable(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

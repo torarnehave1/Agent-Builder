@@ -9,6 +9,7 @@ import GraphSelector from './GraphSelector';
 import AgentSelector from './AgentSelector';
 import AgentSettings from './AgentSettings';
 import AgentChat from './AgentChat';
+import DataExplorer from './DataExplorer';
 import { contractToReactFlow, DEFAULT_CONTRACT } from '../lib/contractToGraph';
 import type { AgentContract } from '../types/contract';
 
@@ -23,7 +24,7 @@ interface Props {
 const CONTRACT_API = 'https://knowledge.vegvisr.org/getContract';
 const AGENT_API = 'https://agent.vegvisr.org';
 
-type View = 'builder' | 'chat' | 'settings';
+type View = 'builder' | 'chat' | 'settings' | 'data';
 
 interface SelectedAgent {
   id: string;
@@ -260,6 +261,13 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
             >
               Agents
             </button>
+            <button
+              type="button"
+              onClick={() => setView('data')}
+              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'data' ? 'bg-amber-600/30 text-amber-300' : 'text-gray-400 hover:bg-white/5'}`}
+            >
+              Data
+            </button>
           </div>
           <button className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
             Preview
@@ -284,7 +292,9 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       <EcosystemNav className="border-b border-white/10 bg-slate-950/90" />
 
       {/* Main Content */}
-      {view === 'settings' ? (
+      {view === 'data' ? (
+        <DataExplorer />
+      ) : view === 'settings' ? (
         <AgentSettings
           agentId={editingAgentId === undefined ? selectedAgentId : editingAgentId}
           userId={userId}

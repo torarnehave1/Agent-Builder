@@ -61,7 +61,7 @@ const TOOL_DEFINITIONS = [
         },
         nodeType: {
           type: 'string',
-          enum: ['fulltext', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run'],
+          enum: ['fulltext', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
           description: 'Node type. Call get_node_types_reference for data format details.'
         },
         content: {
@@ -204,6 +204,10 @@ const TOOL_DEFINITIONS = [
         footerText: {
           type: 'string',
           description: 'Footer text'
+        },
+        defaultTheme: {
+          type: 'string',
+          description: 'Default theme ID or label to auto-apply (e.g. "warm-cream", "Dark Glass"). When set, the theme picker is hidden for non-Superadmin users and this theme loads automatically.'
         },
         sections: {
           type: 'array',
@@ -541,6 +545,59 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'admin_register_user',
+    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, phone, and role. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id and emailVerificationToken.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'Email address for the new user (required)'
+        },
+        name: {
+          type: 'string',
+          description: 'Full name of the new user (optional)'
+        },
+        phone: {
+          type: 'string',
+          description: 'Phone number for the new user (optional)'
+        },
+        role: {
+          type: 'string',
+          enum: ['Admin', 'user', 'Subscriber', 'Superadmin'],
+          description: 'Role to assign. Default: "Admin"'
+        }
+      },
+      required: ['email']
+    }
+  },
+  {
+    name: 'send_email',
+    description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. Use this when the user asks to send, write, or compose an email.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        to: {
+          type: 'string',
+          description: 'Recipient email address (required)'
+        },
+        subject: {
+          type: 'string',
+          description: 'Email subject line (required)'
+        },
+        html: {
+          type: 'string',
+          description: 'Email body as HTML (required). Wrap plain text in <p> tags.'
+        },
+        fromEmail: {
+          type: 'string',
+          description: 'Sender email address (optional). If omitted, uses the user\'s default email account.'
+        }
+      },
+      required: ['to', 'subject', 'html']
+    }
+  },
+  {
     name: 'analyze_transcription',
     description: 'Analyze a conversation transcription from the Enkel Endring program. Fetches the transcription from a graph node and produces a structured Norwegian-language report with: key themes, success indicators, powerful quotes, action points, and mentor feedback. Use this when the user asks for a "vurdering", "analyse", or "rapport" of a transcription.',
     input_schema: {
@@ -559,6 +616,95 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['graphId']
+    }
+  },
+  {
+    name: 'save_form_data',
+    description: 'Append a data record to a data-node in a knowledge graph. Creates the data-node if it does not exist. Data is encrypted at rest automatically by the KG worker. The node ID is always a UUID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'Graph ID containing (or to contain) the data-node' },
+        nodeId: { type: 'string', description: 'data-node UUID. If omitted, a new UUID is auto-generated.' },
+        record: { type: 'object', description: 'Key-value record to append (e.g., {"name":"John","email":"john@example.com","message":"Hello"})' },
+        schema: {
+          type: 'object',
+          description: 'Column schema (required when creating a new data-node). Example: { "columns": [{"key":"name","label":"Name","type":"text"},{"key":"email","label":"Email","type":"email"}] }'
+        },
+        label: { type: 'string', description: 'Node label (required when creating). Start with # for landing page visibility (e.g., "#Contact Submissions").' },
+        formTitle: { type: 'string', description: 'Title shown above the submission form in the landing page (e.g., "Contact Us").' }
+      },
+      required: ['graphId', 'record']
+    }
+  },
+  {
+    name: 'query_data_nodes',
+    description: 'Read records from a data-node. Returns the decrypted data as a JSON array with schema information.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'Graph ID' },
+        nodeId: { type: 'string', description: 'data-node UUID' },
+        limit: { type: 'number', description: 'Max records to return (default 50, max 200)' },
+        offset: { type: 'number', description: 'Skip first N records (default 0)' },
+        filterKey: { type: 'string', description: 'Optional: filter by this field key' },
+        filterValue: { type: 'string', description: 'Optional: match this value (case-insensitive contains)' }
+      },
+      required: ['graphId', 'nodeId']
+    }
+  },
+  {
+    name: 'create_app_table',
+    description: 'Create a new relational database table (D1) for structured app data. Use this instead of data-node when you need proper relational storage with SQL queries. Tables are linked to a graphId.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'Graph ID that owns this table' },
+        displayName: { type: 'string', description: 'Human-readable table name (e.g., "Contact Submissions")' },
+        columns: {
+          type: 'array',
+          description: 'Column definitions. Each column has name (lowercase, e.g. "email"), label (display name), type (text|integer|real|boolean|datetime), and optional required (boolean).',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Column name (lowercase alphanumeric + underscores, e.g., "first_name")' },
+              label: { type: 'string', description: 'Display label (e.g., "First Name")' },
+              type: { type: 'string', enum: ['text', 'integer', 'real', 'boolean', 'datetime'], description: 'Column data type' },
+              required: { type: 'boolean', description: 'Whether this column is required' }
+            },
+            required: ['name', 'type']
+          }
+        }
+      },
+      required: ['graphId', 'displayName', 'columns']
+    }
+  },
+  {
+    name: 'insert_app_record',
+    description: 'Insert a record into an app data table. The table must have been created with create_app_table first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'Table UUID (returned by create_app_table)' },
+        record: { type: 'object', description: 'Key-value pairs matching the table columns (e.g., {"name":"John","email":"john@test.com"})' }
+      },
+      required: ['tableId', 'record']
+    }
+  },
+  {
+    name: 'query_app_table',
+    description: 'Query records from an app data table with optional filtering, ordering, and pagination.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'Table UUID' },
+        where: { type: 'object', description: 'Optional filter conditions as key-value pairs (e.g., {"email":"john@test.com"})' },
+        orderBy: { type: 'string', description: 'Column to order by (default: _created_at)' },
+        order: { type: 'string', enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' },
+        limit: { type: 'number', description: 'Max records to return (default 50, max 1000)' },
+        offset: { type: 'number', description: 'Skip first N records (default 0)' }
+      },
+      required: ['tableId']
     }
   }
 ]

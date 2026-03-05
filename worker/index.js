@@ -34,6 +34,53 @@ export default {
     }
 
     try {
+      // POST /api/data-node/submit — Public form submission endpoint
+      // Landing pages POST here to append records to data-nodes (no auth required)
+      if (pathname === '/api/data-node/submit' && request.method === 'POST') {
+        const body = await request.json()
+        const { graphId, nodeId, record } = body
+
+        if (!graphId || !nodeId || !record || typeof record !== 'object') {
+          return new Response(JSON.stringify({ error: 'graphId, nodeId, and record are required' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Add metadata to record
+        record._id = crypto.randomUUID()
+        record._ts = new Date().toISOString()
+
+        // Fetch graph via service binding (no auth needed)
+        const getRes = await env.KG_WORKER.fetch(
+          `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}&nodeId=${encodeURIComponent(nodeId)}`
+        )
+        if (!getRes.ok) {
+          return new Response(JSON.stringify({ error: 'Graph or node not found' }), { status: 404, headers: corsHeaders })
+        }
+        const graphData = await getRes.json()
+        const node = (graphData.nodes || []).find(n => n.id === nodeId)
+        if (!node || node.type !== 'data-node') {
+          return new Response(JSON.stringify({ error: 'data-node not found' }), { status: 404, headers: corsHeaders })
+        }
+
+        // Parse existing records, append new one
+        let records = []
+        try { records = JSON.parse(node.info || '[]') } catch { records = [] }
+        if (!Array.isArray(records)) records = []
+        records.push(record)
+
+        // Patch node via service binding (KG worker encrypts automatically)
+        const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, nodeId, fields: { info: JSON.stringify(records) } })
+        })
+        if (!patchRes.ok) {
+          const err = await patchRes.json().catch(() => ({}))
+          return new Response(JSON.stringify({ error: err.error || 'Failed to save' }), { status: 500, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({ success: true, recordId: record._id, recordCount: records.length }), { headers: corsHeaders })
+      }
+
       // POST /execute - Execute an agent
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()

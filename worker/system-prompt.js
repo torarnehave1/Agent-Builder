@@ -182,8 +182,23 @@ When creating nodes with create_node, set the correct nodeType and format the co
 
 **map** — Map node. Info = descriptive text about the locations. The map data (KML/coordinates) is managed separately by the viewer.
 
+**data-node** — Encrypted structured data storage (JSON records). Info = JSON array of record objects.
+Each record auto-gets _id (UUID) and _ts (ISO timestamp). Use metadata.schema.columns to define fields:
+\`[{"key":"name","label":"Name","type":"text"},{"key":"email","label":"Email","type":"email"}]\`.
+Supported field types: text, email, tel, url, number, textarea, select, checkbox, date.
+Data is encrypted at rest in the KG. Node ID must be a UUID. Label should start with # for landing page visibility.
+Use save_form_data tool to create/append records and query_data_nodes to read them.
+
 **fulltext** — Standard markdown content (default).
 **image** — Alt text in info, image URL in path field.
-**link** — URL in info field.`
+**link** — URL in info field.
+
+## App Data Tables (Drizzle / D1)
+Use these tools for proper relational database storage when you need SQL queries, filtering, and pagination:
+- **create_app_table**: Create a relational table linked to a graphId. Column types: text, integer, real, boolean, datetime.
+- **insert_app_record**: Insert a record into an app table by tableId.
+- **query_app_table**: Query records with optional WHERE filters, ORDER BY, LIMIT/OFFSET.
+Tables are stored in D1 (SQLite) and support proper indexes and queries. Prefer this over data-node for apps that need structured data with many records.
+For landing page forms: create a table, then store the tableId in the data-node metadata as drizzleTableId.`
 
 export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE }
