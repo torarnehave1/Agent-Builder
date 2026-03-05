@@ -1806,6 +1806,49 @@ async function executeQueryAppTable(input, env) {
   }
 }
 
+async function executeListChatGroups(input, env) {
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/chat-groups', {
+    method: 'GET'
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to list chat groups')
+
+  return {
+    groups: data.groups,
+    count: data.groups.length,
+    message: `Found ${data.groups.length} chat groups`
+  }
+}
+
+async function executeAddUserToChatGroup(input, env) {
+  const email = (input.email || '').trim()
+  if (!email) throw new Error('email is required')
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/add-user-to-group', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      groupId: input.groupId || undefined,
+      groupName: input.groupName || undefined,
+      role: input.role || undefined
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to add user to group')
+
+  return {
+    success: true,
+    user_id: data.user_id,
+    email: data.email,
+    group_id: data.group_id,
+    groupName: data.groupName,
+    role: data.role,
+    message: `Added ${data.email} to group "${data.groupName}" as ${data.role}`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -1879,6 +1922,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeInsertAppRecord(toolInput, env)
     case 'query_app_table':
       return await executeQueryAppTable(toolInput, env)
+    case 'list_chat_groups':
+      return await executeListChatGroups(toolInput, env)
+    case 'add_user_to_chat_group':
+      return await executeAddUserToChatGroup(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

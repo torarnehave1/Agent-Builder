@@ -706,6 +706,29 @@ const TOOL_DEFINITIONS = [
       },
       required: ['tableId']
     }
+  },
+  {
+    name: 'list_chat_groups',
+    description: 'List all chat groups in Hallo Vegvisr. Returns group IDs and names. Use this to find a group before adding users.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'add_user_to_chat_group',
+    description: 'Add a vegvisr.org user (by email) to a chat group in Hallo Vegvisr. Looks up the user in the vegvisr_org config table, then adds them to the specified group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'User email address (must exist in vegvisr.org)' },
+        groupId: { type: 'string', description: 'Chat group UUID (use list_chat_groups to find it)' },
+        groupName: { type: 'string', description: 'Chat group name — used to find groupId if groupId is not provided' },
+        role: { type: 'string', enum: ['member', 'admin'], description: 'Role in the group (default: member)' }
+      },
+      required: ['email']
+    }
   }
 ]
 

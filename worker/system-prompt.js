@@ -199,6 +199,10 @@ Use these tools for proper relational database storage when you need SQL queries
 - **insert_app_record**: Insert a record into an app table by tableId.
 - **query_app_table**: Query records with optional WHERE filters, ORDER BY, LIMIT/OFFSET.
 Tables are stored in D1 (SQLite) and support proper indexes and queries. Prefer this over data-node for apps that need structured data with many records.
-For landing page forms: create a table, then store the tableId in the data-node metadata as drizzleTableId.`
+For landing page forms: create a table, then store the tableId in the data-node metadata as drizzleTableId.
+
+## Chat Group Management (Hallo Vegvisr)
+- **list_chat_groups**: List all chat groups in Hallo Vegvisr. Returns group IDs and names.
+- **add_user_to_chat_group**: Add a vegvisr.org user (by email) to a Hallo Vegvisr chat group. Provide the email and either groupId or groupName. The tool looks up the user in vegvisr_org, verifies the group exists, and adds them as a member.`
 
 export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE }
