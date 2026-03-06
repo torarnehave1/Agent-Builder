@@ -209,6 +209,7 @@ For landing page forms: create a table, then store the tableId in the data-node 
 - **send_group_message**: Send a text or voice message to a chat group. For text: requires email, group, body. For voice: requires email, group, audioUrl (get from list_recordings). Optionally include transcriptText for voice messages.
 - **create_chat_group**: Create a new chat group. Requires email (creator becomes owner) and group name. Optionally link a knowledge graph via graphId.
 - **register_chat_bot**: Register an AI chatbot in a chat group. Requires a knowledge graph ID (bot personality) and bot name. The graph's fulltext nodes define the bot's personality and guidelines.
+- **get_group_members**: Get all members of a chat group with names, emails, IDs, roles (owner/member/bot), and profile images.
 - **trigger_bot_response**: Trigger a chatbot to respond to recent group messages. Loads bot personality from its knowledge graph, generates a response via Claude, and posts it to the group.`
 
 export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE }

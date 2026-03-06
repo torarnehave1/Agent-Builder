@@ -2001,6 +2001,17 @@ async function executeRegisterChatBot(input, env) {
   }
 }
 
+async function executeGetGroupMembers(input, env) {
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+  const params = new URLSearchParams()
+  if (input.groupId) params.set('groupId', input.groupId)
+  if (input.groupName) params.set('groupName', input.groupName)
+  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-members?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get group members')
+  return data
+}
+
 async function executeTriggerBotResponse(input, env) {
   if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
   const messageCount = Math.min(input.messageCount || 10, 50)
@@ -2244,6 +2255,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCreateChatGroup(toolInput, env)
     case 'register_chat_bot':
       return await executeRegisterChatBot(toolInput, env)
+    case 'get_group_members':
+      return await executeGetGroupMembers(toolInput, env)
     case 'trigger_bot_response':
       return await executeTriggerBotResponse(toolInput, env)
     default:

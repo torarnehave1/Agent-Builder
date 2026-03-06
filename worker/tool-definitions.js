@@ -799,6 +799,18 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_group_members',
+    description: 'Get all members of a chat group with their names, emails, IDs, roles, and profile images. Also shows which members are bots.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name (use this or groupId)' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'trigger_bot_response',
     description: 'Trigger a chatbot to respond to recent messages in its group. Loads bot personality from its knowledge graph, reads recent messages, generates a response via Claude, and posts it to the group.',
     input_schema: {
