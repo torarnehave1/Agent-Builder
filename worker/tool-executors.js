@@ -2048,6 +2048,8 @@ async function executeTriggerBotResponse(input, env) {
     let botTemp = 0.7
     let systemPromptOverride = ''
 
+    let botAvatarUrl = null
+
     if (isAgentBot) {
       // Agent-based bot: load agent_config for model/temp, then knowledge graph for personality
       const agentId = bot.userId.replace('bot-agent-', '')
@@ -2056,6 +2058,7 @@ async function executeTriggerBotResponse(input, env) {
         botTitle = agentConfig.name || botTitle
         botModel = agentConfig.model || botModel
         botTemp = agentConfig.temperature ?? botTemp
+        botAvatarUrl = agentConfig.avatar_url || null
         if (agentConfig.system_prompt) systemPromptOverride = agentConfig.system_prompt
         // Get graphId from agent metadata
         try {
@@ -2119,14 +2122,16 @@ Do not prefix your response with your name or any label.`
     }
 
     // Post bot response to group
+    const sendPayload = {
+      email: bot.email,
+      groupId: botData.groupId,
+      body: responseText
+    }
+    if (botAvatarUrl) sendPayload.senderAvatarUrl = botAvatarUrl
     const sendRes = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/send-group-message', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: bot.email,
-        groupId: botData.groupId,
-        body: responseText
-      })
+      body: JSON.stringify(sendPayload)
     })
     const sendData = await sendRes.json()
     if (!sendRes.ok) {
