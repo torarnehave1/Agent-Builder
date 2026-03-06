@@ -1939,6 +1939,219 @@ async function executeSendGroupMessage(input, env) {
   return result
 }
 
+async function executeCreateChatGroup(input, env) {
+  const email = (input.email || '').trim()
+  const name = (input.name || '').trim()
+  if (!email) throw new Error('email is required')
+  if (!name) throw new Error('name (group name) is required')
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/create-chat-group', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      email,
+      name,
+      graphId: input.graphId || undefined
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to create chat group')
+
+  return {
+    success: true,
+    groupId: data.groupId,
+    groupName: data.groupName,
+    createdBy: data.createdBy,
+    role: data.role,
+    graphId: data.graphId,
+    createdAt: data.createdAt,
+    message: `Created chat group "${data.groupName}" with ${data.createdBy} as owner`
+  }
+}
+
+async function executeRegisterChatBot(input, env) {
+  const graphId = (input.graphId || '').trim()
+  const botName = (input.botName || '').trim()
+  if (!graphId) throw new Error('graphId is required')
+  if (!botName) throw new Error('botName is required')
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/register-chat-bot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId,
+      botName,
+      groupId: input.groupId || undefined,
+      groupName: input.groupName || undefined
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to register chat bot')
+
+  return {
+    success: true,
+    botUserId: data.botUserId,
+    botEmail: data.botEmail,
+    botName: data.botName,
+    groupId: data.groupId,
+    groupName: data.groupName,
+    graphId: data.graphId,
+    message: `Registered bot "${data.botName}" in group "${data.groupName}" (personality graph: ${data.graphId})`
+  }
+}
+
+async function executeTriggerBotResponse(input, env) {
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+  const messageCount = Math.min(input.messageCount || 10, 50)
+
+  // 1. Get bots in group
+  const botParams = new URLSearchParams()
+  if (input.groupId) botParams.set('groupId', input.groupId)
+  if (input.groupName) botParams.set('groupName', input.groupName)
+  const botRes = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-bots?${botParams}`)
+  const botData = await botRes.json()
+  if (!botRes.ok) throw new Error(botData.error || 'Failed to get group bots')
+  if (!botData.bots || botData.bots.length === 0) throw new Error(`No bots registered in group "${botData.groupName}"`)
+
+  // Filter to specific bot if requested
+  let bots = botData.bots
+  if (input.botGraphId) {
+    bots = bots.filter(b => b.graphId === input.botGraphId)
+    if (bots.length === 0) throw new Error(`Bot with graph "${input.botGraphId}" not found in group`)
+  }
+
+  // 2. Get recent messages
+  const msgParams = new URLSearchParams()
+  msgParams.set('groupId', botData.groupId)
+  msgParams.set('limit', String(messageCount))
+  const msgRes = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-messages?${msgParams}`)
+  const msgData = await msgRes.json()
+  if (!msgRes.ok) throw new Error(msgData.error || 'Failed to get group messages')
+
+  // Format messages as conversation context
+  const now = Date.now()
+  const formattedMessages = (msgData.messages || []).reverse().map(m => {
+    const ago = Math.round((now - new Date(m.createdAt).getTime()) / 60000)
+    const timeStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`
+    const text = m.messageType === 'voice' && m.transcriptText ? `[voice] ${m.transcriptText}` : m.body
+    return `[${m.email}, ${timeStr}]: ${text}`
+  }).join('\n')
+
+  // 3. For each bot, generate and post response
+  const results = []
+  for (const bot of bots) {
+    const isAgentBot = bot.userId.startsWith('bot-agent-')
+    let botTitle = bot.botName || bot.email
+    let personality = ''
+    let botModel = 'claude-haiku-4-5-20251001'
+    let botTemp = 0.7
+    let systemPromptOverride = ''
+
+    if (isAgentBot) {
+      // Agent-based bot: load agent_config for model/temp, then knowledge graph for personality
+      const agentId = bot.userId.replace('bot-agent-', '')
+      const agentConfig = await env.DB.prepare('SELECT * FROM agent_configs WHERE id = ?').bind(agentId).first()
+      if (agentConfig) {
+        botTitle = agentConfig.name || botTitle
+        botModel = agentConfig.model || botModel
+        botTemp = agentConfig.temperature ?? botTemp
+        if (agentConfig.system_prompt) systemPromptOverride = agentConfig.system_prompt
+        // Get graphId from agent metadata
+        try {
+          const meta = JSON.parse(agentConfig.metadata || '{}')
+          if (meta.botGraphId && !bot.graphId) bot.graphId = meta.botGraphId
+        } catch {}
+      }
+    }
+
+    // Load knowledge graph for personality (both agent-based and graph-only bots)
+    if (bot.graphId) {
+      const kgRes = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${bot.graphId}`)
+      const kgData = await kgRes.json()
+      if (kgRes.ok && kgData.nodes) {
+        if (!isAgentBot) botTitle = kgData.metadata?.title || botTitle
+        const fulltextNodes = kgData.nodes.filter(n => n.type === 'fulltext' && n.info)
+        personality = fulltextNodes.map(n => n.info).join('\n\n---\n\n')
+      } else if (!isAgentBot) {
+        results.push({ bot: bot.email, error: `Failed to load graph ${bot.graphId}` })
+        continue
+      }
+    } else if (!systemPromptOverride) {
+      results.push({ bot: bot.email, error: 'No knowledge graph or system prompt configured' })
+      continue
+    }
+
+    const systemPrompt = `${systemPromptOverride ? systemPromptOverride + '\n\n' : ''}You are ${botTitle}, a chatbot in the "${botData.groupName}" chat group.
+
+${personality}
+
+Below are recent messages from the group. Respond naturally as ${botTitle}.
+Keep your response concise and conversational. Do not repeat what others said.
+Do not prefix your response with your name or any label.`
+
+    const userMessage = `Here are the recent messages in the group:\n\n${formattedMessages}\n\nPlease respond as ${botTitle}.`
+
+    // Call Claude
+    const aiRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId: bot.userId,
+        messages: [{ role: 'user', content: userMessage }],
+        system: systemPrompt,
+        model: botModel,
+        max_tokens: 1024,
+        temperature: botTemp
+      })
+    })
+    const aiData = await aiRes.json()
+    if (!aiRes.ok) {
+      results.push({ bot: bot.email, error: `Claude API error: ${aiData.error || 'unknown'}` })
+      continue
+    }
+
+    const textBlock = (aiData.content || []).find(c => c.type === 'text')
+    const responseText = textBlock?.text || ''
+    if (!responseText) {
+      results.push({ bot: bot.email, error: 'Empty response from Claude' })
+      continue
+    }
+
+    // Post bot response to group
+    const sendRes = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/send-group-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: bot.email,
+        groupId: botData.groupId,
+        body: responseText
+      })
+    })
+    const sendData = await sendRes.json()
+    if (!sendRes.ok) {
+      results.push({ bot: bot.email, error: sendData.error || 'Failed to post response' })
+      continue
+    }
+
+    results.push({
+      bot: bot.email,
+      botName: botTitle,
+      messageId: sendData.messageId,
+      response: responseText,
+      success: true
+    })
+  }
+
+  return {
+    groupId: botData.groupId,
+    groupName: botData.groupName,
+    messagesAnalyzed: msgData.messages?.length || 0,
+    botResponses: results,
+    message: results.map(r => r.success ? `${r.botName}: "${r.response.substring(0, 100)}..."` : `${r.bot}: ERROR - ${r.error}`).join('\n')
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -2022,6 +2235,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetGroupStats(toolInput, env)
     case 'send_group_message':
       return await executeSendGroupMessage(toolInput, env)
+    case 'create_chat_group':
+      return await executeCreateChatGroup(toolInput, env)
+    case 'register_chat_bot':
+      return await executeRegisterChatBot(toolInput, env)
+    case 'trigger_bot_response':
+      return await executeTriggerBotResponse(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

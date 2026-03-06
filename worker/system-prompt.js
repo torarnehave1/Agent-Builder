@@ -206,6 +206,9 @@ For landing page forms: create a table, then store the tableId in the data-node 
 - **add_user_to_chat_group**: Add a vegvisr.org user (by email) to a Hallo Vegvisr chat group. Provide the email and either groupId or groupName. The tool looks up the user in vegvisr_org, verifies the group exists, and adds them as a member.
 - **get_group_messages**: Get recent messages from a chat group. Returns message text, sender email, and timestamp. Use this when the user asks to see messages, analyze conversations, or do sentiment analysis. You can then analyze the returned messages directly.
 - **get_group_stats**: Get activity statistics for all chat groups — message count, member count, last message time. Use when the user asks which group is most active or wants an overview.
-- **send_group_message**: Send a text or voice message to a chat group. For text: requires email, group, body. For voice: requires email, group, audioUrl (get from list_recordings). Optionally include transcriptText for voice messages.`
+- **send_group_message**: Send a text or voice message to a chat group. For text: requires email, group, body. For voice: requires email, group, audioUrl (get from list_recordings). Optionally include transcriptText for voice messages.
+- **create_chat_group**: Create a new chat group. Requires email (creator becomes owner) and group name. Optionally link a knowledge graph via graphId.
+- **register_chat_bot**: Register an AI chatbot in a chat group. Requires a knowledge graph ID (bot personality) and bot name. The graph's fulltext nodes define the bot's personality and guidelines.
+- **trigger_bot_response**: Trigger a chatbot to respond to recent group messages. Loads bot personality from its knowledge graph, generates a response via Claude, and posts it to the group.`
 
 export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE }

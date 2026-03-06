@@ -770,6 +770,47 @@ const TOOL_DEFINITIONS = [
       },
       required: ['email']
     }
+  },
+  {
+    name: 'create_chat_group',
+    description: 'Create a new Hallo Vegvisr chat group. The creator (identified by email) becomes the owner. Use this when the user asks to create or set up a new chat group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Email of the user creating the group (becomes owner)' },
+        name: { type: 'string', description: 'Name for the new chat group' },
+        graphId: { type: 'string', description: 'Optional knowledge graph ID to link to the group' }
+      },
+      required: ['email', 'name']
+    }
+  },
+  {
+    name: 'register_chat_bot',
+    description: 'Register an AI chatbot in a chat group. The bot personality is defined by a knowledge graph (fulltext nodes become the system prompt). Use this to add a bot to a group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'Knowledge graph ID containing bot personality and guidelines' },
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name' },
+        botName: { type: 'string', description: 'Display name for the bot (e.g. "SIMULA")' }
+      },
+      required: ['graphId', 'botName']
+    }
+  },
+  {
+    name: 'trigger_bot_response',
+    description: 'Trigger a chatbot to respond to recent messages in its group. Loads bot personality from its knowledge graph, reads recent messages, generates a response via Claude, and posts it to the group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name' },
+        botGraphId: { type: 'string', description: 'Specific bot graph ID (if group has multiple bots). If omitted, triggers all bots.' },
+        messageCount: { type: 'number', description: 'Number of recent messages to include as context (default 10, max 50)' }
+      },
+      required: []
+    }
   }
 ]
 

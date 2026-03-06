@@ -558,6 +558,48 @@ export default {
         return new Response(JSON.stringify({ id: agentId, deleted: true }), { headers: corsHeaders })
       }
 
+      // ── Chat Bot management proxies ──
+
+      // GET /chat-groups — proxy to drizzle-worker
+      if (pathname === '/chat-groups' && request.method === 'GET') {
+        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/chat-groups')
+        const data = await res.text()
+        return new Response(data, { status: res.status, headers: corsHeaders })
+      }
+
+      // GET /agent-bot-groups?agentId=X — get groups where agent is a bot
+      if (pathname === '/agent-bot-groups' && request.method === 'GET') {
+        const agentId = url.searchParams.get('agentId')
+        if (!agentId) return new Response(JSON.stringify({ error: 'agentId required' }), { status: 400, headers: corsHeaders })
+        const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/agent-bot-groups?agentId=${encodeURIComponent(agentId)}`)
+        const data = await res.text()
+        return new Response(data, { status: res.status, headers: corsHeaders })
+      }
+
+      // POST /register-agent-bot — register agent as bot in a group
+      if (pathname === '/register-agent-bot' && request.method === 'POST') {
+        const body = await request.json()
+        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/register-chat-bot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+        const data = await res.text()
+        return new Response(data, { status: res.status, headers: corsHeaders })
+      }
+
+      // POST /unregister-agent-bot — remove bot from a group
+      if (pathname === '/unregister-agent-bot' && request.method === 'POST') {
+        const body = await request.json()
+        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/unregister-chat-bot', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+        const data = await res.text()
+        return new Response(data, { status: res.status, headers: corsHeaders })
+      }
+
       // GET /health - Health check
       if (pathname === '/health' && request.method === 'GET') {
         return new Response(JSON.stringify({

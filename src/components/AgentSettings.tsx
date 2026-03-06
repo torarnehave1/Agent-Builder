@@ -49,6 +49,13 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [urlInput, setUrlInput] = useState('');
+  // Chat Bot state
+  const [isChatBot, setIsChatBot] = useState(false);
+  const [botGraphId, setBotGraphId] = useState('');
+  const [botGroups, setBotGroups] = useState<{groupId: string, groupName: string}[]>([]);
+  const [availableGroups, setAvailableGroups] = useState<{id: string, name: string}[]>([]);
+  const [selectedGroupId, setSelectedGroupId] = useState('');
+  const [initialBotGroups, setInitialBotGroups] = useState<{groupId: string, groupName: string}[]>([]);
 
   // Load agent list
   const loadAgents = useCallback(() => {
@@ -74,6 +81,11 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
     setAvatarUrl(null);
     setSelectedTools([]);
     setUrlInput('');
+    setIsChatBot(false);
+    setBotGraphId('');
+    setBotGroups([]);
+    setInitialBotGroups([]);
+    setSelectedGroupId('');
   };
 
   // Load agent config if editing
@@ -93,13 +105,44 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
             try {
               setSelectedTools(JSON.parse(a.tools || '[]'));
             } catch { setSelectedTools([]); }
+            // Load bot metadata
+            try {
+              const meta = JSON.parse(a.metadata || '{}');
+              if (meta.botGraphId) {
+                setIsChatBot(true);
+                setBotGraphId(meta.botGraphId || '');
+              } else {
+                setIsChatBot(false);
+                setBotGraphId('');
+              }
+            } catch { setIsChatBot(false); setBotGraphId(''); }
           }
+        })
+        .catch(() => {});
+      // Load bot group registrations
+      fetch(`${AGENT_API}/agent-bot-groups?agentId=${agentId}`)
+        .then(res => res.json())
+        .then(data => {
+          const groups = (data.groups || []).map((g: any) => ({ groupId: g.groupId, groupName: g.groupName }));
+          setBotGroups(groups);
+          setInitialBotGroups(groups);
+          if (groups.length > 0) setIsChatBot(true);
         })
         .catch(() => {});
     } else {
       resetForm();
     }
   }, [agentId]);
+
+  // Load available chat groups
+  useEffect(() => {
+    fetch(`${AGENT_API}/chat-groups`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.groups) setAvailableGroups(data.groups.map((g: any) => ({ id: g.id, name: g.name })));
+      })
+      .catch(() => {});
+  }, []);
 
   // Load available tools
   useEffect(() => {
@@ -154,6 +197,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
     if (!name.trim()) return;
     setSaving(true);
     try {
+      const metadata = isChatBot ? { botGraphId: botGraphId.trim() || undefined } : {};
       const payload = {
         name: name.trim(),
         description: description.trim(),
@@ -162,6 +206,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
         temperature,
         tools: selectedTools,
         avatar_url: avatarUrl,
+        metadata,
       };
 
       let res;
@@ -180,6 +225,45 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
       }
       const data = await res.json();
       const savedId = agentId || data.id;
+
+      // Sync bot group registrations
+      if (isChatBot) {
+        const initialIds = new Set(initialBotGroups.map(g => g.groupId));
+        const currentIds = new Set(botGroups.map(g => g.groupId));
+        // Register new groups
+        for (const g of botGroups) {
+          if (!initialIds.has(g.groupId)) {
+            await fetch(`${AGENT_API}/register-agent-bot`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agentId: savedId, groupId: g.groupId, botName: name.trim(), graphId: botGraphId.trim() || undefined }),
+            });
+          }
+        }
+        // Unregister removed groups
+        for (const g of initialBotGroups) {
+          if (!currentIds.has(g.groupId)) {
+            await fetch(`${AGENT_API}/unregister-agent-bot`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ agentId: savedId, groupId: g.groupId }),
+            });
+          }
+        }
+        setInitialBotGroups([...botGroups]);
+      } else if (initialBotGroups.length > 0) {
+        // Bot was disabled — remove from all groups
+        for (const g of initialBotGroups) {
+          await fetch(`${AGENT_API}/unregister-agent-bot`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: savedId, groupId: g.groupId }),
+          });
+        }
+        setInitialBotGroups([]);
+        setBotGroups([]);
+      }
+
       const savedAgent: AgentConfig = {
         id: savedId,
         name: name.trim(),
@@ -193,9 +277,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
         is_active: 1,
       };
       onSave(savedAgent);
-      // Refresh agent list after save
       loadAgents();
-      // Select the saved agent
       onSelectAgent(savedId);
     } catch (err) {
       console.error('Save failed:', err);
@@ -467,6 +549,101 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
                 </label>
               ))}
             </div>
+          </div>
+
+          {/* Chat Bot */}
+          <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+                Chat Bot
+                <span className="text-[9px] text-gray-600 font-normal ml-2">
+                  Enable to use this agent as a bot in chat groups
+                </span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isChatBot}
+                  onChange={e => setIsChatBot(e.target.checked)}
+                  className="rounded border-gray-600"
+                />
+                <span className="text-[10px] text-white">Enable</span>
+              </label>
+            </div>
+
+            {isChatBot && (
+              <div className="space-y-3 pt-2 border-t border-white/5">
+                {/* Knowledge Graph ID */}
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-1">
+                    Personality Graph ID *
+                    <span className="text-[9px] text-gray-600 ml-1">(knowledge graph with bot personality)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={botGraphId}
+                    onChange={e => setBotGraphId(e.target.value)}
+                    placeholder="e.g. a7f3c2e1-9d4b-4a8f-b6e2-1c5d9f3a7b2e"
+                    className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 font-mono"
+                  />
+                </div>
+
+                {/* Group assignments */}
+                <div>
+                  <label className="text-[10px] text-gray-500 block mb-1">Chat Groups</label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <select
+                      value={selectedGroupId}
+                      onChange={e => setSelectedGroupId(e.target.value)}
+                      title="Select a chat group"
+                      className="flex-1 rounded-md bg-slate-950/60 border border-white/8 px-3 py-1.5 text-[11px] text-white focus:outline-none focus:border-emerald-500/40"
+                    >
+                      <option value="">Select a group...</option>
+                      {availableGroups
+                        .filter(g => !botGroups.some(bg => bg.groupId === g.id))
+                        .map(g => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))
+                      }
+                    </select>
+                    <button
+                      onClick={() => {
+                        if (!selectedGroupId) return;
+                        const group = availableGroups.find(g => g.id === selectedGroupId);
+                        if (group) {
+                          setBotGroups(prev => [...prev, { groupId: group.id, groupName: group.name }]);
+                          setSelectedGroupId('');
+                        }
+                      }}
+                      disabled={!selectedGroupId}
+                      className="px-3 py-1.5 text-[10px] font-semibold text-emerald-400 border border-emerald-600/30 rounded-md hover:bg-emerald-600/10 disabled:opacity-40"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  {/* Group chips */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {botGroups.map(g => (
+                      <span
+                        key={g.groupId}
+                        className="inline-flex items-center gap-1 px-2 py-1 bg-emerald-600/15 border border-emerald-600/25 rounded-full text-[10px] text-emerald-300"
+                      >
+                        {g.groupName}
+                        <button
+                          onClick={() => setBotGroups(prev => prev.filter(bg => bg.groupId !== g.groupId))}
+                          className="text-emerald-400/60 hover:text-red-400 ml-0.5"
+                        >
+                          x
+                        </button>
+                      </span>
+                    ))}
+                    {botGroups.length === 0 && (
+                      <span className="text-[9px] text-gray-600">No groups assigned yet</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
