@@ -215,6 +215,12 @@ Use these tools for proper relational database storage when you need SQL queries
 Tables are stored in D1 (SQLite) and support proper indexes and queries. Prefer this over data-node for apps that need structured data with many records.
 For landing page forms: create a table, then store the tableId in the data-node metadata as drizzleTableId.
 
+**IMPORTANT — Client-side HTML apps**: When generating HTML/JS that calls app table APIs directly from the browser, use the public drizzle-worker URL:
+- Base URL: \`https://drizzle.vegvisr.org\`
+- Query records: \`POST /query\` with body \`{ "tableId": "..." }\`
+- Insert records: \`POST /insert\` with body \`{ "tableId": "...", "record": { ... } }\`
+Do NOT use knowledge.vegvisr.org for client-side table operations — that endpoint does not have these routes.
+
 ## Chat Group Management (Hallo Vegvisr)
 - **list_chat_groups**: List all chat groups in Hallo Vegvisr. Returns group IDs and names.
 - **add_user_to_chat_group**: Add a vegvisr.org user (by email) to a Hallo Vegvisr chat group. Provide the email and either groupId or groupName. The tool looks up the user in vegvisr_org, verifies the group exists, and adds them as a member.
