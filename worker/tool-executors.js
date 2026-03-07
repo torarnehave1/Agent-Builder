@@ -826,12 +826,12 @@ async function resolveUserProfile(userId, env) {
     try {
       // Try by email first
       let profile = await env.DB.prepare(
-        'SELECT email, user_id, bio, profileimage, role, phone, phone_verified_at, data FROM config WHERE email = ?'
+        'SELECT email, user_id, bio, profileimage, Role AS role, phone, phone_verified_at, data FROM config WHERE email = ?'
       ).bind(userId).first()
       // If not found, try by user_id (UUID)
       if (!profile) {
         profile = await env.DB.prepare(
-          'SELECT email, user_id, bio, profileimage, role, phone, phone_verified_at, data FROM config WHERE user_id = ?'
+          'SELECT email, user_id, bio, profileimage, Role AS role, phone, phone_verified_at, data FROM config WHERE user_id = ?'
         ).bind(userId).first()
       }
       return profile // may be null if user not in config
