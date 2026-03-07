@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
+import DataExplorer from './DataExplorer';
+
+type View = 'chat' | 'data';
 
 interface Props {
   userId: string;
@@ -14,6 +17,7 @@ interface Props {
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
   const [graphId, setGraphId] = useState('graph_agent_builder_development');
   const [selectedAgentId] = useState<string | null>(null);
+  const [view, setView] = useState<View>('chat');
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-white">
@@ -21,6 +25,22 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         <div className="flex items-center gap-2">
           <span className="text-base font-bold text-white">Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
+          <nav className="flex items-center gap-1 ml-4">
+            {(['chat', 'data'] as const).map((tab) => (
+              <button
+                type="button"
+                key={tab}
+                onClick={() => setView(tab)}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                  view === tab
+                    ? 'bg-white/10 text-white'
+                    : 'text-white/50 hover:text-white/80'
+                }`}
+              >
+                {tab === 'chat' ? 'Chat' : 'Data'}
+              </button>
+            ))}
+          </nav>
         </div>
         <div className="flex items-center gap-3">
           <LanguageSelector value={language} onChange={onLanguageChange} />
@@ -35,7 +55,10 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         </div>
       </header>
 
-      <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={null} />
+      {view === 'chat' && (
+        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={null} />
+      )}
+      {view === 'data' && <DataExplorer />}
     </div>
   );
 }
