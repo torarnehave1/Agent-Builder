@@ -1,17 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Node, Edge } from '@xyflow/react';
-import { ReactFlowProvider } from '@xyflow/react';
-import { AuthBar, EcosystemNav, LanguageSelector } from 'vegvisr-ui-kit';
-import ContractCanvas, { createNewNode } from './ContractCanvas';
-import Sidebar from './Sidebar';
-import StatusBar from './StatusBar';
-import GraphSelector from './GraphSelector';
-import AgentSelector from './AgentSelector';
-import AgentSettings from './AgentSettings';
+import { useState } from 'react';
+import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
-import DataExplorer from './DataExplorer';
-import { contractToReactFlow, DEFAULT_CONTRACT } from '../lib/contractToGraph';
-import type { AgentContract } from '../types/contract';
 
 interface Props {
   userId: string;
@@ -22,193 +11,12 @@ interface Props {
   onLogout: () => void;
 }
 
-const CONTRACT_API = 'https://knowledge.vegvisr.org/getContract';
-const AGENT_API = 'https://agent.vegvisr.org';
-
-type View = 'builder' | 'chat' | 'settings' | 'data';
-
-interface SelectedAgent {
-  id: string;
-  name: string;
-  avatar_url?: string | null;
-}
-
-export default function AgentBuilder({ userId, userEmail, role, language, onLanguageChange, onLogout }: Props) {
-  const [view, setView] = useState<View>('chat');
-  const [selectedNode, setSelectedNode] = useState<Node | null>(null);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<SelectedAgent | null>(null);
-  const [editingAgentId, setEditingAgentId] = useState<string | null | undefined>(undefined);
-  const [contractName, setContractName] = useState('Dark Glass');
-  const [contractId, setContractId] = useState('contract_dark_glass');
+export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
   const [graphId, setGraphId] = useState('graph_agent_builder_development');
-  const [loading, setLoading] = useState(true);
-  const nodesRef = useRef<Node[]>([]);
-  const edgesRef = useRef<Edge[]>([]);
-  const [graphState, setGraphState] = useState<{ nodes: Node[]; edges: Edge[] }>({ nodes: [], edges: [] });
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [templates, setTemplates] = useState<Array<{ id: string; name: string; category: string }>>([]);
+  const [selectedAgentId] = useState<string | null>(null);
 
-  // Fetch saved templates on mount
-  useEffect(() => {
-    fetch('https://knowledge.vegvisr.org/getAITemplates')
-      .then(res => res.json())
-      .then(data => {
-        if (data.results) {
-          setTemplates(data.results.map((t: { id: string; name: string; category?: string }) => ({
-            id: t.id,
-            name: t.name,
-            category: t.category || 'General',
-          })));
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  // Apply saved layout positions over computed defaults
-  const applyLayout = (nodes: Node[], layout: Record<string, { x: number; y: number }> | null): Node[] => {
-    if (!layout) return nodes;
-    return nodes.map(n => layout[n.id] ? { ...n, position: layout[n.id] } : n);
-  };
-
-  // Debounced save layout to API
-  const saveLayout = useCallback((nodes: Node[]) => {
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
-      const layout: Record<string, { x: number; y: number }> = {};
-      for (const n of nodes) {
-        layout[n.id] = { x: Math.round(n.position.x), y: Math.round(n.position.y) };
-      }
-      fetch(`${AGENT_API}/layout`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contractId, layout }),
-      }).catch(() => {/* silent */});
-    }, 800);
-  }, [contractId]);
-
-  // Load contract + saved layout from API
-  useEffect(() => {
-    const loadContract = async () => {
-      setLoading(true);
-      try {
-        // Fetch contract and layout in parallel
-        const [contractRes, layoutRes] = await Promise.all([
-          fetch(`${CONTRACT_API}?id=${contractId}`),
-          fetch(`${AGENT_API}/layout?contractId=${contractId}`).catch(() => null),
-        ]);
-
-        let savedLayout: Record<string, { x: number; y: number }> | null = null;
-        if (layoutRes?.ok) {
-          const layoutData = await layoutRes.json();
-          savedLayout = layoutData.layout || null;
-        }
-
-        if (contractRes.ok) {
-          const data = await contractRes.json();
-          const contract: AgentContract = data.contract ?? data;
-          const { nodes, edges } = contractToReactFlow(contract, contractName, templates);
-          const finalNodes = applyLayout(nodes, savedLayout);
-          nodesRef.current = finalNodes;
-          edgesRef.current = edges;
-          setGraphState({ nodes: finalNodes, edges });
-        } else {
-          const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName, templates);
-          const finalNodes = applyLayout(nodes, savedLayout);
-          nodesRef.current = finalNodes;
-          edgesRef.current = edges;
-          setGraphState({ nodes: finalNodes, edges });
-        }
-      } catch {
-        const { nodes, edges } = contractToReactFlow(DEFAULT_CONTRACT, contractName, templates);
-        nodesRef.current = nodes;
-        edgesRef.current = edges;
-        setGraphState({ nodes, edges });
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadContract();
-  }, [contractId, contractName, templates]);
-
-  const handleNodeSelect = useCallback((node: Node | null) => {
-    setSelectedNode(node);
-  }, []);
-
-  const handleNodesChange = useCallback((nodes: Node[]) => {
-    nodesRef.current = nodes;
-  }, []);
-
-  const handleNodeDragStop = useCallback(() => {
-    saveLayout(nodesRef.current);
-  }, [saveLayout]);
-
-  const handleEdgesChange = useCallback((edges: Edge[]) => {
-    edgesRef.current = edges;
-  }, []);
-
-  const handleUpdateNode = useCallback((id: string, data: Record<string, unknown>) => {
-    nodesRef.current = nodesRef.current.map((n) =>
-      n.id === id ? { ...n, data } : n
-    );
-    setGraphState({ nodes: [...nodesRef.current], edges: edgesRef.current });
-    setSelectedNode((prev) => prev?.id === id ? { ...prev, data } : prev);
-  }, []);
-
-  const handleDeleteNode = useCallback((id: string) => {
-    nodesRef.current = nodesRef.current.filter((n) => n.id !== id);
-    edgesRef.current = edgesRef.current.filter((e) => e.source !== id && e.target !== id);
-    setGraphState({ nodes: [...nodesRef.current], edges: [...edgesRef.current] });
-    setSelectedNode((prev) => prev?.id === id ? null : prev);
-    saveLayout(nodesRef.current);
-  }, [saveLayout]);
-
-  const handleDeleteNodes = useCallback((deleted: Node[]) => {
-    const ids = new Set(deleted.map((n) => n.id));
-    nodesRef.current = nodesRef.current.filter((n) => !ids.has(n.id));
-    edgesRef.current = edgesRef.current.filter((e) => !ids.has(e.source) && !ids.has(e.target));
-    setGraphState({ nodes: [...nodesRef.current], edges: [...edgesRef.current] });
-    setSelectedNode((prev) => prev && ids.has(prev.id) ? null : prev);
-    saveLayout(nodesRef.current);
-  }, [saveLayout]);
-
-  const handleAddNode = useCallback((type: string) => {
-    const newNode = createNewNode(type, nodesRef.current);
-    nodesRef.current = [...nodesRef.current, newNode];
-    setGraphState({ nodes: [...nodesRef.current], edges: edgesRef.current });
-  }, []);
-
-  const handleDropNode = useCallback((type: string, position: { x: number; y: number }) => {
-    const newNode = createNewNode(type, nodesRef.current);
-    newNode.position = position;
-    nodesRef.current = [...nodesRef.current, newNode];
-    setGraphState({ nodes: [...nodesRef.current], edges: edgesRef.current });
-    saveLayout(nodesRef.current);
-  }, [saveLayout]);
-
-  // Contract selector
-  const contracts = [
-    { id: 'contract_open', name: 'Open (any type)' },
-    { id: 'contract_knowledge_graph_me', name: 'KnowledgeGraphME' },
-    { id: 'contract_dark_glass', name: 'Dark Glass' },
-    { id: 'contract_base_html', name: 'Base HTML' },
-    { id: 'contract_guided_builder', name: 'Guided Builder' },
-    { id: 'contract_editable_html_template', name: 'Editable HTML Template' },
-  ];
-
-  const handleContractChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const selected = contracts.find(c => c.id === e.target.value);
-    if (selected) {
-      setContractId(selected.id);
-      setContractName(selected.name);
-      setSelectedNode(null);
-    }
-  };
-
-  // ── Chat-only UI ──
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-white">
-      {/* Top Navigation */}
       <header className="flex items-center justify-between px-4 h-[48px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-base font-bold text-white">Vegvisr</span>
@@ -227,7 +35,7 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
         </div>
       </header>
 
-      <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
+      <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={null} />
     </div>
   );
 }
