@@ -1273,7 +1273,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               Sessions ({sessions.length})
             </button>
             {sessionsOpen && (
-              <div className="absolute top-full mt-1 left-0 w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+              <div className="absolute top-full mt-1 left-0 w-[calc(100vw-2rem)] sm:w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
                 <button
                   type="button"
                   onClick={() => { setMessages([]); setSessionId(null); setSessionsOpen(false); }}
@@ -1356,9 +1356,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
         {!hasMessages && (
-          <div className="text-center py-16 text-white/60">
-            <h2 className="text-white text-2xl font-semibold mb-3">Agent Chat</h2>
-            <p className="text-base leading-relaxed max-w-[500px] mx-auto">
+          <div className="text-center py-10 sm:py-16 px-4 text-white/60">
+            <h2 className="text-white text-xl sm:text-2xl font-semibold mb-2 sm:mb-3">Agent Chat</h2>
+            <p className="text-sm sm:text-base leading-relaxed max-w-[500px] mx-auto">
               I can help you create knowledge graphs, build HTML pages, modify content, and manage your apps. What would you like to do?
             </p>
           </div>
@@ -1367,7 +1367,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         {messages.map((msg, i) => (
           <div
             key={i}
-            className={`flex gap-2.5 max-w-[80%] ${
+            className={`flex gap-2 sm:gap-2.5 max-w-[92%] sm:max-w-[80%] ${
               msg.role === 'user' ? 'self-end flex-row-reverse' : 'self-start'
             }`}
           >
@@ -1384,7 +1384,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               </div>
             )}
           <div
-            className={`px-4 py-3 rounded-[14px] text-[0.95rem] leading-relaxed break-words ${
+            className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-[14px] text-[0.9rem] sm:text-[0.95rem] leading-relaxed break-words overflow-x-auto ${
               msg.role === 'user'
                 ? 'bg-sky-400/[0.16] border border-sky-400/30 text-white'
                 : 'bg-white/[0.06] border border-white/[0.12] text-white'
@@ -1399,7 +1399,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               </div>
             )}
             {msg.role === 'assistant' ? (
-              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {preprocessGraphLinks(msg.content || '_(completed with tool calls only)_')}
                 </ReactMarkdown>
@@ -1455,7 +1455,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               <ToolCallCard key={tc.id} tc={tc} userId={userId} />
             ))}
             {current.text && (
-              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-3 [&_pre]:rounded-lg [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {preprocessGraphLinks(current.text)}
                 </ReactMarkdown>
@@ -1597,7 +1597,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
       {/* Input area */}
       <div
-        className={`px-3 sm:px-4 py-3 border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
+        className={`px-3 sm:px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setImageDragActive(true); }}
         onDragLeave={() => setImageDragActive(false)}
         onDrop={handleImageDrop}
@@ -1633,13 +1633,13 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             onPaste={handleImagePaste}
             placeholder={pendingImages.length > 0 ? 'Ask about the image(s)...' : 'Type your message...'}
             rows={1}
-            className="flex-1 px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
+            className="flex-1 min-w-0 px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
           />
           <button
             type="button"
             onClick={() => sendMessage()}
             disabled={streaming || (!input.trim() && pendingImages.length === 0)}
-            className="px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {streaming ? '...' : 'Send'}
           </button>

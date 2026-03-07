@@ -33,20 +33,8 @@ interface SelectedAgent {
   avatar_url?: string | null;
 }
 
-function useIsMobile(breakpoint = 768) {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
-    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, [breakpoint]);
-  return isMobile;
-}
-
 export default function AgentBuilder({ userId, userEmail, role, language, onLanguageChange, onLogout }: Props) {
-  const isMobile = useIsMobile();
-  const [view, setView] = useState<View>('builder');
+  const [view, setView] = useState<View>('chat');
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<SelectedAgent | null>(null);
@@ -217,15 +205,17 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
     }
   };
 
-  // ── Mobile: chat-only with minimal header ──
-  if (isMobile) {
-    return (
-      <div className="flex flex-col h-screen bg-slate-950 text-white">
-        <header className="flex items-center justify-between px-4 h-[48px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="text-base font-bold text-white">Vegvisr</span>
-            <span className="text-sm text-purple-400">Agent</span>
-          </div>
+  // ── Chat-only UI ──
+  return (
+    <div className="flex flex-col h-screen bg-slate-950 text-white">
+      {/* Top Navigation */}
+      <header className="flex items-center justify-between px-4 h-[48px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
+        <div className="flex items-center gap-2">
+          <span className="text-base font-bold text-white">Vegvisr</span>
+          <span className="text-sm text-purple-400">Agent</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <LanguageSelector value={language} onChange={onLanguageChange} />
           <AuthBar
             userEmail={userEmail}
             badgeLabel="Agent"
@@ -234,162 +224,10 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
             logoutLabel="Log out"
             onLogout={onLogout}
           />
-        </header>
-        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
-      </div>
-    );
-  }
-
-  // ── Desktop: full builder UI ──
-  return (
-    <div className="flex flex-col h-screen bg-slate-950 text-white">
-      {/* Top Navigation */}
-      <header className="flex items-center justify-between px-5 h-[52px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
-        <div className="flex items-center gap-3">
-          <span className="text-base font-bold text-white">Vegvisr</span>
-          <span className="text-base text-purple-500">Agent Builder</span>
-          <GraphSelector graphId={graphId} onGraphChange={setGraphId} />
-          <span className="text-xs text-gray-600">/</span>
-          <AgentSelector
-            agentId={selectedAgentId}
-            onAgentChange={(id) => {
-              setSelectedAgentId(id);
-              if (!id) setSelectedAgent(null);
-            }}
-            onNewAgent={() => {
-              setEditingAgentId(null);
-              setView('settings');
-            }}
-          />
-          <span className="text-xs text-gray-600">/</span>
-          <select
-            value={contractId}
-            onChange={handleContractChange}
-            title="Select contract"
-            className="text-xs text-purple-400 bg-transparent border-none focus:outline-none cursor-pointer"
-          >
-            {contracts.map(c => (
-              <option key={c.id} value={c.id} className="bg-slate-900 text-white">
-                Contract: {c.name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="flex items-center gap-3">
-          {/* View toggle */}
-          <div className="flex rounded-md border border-white/10 overflow-hidden">
-            <button
-              type="button"
-              onClick={() => setView('builder')}
-              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'builder' ? 'bg-purple-600/30 text-purple-300' : 'text-gray-400 hover:bg-white/5'}`}
-            >
-              Builder
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('chat')}
-              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'chat' ? 'bg-sky-600/30 text-sky-300' : 'text-gray-400 hover:bg-white/5'}`}
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditingAgentId(selectedAgentId);
-                setView('settings');
-              }}
-              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'settings' ? 'bg-emerald-600/30 text-emerald-300' : 'text-gray-400 hover:bg-white/5'}`}
-            >
-              Agents
-            </button>
-            <button
-              type="button"
-              onClick={() => setView('data')}
-              className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'data' ? 'bg-amber-600/30 text-amber-300' : 'text-gray-400 hover:bg-white/5'}`}
-            >
-              Data
-            </button>
-          </div>
-          <button type="button" className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
-            Preview
-          </button>
-          <button type="button" className="rounded-md bg-gradient-to-r from-purple-600 to-purple-700 px-4 py-1.5 text-xs font-semibold text-white shadow-md shadow-purple-900/40">
-            Execute
-          </button>
-          <span className="w-px h-5 bg-white/10" />
-          <LanguageSelector value={language} onChange={onLanguageChange} />
-          <AuthBar
-            userEmail={userEmail}
-            badgeLabel="Agent Builder"
-            signInLabel="Sign in"
-            onSignIn={() => {}}
-            logoutLabel="Log out"
-            onLogout={onLogout}
-          />
         </div>
       </header>
 
-      {/* Ecosystem Navigation */}
-      <EcosystemNav className="border-b border-white/10 bg-slate-950/90" />
-
-      {/* Main Content */}
-      {view === 'data' ? (
-        <DataExplorer />
-      ) : view === 'settings' ? (
-        <AgentSettings
-          agentId={editingAgentId === undefined ? selectedAgentId : editingAgentId}
-          userId={userId}
-          onSave={(agent) => {
-            setSelectedAgentId(agent.id);
-            setSelectedAgent({ id: agent.id, name: agent.name, avatar_url: agent.avatar_url });
-          }}
-          onCancel={() => setView('builder')}
-          onSelectAgent={(id) => setEditingAgentId(id)}
-        />
-      ) : view === 'chat' ? (
-        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
-      ) : (
-        <>
-          <div className="flex flex-1 min-h-0">
-            {loading ? (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-sm text-gray-500">Loading contract...</div>
-              </div>
-            ) : (
-              <ReactFlowProvider>
-                <ContractCanvas
-                  initialNodes={graphState.nodes}
-                  initialEdges={graphState.edges}
-                  onNodeSelect={handleNodeSelect}
-                  onNodesChange={handleNodesChange}
-                  onEdgesChange={handleEdgesChange}
-                  onNodeDragStop={handleNodeDragStop}
-                  onDropNode={handleDropNode}
-                  onDeleteNodes={handleDeleteNodes}
-                />
-              </ReactFlowProvider>
-            )}
-            <Sidebar
-              selectedNode={selectedNode}
-              nodes={graphState.nodes}
-              edges={graphState.edges}
-              userId={userId}
-              contractId={contractId}
-              contractName={contractName}
-              graphId={graphId}
-              onUpdateNode={handleUpdateNode}
-              onAddNode={handleAddNode}
-              onDeleteNode={handleDeleteNode}
-            />
-          </div>
-          <StatusBar
-            graphId={graphId}
-            nodeCount={nodesRef.current.length}
-            edgeCount={edgesRef.current.length}
-            contractName={contractName}
-          />
-        </>
-      )}
+      <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
     </div>
   );
 }
