@@ -6,8 +6,9 @@
  */
 
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
-import { isOpenAPITool, executeOpenAPITool } from './openapi-tools.js'
+import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE } from './system-prompt.js'
+import { TOOL_DEFINITIONS } from './tool-definitions.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -2168,6 +2169,304 @@ Do not prefix your response with your name or any label.`
   }
 }
 
+// ── Describe capabilities ─────────────────────────────────────────
+
+async function executeDescribeCapabilities(input, env) {
+  const includeTools = input.include_tools !== false
+  const includeTemplates = input.include_templates !== false
+
+  const result = {}
+
+  if (includeTools) {
+    // Hardcoded tools
+    const hardcoded = TOOL_DEFINITIONS.map(t => ({ name: t.name, description: t.description }))
+
+    // Dynamic KG API tools
+    let dynamic = []
+    try {
+      const loaded = await loadOpenAPITools(env)
+      const hardcodedNames = new Set(TOOL_DEFINITIONS.map(t => t.name))
+      dynamic = loaded.tools
+        .filter(t => !hardcodedNames.has(t.name))
+        .map(t => ({ name: t.name, description: t.description }))
+    } catch { /* ignore */ }
+
+    result.tools = {
+      hardcoded,
+      dynamic,
+      builtin: [{ name: 'web_search', description: 'Quick web search (Claude built-in, lightweight)' }],
+      total: hardcoded.length + dynamic.length + 1
+    }
+  }
+
+  if (includeTemplates) {
+    result.templates = listTemplates()
+  }
+
+  result.summary = `This agent has ${result.tools?.total || '?'} tools and ${result.templates?.length || '?'} HTML templates available. Tools cover knowledge graph management, web search, image search & analysis, audio transcription, semantic analysis, email, and HTML app creation.`
+
+  return result
+}
+
+// ── Calendar DB tools ─────────────────────────────────────────────
+
+async function executeCalendarListTables(env) {
+  const db = env.CALENDAR_DB
+  if (!db) throw new Error('CALENDAR_DB binding not available')
+
+  const result = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name"
+  ).all()
+
+  const tables = []
+  for (const row of result.results) {
+    const info = await db.prepare(`PRAGMA table_info(${row.name})`).all()
+    tables.push({
+      name: row.name,
+      columns: info.results.map(c => ({ name: c.name, type: c.type, notnull: !!c.notnull, pk: !!c.pk }))
+    })
+  }
+
+  return { tables, message: `Found ${tables.length} tables in calendar_db` }
+}
+
+async function executeCalendarQuery(input, env) {
+  const db = env.CALENDAR_DB
+  if (!db) throw new Error('CALENDAR_DB binding not available')
+
+  const sql = (input.sql || '').trim()
+  if (!sql) throw new Error('sql is required')
+
+  // Only allow SELECT queries
+  if (!/^SELECT\b/i.test(sql)) {
+    throw new Error('Only SELECT queries are allowed on calendar_db. Use the calendar app for modifications.')
+  }
+
+  const params = input.params || []
+  let stmt = db.prepare(sql)
+  if (params.length > 0) stmt = stmt.bind(...params)
+
+  const result = await stmt.all()
+  return {
+    records: result.results,
+    count: result.results.length,
+    message: `Returned ${result.results.length} records`
+  }
+}
+
+// ── Calendar booking tools (via CALENDAR_WORKER service binding) ──
+
+async function executeCalendarGetSettings(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  if (!userEmail) throw new Error('userEmail is required')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    `https://calendar-worker/api/public/settings?user=${encodeURIComponent(userEmail)}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get calendar settings')
+
+  return {
+    settings: data.settings,
+    availability: data.availability,
+    meetingTypes: data.meetingTypes,
+    groupMeetings: data.groupMeetings,
+    message: `Retrieved calendar settings for ${userEmail}: available ${data.settings.availability_start}-${data.settings.availability_end}, ${data.meetingTypes?.length || 0} meeting types`
+  }
+}
+
+async function executeCalendarCheckAvailability(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  const date = (input.date || '').trim()
+  if (!userEmail) throw new Error('userEmail is required')
+  if (!date) throw new Error('date is required (YYYY-MM-DD)')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    `https://calendar-worker/api/public/bookings?user=${encodeURIComponent(userEmail)}&date=${date}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to check availability')
+
+  const bookings = data.bookings || []
+  return {
+    date,
+    bookedSlots: bookings,
+    count: bookings.length,
+    message: bookings.length === 0
+      ? `No bookings on ${date} — all slots are free`
+      : `${bookings.length} occupied slot(s) on ${date}`
+  }
+}
+
+async function executeCalendarListBookings(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  if (!userEmail) throw new Error('userEmail is required')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    'https://calendar-worker/api/admin/bookings',
+    { headers: { 'X-User-Email': userEmail } }
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to list bookings')
+
+  const bookings = data.bookings || []
+  return {
+    bookings,
+    count: bookings.length,
+    message: bookings.length === 0
+      ? `No bookings found for ${userEmail}`
+      : `Found ${bookings.length} booking(s) for ${userEmail}`
+  }
+}
+
+async function executeCalendarCreateBooking(input, env) {
+  const ownerEmail = (input.ownerEmail || '').trim()
+  const guestName = (input.guestName || '').trim()
+  const guestEmail = (input.guestEmail || '').trim()
+  const startTime = (input.startTime || '').trim()
+  const endTime = (input.endTime || '').trim()
+  if (!ownerEmail) throw new Error('ownerEmail is required')
+  if (!guestName) throw new Error('guestName is required')
+  if (!guestEmail) throw new Error('guestEmail is required')
+  if (!startTime) throw new Error('startTime is required (ISO 8601)')
+  if (!endTime) throw new Error('endTime is required (ISO 8601)')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    'https://calendar-worker/api/bookings',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        owner_email: ownerEmail,
+        guest_name: guestName,
+        guest_email: guestEmail,
+        start_time: startTime,
+        end_time: endTime,
+        description: input.description || '',
+        meeting_type_id: input.meetingTypeId || null
+      })
+    }
+  )
+  const data = await res.json()
+
+  if (res.status === 409) {
+    return {
+      success: false,
+      conflict: true,
+      message: data.error || 'This time slot is already booked. Please choose a different time.'
+    }
+  }
+  if (!res.ok) throw new Error(data.error || 'Failed to create booking')
+
+  return {
+    success: true,
+    bookingId: data.bookingId,
+    googleSynced: data.google_synced,
+    message: `Booking created (ID: ${data.bookingId}). ${data.google_synced ? 'Synced to Google Calendar.' : 'Google Calendar not connected — booking saved in D1 only.'}`
+  }
+}
+
+async function executeCalendarRescheduleBooking(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  const bookingId = input.bookingId
+  const newStartTime = (input.newStartTime || '').trim()
+  const newEndTime = (input.newEndTime || '').trim()
+
+  if (!userEmail) throw new Error('userEmail is required')
+  if (!bookingId) throw new Error('bookingId is required')
+  if (!newStartTime) throw new Error('newStartTime is required (ISO 8601)')
+  if (!newEndTime) throw new Error('newEndTime is required (ISO 8601)')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    'https://calendar-worker/api/admin/bookings',
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-User-Email': userEmail
+      },
+      body: JSON.stringify({
+        id: bookingId,
+        start_time: newStartTime,
+        end_time: newEndTime
+      })
+    }
+  )
+  const data = await res.json()
+
+  if (res.status === 409) {
+    return {
+      success: false,
+      conflict: true,
+      message: data.error || 'The new time slot conflicts with an existing booking. Please choose a different time.'
+    }
+  }
+  if (res.status === 404) {
+    return {
+      success: false,
+      message: data.error || 'Booking not found. It may have been deleted.'
+    }
+  }
+  if (!res.ok) throw new Error(data.error || 'Failed to reschedule booking')
+
+  return {
+    success: true,
+    bookingId: data.bookingId,
+    googleUpdated: data.google_updated,
+    message: `Booking ${data.bookingId} rescheduled to ${newStartTime} — ${newEndTime}. ${data.google_updated ? 'Google Calendar updated.' : 'Google Calendar not updated (not synced or not connected).'}`
+  }
+}
+
+async function executeCalendarDeleteBooking(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  const bookingId = input.bookingId
+
+  if (!userEmail) throw new Error('userEmail is required')
+  if (!bookingId) throw new Error('bookingId is required')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    `https://calendar-worker/api/admin/bookings?id=${bookingId}`,
+    {
+      method: 'DELETE',
+      headers: { 'X-User-Email': userEmail }
+    }
+  )
+  const data = await res.json()
+
+  if (res.status === 404) {
+    return {
+      success: false,
+      message: data.error || 'Booking not found. It may have already been deleted.'
+    }
+  }
+  if (!res.ok) throw new Error(data.error || 'Failed to delete booking')
+
+  return {
+    success: true,
+    googleDeleted: data.google_deleted,
+    message: `Booking ${bookingId} has been cancelled and removed. ${data.google_deleted ? 'Also removed from Google Calendar.' : ''}`
+  }
+}
+
+async function executeCalendarGetStatus(input, env) {
+  const userEmail = (input.userEmail || '').trim()
+  if (!userEmail) throw new Error('userEmail is required')
+
+  const res = await env.CALENDAR_WORKER.fetch(
+    'https://calendar-worker/api/auth/calendar-status',
+    { headers: { 'X-User-Email': userEmail } }
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to check calendar status')
+
+  return {
+    connected: data.connected,
+    message: data.connected
+      ? `Google Calendar is connected for ${userEmail}`
+      : `Google Calendar is NOT connected for ${userEmail}`
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -2259,6 +2558,26 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetGroupMembers(toolInput, env)
     case 'trigger_bot_response':
       return await executeTriggerBotResponse(toolInput, env)
+    case 'describe_capabilities':
+      return await executeDescribeCapabilities(toolInput, env)
+    case 'calendar_list_tables':
+      return await executeCalendarListTables(env)
+    case 'calendar_query':
+      return await executeCalendarQuery(toolInput, env)
+    case 'calendar_get_settings':
+      return await executeCalendarGetSettings(toolInput, env)
+    case 'calendar_check_availability':
+      return await executeCalendarCheckAvailability(toolInput, env)
+    case 'calendar_list_bookings':
+      return await executeCalendarListBookings(toolInput, env)
+    case 'calendar_create_booking':
+      return await executeCalendarCreateBooking(toolInput, env)
+    case 'calendar_reschedule_booking':
+      return await executeCalendarRescheduleBooking(toolInput, env)
+    case 'calendar_delete_booking':
+      return await executeCalendarDeleteBooking(toolInput, env)
+    case 'calendar_get_status':
+      return await executeCalendarGetStatus(toolInput, env)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

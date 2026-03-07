@@ -708,6 +708,119 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'calendar_list_tables',
+    description: 'List all tables in the calendar database (calendar_db). Returns table names so you can explore the calendar schema.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'calendar_query',
+    description: 'Run a read-only SQL query against the calendar database (calendar_db). Use this to view bookings, settings, availability, meeting types, and group meetings. Only SELECT queries are allowed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'SQL SELECT query to execute (e.g., "SELECT * FROM bookings LIMIT 10")' },
+        params: {
+          type: 'array',
+          description: 'Optional bind parameters for the query (e.g., ["torarnehave@gmail.com"])',
+          items: { type: 'string' }
+        }
+      },
+      required: ['sql']
+    }
+  },
+  {
+    name: 'calendar_get_settings',
+    description: 'Get a user\'s booking profile — availability hours, available days of the week, meeting types (with durations), and upcoming group meetings. Use this before booking to understand what slots and meeting types are available.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' }
+      },
+      required: ['userEmail']
+    }
+  },
+  {
+    name: 'calendar_check_availability',
+    description: 'Check booked time slots for a specific date. Returns occupied slots from both D1 bookings and Google Calendar events. Use this to find free time before creating a booking.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' },
+        date: { type: 'string', description: 'Date to check in YYYY-MM-DD format (e.g., "2026-03-10")' }
+      },
+      required: ['userEmail', 'date']
+    }
+  },
+  {
+    name: 'calendar_list_bookings',
+    description: 'List all bookings for a user with guest details, times, and meeting type info. Use this to see upcoming and past appointments.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' }
+      },
+      required: ['userEmail']
+    }
+  },
+  {
+    name: 'calendar_create_booking',
+    description: 'Book a meeting for a user. Automatically syncs to Google Calendar if connected. Returns conflict error if the time slot is already taken. Times must be ISO 8601 format.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        ownerEmail: { type: 'string', description: 'The calendar owner\'s email address (who is being booked)' },
+        guestName: { type: 'string', description: 'Full name of the guest booking the meeting' },
+        guestEmail: { type: 'string', description: 'Email address of the guest' },
+        startTime: { type: 'string', description: 'Meeting start time in ISO 8601 format (e.g., "2026-03-10T10:00:00.000Z")' },
+        endTime: { type: 'string', description: 'Meeting end time in ISO 8601 format (e.g., "2026-03-10T10:30:00.000Z")' },
+        description: { type: 'string', description: 'Optional meeting description or notes' },
+        meetingTypeId: { type: 'number', description: 'Optional meeting type ID (from calendar_get_settings)' }
+      },
+      required: ['ownerEmail', 'guestName', 'guestEmail', 'startTime', 'endTime']
+    }
+  },
+  {
+    name: 'calendar_reschedule_booking',
+    description: 'Reschedule an existing booking to a new time. Updates both D1 and Google Calendar (if synced). Returns conflict error (409) if the new time overlaps another booking.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' },
+        bookingId: { type: 'number', description: 'The booking ID to reschedule (from calendar_list_bookings)' },
+        newStartTime: { type: 'string', description: 'New start time in ISO 8601 format (e.g., "2026-03-12T14:00:00.000Z")' },
+        newEndTime: { type: 'string', description: 'New end time in ISO 8601 format (e.g., "2026-03-12T14:30:00.000Z")' }
+      },
+      required: ['userEmail', 'bookingId', 'newStartTime', 'newEndTime']
+    }
+  },
+  {
+    name: 'calendar_delete_booking',
+    description: 'Cancel/delete a booking. Removes it from D1 and from Google Calendar (if synced). This action cannot be undone.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' },
+        bookingId: { type: 'number', description: 'The booking ID to delete (from calendar_list_bookings)' }
+      },
+      required: ['userEmail', 'bookingId']
+    }
+  },
+  {
+    name: 'calendar_get_status',
+    description: 'Check if a user\'s Google Calendar is connected. Returns connected: true/false.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' }
+      },
+      required: ['userEmail']
+    }
+  },
+  {
     name: 'list_chat_groups',
     description: 'List all chat groups in Hallo Vegvisr. Returns group IDs and names. Use this to find a group before adding users.',
     input_schema: {
@@ -820,6 +933,26 @@ const TOOL_DEFINITIONS = [
         groupName: { type: 'string', description: 'Chat group name' },
         botGraphId: { type: 'string', description: 'Specific bot graph ID (if group has multiple bots). If omitted, triggers all bots.' },
         messageCount: { type: 'number', description: 'Number of recent messages to include as context (default 10, max 50)' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'describe_capabilities',
+    description: 'Describe this agent\'s capabilities — returns a structured list of all available tools (with descriptions), all HTML templates (with descriptions and placeholders), and supported node types. Use this when the user asks "what can you do?", "what tools do you have?", "describe yourself", or "what are your capabilities?".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        include_tools: {
+          type: 'boolean',
+          description: 'Include the full list of available tools (default true)',
+          default: true
+        },
+        include_templates: {
+          type: 'boolean',
+          description: 'Include the list of HTML templates (default true)',
+          default: true
+        }
       },
       required: []
     }
