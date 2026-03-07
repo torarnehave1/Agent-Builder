@@ -2208,6 +2208,52 @@ async function executeDescribeCapabilities(input, env) {
   return result
 }
 
+// ── Main DB tools (vegvisr_org) ───────────────────────────────────
+
+async function executeDbListTables(env) {
+  const db = env.DB
+  if (!db) throw new Error('DB binding not available')
+
+  const result = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name"
+  ).all()
+
+  const tables = []
+  for (const row of result.results) {
+    const info = await db.prepare(`PRAGMA table_info(${row.name})`).all()
+    tables.push({
+      name: row.name,
+      columns: info.results.map(c => ({ name: c.name, type: c.type, notnull: !!c.notnull, pk: !!c.pk }))
+    })
+  }
+
+  return { tables, message: `Found ${tables.length} tables in vegvisr_org` }
+}
+
+async function executeDbQuery(input, env) {
+  const db = env.DB
+  if (!db) throw new Error('DB binding not available')
+
+  const sql = (input.sql || '').trim()
+  if (!sql) throw new Error('sql is required')
+
+  // Only allow SELECT queries
+  if (!/^SELECT\b/i.test(sql)) {
+    throw new Error('Only SELECT queries are allowed on vegvisr_org.')
+  }
+
+  const params = input.params || []
+  let stmt = db.prepare(sql)
+  if (params.length > 0) stmt = stmt.bind(...params)
+
+  const result = await stmt.all()
+  return {
+    records: result.results,
+    count: result.results.length,
+    message: `Returned ${result.results.length} records`
+  }
+}
+
 // ── Calendar DB tools ─────────────────────────────────────────────
 
 async function executeCalendarListTables(env) {
@@ -2560,6 +2606,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeTriggerBotResponse(toolInput, env)
     case 'describe_capabilities':
       return await executeDescribeCapabilities(toolInput, env)
+    case 'db_list_tables':
+      return await executeDbListTables(env)
+    case 'db_query':
+      return await executeDbQuery(toolInput, env)
     case 'calendar_list_tables':
       return await executeCalendarListTables(env)
     case 'calendar_query':

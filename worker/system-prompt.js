@@ -37,6 +37,8 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **analyze_node**: Semantic analysis of a single node — returns sentiment, importance weight (0-1), keywords, and summary. Uses Claude Sonnet.
 - **analyze_graph**: Full graph semantic analysis — returns topic clusters, node importance rankings, overall sentiment, and summary. Uses Claude Sonnet.
 - **analyze_transcription**: Analyze a conversation transcription from Enkel Endring. Produces a structured Norwegian report (themes, success indicators, quotes, action points, mentor feedback). Set conversationType to "1-1" or "group".
+- **db_list_tables**: List all tables and columns in the main vegvisr_org database. Use this to explore the schema (config, user_api_keys, graphs, etc.).
+- **db_query**: Run a read-only SQL SELECT query against the main vegvisr_org database. Only SELECT queries allowed.
 - **calendar_list_tables**: List all tables and columns in the calendar database (calendar_db). Use this to explore the schema.
 - **calendar_query**: Run a read-only SQL SELECT query against the calendar database. View bookings, settings, availability, meeting types, and group meetings. Only SELECT queries allowed.
 - **calendar_get_settings**: Get a user's booking profile — availability hours, available days, meeting types (with durations), and group meetings. Call this first before booking.

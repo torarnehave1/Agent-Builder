@@ -708,6 +708,31 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'db_list_tables',
+    description: 'List all tables in the main vegvisr_org database with their columns. Use this to explore the database schema (config, user_api_keys, graphs, etc.).',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'db_query',
+    description: 'Run a read-only SQL SELECT query against the main vegvisr_org database. Use this to inspect config, user_api_keys, graphs, and other tables. Only SELECT queries are allowed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'SQL SELECT query to execute (e.g., "SELECT email, Role FROM config LIMIT 10")' },
+        params: {
+          type: 'array',
+          description: 'Optional bind parameters for the query (e.g., ["torarnehave@gmail.com"])',
+          items: { type: 'string' }
+        }
+      },
+      required: ['sql']
+    }
+  },
+  {
     name: 'calendar_list_tables',
     description: 'List all tables in the calendar database (calendar_db). Returns table names so you can explore the calendar schema.',
     input_schema: {
