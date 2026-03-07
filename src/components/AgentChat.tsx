@@ -1261,7 +1261,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   return (
     <div className="flex flex-col flex-1 min-h-0">
       {/* Graph selector bar + Sessions + Copy Log */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-slate-950/80">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-white/10 bg-slate-950/80 flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-2">
           {/* Session picker */}
           <div className="relative">
@@ -1354,7 +1354,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-5 flex flex-col gap-4">
+      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
         {!hasMessages && (
           <div className="text-center py-16 text-white/60">
             <h2 className="text-white text-2xl font-semibold mb-3">Agent Chat</h2>
@@ -1597,7 +1597,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
       {/* Input area */}
       <div
-        className={`px-4 py-3 border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
+        className={`px-3 sm:px-4 py-3 border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setImageDragActive(true); }}
         onDragLeave={() => setImageDragActive(false)}
         onDrop={handleImageDrop}

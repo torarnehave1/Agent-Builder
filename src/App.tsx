@@ -290,6 +290,7 @@ function App() {
         <AgentBuilder
           userId={authUser.userId}
           userEmail={authUser.email}
+          role={authUser.role}
           language={language}
           onLanguageChange={setLanguage}
           onLogout={handleLogout}

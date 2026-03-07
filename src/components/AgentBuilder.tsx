@@ -16,6 +16,7 @@ import type { AgentContract } from '../types/contract';
 interface Props {
   userId: string;
   userEmail: string;
+  role?: string | null;
   language: string;
   onLanguageChange: (lang: 'en' | 'no') => void;
   onLogout: () => void;
@@ -32,7 +33,19 @@ interface SelectedAgent {
   avatar_url?: string | null;
 }
 
-export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
+export default function AgentBuilder({ userId, userEmail, role, language, onLanguageChange, onLogout }: Props) {
+  const isMobile = useIsMobile();
   const [view, setView] = useState<View>('builder');
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -204,6 +217,30 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
     }
   };
 
+  // ── Mobile: chat-only with minimal header ──
+  if (isMobile) {
+    return (
+      <div className="flex flex-col h-screen bg-slate-950 text-white">
+        <header className="flex items-center justify-between px-4 h-[48px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <span className="text-base font-bold text-white">Vegvisr</span>
+            <span className="text-sm text-purple-400">Agent</span>
+          </div>
+          <AuthBar
+            userEmail={userEmail}
+            badgeLabel="Agent"
+            signInLabel="Sign in"
+            onSignIn={() => {}}
+            logoutLabel="Log out"
+            onLogout={onLogout}
+          />
+        </header>
+        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={selectedAgent?.avatar_url || null} />
+      </div>
+    );
+  }
+
+  // ── Desktop: full builder UI ──
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-white">
       {/* Top Navigation */}
@@ -228,6 +265,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <select
             value={contractId}
             onChange={handleContractChange}
+            title="Select contract"
             className="text-xs text-purple-400 bg-transparent border-none focus:outline-none cursor-pointer"
           >
             {contracts.map(c => (
@@ -241,18 +279,21 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           {/* View toggle */}
           <div className="flex rounded-md border border-white/10 overflow-hidden">
             <button
+              type="button"
               onClick={() => setView('builder')}
               className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'builder' ? 'bg-purple-600/30 text-purple-300' : 'text-gray-400 hover:bg-white/5'}`}
             >
               Builder
             </button>
             <button
+              type="button"
               onClick={() => setView('chat')}
               className={`px-3 py-1.5 text-xs font-semibold transition-colors ${view === 'chat' ? 'bg-sky-600/30 text-sky-300' : 'text-gray-400 hover:bg-white/5'}`}
             >
               Chat
             </button>
             <button
+              type="button"
               onClick={() => {
                 setEditingAgentId(selectedAgentId);
                 setView('settings');
@@ -269,10 +310,10 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               Data
             </button>
           </div>
-          <button className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
+          <button type="button" className="rounded-md border border-purple-600/40 bg-purple-600/20 px-4 py-1.5 text-xs font-semibold text-purple-400 hover:bg-purple-600/30">
             Preview
           </button>
-          <button className="rounded-md bg-gradient-to-r from-purple-600 to-purple-700 px-4 py-1.5 text-xs font-semibold text-white shadow-md shadow-purple-900/40">
+          <button type="button" className="rounded-md bg-gradient-to-r from-purple-600 to-purple-700 px-4 py-1.5 text-xs font-semibold text-white shadow-md shadow-purple-900/40">
             Execute
           </button>
           <span className="w-px h-5 bg-white/10" />
