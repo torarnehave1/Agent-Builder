@@ -58,8 +58,8 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       </header>
 
       {view === 'chat' && (
-        <div className={`flex flex-1 min-h-0 ${previewHtml ? '' : ''}`}>
-          <div className={previewHtml ? 'w-[40%] min-w-[320px] border-r border-white/10' : 'flex-1'}>
+        <div className="flex flex-1 min-h-0">
+          <div className={`flex flex-col min-h-0 ${previewHtml ? 'w-[40%] min-w-[320px] border-r border-white/10' : 'flex-1'}`}>
             <AgentChat
               userId={userId}
               graphId={graphId}
