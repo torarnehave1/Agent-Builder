@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
 import DataExplorer from './DataExplorer';
+import HtmlPreview from './HtmlPreview';
 
 type View = 'chat' | 'data';
 
@@ -18,6 +19,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [graphId, setGraphId] = useState('graph_agent_builder_development');
   const [selectedAgentId] = useState<string | null>(null);
   const [view, setView] = useState<View>('chat');
+  const [previewHtml, setPreviewHtml] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-white">
@@ -56,7 +58,23 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       </header>
 
       {view === 'chat' && (
-        <AgentChat userId={userId} graphId={graphId} onGraphChange={setGraphId} agentId={selectedAgentId} agentAvatarUrl={null} />
+        <div className={`flex flex-1 min-h-0 ${previewHtml ? '' : ''}`}>
+          <div className={previewHtml ? 'w-[40%] min-w-[320px] border-r border-white/10' : 'flex-1'}>
+            <AgentChat
+              userId={userId}
+              graphId={graphId}
+              onGraphChange={setGraphId}
+              agentId={selectedAgentId}
+              agentAvatarUrl={null}
+              onPreview={setPreviewHtml}
+            />
+          </div>
+          {previewHtml && (
+            <div className="flex-1 flex min-w-0">
+              <HtmlPreview html={previewHtml} onClose={() => setPreviewHtml(null)} />
+            </div>
+          )}
+        </div>
       )}
       {view === 'data' && <DataExplorer />}
     </div>
