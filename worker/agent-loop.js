@@ -208,12 +208,6 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
             const ssePayload = { tool: toolUse.name, success: true, summary }
-            // Pass HTML node data to frontend for preview
-            if (toolUse.name === 'read_node' && result.node && result.node.type === 'html-node' && result.node.info) {
-              ssePayload.nodeHtml = result.node.info
-              ssePayload.nodeType = result.node.type
-              ssePayload.nodeLabel = result.node.label
-            }
             // Pass clientSideRequired data to frontend so it can handle transcription
             if (result.clientSideRequired) {
               ssePayload.clientSideRequired = true

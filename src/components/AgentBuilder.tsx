@@ -57,9 +57,19 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         </div>
       </header>
 
-      {view === 'chat' && (
+      {view === 'chat' && !previewHtml && (
+        <AgentChat
+          userId={userId}
+          graphId={graphId}
+          onGraphChange={setGraphId}
+          agentId={selectedAgentId}
+          agentAvatarUrl={null}
+          onPreview={setPreviewHtml}
+        />
+      )}
+      {view === 'chat' && previewHtml && (
         <div className="flex flex-1 min-h-0">
-          <div className={`flex flex-col min-h-0 ${previewHtml ? 'w-[40%] min-w-[320px] border-r border-white/10' : 'flex-1'}`}>
+          <div className="w-[40%] min-w-[320px] flex flex-col min-h-0 border-r border-white/10">
             <AgentChat
               userId={userId}
               graphId={graphId}
@@ -69,11 +79,9 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               onPreview={setPreviewHtml}
             />
           </div>
-          {previewHtml && (
-            <div className="flex-1 flex min-w-0">
-              <HtmlPreview html={previewHtml} onClose={() => setPreviewHtml(null)} />
-            </div>
-          )}
+          <div className="flex-1 flex min-w-0">
+            <HtmlPreview html={previewHtml} onClose={() => setPreviewHtml(null)} />
+          </div>
         </div>
       )}
       {view === 'data' && <DataExplorer />}
