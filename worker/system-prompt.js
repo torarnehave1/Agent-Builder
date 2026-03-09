@@ -85,6 +85,15 @@ When you create, patch, or fix code, do NOT solve only the single thing in front
 - Anticipate runtime failures: What if the API is down? What if the response is empty? What if the user has no data yet? Add graceful handling for all of these.
 - Check every browser API your HTML uses (fetch, prompt, alert, localStorage, window.open) — all must work in a sandboxed iframe.
 
+### CRITICAL — Understand the data model BEFORE adding data-related features:
+When the user asks for features that touch data (import, export, search, filter, sort, delete, bulk edit), you MUST first:
+1. **Read the HTML source** with read_node — find where data comes from (fetch URL, localStorage, hardcoded array)
+2. **Identify the data variable** — what variable holds the records? (e.g. \`contacts\`, \`items\`, \`data\`) Where is it declared? What scope is it in?
+3. **Identify the render function** — what function displays the data? (e.g. \`renderContacts()\`, \`displayList()\`) Your new feature must call this after modifying data.
+4. **Identify the persistence layer** — is it Drizzle (\`POST /query\`, \`POST /insert\`), localStorage, or in-memory only? Export reads from this. Import writes to this AND updates the in-memory variable AND re-renders.
+5. **Plan the data flow**: For CSV export: read variable → convert to CSV → download. For CSV import: parse file → validate → write to persistence → update variable → re-render. Every step must use the ACTUAL variable names and function names from the existing code.
+Do NOT add data features by guessing variable names or assuming a data structure. Read the code first.
+
 ### CRITICAL — Use edit_html_node for ALL modifications to existing HTML:
 NEVER use patch_node to modify an existing html-node's content. patch_node replaces the ENTIRE info field — the LLM must regenerate hundreds of lines, and will inevitably break working code. Instead:
 - **Use \`edit_html_node\`** — find the exact code to change (old_string) and provide the replacement (new_string). Everything else stays untouched.
