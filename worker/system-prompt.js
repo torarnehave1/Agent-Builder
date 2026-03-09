@@ -305,13 +305,76 @@ Use these tools for proper relational database storage when you need SQL queries
 Tables are stored in D1 (SQLite) and support proper indexes and queries. Prefer this over data-node for apps that need structured data with many records.
 For landing page forms: create a table, then store the tableId in the data-node metadata as drizzleTableId.
 
-**IMPORTANT — Client-side HTML apps**: When generating HTML/JS that calls app table APIs directly from the browser, use the public drizzle-worker URL:
-- Base URL: \`https://drizzle.vegvisr.org\`
-- Query records: \`POST /query\` with body \`{ "tableId": "..." }\`
-- Insert records: \`POST /insert\` with body \`{ "tableId": "...", "record": { ... } }\`
-- **ONLY these two endpoints exist.** There is NO /update, NO /delete, NO /upsert endpoint. If the app needs to update or delete records, use \`POST /raw-query\` with a SELECT to read data, and handle updates by deleting + re-inserting. Or store mutable data in the HTML app's localStorage as a cache layer.
-- Do NOT use knowledge.vegvisr.org for client-side table operations — that endpoint does not have these routes.
-- Do NOT generate HTML that calls endpoints that do not exist — this causes 404 errors at runtime.
+**IMPORTANT — Client-side HTML apps**: When generating HTML/JS that calls app table APIs directly from the browser, use the public drizzle-worker URL \`https://drizzle.vegvisr.org\`. Here is the COMPLETE API:
+
+**POST /query** — Read records from a table:
+\`\`\`js
+// Request:
+fetch('https://drizzle.vegvisr.org/query', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    tableId: 'uuid-of-table',           // required
+    where: { email: 'john@test.com' },  // optional — equality filters only, AND-joined
+    orderBy: '_created_at',              // optional — default: _created_at
+    order: 'desc',                       // optional — asc or desc, default: desc
+    limit: 50,                           // optional — 1-1000, default: 50
+    offset: 0                            // optional — pagination
+  })
+})
+// Response: { records: [...], total: 120, limit: 50, offset: 0 }
+// Each record has system fields: _id (UUID), _created_at (ISO timestamp)
+// IMPORTANT: records are in response.records — NOT response.results or response.data
+\`\`\`
+
+**POST /insert** — Add a record:
+\`\`\`js
+// Request:
+fetch('https://drizzle.vegvisr.org/insert', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    tableId: 'uuid-of-table',
+    record: { name: 'John', email: 'john@test.com', phone: '12345678' }
+  })
+})
+// Response: { success: true, _id: 'new-record-uuid', _created_at: '2026-03-09T...' }
+// System fields _id and _created_at are auto-generated — do NOT include them in the record
+\`\`\`
+
+**GET /tables?graphId=X** — Discover existing tables for a graph:
+\`\`\`js
+// Use this when the app needs to find its tableId at runtime
+fetch('https://drizzle.vegvisr.org/tables?graphId=' + GRAPH_ID)
+// Response: { tables: [{ tableId, displayName, graphId, columns: [...] }] }
+\`\`\`
+
+**GET /table/{tableId}** — Get table schema (column names, types):
+\`\`\`js
+fetch('https://drizzle.vegvisr.org/table/' + tableId)
+// Response: { tableId, displayName, graphId, columns: [{ name, label, type }] }
+\`\`\`
+
+**POST /raw-query** — Custom read-only SQL (SELECT only):
+\`\`\`js
+fetch('https://drizzle.vegvisr.org/raw-query', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sql: 'SELECT * FROM app_table_xxx WHERE name LIKE ?', params: ['%john%'] })
+})
+// Response: { results: [...] }
+// Use this for LIKE searches, range queries, JOINs — anything /query can't do
+// ONLY SELECT allowed — INSERT/UPDATE/DELETE will return 403
+\`\`\`
+
+**There is NO /update, NO /delete endpoint.** To update: read record, delete+re-insert via /raw-query workaround, or use localStorage as mutable cache. To delete: not directly supported — design apps accordingly.
+
+**Critical rules for client-side HTML**:
+- Do NOT use knowledge.vegvisr.org for table operations — it has no table routes
+- Do NOT generate HTML that calls endpoints that do not exist — this causes 404 errors
+- ALWAYS access response data as \`response.records\` (from /query) or \`response.results\` (from /raw-query) — getting the field name wrong causes "undefined" errors
+- Every table has system columns \`_id\` and \`_created_at\` auto-added — use these for unique identification and sorting
+- WHERE filters are equality-only and AND-joined — for LIKE/range, use /raw-query
 
 ## Chat Group Management (Hallo Vegvisr)
 - **list_chat_groups**: List all chat groups in Hallo Vegvisr. Returns group IDs and names.
