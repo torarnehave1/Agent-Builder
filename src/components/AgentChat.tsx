@@ -1031,6 +1031,36 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       let assistantText = '';
 
       await parseSSE(reader, (ev) => {
+        // Auto-open preview when an HTML node is created or patched
+        if (ev.type === 'tool_result' && ev.data.success && onPreview) {
+          const toolName = ev.data.tool as string;
+          if (toolName === 'create_html_node' || toolName === 'create_html_from_template') {
+            // Find the matching tool call to get the HTML from input
+            setCurrent(prev => {
+              if (!prev) return prev;
+              const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
+              if (tc) {
+                const inp = tc.input as Record<string, unknown>;
+                const html = (inp.htmlContent || inp.content || inp.info || '') as string;
+                if (html) setTimeout(() => onPreview(html), 0);
+              }
+              return prev;
+            });
+          } else if (toolName === 'patch_node') {
+            setCurrent(prev => {
+              if (!prev) return prev;
+              const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
+              if (tc) {
+                const inp = tc.input as Record<string, unknown>;
+                const flds = (inp.fields || {}) as Record<string, unknown>;
+                const html = flds.info as string;
+                if (html && html.includes('<html')) setTimeout(() => onPreview(html), 0);
+              }
+              return prev;
+            });
+          }
+        }
+
         // Detect clientSideRequired from transcribe_audio tool result
         if (ev.type === 'tool_result' && ev.data.tool === 'transcribe_audio' && ev.data.clientSideRequired) {
           pendingClientTranscription = {
