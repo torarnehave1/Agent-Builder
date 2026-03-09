@@ -195,7 +195,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors }: Props) {
       </div>
       <iframe
         srcDoc={injectBridge(html)}
-        sandbox="allow-scripts allow-forms allow-same-origin"
+        sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
       />
