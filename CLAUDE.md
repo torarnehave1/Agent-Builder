@@ -15,10 +15,22 @@ Before writing or modifying ANY code, complete this checklist:
 - **For every environment boundary** (iframe, worker, cross-origin): list every restriction and verify your code handles them all
 - **For React state/closures**: verify that async callbacks, event handlers, and effects will see current values — use refs when needed
 
-### 3. Do NOT Be Minimal When Safety Matters
-- "Keep it simple" does NOT mean "add the bare minimum and fix later"
-- When configuring permissions, security policies, or environment boundaries: be COMPREHENSIVE upfront
-- Each deploy-test-fix cycle costs real time and money
+### 3. Be PROACTIVE — Think Beyond the Immediate Task
+PROACTIVE means: when you implement something, ask "where else does this principle apply?" and handle ALL of those places NOW — not one at a time across multiple sessions.
+
+**Real example of FAILING to be proactive:**
+Adding "mandatory console logging" only for NEW HTML creation. A proactive approach would also cover:
+- When PATCHING existing HTML → add logging around the fix
+- When READING existing HTML → notice missing logging and upgrade it
+- When the agent debugs errors → add logging so the same class of error is never vague again
+- Apply the principle everywhere it's relevant, not just the narrow place you were asked about
+
+**What proactive looks like in practice:**
+- When adding an iframe → list ALL browser APIs the content will use and add ALL sandbox permissions upfront (scripts, forms, same-origin, modals, popups) — not one at a time across 5 deploys
+- When adding a feature → ask "what else in the system is affected?" and handle it in the same change
+- When fixing a bug → ask "can this same bug exist anywhere else?" and check
+- When finishing code → commit, push, deploy without being asked — close the loop
+- Each deploy-test-fix cycle costs the user real time and money — your job is to minimize those cycles
 
 ### 4. Think Like the User, Not the Developer
 - The user will test the FULL app, not just your new feature
