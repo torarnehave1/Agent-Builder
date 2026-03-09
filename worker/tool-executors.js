@@ -234,29 +234,58 @@ async function executeEditHtmlNode(input, env) {
 
   const currentHtml = node.info || ''
 
-  // 2. Check that old_string exists in the content
-  const occurrences = currentHtml.split(input.old_string).length - 1
+  // 2. Normalize escaped newlines — LLMs often send \\n instead of real \n
+  let oldString = input.old_string
+  let newString = input.new_string
+  if (oldString.includes('\\n')) {
+    oldString = oldString.replace(/\\n/g, '\n')
+  }
+  if (newString.includes('\\n')) {
+    newString = newString.replace(/\\n/g, '\n')
+  }
+  // Also normalize \\t to real tabs
+  if (oldString.includes('\\t')) {
+    oldString = oldString.replace(/\\t/g, '\t')
+  }
+  if (newString.includes('\\t')) {
+    newString = newString.replace(/\\t/g, '\t')
+  }
+
+  // 3. Check that old_string exists in the content
+  const occurrences = currentHtml.split(oldString).length - 1
   if (occurrences === 0) {
-    // Return a helpful error with a snippet of the HTML around where they might have meant
+    // Try a whitespace-flexible match as a hint
+    const flexPattern = oldString.replace(/\s+/g, '\\s+')
+    let flexMatch = null
+    try {
+      const regex = new RegExp(flexPattern)
+      flexMatch = currentHtml.match(regex)
+    } catch (e) { /* regex may fail on special chars, that's ok */ }
+
     const preview = currentHtml.substring(0, 500)
-    throw new Error(`old_string not found in node "${input.nodeId}". The string must match EXACTLY (including whitespace and newlines). First 500 chars of current content:\n${preview}`)
+    let errorMsg = `old_string not found in node "${input.nodeId}". The string must match EXACTLY (including whitespace and newlines).`
+    if (flexMatch) {
+      errorMsg += `\n\nA similar string was found with different whitespace. The actual text is:\n${flexMatch[0].substring(0, 300)}`
+    }
+    errorMsg += `\n\nFirst 500 chars of current content:\n${preview}`
+    throw new Error(errorMsg)
   }
 
   if (occurrences > 1 && !input.replace_all) {
     throw new Error(`old_string found ${occurrences} times in node "${input.nodeId}". Either provide more context to make it unique, or set replace_all: true to replace all occurrences.`)
   }
 
-  // 3. Perform the replacement
+  // 4. Perform the replacement
   let newHtml
   if (input.replace_all) {
-    newHtml = currentHtml.split(input.old_string).join(input.new_string)
+    newHtml = currentHtml.split(oldString).join(newString)
   } else {
     // Replace only the first occurrence
-    const idx = currentHtml.indexOf(input.old_string)
-    newHtml = currentHtml.substring(0, idx) + input.new_string + currentHtml.substring(idx + input.old_string.length)
+    const idx = currentHtml.indexOf(oldString)
+    newHtml = currentHtml.substring(0, idx) + newString + currentHtml.substring(idx + oldString.length)
   }
 
-  // 4. Patch the node with the edited content
+  // 5. Patch the node with the edited content
   const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

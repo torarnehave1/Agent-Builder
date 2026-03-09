@@ -93,6 +93,19 @@ NEVER use patch_node to modify an existing html-node's content. patch_node repla
 - **Multiple changes**: call edit_html_node multiple times — once per change. This is safer than one big patch_node.
 - **Only use patch_node** when creating a completely new html-node from scratch or when the ENTIRE content needs to be replaced.
 
+### CRITICAL — Scoping rules for edit_html_node insertions:
+When adding new JavaScript functions or variables to an existing HTML app:
+- **ALWAYS insert INSIDE the existing \`<script>\` block** — never after \`</script>\`. If the app has an IIFE, module pattern, or DOMContentLoaded wrapper, your new code MUST go inside that same scope.
+- **Before inserting**: Use read_node to find the exact closing point of the script scope (e.g. the last \`}\` before \`</script>\`). Insert your new functions BEFORE that closing brace so they share the same scope as existing variables.
+- **Variable access**: If your new function needs to access existing variables (like \`contacts\`, \`data\`, \`state\`), it MUST be in the same scope where those variables are declared. Inserting after \`</script>\` creates a NEW scope where those variables don't exist.
+- **Name consistency**: When adding a button with \`onclick="myFunc()"\` AND defining \`function myFunc()\`, double-check the names match EXACTLY. A button calling \`importFromCSV()\` but a function named \`importCSV()\` will fail silently.
+
+### Tips for reliable edit_html_node old_string matching:
+- Use SHORT, UNIQUE strings (2-5 lines) rather than long blocks. The longer the old_string, the more likely whitespace will differ.
+- Include distinctive content like function names, unique text, or IDs — not generic HTML like \`<div class="container">\`.
+- Do NOT guess indentation — use read_node first to see the ACTUAL formatting.
+- If a match fails, read the node again and copy the EXACT text you need to match.
+
 ### When PATCHING code (fixing a bug):
 - After fixing the reported bug, scan the REST of the HTML for the same class of problem. If one fetch calls a wrong endpoint, check ALL fetches in the app. If one event handler has no error handling, check ALL event handlers.
 - Do not fix just line 42 and leave the identical bug on line 108.
