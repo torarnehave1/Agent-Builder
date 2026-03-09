@@ -159,7 +159,7 @@ When adding new JavaScript functions or variables to an existing HTML app:
           const res = await fetch('https://drizzle.vegvisr.org/query', { method: 'POST', ... });
           if (!res.ok) { console.error('[loadContacts] Query failed:', res.status, await res.text()); return; }
           const data = await res.json();
-          console.log('[loadContacts] Loaded', data.results?.length, 'contacts');
+          console.log('[loadContacts] Loaded', data.records?.length, 'contacts');
         } catch (err) { console.error('[loadContacts] Network error:', err.message); }
       }
       // BAD — no context
@@ -173,6 +173,25 @@ When adding new JavaScript functions or variables to an existing HTML app:
     - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, ALWAYS include the viewUrl from the tool result as a markdown link so the user gets a clickable graph card: \`[App Title](viewUrl)\`.
     - **Graph summaries API**: When fetching \`/getknowgraphsummaries\`, the response has \`data.results\` (not \`data.graphs\`). Each result has nested \`metadata\` object: use \`r.metadata.title\`, \`r.metadata.metaArea\`, \`r.metadata.category\` — NOT flat fields like \`r.metaArea\`.
 14. **User templates**: Before building a custom app from scratch, check if the user has existing templates with \`kg_get_templates\`. If a similar template exists, offer to use it as a starting point. When creating a new custom app, mention that the user can save it as a reusable template using the "Save as Template" button that appears on the tool result card.
+    **Template Design System — CSS Variables**: All built-in templates (landing-page, editable-page, theme-builder, agent-chat) share the same CSS custom properties. When the user says "use the same palette as the landing page" or "match the template style", use these variables:
+    \`\`\`css
+    :root {
+      --bg1: #0b1220;         /* primary background (dark) */
+      --bg2: #111827;         /* secondary background */
+      --text: #fff;           /* main text color */
+      --muted: rgba(255,255,255,0.72);  /* secondary text */
+      --soft: rgba(255,255,255,0.58);   /* tertiary text / subtle */
+      --accent: #38bdf8;      /* primary accent (sky blue) */
+      --accent2: #8b5cf6;     /* secondary accent (purple) */
+      --card-bg: rgba(255,255,255,0.06);    /* card background */
+      --card-border: rgba(255,255,255,0.12); /* card border */
+      --line: rgba(255,255,255,0.12);        /* dividers/lines */
+      --radius: 14px;         /* border radius */
+    }
+    \`\`\`
+    **Body gradient**: \`background-image: radial-gradient(circle at top, color-mix(in srgb, var(--accent) 20%, transparent), transparent 55%), radial-gradient(circle at bottom, color-mix(in srgb, var(--accent2) 18%, transparent), transparent 55%);\`
+    **Font stack**: \`ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial\`
+    When creating custom HTML apps, ALWAYS use these CSS variables instead of hardcoded colors — this ensures visual consistency with the rest of the platform and allows theme switching to work.
 15. **Semantic analysis**: Use \`analyze_node\` when the user asks about the meaning, sentiment, or importance of specific content. Use \`analyze_graph\` when they want to understand the overall theme, find the most important nodes, or get topic clusters. Pass \`store: true\` to save results in node metadata for future reference. The analysis uses Claude Sonnet for balanced quality and cost.
 16. **Audio transcription**: Use \`list_recordings\` first to browse the user's audio portfolio and find recordings. Then use \`transcribe_audio\` with the recordingId to transcribe. For direct audio URLs, pass audioUrl instead. Default service is OpenAI Whisper (best quality). Use the \`language\` param for non-English audio (e.g. "no" for Norwegian). Set \`saveToPortfolio: true\` to persist transcription results back to the recording metadata. IMPORTANT: When the user asks to transcribe AND create a graph (or save to graph), ALWAYS use \`saveToGraph: true\` — this creates the graph with a fulltext node directly on the client, bypassing the LLM for the large text. This is MUCH faster than transcribing first and then calling create_graph/create_node separately.
 17. **User profile / bio**: When the user asks "who am I", "show my bio", "write out my bio", or similar — call \`who_am_i\` and output the \`bio\` field EXACTLY as returned, without summarizing, paraphrasing, or shortening. The bio is the user's own content and must be reproduced verbatim.

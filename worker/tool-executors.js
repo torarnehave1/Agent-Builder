@@ -619,13 +619,26 @@ async function executeGetHtmlTemplate(input, env) {
 
   const entry = getTemplate(templateId)
 
+  // Extract CSS variables from the template's :root block
+  let cssVariables = null
+  const rootMatch = entry.template.match(/:root\s*\{([^}]+)\}/)
+  if (rootMatch) {
+    cssVariables = {}
+    const re = /--([\w-]+)\s*:\s*([^;]+)/g
+    let m
+    while ((m = re.exec(rootMatch[1])) !== null) {
+      cssVariables['--' + m[1].trim()] = m[2].trim()
+    }
+  }
+
   return {
     templateId: entry.id,
     templateSize: entry.template.length,
     placeholders: entry.placeholders,
     description: entry.description,
     version: getTemplateVersion(templateId),
-    instructions: 'Use create_html_from_template to create the HTML node. Pass the placeholder values and the worker fills them into the template server-side. CSS must be created as a SEPARATE css-node.',
+    cssVariables,
+    instructions: 'Use create_html_from_template to create the HTML node. Pass the placeholder values and the worker fills them into the template server-side. CSS must be created as a SEPARATE css-node. Use the cssVariables to match this template\'s visual style in custom apps.',
     contractInfo,
     availableTemplates: listTemplates(),
   }
