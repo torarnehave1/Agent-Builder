@@ -387,9 +387,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       '',
       ...(nodeRef && graphRef ? [
         `The HTML source is in graph "${graphRef}", node "${nodeRef}".`,
-        'Use read_node to get the full HTML source code, find the lines causing these errors, and use patch_node to fix them.',
+        'Use read_node to get the full HTML source code, find the exact lines causing these errors, and use edit_html_node to surgically fix them.',
       ] : [
-        'Read the HTML source code with read_node, find the lines causing these errors, and fix them with patch_node.',
+        'Read the HTML source code with read_node, find the exact lines causing these errors, and fix them with edit_html_node.',
       ]),
     ].join('\n');
 
@@ -1090,7 +1090,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           const toolName = ev.data.tool as string;
           const inp = ev.data.input as Record<string, unknown>;
           if (inp.graphId && typeof inp.graphId === 'string') {
-            if (['read_graph', 'read_graph_content', 'create_graph', 'create_html_node', 'create_node', 'create_html_from_template'].includes(toolName)) {
+            if (['read_graph', 'read_graph_content', 'create_graph', 'create_html_node', 'create_node', 'create_html_from_template', 'edit_html_node'].includes(toolName)) {
               lastAgentGraphRef.current = inp.graphId as string;
               onGraphChange(inp.graphId as string);
             }
@@ -1130,6 +1130,15 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               }
               return prev;
             });
+          } else if (toolName === 'edit_html_node') {
+            devLoopEnabledRef.current = true;
+            // Don't reset devLoopCount — edit_html_node is often a fix attempt within the loop
+            const resultData = ev.data as Record<string, unknown>;
+            if (resultData.nodeId) lastHtmlNodeIdRef.current = resultData.nodeId as string;
+            const updatedHtml = resultData.updatedHtml as string;
+            if (updatedHtml && updatedHtml.includes('<html')) {
+              setTimeout(() => onPreview(updatedHtml), 0);
+            }
           }
         }
 

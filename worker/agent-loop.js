@@ -208,6 +208,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
             const ssePayload = { tool: toolUse.name, success: true, summary }
+            // Pass updatedHtml for edit_html_node so frontend can auto-preview
+            if (toolUse.name === 'edit_html_node' && result.updatedHtml) {
+              ssePayload.updatedHtml = result.updatedHtml
+              ssePayload.nodeId = result.nodeId
+            }
             // Pass clientSideRequired data to frontend so it can handle transcription
             if (result.clientSideRequired) {
               ssePayload.clientSideRequired = true
@@ -218,7 +223,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ssePayload.graphTitle = result.graphTitle || null
             }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
-            const resultStr = truncateResult(result)
+            // Strip large fields that are only for the frontend (not needed by Claude)
+            const resultForClaude = { ...result }
+            delete resultForClaude.updatedHtml
+            const resultStr = truncateResult(resultForClaude)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: resultStr }
           } catch (error) {
             log(`${toolUse.name} FAILED (${((Date.now() - toolStart) / 1000).toFixed(1)}s): ${error.message}`)

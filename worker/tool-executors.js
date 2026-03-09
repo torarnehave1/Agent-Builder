@@ -212,6 +212,78 @@ async function executePatchNode(input, env) {
   }
 }
 
+async function executeEditHtmlNode(input, env) {
+  // 1. Read the current node content
+  const readRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  const graphData = await readRes.json()
+  if (!readRes.ok) {
+    throw new Error(graphData.error || `Failed to read graph (${readRes.status})`)
+  }
+
+  const node = graphData.nodes?.find(n => n.id === input.nodeId)
+  if (!node) {
+    const validIds = graphData.nodes?.map(n => `"${n.id}" (${n.label})`).join(', ') || 'none'
+    throw new Error(`Node "${input.nodeId}" not found. Valid node IDs: ${validIds}`)
+  }
+
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    throw new Error(`edit_html_node only works on html-node or css-node types. Node "${input.nodeId}" is type "${node.type}". Use patch_node instead.`)
+  }
+
+  const currentHtml = node.info || ''
+
+  // 2. Check that old_string exists in the content
+  const occurrences = currentHtml.split(input.old_string).length - 1
+  if (occurrences === 0) {
+    // Return a helpful error with a snippet of the HTML around where they might have meant
+    const preview = currentHtml.substring(0, 500)
+    throw new Error(`old_string not found in node "${input.nodeId}". The string must match EXACTLY (including whitespace and newlines). First 500 chars of current content:\n${preview}`)
+  }
+
+  if (occurrences > 1 && !input.replace_all) {
+    throw new Error(`old_string found ${occurrences} times in node "${input.nodeId}". Either provide more context to make it unique, or set replace_all: true to replace all occurrences.`)
+  }
+
+  // 3. Perform the replacement
+  let newHtml
+  if (input.replace_all) {
+    newHtml = currentHtml.split(input.old_string).join(input.new_string)
+  } else {
+    // Replace only the first occurrence
+    const idx = currentHtml.indexOf(input.old_string)
+    newHtml = currentHtml.substring(0, idx) + input.new_string + currentHtml.substring(idx + input.old_string.length)
+  }
+
+  // 4. Patch the node with the edited content
+  const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      fields: { info: newHtml },
+    }),
+  })
+  const patchData = await patchRes.json()
+  if (!patchRes.ok) {
+    throw new Error(patchData.error || `patchNode failed (${patchRes.status})`)
+  }
+
+  const replacements = input.replace_all ? occurrences : 1
+  return {
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    replacements,
+    oldLength: currentHtml.length,
+    newLength: newHtml.length,
+    version: patchData.newVersion,
+    message: `Edited node "${input.nodeId}": replaced ${replacements} occurrence(s). HTML ${newHtml.length > currentHtml.length ? 'grew' : 'shrank'} from ${currentHtml.length} to ${newHtml.length} chars.`,
+    updatedHtml: newHtml,
+  }
+}
+
 async function executePatchGraphMetadata(input, env) {
   const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchGraphMetadata', {
     method: 'POST',
@@ -2541,6 +2613,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReadNode(toolInput, env)
     case 'patch_node':
       return await executePatchNode(toolInput, env)
+    case 'edit_html_node':
+      return await executeEditHtmlNode(toolInput, env)
     case 'patch_graph_metadata':
       return await executePatchGraphMetadata(toolInput, env)
     case 'list_graphs':

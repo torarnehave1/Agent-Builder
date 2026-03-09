@@ -313,6 +313,36 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'edit_html_node',
+    description: 'Surgically edit an html-node by finding and replacing an exact string in its HTML content. Unlike patch_node (which replaces the entire info field), this tool only changes the specific part you target — all other code stays untouched. Use this instead of patch_node when modifying existing HTML apps to avoid accidentally breaking working code. You can make multiple edits by calling this tool multiple times.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The graph ID containing the html-node'
+        },
+        nodeId: {
+          type: 'string',
+          description: 'The html-node ID to edit'
+        },
+        old_string: {
+          type: 'string',
+          description: 'The exact string to find in the HTML. Must be unique in the document. Include enough surrounding context to make it unique.'
+        },
+        new_string: {
+          type: 'string',
+          description: 'The replacement string. Can be larger than old_string (for adding code) or empty string (for removing code).'
+        },
+        replace_all: {
+          type: 'boolean',
+          description: 'If true, replace ALL occurrences of old_string. Default false (replaces only the first match).'
+        }
+      },
+      required: ['graphId', 'nodeId', 'old_string', 'new_string']
+    }
+  },
+  {
     name: 'patch_graph_metadata',
     description: 'Update graph-level metadata fields (title, description, category, metaArea, etc.) without re-sending all nodes and edges. Only the provided fields are changed; others are preserved.',
     input_schema: {
