@@ -232,24 +232,20 @@ async function executeEditHtmlNode(input, env) {
     throw new Error(`edit_html_node only works on html-node or css-node types. Node "${input.nodeId}" is type "${node.type}". Use patch_node instead.`)
   }
 
-  const currentHtml = node.info || ''
+  // 2. Normalize line endings in the source — \r\n → \n
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
 
-  // 2. Normalize escaped newlines — LLMs often send \\n instead of real \n
+  // 3. Normalize escaped sequences — LLMs often send \\n instead of real \n
   let oldString = input.old_string
   let newString = input.new_string
-  if (oldString.includes('\\n')) {
-    oldString = oldString.replace(/\\n/g, '\n')
-  }
-  if (newString.includes('\\n')) {
-    newString = newString.replace(/\\n/g, '\n')
-  }
-  // Also normalize \\t to real tabs
-  if (oldString.includes('\\t')) {
-    oldString = oldString.replace(/\\t/g, '\t')
-  }
-  if (newString.includes('\\t')) {
-    newString = newString.replace(/\\t/g, '\t')
-  }
+  // Escaped newlines/tabs from JSON serialization
+  if (oldString.includes('\\n')) oldString = oldString.replace(/\\n/g, '\n')
+  if (newString.includes('\\n')) newString = newString.replace(/\\n/g, '\n')
+  if (oldString.includes('\\t')) oldString = oldString.replace(/\\t/g, '\t')
+  if (newString.includes('\\t')) newString = newString.replace(/\\t/g, '\t')
+  // Windows line endings in agent input
+  oldString = oldString.replace(/\r\n/g, '\n')
+  newString = newString.replace(/\r\n/g, '\n')
 
   // 3. Check that old_string exists in the content
   const occurrences = currentHtml.split(oldString).length - 1
