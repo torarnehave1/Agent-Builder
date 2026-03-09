@@ -1,5 +1,37 @@
 # Agent-Builder — Claude Code Instructions
 
+## Proactive Analysis — MANDATORY
+
+Before writing or modifying ANY code, complete this checklist:
+
+### 1. Impact Analysis (BEFORE coding)
+- **List every user interaction** affected by your change (clicks, inputs, navigation, API calls, dialogs)
+- **Trace each interaction end-to-end**: what functions fire, what browser APIs are used, what network requests happen, what permissions are needed
+- **Ask yourself**: "If I were a user clicking every button in this app, what would break?"
+- **For iframes/sandboxes/workers**: list ALL browser APIs the hosted content uses (fetch, prompt, alert, localStorage, postMessage, window.open, etc.) and ensure ALL are permitted
+
+### 2. Anticipate Failures (BEFORE coding)
+- **For every new feature**: list 3-5 things that could go wrong
+- **For every environment boundary** (iframe, worker, cross-origin): list every restriction and verify your code handles them all
+- **For React state/closures**: verify that async callbacks, event handlers, and effects will see current values — use refs when needed
+
+### 3. Do NOT Be Minimal When Safety Matters
+- "Keep it simple" does NOT mean "add the bare minimum and fix later"
+- When configuring permissions, security policies, or environment boundaries: be COMPREHENSIVE upfront
+- Each deploy-test-fix cycle costs real time and money
+
+### 4. Think Like the User, Not the Developer
+- The user will test the FULL app, not just your new feature
+- Existing functionality must keep working after your change
+- Mentally run through the app as a user before committing
+
+### 5. Debugging
+- NEVER assume deployment or cache issues — trace actual runtime values first
+- When the user reports a bug twice, the problem is real — investigate deeper
+- Read the actual code at the point of failure, don't guess from memory
+
+---
+
 ## What This Project Is
 
 The Agent-Builder is a full-stack AI agent system built on Cloudflare Workers + React/Vite (Pages).

@@ -355,6 +355,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   // ONLY active after agent creates/patches HTML, NOT when loading existing apps via Develop
   const devLoopCountRef = useRef(0);
   const devLoopEnabledRef = useRef(false);
+  const lastHtmlNodeIdRef = useRef<string | null>(null);
   const MAX_DEV_LOOP_ITERATIONS = 3;
 
   useEffect(() => {
@@ -377,12 +378,19 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     devLoopCountRef.current += 1;
     onConsoleErrorsHandled?.();
 
+    const nodeRef = lastHtmlNodeIdRef.current;
+    const graphRef = lastAgentGraphRef.current || graphId;
     const errorMsg = [
-      'The HTML preview is showing errors in the browser console:',
+      'The HTML preview is showing these runtime errors:',
       '',
       ...consoleErrors.map(e => `- ${e}`),
       '',
-      'Please fix these errors in the HTML code.',
+      ...(nodeRef && graphRef ? [
+        `The HTML source is in graph "${graphRef}", node "${nodeRef}".`,
+        'Use read_node to get the full HTML source code, find the lines causing these errors, and use patch_node to fix them.',
+      ] : [
+        'Read the HTML source code with read_node, find the lines causing these errors, and fix them with patch_node.',
+      ]),
     ].join('\n');
 
     // Use setTimeout to avoid calling sendMessage during render
@@ -1101,6 +1109,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
+                if (inp.nodeId) lastHtmlNodeIdRef.current = inp.nodeId as string;
                 const html = (inp.htmlContent || inp.content || inp.info || '') as string;
                 if (html) setTimeout(() => onPreview(html), 0);
               }
@@ -1114,6 +1123,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
+                if (inp.nodeId) lastHtmlNodeIdRef.current = inp.nodeId as string;
                 const flds = (inp.fields || {}) as Record<string, unknown>;
                 const html = flds.info as string;
                 if (html && html.includes('<html')) setTimeout(() => onPreview(html), 0);

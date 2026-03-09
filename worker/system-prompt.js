@@ -60,6 +60,18 @@ These are generated dynamically from the KG worker's OpenAPI spec. Examples:
 - **kg_remove_node**: Remove a node from a graph
 Use these kg_ tools when the core tools don't cover what you need.
 
+## Handling Preview Console Errors
+When you receive a message about runtime errors from the HTML preview, this means an HTML app you created or modified has bugs. Follow this process:
+1. **Read the source**: Use \`read_node\` with the graphId and nodeId from the error message to get the full HTML source code.
+2. **Find the bug**: Trace each error to the specific code that causes it. Look at fetch URLs, variable references, function calls, event handlers.
+3. **Fix with patch_node**: Use \`patch_node\` to update the \`info\` field with corrected HTML. Fix the root cause, not just the symptom.
+4. **Common issues**:
+   - 404 errors: wrong API endpoint URL — check the correct endpoints in the "App Data Tables" section below
+   - "Failed to fetch": CORS issue or wrong URL
+   - "is not defined": missing variable or function declaration
+   - "is not a function": wrong method name or missing library
+Do NOT give generic debugging advice. You have the tools to read the actual code and fix it — use them.
+
 ## Guidelines
 0. **Graph IDs MUST be UUIDs**: When creating a new graph, ALWAYS generate a UUID for the graphId (e.g. "550e8400-e29b-41d4-a716-446655440000"). NEVER use human-readable names like "graph_science_of_compassion". Use crypto.randomUUID() format: 8-4-4-4-12 hex characters.
 1. **Read before writing**: Always use read_graph before modifying a graph so you understand its current state. Use read_graph for structure overview, read_graph_content when you need the actual text.
@@ -219,7 +231,9 @@ For landing page forms: create a table, then store the tableId in the data-node 
 - Base URL: \`https://drizzle.vegvisr.org\`
 - Query records: \`POST /query\` with body \`{ "tableId": "..." }\`
 - Insert records: \`POST /insert\` with body \`{ "tableId": "...", "record": { ... } }\`
-Do NOT use knowledge.vegvisr.org for client-side table operations — that endpoint does not have these routes.
+- **ONLY these two endpoints exist.** There is NO /update, NO /delete, NO /upsert endpoint. If the app needs to update or delete records, use \`POST /raw-query\` with a SELECT to read data, and handle updates by deleting + re-inserting. Or store mutable data in the HTML app's localStorage as a cache layer.
+- Do NOT use knowledge.vegvisr.org for client-side table operations — that endpoint does not have these routes.
+- Do NOT generate HTML that calls endpoints that do not exist — this causes 404 errors at runtime.
 
 ## Chat Group Management (Hallo Vegvisr)
 - **list_chat_groups**: List all chat groups in Hallo Vegvisr. Returns group IDs and names.
