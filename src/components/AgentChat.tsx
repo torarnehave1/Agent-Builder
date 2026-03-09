@@ -311,6 +311,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [htmlNodePicker, setHtmlNodePicker] = useState<Array<{ id: string; label: string; info: string }> | null>(null);
+  const lastAgentGraphRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1075,6 +1076,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           const inp = ev.data.input as Record<string, unknown>;
           if (inp.graphId && typeof inp.graphId === 'string') {
             if (['read_graph', 'read_graph_content', 'create_graph', 'create_html_node', 'create_node', 'create_html_from_template'].includes(toolName)) {
+              lastAgentGraphRef.current = inp.graphId as string;
               onGraphChange(inp.graphId as string);
             }
           }
@@ -1417,14 +1419,16 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           ))}
         </select>
         <div className="flex-1 flex justify-end gap-2">
-          {graphId && onPreview && (
+          {(graphId || lastAgentGraphRef.current) && onPreview && (
             <div className="relative">
               <button
                 type="button"
                 onClick={async () => {
                   if (htmlNodePicker) { setHtmlNodePicker(null); return; }
+                  const targetGraph = lastAgentGraphRef.current || graphId;
+                  if (!targetGraph) return;
                   try {
-                    const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+                    const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(targetGraph)}`);
                     if (!res.ok) return;
                     const data = await res.json();
                     const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
