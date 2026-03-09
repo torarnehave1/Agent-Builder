@@ -66,6 +66,7 @@ async function executeCreateGraph(input, env) {
 }
 
 // Type-aware truncation for read_graph (structure overview)
+// html-node/css-node kept short here — use read_node for full content
 function truncateNodeInfo(info, type) {
   if (!info) return { text: '', truncated: false }
   const limits = {

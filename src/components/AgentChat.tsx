@@ -1069,6 +1069,17 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       let assistantText = '';
 
       await parseSSE(reader, (ev) => {
+        // Auto-switch graph context when agent reads or creates in a graph
+        if (ev.type === 'tool_call') {
+          const toolName = ev.data.tool as string;
+          const inp = ev.data.input as Record<string, unknown>;
+          if (inp.graphId && typeof inp.graphId === 'string') {
+            if (['read_graph', 'read_graph_content', 'create_graph', 'create_html_node', 'create_node', 'create_html_from_template'].includes(toolName)) {
+              onGraphChange(inp.graphId as string);
+            }
+          }
+        }
+
         // Auto-open preview when an HTML node is created or patched
         if (ev.type === 'tool_result' && ev.data.success && onPreview) {
           const toolName = ev.data.tool as string;
