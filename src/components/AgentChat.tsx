@@ -308,6 +308,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [htmlNodePicker, setHtmlNodePicker] = useState<Array<{ id: string; label: string; info: string }> | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1369,35 +1370,44 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         </select>
         <div className="flex-1 flex justify-end gap-2">
           {graphId && onPreview && (
-            <button
-              type="button"
-              onClick={async () => {
-                try {
-                  const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
-                  if (!res.ok) return;
-                  const data = await res.json();
-                  const htmlNodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
-                  if (htmlNodes.length === 0) return;
-                  if (htmlNodes.length === 1) {
-                    onPreview(htmlNodes[0].info);
-                  } else {
-                    // Multiple html-nodes: show a picker
-                    const labels = htmlNodes.map((n: { label?: string; id?: string }, i: number) => `${i + 1}. ${n.label || n.id}`).join('\n');
-                    const choice = prompt(`Multiple HTML nodes found:\n${labels}\n\nEnter number:`);
-                    if (choice) {
-                      const idx = parseInt(choice, 10) - 1;
-                      if (idx >= 0 && idx < htmlNodes.length) {
-                        onPreview(htmlNodes[idx].info);
-                      }
+            <div className="relative">
+              <button
+                type="button"
+                onClick={async () => {
+                  if (htmlNodePicker) { setHtmlNodePicker(null); return; }
+                  try {
+                    const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
+                    if (nodes.length === 0) return;
+                    if (nodes.length === 1) {
+                      onPreview(nodes[0].info);
+                    } else {
+                      setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
                     }
-                  }
-                } catch { /* ignore */ }
-              }}
-              className="px-3 py-1 rounded-md border border-sky-500/20 bg-sky-600/20 text-sky-300 text-xs hover:bg-sky-600/30 transition-colors"
-              title="Load HTML app from selected graph into preview"
-            >
-              Develop
-            </button>
+                  } catch { /* ignore */ }
+                }}
+                className="px-3 py-1 rounded-md border border-sky-500/20 bg-sky-600/20 text-sky-300 text-xs hover:bg-sky-600/30 transition-colors"
+                title="Load HTML app from selected graph into preview"
+              >
+                Develop
+              </button>
+              {htmlNodePicker && (
+                <div className="absolute top-full mt-1 right-0 w-64 bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+                  {htmlNodePicker.map(n => (
+                    <button
+                      key={n.id}
+                      type="button"
+                      onClick={() => { onPreview(n.info); setHtmlNodePicker(null); }}
+                      className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
+                    >
+                      {n.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
           {hasMessages && (
             <>
