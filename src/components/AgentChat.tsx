@@ -352,10 +352,17 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
   // --- Autonomous dev loop: auto-send console errors to agent ---
+  // ONLY active after agent creates/patches HTML, NOT when loading existing apps via Develop
   const devLoopCountRef = useRef(0);
+  const devLoopEnabledRef = useRef(false);
   const MAX_DEV_LOOP_ITERATIONS = 3;
 
   useEffect(() => {
+    if (!devLoopEnabledRef.current) {
+      // Auto-feedback disabled — user loaded an existing app, discard errors
+      if (consoleErrors && consoleErrors.length > 0) onConsoleErrorsHandled?.();
+      return;
+    }
     if (!consoleErrors || consoleErrors.length === 0 || streaming) return;
 
     if (devLoopCountRef.current >= MAX_DEV_LOOP_ITERATIONS) {
@@ -1083,10 +1090,12 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         }
 
         // Auto-open preview when an HTML node is created or patched
+        // Also enable the dev loop so console errors get fed back to the agent
         if (ev.type === 'tool_result' && ev.data.success && onPreview) {
           const toolName = ev.data.tool as string;
           if (toolName === 'create_html_node' || toolName === 'create_html_from_template') {
-            // Find the matching tool call to get the HTML from input
+            devLoopEnabledRef.current = true;
+            devLoopCountRef.current = 0;
             setCurrent(prev => {
               if (!prev) return prev;
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
@@ -1098,6 +1107,8 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               return prev;
             });
           } else if (toolName === 'patch_node') {
+            devLoopEnabledRef.current = true;
+            devLoopCountRef.current = 0;
             setCurrent(prev => {
               if (!prev) return prev;
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
@@ -1434,6 +1445,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
                     if (nodes.length === 0) return;
                     if (nodes.length === 1) {
+                      devLoopEnabledRef.current = false;
                       onPreview(nodes[0].info);
                     } else {
                       setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
@@ -1451,7 +1463,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { devLoopEnabledRef.current = false; onPreview(n.info); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
                     >
                       {n.label}
