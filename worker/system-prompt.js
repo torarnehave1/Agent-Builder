@@ -70,6 +70,8 @@ When you receive a message about runtime errors from the HTML preview, this mean
    - "Failed to fetch": CORS issue or wrong URL
    - "is not defined": missing variable or function declaration
    - "is not a function": wrong method name or missing library
+5. **Use the log context**: Error messages from well-instrumented code will include \`[functionName]\` prefixes. Use these to find the exact function in the HTML source that needs fixing.
+6. **When fixing, maintain logging**: Keep all existing console.log/error statements. Add more if the code lacks context. Never remove instrumentation.
 Do NOT give generic debugging advice. You have the tools to read the actual code and fix it — use them.
 
 ## Guidelines
@@ -90,6 +92,23 @@ Do NOT give generic debugging advice. You have the tools to read the actual code
     \`[Graph Title](https://www.vegvisr.org/gnew-viewer?graphId=THE_GRAPH_ID)\`
     Replace THE_GRAPH_ID with the actual graph ID. The chat UI detects these links and renders them as rich interactive cards with metadata badges and a "View Graph" button. Without this exact URL format, results show as plain text. Include description and details as text around each link.
 13. **Custom apps**: When a user asks you to build an app, page, tool, or template that doesn't fit the 4 predefined templates, use \`create_html_node\` to generate a complete standalone HTML app. The HTML must be self-contained (all CSS in \`<style>\`, all JS in \`<script>\`). **CRITICAL: Never hardcode data into the HTML. Always fetch data dynamically at runtime using JavaScript fetch().** This keeps the HTML small and the app always up to date.
+    - **MANDATORY error logging in generated HTML**: Every fetch() call and every event handler MUST include descriptive console.error() with context about WHAT failed and WHERE. The preview console captures these — vague errors make debugging impossible. Example:
+      \`\`\`js
+      // GOOD — descriptive context
+      async function loadContacts() {
+        try {
+          const res = await fetch('https://drizzle.vegvisr.org/query', { method: 'POST', ... });
+          if (!res.ok) { console.error('[loadContacts] Query failed:', res.status, await res.text()); return; }
+          const data = await res.json();
+          console.log('[loadContacts] Loaded', data.results?.length, 'contacts');
+        } catch (err) { console.error('[loadContacts] Network error:', err.message); }
+      }
+      // BAD — no context
+      fetch(url).then(r => r.json()).catch(e => console.error(e));
+      \`\`\`
+    - Every function that does I/O should log its name in brackets: \`[functionName]\`
+    - Log success too (e.g. "[saveContact] Saved OK") so the console shows the full flow, not just failures
+    - For event handlers: log which UI action triggered the call (e.g. "[onSave] Save button clicked for contact:", id)
     - **Album images**: Use \`fetch('https://albums.vegvisr.org/photo-album?name=ALBUM_NAME')\` at runtime in the HTML's \`<script>\`. The response has \`{ images: ["key1", "key2", ...] }\`. Render each as \`https://vegvisr.imgix.net/{key}?w=800&h=600&fit=crop\`. Do NOT use get_album_images to embed URLs in the HTML — let the app fetch them live.
     - **Graph data**: Use \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\` at runtime.
     - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, ALWAYS include the viewUrl from the tool result as a markdown link so the user gets a clickable graph card: \`[App Title](viewUrl)\`.
