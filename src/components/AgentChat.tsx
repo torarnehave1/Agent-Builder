@@ -97,12 +97,16 @@ function ToolCallCard({ tc, userId, onPreview }: { tc: ToolCall; userId: string;
 
   const input = tc.input as Record<string, unknown>;
   const fields = (input.fields || {}) as Record<string, unknown>;
+  const result = (tc.result || {}) as Record<string, unknown>;
   const isPatchWithHtml = tc.tool === 'patch_node' && typeof fields.info === 'string' && (fields.info as string).includes('<html');
+  const isReadHtmlNode = tc.tool === 'read_node' && typeof result.nodeHtml === 'string';
   const isHtmlNode = tc.tool === 'create_html_node'
     || (tc.tool === 'create_node' && (input.nodeType === 'html-node' || input.type === 'html-node'))
     || tc.tool === 'create_html_from_template'
-    || isPatchWithHtml;
-  const canSaveAsTemplate = isHtmlNode && tc.status === 'success';
+    || isPatchWithHtml
+    || isReadHtmlNode;
+  const canPreview = isHtmlNode && tc.status === 'success';
+  const canSaveAsTemplate = isHtmlNode && tc.status === 'success' && !isReadHtmlNode;
 
   const saveAsTemplate = async () => {
     // Get the HTML content from whichever tool was used
@@ -150,18 +154,18 @@ function ToolCallCard({ tc, userId, onPreview }: { tc: ToolCall; userId: string;
           )}
         </div>
       )}
-      {canSaveAsTemplate && (
+      {canPreview && (
         <div className="flex items-center gap-2 mx-3 my-2">
           {onPreview && (
             <button type="button" onClick={() => {
-              const html = (input.htmlContent || input.content || input.info || fields.info || '') as string;
+              const html = (result.nodeHtml || input.htmlContent || input.content || input.info || fields.info || '') as string;
               if (html) onPreview(html);
             }}
               className="px-2 py-1 text-xs rounded bg-sky-600/20 text-sky-300 hover:bg-sky-600/30 border border-sky-500/20">
               Preview
             </button>
           )}
-          {!savedAsTemplate && (
+          {canSaveAsTemplate && !savedAsTemplate && (
             <button type="button" onClick={saveAsTemplate}
               className="px-2 py-1 text-xs rounded bg-violet-600/20 text-violet-300 hover:bg-violet-600/30 border border-violet-500/20">
               Save as Template
