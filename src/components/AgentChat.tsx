@@ -1338,6 +1338,37 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           ))}
         </select>
         <div className="flex-1 flex justify-end gap-2">
+          {graphId && onPreview && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+                  if (!res.ok) return;
+                  const data = await res.json();
+                  const htmlNodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
+                  if (htmlNodes.length === 0) return;
+                  if (htmlNodes.length === 1) {
+                    onPreview(htmlNodes[0].info);
+                  } else {
+                    // Multiple html-nodes: show a picker
+                    const labels = htmlNodes.map((n: { label?: string; id?: string }, i: number) => `${i + 1}. ${n.label || n.id}`).join('\n');
+                    const choice = prompt(`Multiple HTML nodes found:\n${labels}\n\nEnter number:`);
+                    if (choice) {
+                      const idx = parseInt(choice, 10) - 1;
+                      if (idx >= 0 && idx < htmlNodes.length) {
+                        onPreview(htmlNodes[idx].info);
+                      }
+                    }
+                  }
+                } catch { /* ignore */ }
+              }}
+              className="px-3 py-1 rounded-md border border-sky-500/20 bg-sky-600/20 text-sky-300 text-xs hover:bg-sky-600/30 transition-colors"
+              title="Load HTML app from selected graph into preview"
+            >
+              Develop
+            </button>
+          )}
           {hasMessages && (
             <>
               <button
