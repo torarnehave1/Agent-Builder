@@ -39,6 +39,8 @@ interface Props {
   agentId?: string | null;
   agentAvatarUrl?: string | null;
   onPreview?: (html: string) => void;
+  consoleErrors?: string[] | null;
+  onConsoleErrorsHandled?: () => void;
 }
 
 interface ToolCall {
@@ -298,7 +300,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview }: Props) {
+export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -347,6 +349,38 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
   // Keep ref in sync for use inside callbacks
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+
+  // --- Autonomous dev loop: auto-send console errors to agent ---
+  const devLoopCountRef = useRef(0);
+  const MAX_DEV_LOOP_ITERATIONS = 3;
+
+  useEffect(() => {
+    if (!consoleErrors || consoleErrors.length === 0 || streaming) return;
+
+    if (devLoopCountRef.current >= MAX_DEV_LOOP_ITERATIONS) {
+      setMessages(prev => [...prev, {
+        role: 'assistant',
+        content: `Auto-fix reached ${MAX_DEV_LOOP_ITERATIONS} attempts. Please review the remaining errors and provide guidance.`,
+      }]);
+      onConsoleErrorsHandled?.();
+      return;
+    }
+
+    devLoopCountRef.current += 1;
+    onConsoleErrorsHandled?.();
+
+    const errorMsg = [
+      'The HTML preview is showing errors in the browser console:',
+      '',
+      ...consoleErrors.map(e => `- ${e}`),
+      '',
+      'Please fix these errors in the HTML code.',
+    ].join('\n');
+
+    // Use setTimeout to avoid calling sendMessage during render
+    setTimeout(() => sendMessage(errorMsg), 100);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consoleErrors, streaming]);
 
   // Load graph list
   useEffect(() => {
@@ -943,6 +977,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     const text = (overrideText || input).trim();
     const images = pendingImages;
     if ((!text && images.length === 0) || streaming) return;
+
+    // Reset dev loop counter on user-initiated sends (not auto-feedback)
+    if (!overrideText) devLoopCountRef.current = 0;
 
     setInput('');
     setSuggestions([]);

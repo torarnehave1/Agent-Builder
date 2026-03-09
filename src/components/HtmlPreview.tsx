@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 interface Props {
   html: string | null;
   onClose: () => void;
+  onConsoleErrors?: (errors: string[]) => void;
 }
 
 interface ConsoleEntry {
@@ -90,10 +91,12 @@ const LEVEL_STYLE: Record<string, { icon: string; color: string }> = {
   network: { icon: '↔', color: 'text-orange-400' },
 };
 
-export default function HtmlPreview({ html, onClose }: Props) {
+export default function HtmlPreview({ html, onClose, onConsoleErrors }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
+  const reportedRef = useRef<Set<string>>(new Set());
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleMessage = useCallback((e: MessageEvent) => {
     if (e.data?.type === '__vegvisr_console__') {
@@ -110,8 +113,32 @@ export default function HtmlPreview({ html, onClose }: Props) {
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
 
-  // Clear console when html changes
-  useEffect(() => { setEntries([]); }, [html]);
+  // Clear console and reported errors when html changes
+  useEffect(() => {
+    setEntries([]);
+    reportedRef.current = new Set();
+  }, [html]);
+
+  // Debounced error reporting to parent
+  useEffect(() => {
+    if (!onConsoleErrors) return;
+    const errors = entries
+      .filter(e => e.level === 'error' || e.level === 'network')
+      .map(e => e.message)
+      .filter(msg => !reportedRef.current.has(msg));
+    if (errors.length === 0) return;
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      const newErrors = errors.filter(msg => !reportedRef.current.has(msg));
+      if (newErrors.length > 0) {
+        newErrors.forEach(msg => reportedRef.current.add(msg));
+        onConsoleErrors(newErrors);
+      }
+    }, 2000);
+
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [entries, onConsoleErrors]);
 
   // Auto-scroll console
   useEffect(() => {
