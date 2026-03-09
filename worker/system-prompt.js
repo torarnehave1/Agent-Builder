@@ -84,6 +84,13 @@ When you create, patch, or fix code, do NOT solve only the single thing in front
 - Anticipate runtime failures: What if the API is down? What if the response is empty? What if the user has no data yet? Add graceful handling for all of these.
 - Check every browser API your HTML uses (fetch, prompt, alert, localStorage, window.open) — all must work in a sandboxed iframe.
 
+### CRITICAL — Preserving existing code when patching:
+patch_node replaces the ENTIRE info field. You cannot do surgical edits — you must send the complete HTML. This means:
+- **Copy existing code EXACTLY** — do not rephrase, reorganize, rename variables, or simplify working code. If a function works, keep it character-for-character identical.
+- **Only ADD new code** — insert new functions, new buttons, new event listeners. Do not rewrite existing ones.
+- **Before sending the patch**: mentally diff your new version against the original. Every existing function must still be there, unchanged. If you removed or modified ANY existing line that was not part of your intended change, you have a bug.
+- **Test mentally**: after your patch, would every existing button, form, and interaction still work exactly as before?
+
 ### When PATCHING code (fixing a bug):
 - After fixing the reported bug, scan the REST of the HTML for the same class of problem. If one fetch calls a wrong endpoint, check ALL fetches in the app. If one event handler has no error handling, check ALL event handlers.
 - Do not fix just line 42 and leave the identical bug on line 108.
@@ -134,9 +141,9 @@ When you create, patch, or fix code, do NOT solve only the single thing in front
       // BAD — no context
       fetch(url).then(r => r.json()).catch(e => console.error(e));
       \`\`\`
-    - Every function that does I/O should log its name in brackets: \`[functionName]\`
-    - Log success too (e.g. "[saveContact] Saved OK") so the console shows the full flow, not just failures
-    - For event handlers: log which UI action triggered the call (e.g. "[onSave] Save button clicked for contact:", id)
+    - Every function that does I/O should include a console.log at the start with the function name as a prefix string. Example: \`console.log('[loadContacts] Starting...')\`. The bracket prefix is ONLY used INSIDE console.log/console.error string arguments — it is NOT valid JavaScript syntax on its own. NEVER write \`[functionName]\` as a standalone line of code — that is a syntax error.
+    - Log success too (e.g. \`console.log('[saveContact] Saved OK')\`) so the console shows the full flow, not just failures
+    - For event handlers: log which UI action triggered the call (e.g. \`console.log('[onSave] Save button clicked for contact:', id)\`)
     - **Album images**: Use \`fetch('https://albums.vegvisr.org/photo-album?name=ALBUM_NAME')\` at runtime in the HTML's \`<script>\`. The response has \`{ images: ["key1", "key2", ...] }\`. Render each as \`https://vegvisr.imgix.net/{key}?w=800&h=600&fit=crop\`. Do NOT use get_album_images to embed URLs in the HTML — let the app fetch them live.
     - **Graph data**: Use \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\` at runtime.
     - Always create the graph first with \`create_graph\`, then create the html-node with \`create_html_node\`. After creation, ALWAYS include the viewUrl from the tool result as a markdown link so the user gets a clickable graph card: \`[App Title](viewUrl)\`.
