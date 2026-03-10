@@ -504,6 +504,14 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_html_builder_reference',
+    description: 'Get the complete HTML app builder reference — editing rules (edit_html_node scoping, matching tips), Drizzle API (all endpoints with request/response formats), CSS design system variables, error handling and logging conventions, preview error debugging process, and proactive coding rules. Call this BEFORE creating, editing, or debugging any HTML app.',
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
     name: 'list_recordings',
     description: 'List audio recordings from the current user\'s audio portfolio. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, and transcription status. Use this to find recordings before transcribing them.',
     input_schema: {

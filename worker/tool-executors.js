@@ -7,7 +7,7 @@
 
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
-import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE } from './system-prompt.js'
+import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -2673,6 +2673,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return { reference: FORMATTING_REFERENCE }
     case 'get_node_types_reference':
       return { reference: NODE_TYPES_REFERENCE }
+    case 'get_html_builder_reference':
+      return { reference: HTML_BUILDER_REFERENCE }
     case 'who_am_i':
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':
