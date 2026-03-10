@@ -1066,8 +1066,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         body: JSON.stringify({
           userId,
           messages: apiMessages,
-          graphId: graphId || undefined,
+          graphId: lastAgentGraphRef.current || graphId || undefined,
           agentId: agentId || undefined,
+          activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
         }),
       });
 
@@ -1465,6 +1466,8 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     if (nodes.length === 0) return;
                     if (nodes.length === 1) {
                       devLoopEnabledRef.current = false;
+                      lastAgentGraphRef.current = targetGraph;
+                      lastHtmlNodeIdRef.current = nodes[0].id;
                       onPreview(nodes[0].info);
                     } else {
                       setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
@@ -1482,7 +1485,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { devLoopEnabledRef.current = false; onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { devLoopEnabledRef.current = false; lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onPreview(n.info); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
                     >
                       {n.label}

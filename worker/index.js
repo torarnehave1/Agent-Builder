@@ -120,7 +120,7 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId } = body
 
         if (!userId || !userMessages || !Array.isArray(userMessages)) {
           return new Response(JSON.stringify({
@@ -148,7 +148,11 @@ export default {
         }
 
         if (graphId) {
-          systemPrompt += `\n\n## Current Context\nThe user has selected graph "${graphId}". Use this graphId for operations unless they specify otherwise.`
+          let ctx = `\n\n## Current Context\nThe user has selected graph "${graphId}". Use this graphId for operations unless they specify otherwise.`
+          if (activeHtmlNodeId) {
+            ctx += `\nThe active HTML node is "${activeHtmlNodeId}". Use this nodeId when reading or editing the HTML app — do NOT guess node IDs.`
+          }
+          systemPrompt += ctx
         }
 
         const chatMessages = userMessages.map(m => ({ role: m.role, content: m.content }))
