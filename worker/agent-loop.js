@@ -25,7 +25,11 @@ async function loadAllTools(env) {
 
   const hardcodedNames = new Set(TOOL_DEFINITIONS.map(t => t.name))
   const dynamicTools = openAPITools.filter(t => !hardcodedNames.has(t.name))
-  const allTools = [...TOOL_DEFINITIONS, ...dynamicTools, WEB_SEARCH_TOOL]
+
+  // Remove edit_html_node from orchestrator — all HTML editing goes through delegate_to_html_builder
+  const ORCHESTRATOR_BLOCKED_TOOLS = new Set(['edit_html_node'])
+  const filteredTools = TOOL_DEFINITIONS.filter(t => !ORCHESTRATOR_BLOCKED_TOOLS.has(t.name))
+  const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL]
 
   return { allTools, operationMap }
 }

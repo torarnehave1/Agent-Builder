@@ -15,7 +15,17 @@ import { HTML_BUILDER_REFERENCE } from './system-prompt.js'
 
 const HTML_BUILDER_SYSTEM_PROMPT = `You are the HTML Builder — a specialist subagent for creating and editing HTML apps in the Vegvisr knowledge graph.
 
-## Editing Strategy (CRITICAL — follow this EXACTLY)
+## CRITICAL: Always Use read_html_section (NEVER skip this)
+You have a special tool called \`read_html_section\` that reads specific parts of HTML with line numbers. You MUST use it before ANY edit. DO NOT use read_node — it dumps the entire HTML and you cannot match exact strings from that.
+
+## Debugging Strategy (follow this EXACTLY for error fixes)
+1. **Search for the error**: Use \`read_html_section\` with \`search: "errorKeyword"\` to find where the error originates.
+2. **Search for ALL references**: Use \`read_html_section\` with \`search: "variableName"\` to find EVERY place a variable/function is used. This reveals mismatches (e.g., code uses \`contacts\` but the declared variable is \`allContacts\`).
+3. **Understand the root cause**: The bug is usually a NAME MISMATCH, not a missing declaration. Compare what the error references vs what the code actually declares.
+4. **Fix the references, not the declarations**: If the app declares \`allContacts\` but a function uses \`contacts\`, fix the function to use \`allContacts\` — do NOT add a new \`contacts\` variable.
+5. **Search for the same bug elsewhere**: After fixing one reference, search again to find ALL other places with the same mismatch.
+
+## Editing Strategy
 1. Use \`read_html_section\` FIRST to read ONLY the section you need (e.g., section: "script", or search: "functionName").
 2. Copy the EXACT text from the returned content into \`edit_html_node\` old_string. Keep old_string SHORT (1-5 lines) and UNIQUE.
 3. If edit_html_node fails, re-read with read_html_section to get the EXACT current text — do NOT guess.
@@ -36,13 +46,6 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are the HTML Builder — a specialist su
 - Insert new JS INSIDE the existing <script> block, not outside
 - Find the scope boundary and insert BEFORE its closing brace
 - Match onclick handler names to function definitions exactly
-
-## Error Fixing Protocol
-When console errors are provided:
-1. Use read_html_section with search to find the error location
-2. Read surrounding context to understand the code
-3. Fix with edit_html_node using exact text from step 1-2
-4. Check for the SAME class of bug elsewhere (use search again)
 
 After completing your task, provide a brief summary of what you changed.`
 
@@ -210,7 +213,7 @@ function getSubagentTools() {
 
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
-  const maxTurns = 5
+  const maxTurns = 8
   const model = 'claude-sonnet-4-20250514'
 
   const log = (msg) => console.log(`[html-builder-subagent] ${msg}`)
