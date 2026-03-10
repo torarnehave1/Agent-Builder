@@ -249,13 +249,47 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   let turn = 0
   const actions = []
 
+  // Friendly progress messages instead of "turn X/20"
+  // Mystical progress messages — no time, just presence
+  const thinkingMessages = [
+    'Being present...',
+    'A drop entering the ocean...',
+    'Dissolving into the code...',
+    'No time, only this moment...',
+    'The wave observing itself...',
+    'Diving into the deep...',
+    'An ocean in a single drop...',
+    'Stillness before the change...',
+    'Between the particles...',
+    'Collapsing the wavefunction...',
+    'All possibilities, one path...',
+    'Breathing with the code...',
+    'Where observer meets observed...',
+    'Entangled with the solution...',
+    'The turtle knows the way...',
+    'Slow is the speed of truth...',
+    'Everything is already here...',
+    'Letting the pattern emerge...',
+    'A quiet knowing...',
+    'The code dreams itself into form...',
+  ]
+  const toolMessages = {
+    read_html_section: ['Observing the code...', 'Seeing what is...', 'The code reveals itself...'],
+    edit_html_node: ['Shaping the form...', 'The change flows in...', 'Transforming...'],
+    create_html_node: ['Something new emerges...', 'From nothing, everything...'],
+    create_html_from_template: ['A seed becomes a garden...', 'The template awakens...'],
+    get_contract: ['Consulting the contract...'],
+    get_app_table_schema: ['Feeling the structure beneath...', 'The schema speaks...'],
+    add_app_table_column: ['Expanding the structure...', 'A new dimension opens...'],
+  }
+
   log(`started | graphId=${graphId} nodeId=${nodeId || 'none'} task="${task.slice(0, 100)}"`)
-  progress('HTML Builder started...')
+  progress('Entering the flow...')
 
   while (turn < maxTurns) {
     turn++
     log(`turn ${turn}/${maxTurns}`)
-    progress(`HTML Builder thinking (turn ${turn}/${maxTurns})...`)
+    progress(thinkingMessages[turn - 1] || `Still working... (${turn})`)
 
     const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
       method: 'POST',
@@ -298,7 +332,8 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
 
       const toolResults = []
       for (const toolUse of toolUses) {
-        progress(`HTML Builder: ${toolUse.name}...`)
+        const msgs = toolMessages[toolUse.name] || [`Working on ${toolUse.name}...`]
+        progress(msgs[Math.floor(Math.random() * msgs.length)])
         try {
           let result
           if (toolUse.name === 'read_html_section') {

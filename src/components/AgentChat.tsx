@@ -324,6 +324,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
+  // Subagent progress badge — shown above input while active
+  const [subagentProgress, setSubagentProgress] = useState<string | null>(null);
+
   // Agent avatar state (from props or SSE agent_info event)
   const [agentAvatar, setAgentAvatar] = useState<string | null>(agentAvatarUrl || null);
 
@@ -1203,6 +1206,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             case 'tool_progress': {
               const progressTool = ev.data.tool as string;
               const progressMsg = ev.data.message as string;
+              if (progressTool === 'delegate_to_html_builder') {
+                setSubagentProgress(progressMsg);
+              }
               for (let i = next.toolCalls.length - 1; i >= 0; i--) {
                 if (next.toolCalls[i].tool === progressTool && next.toolCalls[i].status === 'running') {
                   next.toolCalls[i] = { ...next.toolCalls[i], progress: progressMsg };
@@ -1410,6 +1416,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
     setCurrent(null);
     setStreaming(false);
+    setSubagentProgress(null);
   }, [input, streaming, messages, userId, graphId, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
 
   const hasMessages = messages.length > 0 || current !== null;
@@ -1793,6 +1800,16 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                 </div>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Subagent progress badge */}
+      {subagentProgress && (
+        <div className="px-3 sm:px-4 flex justify-center">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-400/20 text-indigo-300 text-sm italic animate-pulse">
+            <span className="opacity-70">&#x2728;</span>
+            {subagentProgress}
           </div>
         </div>
       )}
