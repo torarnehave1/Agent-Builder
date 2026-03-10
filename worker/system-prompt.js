@@ -236,8 +236,8 @@ For landing page forms: create a table, then store the tableId in the data-node 
 const HTML_BUILDER_REFERENCE = `## HTML App Builder Reference
 
 ### Handling Preview Console Errors
-When you receive a message about runtime errors from the HTML preview, this means an HTML app you created or modified has bugs. Follow this process:
-1. **Read the source**: Use \`read_node\` with the graphId and nodeId from the error message to get the full HTML source code.
+When you receive a message about runtime errors, JavaScript errors, or console errors from the HTML preview — ACT IMMEDIATELY. Do NOT ask the user for more information. Do NOT give debugging advice. You have the graph context and node ID — use them. This is a MANDATORY rule.
+1. **Read the source**: Use \`read_node\` with the graphId and nodeId from the Current Context (injected in your system prompt) or from the error message. If you have a Current Context with an active HTML node, ALWAYS use that nodeId — do NOT guess or ask.
 2. **Find the bug**: Trace each error to the specific code that causes it. Look at fetch URLs, variable references, function calls, event handlers.
 3. **Fix with edit_html_node**: Use \`edit_html_node\` to surgically replace the broken code. Find the exact lines causing the error (old_string) and replace with fixed code (new_string). This preserves all other code untouched. Only use \`patch_node\` if the entire HTML needs to be replaced.
 4. **Common issues**:
