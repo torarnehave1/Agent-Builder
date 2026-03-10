@@ -1463,7 +1463,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     if (!res.ok) return;
                     const data = await res.json();
                     const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
-                    if (nodes.length === 0) return;
+                    if (nodes.length === 0) { alert('No HTML app nodes found in this graph.'); return; }
                     if (nodes.length === 1) {
                       devLoopEnabledRef.current = false;
                       lastAgentGraphRef.current = targetGraph;
