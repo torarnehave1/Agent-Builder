@@ -7,45 +7,38 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { HTML_BUILDER_REFERENCE } from './system-prompt.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused, ~2K tokens, HTML rules only
 // ---------------------------------------------------------------------------
 
-const HTML_BUILDER_SYSTEM_PROMPT = `You are the HTML Builder — a specialist subagent for creating and editing HTML apps in the Vegvisr knowledge graph.
+const HTML_BUILDER_SYSTEM_PROMPT = `You fix bugs in HTML apps and create new HTML apps. You have these tools:
 
-## CRITICAL: Always Use read_html_section (NEVER skip this)
-You have a special tool called \`read_html_section\` that reads specific parts of HTML with line numbers. You MUST use it before ANY edit. DO NOT use read_node — it dumps the entire HTML and you cannot match exact strings from that.
+1. \`read_html_section\` — search for text in the HTML. Returns "matchedLine" for each match.
+2. \`edit_html_node\` — find-and-replace exact text. Use "matchedLine" from search as old_string.
+3. \`create_html_node\` / \`create_html_from_template\` — create new HTML apps.
 
-## Debugging Strategy (follow this EXACTLY for error fixes)
-1. **Search for the error**: Use \`read_html_section\` with \`search: "errorKeyword"\` to find where the error originates.
-2. **Search for ALL references**: Use \`read_html_section\` with \`search: "variableName"\` to find EVERY place a variable/function is used. This reveals mismatches (e.g., code uses \`contacts\` but the declared variable is \`allContacts\`).
-3. **Understand the root cause**: The bug is usually a NAME MISMATCH, not a missing declaration. Compare what the error references vs what the code actually declares.
-4. **Fix the references, not the declarations**: If the app declares \`allContacts\` but a function uses \`contacts\`, fix the function to use \`allContacts\` — do NOT add a new \`contacts\` variable.
-5. **Search for the same bug elsewhere**: After fixing one reference, search again to find ALL other places with the same mismatch.
+## Bug fixing workflow (STRICT):
+1. Search for the error keyword to find buggy code
+2. Search for how the variable IS declared to find the correct name
+3. Call edit_html_node to fix each buggy line. Use matchedLine as old_string.
+4. After fixing, search again for remaining occurrences of the same bug and fix those too.
+5. Do NOT stop until you have searched for and fixed ALL occurrences.
 
-## Editing Strategy
-1. Use \`read_html_section\` FIRST to read ONLY the section you need (e.g., section: "script", or search: "functionName").
-2. Copy the EXACT text from the returned content into \`edit_html_node\` old_string. Keep old_string SHORT (1-5 lines) and UNIQUE.
-3. If edit_html_node fails, re-read with read_html_section to get the EXACT current text — do NOT guess.
-4. For multiple changes, make them one at a time.
-5. NEVER try to reproduce text from memory. Always read first, then edit.
+## Rules:
+- NEVER add new variable declarations. Fix references to use existing variables.
+- old_string must be a single line copied from matchedLine. Keep it short.
+- Make one edit per tool call. Do multiple calls for multiple fixes.
+- You MUST call edit_html_node within your first 3 turns.
+- After fixing one function, search for the same bug pattern in OTHER functions.
 
-## HTML Rules
+## HTML creation rules:
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
-- Log success too: console.log('[functionName] Loaded N records')
 - Use Drizzle API at https://drizzle.vegvisr.org for data operations
-  - POST /query with { tableId } for reads → returns { records: [...] }
-  - POST /insert with { tableId, record } for writes → returns { success, _id }
-  - GET /tables?graphId=X for table discovery
+  - POST /query with { tableId } for reads
+  - POST /insert with { tableId, record } for writes
   - There is NO /update, NO /delete endpoint
-
-## Scoping Rules for JS Edits
-- Insert new JS INSIDE the existing <script> block, not outside
-- Find the scope boundary and insert BEFORE its closing brace
-- Match onclick handler names to function definitions exactly
 
 After completing your task, provide a brief summary of what you changed.`
 
@@ -55,31 +48,25 @@ After completing your task, provide a brief summary of what you changed.`
 
 const READ_HTML_SECTION_TOOL = {
   name: 'read_html_section',
-  description: 'Read a specific section or line range of an HTML node. Returns content with line numbers. Use this BEFORE edit_html_node so you have the exact text to match.',
+  description: 'Search for text in an HTML node. Returns matches with "matchedLine" (use as edit_html_node old_string). ALWAYS search before editing.',
   input_schema: {
     type: 'object',
     properties: {
       graphId: { type: 'string', description: 'The graph ID' },
       nodeId: { type: 'string', description: 'The html-node ID' },
+      search: {
+        type: 'string',
+        description: 'Search string. Returns up to 10 matches with context. Each match has "matchedLine" — use this as edit_html_node old_string.'
+      },
       section: {
         type: 'string',
         enum: ['head', 'style', 'body', 'script', 'full'],
-        description: 'Which section to read. "script" returns <script> blocks. "style" returns <style> blocks. "full" returns entire HTML (capped at 200 lines).'
+        description: 'Optional: read a specific section. Prefer search instead.'
       },
-      startLine: {
-        type: 'integer',
-        description: 'Start line number (1-based). Use with endLine for precise line ranges. Takes priority over section.'
-      },
-      endLine: {
-        type: 'integer',
-        description: 'End line number (inclusive). Max range: 100 lines.'
-      },
-      search: {
-        type: 'string',
-        description: 'Search for a string in the HTML. Returns 10 lines of context around each match with line numbers. Best way to find exact text for edit_html_node.'
-      }
+      startLine: { type: 'integer', description: 'Optional: start line (1-based). Use with endLine.' },
+      endLine: { type: 'integer', description: 'Optional: end line (inclusive). Max 100 lines.' }
     },
-    required: ['graphId', 'nodeId']
+    required: ['graphId', 'nodeId', 'search']
   }
 }
 
@@ -105,11 +92,14 @@ async function executeReadHtmlSection(input, env) {
     const maxRange = 100
     const slice = lines.slice(start, Math.min(start + maxRange, end))
     const numbered = slice.map((line, i) => `${start + i + 1}: ${line}`).join('\n')
+    const raw = slice.join('\n')
     return {
       graphId: input.graphId, nodeId: input.nodeId,
       totalLines, totalChars,
       range: `${start + 1}-${Math.min(start + maxRange, end)}`,
-      content: numbered
+      display: numbered,
+      raw,
+      hint: 'Use text from "raw" field (no line numbers) when building edit_html_node old_string.'
     }
   }
 
@@ -120,16 +110,18 @@ async function executeReadHtmlSection(input, env) {
     const seenRanges = new Set()
     for (let i = 0; i < lines.length; i++) {
       if (lines[i].toLowerCase().includes(searchLower)) {
-        const contextStart = Math.max(0, i - 10)
-        const contextEnd = Math.min(totalLines, i + 11)
+        const contextStart = Math.max(0, i - 5)
+        const contextEnd = Math.min(totalLines, i + 6)
         const rangeKey = `${contextStart}-${contextEnd}`
         if (seenRanges.has(rangeKey)) continue
         seenRanges.add(rangeKey)
-        const context = lines.slice(contextStart, contextEnd)
+        const display = lines.slice(contextStart, contextEnd)
           .map((line, j) => `${contextStart + j + 1}${j + contextStart === i ? '>' : ':'} ${line}`)
           .join('\n')
-        matches.push({ line: i + 1, context })
-        if (matches.length >= 5) break
+        const raw = lines.slice(contextStart, contextEnd).join('\n')
+        const matchedLine = lines[i]
+        matches.push({ line: i + 1, display, raw, matchedLine })
+        if (matches.length >= 10) break
       }
     }
     return {
@@ -137,7 +129,8 @@ async function executeReadHtmlSection(input, env) {
       totalLines, totalChars,
       searchTerm: input.search,
       matchCount: matches.length,
-      matches
+      matches,
+      hint: 'Use text from "raw" or "matchedLine" fields (no line numbers) when building edit_html_node old_string.'
     }
   }
 
@@ -146,12 +139,15 @@ async function executeReadHtmlSection(input, env) {
   if (section === 'full') {
     const cap = Math.min(totalLines, 200)
     const numbered = lines.slice(0, cap).map((l, i) => `${i + 1}: ${l}`).join('\n')
+    const raw = lines.slice(0, cap).join('\n')
     return {
       graphId: input.graphId, nodeId: input.nodeId,
       totalLines, totalChars,
       section: 'full',
       truncated: cap < totalLines,
-      content: numbered
+      display: numbered,
+      raw,
+      hint: 'Use text from "raw" field (no line numbers) when building edit_html_node old_string.'
     }
   }
 
@@ -168,16 +164,23 @@ async function executeReadHtmlSection(input, env) {
 
   const sectionMatches = []
   let match
+  const MAX_SECTION_LINES = 100
   while ((match = regex.exec(html)) !== null) {
     const beforeMatch = html.substring(0, match.index)
     const startLine = beforeMatch.split('\n').length
     const sectionLines = match[0].split('\n')
-    const numbered = sectionLines.map((l, i) => `${startLine + i}: ${l}`).join('\n')
+    const truncated = sectionLines.length > MAX_SECTION_LINES
+    const cappedLines = truncated ? sectionLines.slice(0, MAX_SECTION_LINES) : sectionLines
+    const numbered = cappedLines.map((l, i) => `${startLine + i}: ${l}`).join('\n')
+    const raw = cappedLines.join('\n')
     sectionMatches.push({
       startLine,
-      endLine: startLine + sectionLines.length - 1,
+      endLine: startLine + cappedLines.length - 1,
       lineCount: sectionLines.length,
-      content: numbered
+      display: numbered,
+      raw,
+      truncated,
+      truncatedMessage: truncated ? `Section has ${sectionLines.length} lines, showing first ${MAX_SECTION_LINES}. Use search mode to find specific code.` : undefined,
     })
   }
 
@@ -196,9 +199,9 @@ async function executeReadHtmlSection(input, env) {
 // Subagent tool set — only the tools this subagent needs
 // ---------------------------------------------------------------------------
 
+// ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
-  'edit_html_node', 'create_html_node', 'create_html_from_template',
-  'read_node', 'patch_node', 'get_html_builder_reference', 'get_contract'
+  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract'
 ])
 
 function getSubagentTools() {
@@ -213,7 +216,7 @@ function getSubagentTools() {
 
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
-  const maxTurns = 8
+  const maxTurns = 12
   const model = 'claude-sonnet-4-20250514'
 
   const log = (msg) => console.log(`[html-builder-subagent] ${msg}`)
@@ -247,7 +250,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         userId: userId || 'html-builder-subagent',
         messages,
         model,
-        max_tokens: 8192,
+        max_tokens: 16384,
         temperature: 0.2,
         system: HTML_BUILDER_SYSTEM_PROMPT,
         tools,
@@ -290,7 +293,11 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
             result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, {})
           }
 
-          const resultStr = JSON.stringify(result)
+          // Strip updatedHtml to avoid 52K bloat in subagent context
+          const cleanResult = { ...result }
+          delete cleanResult.updatedHtml
+
+          const resultStr = JSON.stringify(cleanResult)
           actions.push({
             tool: toolUse.name,
             success: true,

@@ -391,9 +391,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       '',
       ...(nodeRef && graphRef ? [
         `The HTML source is in graph "${graphRef}", node "${nodeRef}".`,
-        'Use read_node to get the full HTML source code, find the exact lines causing these errors, and use edit_html_node to surgically fix them.',
+        'Use delegate_to_html_builder to fix these errors. Pass the graphId, nodeId, task description, and consoleErrors.',
       ] : [
-        'Read the HTML source code with read_node, find the exact lines causing these errors, and fix them with edit_html_node.',
+        'Use delegate_to_html_builder to fix these errors. Pass the graphId, nodeId (from the error context), task description, and consoleErrors.',
       ]),
     ].join('\n');
 
@@ -1109,12 +1109,15 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           if (toolName === 'create_html_node' || toolName === 'create_html_from_template') {
             devLoopEnabledRef.current = true;
             devLoopCountRef.current = 0;
+            // Read nodeId from result first (executor may auto-generate it), fall back to input
+            const resultNodeId = (ev.data as Record<string, unknown>).nodeId as string | undefined;
+            if (resultNodeId) { lastHtmlNodeIdRef.current = resultNodeId; onActiveHtmlNode?.(resultNodeId); }
             setCurrent(prev => {
               if (!prev) return prev;
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
-                if (inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
+                if (!resultNodeId && inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
                 const html = (inp.htmlContent || inp.content || inp.info || '') as string;
                 if (html) setTimeout(() => onPreview(html), 0);
               }

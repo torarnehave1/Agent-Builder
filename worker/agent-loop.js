@@ -212,10 +212,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
             const ssePayload = { tool: toolUse.name, success: true, summary }
+            // Pass nodeId and graphId for tools that create or edit HTML nodes
+            if (result.nodeId) ssePayload.nodeId = result.nodeId
+            if (result.graphId) ssePayload.graphId = result.graphId
             // Pass updatedHtml for edit_html_node so frontend can auto-preview
             if (toolUse.name === 'edit_html_node' && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
-              ssePayload.nodeId = result.nodeId
             }
             // Pass clientSideRequired data to frontend so it can handle transcription
             if (result.clientSideRequired) {
