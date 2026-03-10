@@ -746,6 +746,32 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'add_app_table_column',
+    description: 'Add a new column to an existing app data table. Alters the D1 table and registers the column in metadata. Use when the user wants a new field (e.g. "add a birthday field").',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'Table UUID' },
+        name: { type: 'string', description: 'Column name (lowercase, alphanumeric with underscores, e.g. "birthday")' },
+        type: { type: 'string', enum: ['text', 'integer', 'real', 'boolean', 'datetime'], description: 'Column data type' },
+        label: { type: 'string', description: 'Display label (e.g. "Bursdag")' },
+        required: { type: 'boolean', description: 'Whether the column is required (default false)' }
+      },
+      required: ['tableId', 'name', 'type']
+    }
+  },
+  {
+    name: 'get_app_table_schema',
+    description: 'Get the schema of an app data table — returns column names, types, labels, and constraints. Use to understand what data a table stores before querying, inserting, or building UI for it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'Table UUID (found in HTML source as TABLE_ID constant, or returned by create_app_table)' }
+      },
+      required: ['tableId']
+    }
+  },
+  {
     name: 'db_list_tables',
     description: 'List all tables in the main vegvisr_org database with their columns. Use this to explore the database schema (config, user_api_keys, graphs, etc.).',
     input_schema: {

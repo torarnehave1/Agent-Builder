@@ -12,11 +12,18 @@ import { TOOL_DEFINITIONS } from './tool-definitions.js'
 // System Prompt — focused, ~2K tokens, HTML rules only
 // ---------------------------------------------------------------------------
 
-const HTML_BUILDER_SYSTEM_PROMPT = `You fix bugs in HTML apps and create new HTML apps. You have these tools:
+const HTML_BUILDER_SYSTEM_PROMPT = `You are an HTML app specialist. You fix bugs, add features, create new apps, and answer questions about HTML app code. You have these tools:
 
 1. \`read_html_section\` — search for text in the HTML. Returns "matchedLine" for each match.
 2. \`edit_html_node\` — find-and-replace exact text. Use "matchedLine" from search as old_string.
 3. \`create_html_node\` / \`create_html_from_template\` — create new HTML apps.
+4. \`get_app_table_schema\` — get column names, types, and labels for a data table. Use when you find a TABLE_ID in the HTML and need to know the actual data structure.
+
+## Code analysis workflow (for questions about the code):
+1. Search for the relevant keywords (table, fetch, function names, variable names, etc.)
+2. Read the matched lines to understand the code
+3. Answer the question based on what you ACTUALLY found in the code — NEVER guess or make up code that isn't there
+4. Quote the actual code you found to support your answer
 
 ## Bug fixing workflow (STRICT):
 1. Search for the error keyword (1 search)
@@ -37,6 +44,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You fix bugs in HTML apps and create new HTM
 - Make one edit per tool call. Do multiple calls for multiple fixes.
 - CRITICAL: Do NOT do more than 2 searches before your first edit_html_node call. Search, then EDIT.
 - After fixing one function, search for the same bug pattern in OTHER functions.
+- NEVER guess or hallucinate code. Only report what you find via read_html_section.
 
 ## HTML creation rules:
 - All HTML must be self-contained (inline CSS, inline JS)
@@ -46,7 +54,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You fix bugs in HTML apps and create new HTM
   - POST /insert with { tableId, record } for writes
   - There is NO /update, NO /delete endpoint
 
-After completing your task, provide a brief summary of what you changed.`
+After completing your task, provide a brief summary of what you found or changed.`
 
 // ---------------------------------------------------------------------------
 // read_html_section — the key innovation
@@ -207,7 +215,7 @@ async function executeReadHtmlSection(input, env) {
 
 // ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
-  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract'
+  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column'
 ])
 
 function getSubagentTools() {

@@ -1919,6 +1919,52 @@ async function executeQueryAppTable(input, env) {
   }
 }
 
+async function executeAddAppTableColumn(input, env) {
+  const tableId = (input.tableId || '').trim()
+  if (!tableId) throw new Error('tableId is required')
+  if (!input.name || !input.type) throw new Error('name and type are required')
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/add-column', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tableId,
+      name: input.name,
+      type: input.type,
+      label: input.label || input.name,
+      required: input.required || false
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to add column')
+
+  return {
+    success: true,
+    columnName: data.columnName,
+    displayName: data.displayName,
+    columnType: data.columnType,
+    message: data.message
+  }
+}
+
+async function executeGetAppTableSchema(input, env) {
+  const tableId = (input.tableId || '').trim()
+  if (!tableId) throw new Error('tableId is required')
+
+  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/table/${tableId}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get table schema')
+
+  return {
+    id: data.id,
+    displayName: data.displayName,
+    tableName: data.tableName,
+    graphId: data.graphId,
+    columns: data.columns,
+    message: `Table "${data.displayName}" has ${data.columns.length} columns: ${data.columns.map(c => c.name).join(', ')}`
+  }
+}
+
 async function executeListChatGroups(input, env) {
   const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/chat-groups', {
     method: 'GET'
@@ -2702,6 +2748,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeInsertAppRecord(toolInput, env)
     case 'query_app_table':
       return await executeQueryAppTable(toolInput, env)
+    case 'get_app_table_schema':
+      return await executeGetAppTableSchema(toolInput, env)
+    case 'add_app_table_column':
+      return await executeAddAppTableColumn(toolInput, env)
     case 'list_chat_groups':
       return await executeListChatGroups(toolInput, env)
     case 'add_user_to_chat_group':

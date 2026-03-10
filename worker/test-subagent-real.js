@@ -157,16 +157,13 @@ async function main() {
 
   // 2. Build the task message (same as subagent receives)
   const userMessage = `## Task
-Fix the runtime error in this HTML app.
+What data table is connected to this contact list? How does the app store and retrieve data?
 
 ## Context
 - graphId: ${GRAPH_ID}
 - nodeId: ${NODE_ID}
 
-## Console Errors
-- Uncaught ReferenceError: contacts is not defined at about:srcdoc:1362:66
-
-Remember: use read_html_section FIRST to read the relevant section before editing.`
+Use read_html_section to search the code and answer based on what you actually find.`
 
   const messages = [{ role: 'user', content: userMessage }]
 
