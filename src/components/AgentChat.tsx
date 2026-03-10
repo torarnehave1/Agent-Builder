@@ -1456,7 +1456,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                 type="button"
                 onClick={async () => {
                   if (htmlNodePicker) { setHtmlNodePicker(null); return; }
-                  const targetGraph = lastAgentGraphRef.current || graphId;
+                  const targetGraph = graphId || lastAgentGraphRef.current;
                   if (!targetGraph) return;
                   try {
                     const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(targetGraph)}`);
