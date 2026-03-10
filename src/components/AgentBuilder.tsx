@@ -90,7 +90,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <div className="flex-1 flex min-w-0">
             <HtmlPreview
               html={previewHtml}
-              onClose={() => setPreviewHtml(null)}
+              onClose={() => { setPreviewHtml(null); setActiveHtmlNodeId(null); }}
               onConsoleErrors={setConsoleErrors}
               graphId={graphId}
               nodeId={activeHtmlNodeId}

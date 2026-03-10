@@ -12,11 +12,21 @@ interface ConsoleEntry {
   level: 'log' | 'warn' | 'error' | 'info' | 'network';
   message: string;
   timestamp: number;
+  graphId?: string;
+  nodeId?: string;
 }
 
-const CONSOLE_BRIDGE = `<script>
+// Build the console bridge script with graphId/nodeId baked in.
+// Every postMessage from the iframe will include these IDs at the source,
+// so there's no dependency on React state timing.
+function buildConsoleBridge(graphId?: string | null, nodeId?: string | null): string {
+  const gId = graphId ? graphId.replace(/'/g, "\\'") : '';
+  const nId = nodeId ? nodeId.replace(/'/g, "\\'") : '';
+  return `<script>
 (function() {
   var MSG_KEY = '__vegvisr_console__';
+  var GRAPH_ID = '${gId}';
+  var NODE_ID = '${nId}';
   function send(level, args) {
     try {
       var parts = [];
@@ -24,7 +34,7 @@ const CONSOLE_BRIDGE = `<script>
         try { parts.push(typeof args[i] === 'string' ? args[i] : JSON.stringify(args[i])); }
         catch(e) { parts.push(String(args[i])); }
       }
-      window.parent.postMessage({ type: MSG_KEY, level: level, message: parts.join(' ') }, '*');
+      window.parent.postMessage({ type: MSG_KEY, level: level, message: parts.join(' '), graphId: GRAPH_ID, nodeId: NODE_ID }, '*');
     } catch(e) {}
   }
   var orig = { log: console.log, warn: console.warn, error: console.error, info: console.info };
@@ -69,20 +79,22 @@ const CONSOLE_BRIDGE = `<script>
   };
 })();
 </script>`;
+}
 
-function injectBridge(html: string): string {
+function injectBridge(html: string, graphId?: string | null, nodeId?: string | null): string {
+  const bridge = buildConsoleBridge(graphId, nodeId);
   const headIdx = html.indexOf('<head>');
   if (headIdx !== -1) {
-    return html.slice(0, headIdx + 6) + CONSOLE_BRIDGE + html.slice(headIdx + 6);
+    return html.slice(0, headIdx + 6) + bridge + html.slice(headIdx + 6);
   }
   const htmlIdx = html.indexOf('<html');
   if (htmlIdx !== -1) {
     const closeTag = html.indexOf('>', htmlIdx);
     if (closeTag !== -1) {
-      return html.slice(0, closeTag + 1) + '<head>' + CONSOLE_BRIDGE + '</head>' + html.slice(closeTag + 1);
+      return html.slice(0, closeTag + 1) + '<head>' + bridge + '</head>' + html.slice(closeTag + 1);
     }
   }
-  return CONSOLE_BRIDGE + html;
+  return bridge + html;
 }
 
 const LEVEL_STYLE: Record<string, { icon: string; color: string }> = {
@@ -100,11 +112,15 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
   const reportedRef = useRef<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // graphId/nodeId now come FROM the postMessage itself (baked into the bridge script),
+  // so there's no closure staleness risk.
   const handleMessage = useCallback((e: MessageEvent) => {
     if (e.data?.type === '__vegvisr_console__') {
       setEntries(prev => [...prev, {
         level: e.data.level,
         message: e.data.message,
+        graphId: e.data.graphId || undefined,
+        nodeId: e.data.nodeId || undefined,
         timestamp: Date.now(),
       }]);
     }
@@ -126,18 +142,19 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
     if (!onConsoleErrors) return;
     const errors = entries
       .filter(e => e.level === 'error' || e.level === 'network')
-      .map(e => e.message)
-      .filter(msg => !reportedRef.current.has(msg));
+      .filter(e => !reportedRef.current.has(e.message));
     if (errors.length === 0) return;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      const newErrors = errors.filter(msg => !reportedRef.current.has(msg));
+      const newErrors = errors.filter(e => !reportedRef.current.has(e.message));
       if (newErrors.length > 0) {
-        newErrors.forEach(msg => reportedRef.current.add(msg));
-        // Append graph/node context to each error so the agent always knows where to look
-        const ctx = graphId && nodeId ? ` [graphId: ${graphId}, nodeId: ${nodeId}]` : '';
-        onConsoleErrors(newErrors.map(msg => msg + ctx));
+        newErrors.forEach(e => reportedRef.current.add(e.message));
+        // Context comes from the entry itself (baked into the bridge), not from React props
+        onConsoleErrors(newErrors.map(e => {
+          const ctx = e.graphId && e.nodeId ? ` [graphId: ${e.graphId}, nodeId: ${e.nodeId}]` : '';
+          return e.message + ctx;
+        }));
       }
     }, 2000);
 
@@ -198,15 +215,18 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
         </div>
       </div>
       <iframe
-        srcDoc={injectBridge(html)}
+        srcDoc={injectBridge(html, graphId, nodeId)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
       />
       {consoleOpen && (
         <div className="flex-1 min-h-[120px] max-h-[200px] border-t border-white/10 bg-slate-950 flex flex-col">
-          <div className="px-2 py-1 border-b border-white/10 flex-shrink-0">
+          <div className="px-2 py-1 border-b border-white/10 flex-shrink-0 flex items-center gap-2">
             <span className="text-[10px] text-white/30 font-mono">Console</span>
+            {graphId && nodeId && (
+              <span className="text-[9px] text-white/20 font-mono">graph: {graphId} | node: {nodeId}</span>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto px-2 py-1 font-mono text-[11px]">
             {entries.length === 0 && (
@@ -214,10 +234,12 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
             )}
             {entries.map((entry, i) => {
               const style = LEVEL_STYLE[entry.level] || LEVEL_STYLE.log;
+              const ctx = (entry.level === 'error' || entry.level === 'network') && entry.graphId && entry.nodeId
+                ? ` [graphId: ${entry.graphId}, nodeId: ${entry.nodeId}]` : '';
               return (
                 <div key={i} className={`${style.color} py-[1px] flex gap-1.5 leading-tight`}>
                   <span className="flex-shrink-0 w-3 text-center">{style.icon}</span>
-                  <span className="break-all">{entry.message}</span>
+                  <span className="break-all">{entry.message}{ctx}</span>
                 </div>
               );
             })}

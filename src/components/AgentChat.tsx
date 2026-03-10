@@ -88,7 +88,7 @@ interface GraphInfo {
 
 // ---------- Tool Call Card ----------
 
-function ToolCallCard({ tc, userId, onPreview }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void }) {
+function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   let inputStr = '';
@@ -158,6 +158,9 @@ function ToolCallCard({ tc, userId, onPreview }: { tc: ToolCall; userId: string;
           {onPreview && (
             <button type="button" onClick={() => {
               const html = (input.htmlContent || input.content || input.info || fields.info || '') as string;
+              const result = (tc.result || {}) as Record<string, unknown>;
+              const nId = (input.nodeId || input.node_id || result.nodeId || '') as string;
+              if (nId) onActiveHtmlNode?.(nId);
               if (html) onPreview(html);
             }}
               className="px-2 py-1 text-xs rounded bg-sky-600/20 text-sky-300 hover:bg-sky-600/30 border border-sky-500/20">
@@ -1570,7 +1573,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
               <div className="mb-2">
                 {msg.toolCalls.map(tc => (
-                  <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} />
+                  <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
                 ))}
               </div>
             )}
@@ -1628,7 +1631,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           <div className="px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
-              <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} />
+              <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
             ))}
             {current.text && (
               <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
