@@ -1144,6 +1144,26 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             if (updatedHtml && updatedHtml.includes('<html')) {
               setTimeout(() => onPreview(updatedHtml), 0);
             }
+          } else if (toolName === 'delegate_to_html_builder') {
+            devLoopEnabledRef.current = true;
+            devLoopCountRef.current = 0;
+            const resultData = ev.data as Record<string, unknown>;
+            const subNodeId = resultData.nodeId as string;
+            const subGraphId = resultData.graphId as string;
+            if (subNodeId) { lastHtmlNodeIdRef.current = subNodeId; onActiveHtmlNode?.(subNodeId); }
+            if (subGraphId) { lastAgentGraphRef.current = subGraphId; }
+            // Fetch the updated HTML from the node to show in preview
+            if (subGraphId && subNodeId) {
+              fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(subGraphId)}`)
+                .then(r => r.json())
+                .then(graph => {
+                  const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === subNodeId);
+                  if (node?.info && typeof node.info === 'string' && node.info.includes('<html')) {
+                    setTimeout(() => onPreview(node.info as string), 0);
+                  }
+                })
+                .catch(() => {});
+            }
           }
         }
 

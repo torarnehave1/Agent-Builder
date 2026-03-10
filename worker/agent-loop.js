@@ -189,7 +189,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
           'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response'
+          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

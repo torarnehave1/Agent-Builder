@@ -9,6 +9,7 @@ import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } f
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { runHtmlBuilderSubagent } from './html-builder-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -2743,6 +2744,25 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCalendarDeleteBooking(toolInput, env)
     case 'calendar_get_status':
       return await executeCalendarGetStatus(toolInput, env)
+    case 'delegate_to_html_builder': {
+      const result = await runHtmlBuilderSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        graphId: result.graphId,
+        nodeId: result.nodeId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `HTML Builder completed: ${(result.summary || '').slice(0, 500)}`
+          : `HTML Builder failed: ${result.error || 'Unknown error'}`,
+        viewUrl: result.graphId
+          ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
+          : undefined,
+      }
+    }
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)

@@ -1019,6 +1019,33 @@ const TOOL_DEFINITIONS = [
       },
       required: []
     }
+  },
+  {
+    name: 'delegate_to_html_builder',
+    description: 'Delegate an HTML building or editing task to the specialized HTML Builder subagent. Use this when the user asks to create, edit, debug, fix, or redesign an HTML app. The subagent has focused HTML expertise and tools for reading specific sections of large HTML files. Use this instead of calling edit_html_node directly.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The graph containing the HTML node'
+        },
+        nodeId: {
+          type: 'string',
+          description: 'The html-node ID to work on. Omit for new HTML creation.'
+        },
+        task: {
+          type: 'string',
+          description: 'What to do: create, edit, fix errors, redesign, etc. Include all user requirements and any error messages from the console.'
+        },
+        consoleErrors: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Console error messages from the HTML preview, if any.'
+        }
+      },
+      required: ['graphId', 'task']
+    }
   }
 ]
 
