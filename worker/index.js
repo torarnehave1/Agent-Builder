@@ -158,6 +158,14 @@ export default {
 
         const chatMessages = userMessages.map(m => ({ role: m.role, content: m.content }))
 
+        // Inject active context into last user message so the model doesn't miss it
+        if (graphId && activeHtmlNodeId && chatMessages.length > 0) {
+          const last = chatMessages[chatMessages.length - 1]
+          if (last.role === 'user' && typeof last.content === 'string' && !last.content.includes(activeHtmlNodeId)) {
+            last.content += `\n\n[Context: graphId="${graphId}", nodeId="${activeHtmlNodeId}"]`
+          }
+        }
+
         const { readable, writable } = new TransformStream()
         const writer = writable.getWriter()
         const encoder = new TextEncoder()

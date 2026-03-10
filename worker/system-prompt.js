@@ -237,9 +237,8 @@ const HTML_BUILDER_REFERENCE = `## HTML App Builder Reference
 
 ### Handling Preview Console Errors
 When you receive a message about runtime errors, JavaScript errors, or console errors from the HTML preview — ACT IMMEDIATELY. Do NOT ask the user for more information. Do NOT give debugging advice. You have the graph context and node ID — use them. This is a MANDATORY rule.
-1. **Read the source**: Use \`read_node\` with the graphId and nodeId from the Current Context (injected in your system prompt) or from the error message. If you have a Current Context with an active HTML node, ALWAYS use that nodeId — do NOT guess or ask.
-2. **Find the bug**: Trace each error to the specific code that causes it. Look at fetch URLs, variable references, function calls, event handlers.
-3. **Delegate to HTML Builder**: Use \`delegate_to_html_builder\` to fix the code. Pass the graphId, nodeId, task description, and the console errors. The HTML Builder subagent will read the relevant sections and make precise edits.
+1. **Delegate immediately**: Use \`delegate_to_html_builder\` to fix the code. Pass the graphId, nodeId, task description, and the console errors. Do NOT call read_node first — the subagent reads the HTML itself with read_html_section.
+2. **Use context**: Get the graphId and nodeId from the Current Context (injected in your system prompt) or from the error message. If you have a Current Context with an active HTML node, ALWAYS use that nodeId — do NOT guess or ask.
 4. **Common issues**:
    - 404 errors: wrong API endpoint URL — check the Drizzle API section below
    - "Failed to fetch": CORS issue or wrong URL

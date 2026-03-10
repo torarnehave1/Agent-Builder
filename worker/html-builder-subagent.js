@@ -19,17 +19,23 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You fix bugs in HTML apps and create new HTM
 3. \`create_html_node\` / \`create_html_from_template\` — create new HTML apps.
 
 ## Bug fixing workflow (STRICT):
-1. Search for the error keyword to find buggy code
-2. Search for how the variable IS declared to find the correct name
-3. Call edit_html_node to fix each buggy line. Use matchedLine as old_string.
-4. After fixing, search again for remaining occurrences of the same bug and fix those too.
-5. Do NOT stop until you have searched for and fixed ALL occurrences.
+1. Search for the error keyword (1 search)
+2. Search for the correct variable/function name (1 search)
+3. IMMEDIATELY call edit_html_node to fix the bug. Do NOT do more than 2 searches before your first edit.
+4. After fixing, search for the same bug pattern in OTHER functions and fix those too.
+5. Do NOT stop until ALL occurrences are fixed.
+
+## Feature addition workflow:
+1. Search for the relevant function or UI element (1-2 searches max)
+2. Plan your edit — what code to add or change
+3. Use edit_html_node to make the change. For adding new code, use an existing line as old_string and include the new code in new_string.
+4. Test by searching for your new code to verify it was added correctly.
 
 ## Rules:
-- NEVER add new variable declarations. Fix references to use existing variables.
+- NEVER add new variable declarations for bug fixes. Fix references to use existing variables.
 - old_string must be a single line copied from matchedLine. Keep it short.
 - Make one edit per tool call. Do multiple calls for multiple fixes.
-- You MUST call edit_html_node within your first 3 turns.
+- CRITICAL: Do NOT do more than 2 searches before your first edit_html_node call. Search, then EDIT.
 - After fixing one function, search for the same bug pattern in OTHER functions.
 
 ## HTML creation rules:
@@ -216,7 +222,7 @@ function getSubagentTools() {
 
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
-  const maxTurns = 12
+  const maxTurns = 20
   const model = 'claude-sonnet-4-20250514'
 
   const log = (msg) => console.log(`[html-builder-subagent] ${msg}`)

@@ -29,8 +29,8 @@ Adding "mandatory console logging" only for NEW HTML creation. A proactive appro
 - When adding an iframe → list ALL browser APIs the content will use and add ALL sandbox permissions upfront (scripts, forms, same-origin, modals, popups) — not one at a time across 5 deploys
 - When adding a feature → ask "what else in the system is affected?" and handle it in the same change
 - When fixing a bug → ask "can this same bug exist anywhere else?" and check
-- When finishing code → commit, push, deploy without being asked — close the loop
-- Each deploy-test-fix cycle costs the user real time and money — your job is to minimize those cycles
+- Each deploy-test-fix cycle costs the user real time and money — test with real data BEFORE deploying to minimize cycles
+- Deploy only when the user explicitly asks
 
 ### 4. Think Like the User, Not the Developer
 - The user will test the FULL app, not just your new feature
