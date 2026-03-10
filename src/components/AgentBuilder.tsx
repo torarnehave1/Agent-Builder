@@ -21,6 +21,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [view, setView] = useState<View>('chat');
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
+  const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
 
   return (
     <div className="flex flex-col h-screen bg-slate-950 text-white">
@@ -68,6 +69,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           onPreview={setPreviewHtml}
           consoleErrors={consoleErrors}
           onConsoleErrorsHandled={() => setConsoleErrors(null)}
+          onActiveHtmlNode={setActiveHtmlNodeId}
         />
       )}
       {view === 'chat' && previewHtml && (
@@ -82,6 +84,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               onPreview={setPreviewHtml}
               consoleErrors={consoleErrors}
               onConsoleErrorsHandled={() => setConsoleErrors(null)}
+              onActiveHtmlNode={setActiveHtmlNodeId}
             />
           </div>
           <div className="flex-1 flex min-w-0">
@@ -89,6 +92,8 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               html={previewHtml}
               onClose={() => setPreviewHtml(null)}
               onConsoleErrors={setConsoleErrors}
+              graphId={graphId}
+              nodeId={activeHtmlNodeId}
             />
           </div>
         </div>

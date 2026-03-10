@@ -121,6 +121,7 @@ export default {
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
         const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId } = body
+        console.log(`[/chat] graphId=${graphId} activeHtmlNodeId=${activeHtmlNodeId} agentId=${agentId}`)
 
         if (!userId || !userMessages || !Array.isArray(userMessages)) {
           return new Response(JSON.stringify({

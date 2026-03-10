@@ -41,6 +41,7 @@ interface Props {
   onPreview?: (html: string) => void;
   consoleErrors?: string[] | null;
   onConsoleErrorsHandled?: () => void;
+  onActiveHtmlNode?: (nodeId: string | null) => void;
 }
 
 interface ToolCall {
@@ -300,7 +301,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled }: Props) {
+export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -1110,7 +1111,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
-                if (inp.nodeId) lastHtmlNodeIdRef.current = inp.nodeId as string;
+                if (inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
                 const html = (inp.htmlContent || inp.content || inp.info || '') as string;
                 if (html) setTimeout(() => onPreview(html), 0);
               }
@@ -1124,7 +1125,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
-                if (inp.nodeId) lastHtmlNodeIdRef.current = inp.nodeId as string;
+                if (inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
                 const flds = (inp.fields || {}) as Record<string, unknown>;
                 const html = flds.info as string;
                 if (html && html.includes('<html')) setTimeout(() => onPreview(html), 0);
@@ -1135,7 +1136,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             devLoopEnabledRef.current = true;
             // Don't reset devLoopCount — edit_html_node is often a fix attempt within the loop
             const resultData = ev.data as Record<string, unknown>;
-            if (resultData.nodeId) lastHtmlNodeIdRef.current = resultData.nodeId as string;
+            if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string); }
             const updatedHtml = resultData.updatedHtml as string;
             if (updatedHtml && updatedHtml.includes('<html')) {
               setTimeout(() => onPreview(updatedHtml), 0);
@@ -1468,6 +1469,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                       devLoopEnabledRef.current = false;
                       lastAgentGraphRef.current = targetGraph;
                       lastHtmlNodeIdRef.current = nodes[0].id;
+                      onActiveHtmlNode?.(nodes[0].id);
                       onPreview(nodes[0].info);
                     } else {
                       setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
@@ -1485,7 +1487,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { devLoopEnabledRef.current = false; lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { devLoopEnabledRef.current = false; lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id); onPreview(n.info); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
                     >
                       {n.label}

@@ -4,6 +4,8 @@ interface Props {
   html: string | null;
   onClose: () => void;
   onConsoleErrors?: (errors: string[]) => void;
+  graphId?: string | null;
+  nodeId?: string | null;
 }
 
 interface ConsoleEntry {
@@ -91,7 +93,7 @@ const LEVEL_STYLE: Record<string, { icon: string; color: string }> = {
   network: { icon: '↔', color: 'text-orange-400' },
 };
 
-export default function HtmlPreview({ html, onClose, onConsoleErrors }: Props) {
+export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, nodeId }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
@@ -133,7 +135,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors }: Props) {
       const newErrors = errors.filter(msg => !reportedRef.current.has(msg));
       if (newErrors.length > 0) {
         newErrors.forEach(msg => reportedRef.current.add(msg));
-        onConsoleErrors(newErrors);
+        // Append graph/node context to each error so the agent always knows where to look
+        const ctx = graphId && nodeId ? ` [graphId: ${graphId}, nodeId: ${nodeId}]` : '';
+        onConsoleErrors(newErrors.map(msg => msg + ctx));
       }
     }, 2000);
 
