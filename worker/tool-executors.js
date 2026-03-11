@@ -10,6 +10,7 @@ import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-t
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent } from './html-builder-subagent.js'
+import { runKgSubagent } from './kg-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -2808,6 +2809,25 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         message: result.success
           ? `HTML Builder completed: ${(result.summary || '').slice(0, 500)}`
           : `HTML Builder failed: ${result.error || 'Unknown error'}`,
+        viewUrl: result.graphId
+          ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
+          : undefined,
+      }
+    }
+    case 'delegate_to_kg': {
+      const result = await runKgSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        graphId: result.graphId,
+        nodeId: result.nodeId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `KG subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `KG subagent failed: ${result.error || 'Unknown error'}`,
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,

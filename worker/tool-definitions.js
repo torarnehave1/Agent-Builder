@@ -1072,6 +1072,28 @@ const TOOL_DEFINITIONS = [
       },
       required: ['graphId', 'task']
     }
+  },
+  {
+    name: 'delegate_to_kg',
+    description: 'Delegate knowledge graph operations to the specialized KG subagent. Use this when the user asks to: create a graph, add/edit/remove nodes, manage edges, export data to a graph, search for graphs, organize content, or read/analyze graph content. The subagent knows all KG API conventions, node types, and formatting rules. Use this instead of calling graph/node tools directly.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do: create graph, add nodes, export data, read content, search, etc. Include all context the subagent needs.'
+        },
+        graphId: {
+          type: 'string',
+          description: 'The graph ID to work with. Omit for new graph creation or search tasks.'
+        },
+        nodeId: {
+          type: 'string',
+          description: 'A specific node ID to work with, if applicable.'
+        }
+      },
+      required: ['task']
+    }
   }
 ]
 

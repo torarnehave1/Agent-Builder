@@ -1206,7 +1206,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             case 'tool_progress': {
               const progressTool = ev.data.tool as string;
               const progressMsg = ev.data.message as string;
-              if (progressTool === 'delegate_to_html_builder') {
+              if (progressTool === 'delegate_to_html_builder' || progressTool === 'delegate_to_kg') {
                 setSubagentProgress(progressMsg);
               }
               for (let i = next.toolCalls.length - 1; i >= 0; i--) {

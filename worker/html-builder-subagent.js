@@ -53,6 +53,13 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an HTML app specialist. You fix bugs
   - POST /query with { tableId } for reads
   - POST /insert with { tableId, record } for writes
   - There is NO /update, NO /delete endpoint
+- Use Knowledge Graph API at https://knowledge.vegvisr.org for graph/node operations:
+  - GET /getknowgraph?id={graphId} — read a graph (returns { nodes, edges, metadata })
+  - POST /addNode with { graphId, node: { id, label, type, info, path, color } } — add a node
+  - POST /patchNode with { graphId, nodeId, fields: { info, label, path, color } } — update a node
+  - POST /removeNode with { graphId, nodeId } — remove a node
+  - POST /saveGraphWithHistory with { id, graphData: { nodes, edges, metadata }, override: true } — save full graph
+  - There is NO /api/graphs/ REST-style endpoint. Always use the exact paths above.
 
 After completing your task, provide a brief summary of what you found or changed.`
 

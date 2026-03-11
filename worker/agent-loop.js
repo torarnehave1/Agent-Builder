@@ -26,8 +26,14 @@ async function loadAllTools(env) {
   const hardcodedNames = new Set(TOOL_DEFINITIONS.map(t => t.name))
   const dynamicTools = openAPITools.filter(t => !hardcodedNames.has(t.name))
 
-  // Remove edit_html_node from orchestrator — all HTML editing goes through delegate_to_html_builder
-  const ORCHESTRATOR_BLOCKED_TOOLS = new Set(['edit_html_node'])
+  // Remove tools that subagents handle — forces orchestrator to delegate
+  // edit_html_node → delegate_to_html_builder
+  // KG write tools → delegate_to_kg (reads kept for quick lookups)
+  const ORCHESTRATOR_BLOCKED_TOOLS = new Set([
+    'edit_html_node',
+    'create_graph', 'create_node', 'patch_node', 'add_edge',
+    'patch_graph_metadata',
+  ])
   const filteredTools = TOOL_DEFINITIONS.filter(t => !ORCHESTRATOR_BLOCKED_TOOLS.has(t.name))
   const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL]
 
@@ -193,7 +199,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
           'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder'
+          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
@@ -386,7 +392,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         'create_graph', 'create_node', 'create_html_node', 'add_edge',
         'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
         'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-        'register_chat_bot', 'trigger_bot_response'
+        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg'
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
