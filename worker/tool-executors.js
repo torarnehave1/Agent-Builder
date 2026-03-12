@@ -11,6 +11,9 @@ import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } fr
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent } from './html-builder-subagent.js'
 import { runKgSubagent } from './kg-subagent.js'
+import { runChatbotSubagent } from './chatbot-subagent.js'
+import { runChatSubagent } from './chat-subagent.js'
+import { runBotSubagent } from './bot-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -1966,17 +1969,26 @@ async function executeGetAppTableSchema(input, env) {
   }
 }
 
+// ── Shared: resolve caller profile + build auth query string for CHAT_WORKER
+async function chatAuth(userId, env) {
+  const profile = await resolveUserProfile(userId, env)
+  if (!profile) throw new Error('Could not resolve your user profile')
+  if (!profile.phone) throw new Error('Your profile has no phone number')
+  const qs = `user_id=${encodeURIComponent(profile.user_id || userId)}&phone=${encodeURIComponent(profile.phone)}&email=${encodeURIComponent(profile.email || '')}`
+  return { profile, qs, body: { user_id: profile.user_id || userId, phone: profile.phone, email: profile.email || '' } }
+}
+
 async function executeListChatGroups(input, env) {
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/chat-groups', {
-    method: 'GET'
-  })
+  const auth = await chatAuth(input.userId, env)
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups?${auth.qs}`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Failed to list chat groups')
 
+  const groups = data.groups || []
   return {
-    groups: data.groups,
-    count: data.groups.length,
-    message: `Found ${data.groups.length} chat groups`
+    groups,
+    count: groups.length,
+    message: `Found ${groups.length} chat groups`
   }
 }
 
@@ -1985,14 +1997,24 @@ async function executeAddUserToChatGroup(input, env) {
   if (!email) throw new Error('email is required')
   if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
 
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/add-user-to-group', {
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  // Look up the target user by email to get their user_id and phone
+  const targetProfile = await resolveUserProfile(email, env)
+  if (!targetProfile) throw new Error(`User not found: ${email}`)
+  if (!targetProfile.phone) throw new Error(`User ${email} has no phone number`)
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/join`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email,
-      groupId: input.groupId || undefined,
-      groupName: input.groupName || undefined,
-      role: input.role || undefined
+      user_id: targetProfile.user_id,
+      phone: targetProfile.phone,
+      email: targetProfile.email || email,
+      role: input.role || 'member',
     })
   })
   const data = await res.json()
@@ -2000,46 +2022,77 @@ async function executeAddUserToChatGroup(input, env) {
 
   return {
     success: true,
-    user_id: data.user_id,
-    email: data.email,
-    group_id: data.group_id,
-    groupName: data.groupName,
-    role: data.role,
-    message: `Added ${data.email} to group "${data.groupName}" as ${data.role}`
+    user_id: targetProfile.user_id,
+    email,
+    group_id: groupId,
+    role: input.role || 'member',
+    message: `Added ${email} to group ${groupId} as ${input.role || 'member'}`
   }
 }
 
 async function executeGetGroupMessages(input, env) {
-  const params = new URLSearchParams()
-  if (input.groupId) params.set('groupId', input.groupId)
-  if (input.groupName) params.set('groupName', input.groupName)
-  if (input.limit) params.set('limit', String(input.limit))
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
 
-  const res = await env.DRIZZLE_WORKER.fetch(
-    `https://drizzle-worker/group-messages?${params}`)
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const auth = await chatAuth(input.userId, env)
+  const limit = Math.min(input.limit || 50, 200)
+  const res = await env.CHAT_WORKER.fetch(
+    `https://group-chat-worker/groups/${groupId}/messages?${auth.qs}&limit=${limit}`
+  )
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Failed to get group messages')
 
+  const messages = data.messages || []
   return {
-    groupName: data.groupName,
-    groupId: data.groupId,
-    messages: data.messages,
-    count: data.count,
-    message: `Retrieved ${data.count} messages from "${data.groupName}"`
+    groupId,
+    messages,
+    count: messages.length,
+    message: `Retrieved ${messages.length} messages from group ${groupId}`
   }
 }
 
 async function executeGetGroupStats(input, env) {
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/group-stats')
+  const auth = await chatAuth(input.userId, env)
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups?${auth.qs}`)
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to get group stats')
+  if (!res.ok) throw new Error(data.error || 'Failed to get groups')
 
-  const mostActive = data.groups[0]
+  const groups = data.groups || []
+  // Build stats by fetching member counts per group
+  const stats = []
+  for (const g of groups) {
+    try {
+      const membersRes = await env.CHAT_WORKER.fetch(
+        `https://group-chat-worker/groups/${g.id}/members?${auth.qs}`
+      )
+      const membersData = await membersRes.json()
+      const members = membersData.members || []
+      const botCount = members.filter(m => m.is_bot || (m.user_id && m.user_id.startsWith('bot:'))).length
+      stats.push({
+        id: g.id,
+        name: g.name,
+        memberCount: members.length,
+        botCount,
+        humanCount: members.length - botCount,
+        createdBy: g.created_by,
+        createdAt: g.created_at,
+        updatedAt: g.updated_at,
+      })
+    } catch {
+      stats.push({ id: g.id, name: g.name, memberCount: '?', createdBy: g.created_by })
+    }
+  }
+
+  const mostActive = stats[0]
   return {
-    groups: data.groups,
-    count: data.groups.length,
+    groups: stats,
+    count: stats.length,
     message: mostActive
-      ? `${data.groups.length} groups. Most active: "${mostActive.name}" with ${mostActive.messageCount} messages`
+      ? `${stats.length} groups. First: "${mostActive.name}" with ${mostActive.memberCount} members (${mostActive.botCount} bots)`
       : 'No groups found'
   }
 }
@@ -2056,21 +2109,31 @@ async function executeSendGroupMessage(input, env) {
   }
   if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
 
-  const payload = {
-    email,
-    groupId: input.groupId || undefined,
-    groupName: input.groupName || undefined,
-    body,
-    messageType
-  }
-  if (messageType === 'voice') {
-    payload.audioUrl = input.audioUrl
-    if (input.audioDurationMs) payload.audioDurationMs = input.audioDurationMs
-    if (input.transcriptText) payload.transcriptText = input.transcriptText
-    if (input.transcriptLang) payload.transcriptLang = input.transcriptLang
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
   }
 
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/send-group-message', {
+  // Resolve the sender by email
+  const senderProfile = await resolveUserProfile(email, env)
+  if (!senderProfile) throw new Error(`User not found: ${email}`)
+  if (!senderProfile.phone) throw new Error(`User ${email} has no phone number`)
+
+  const payload = {
+    user_id: senderProfile.user_id,
+    phone: senderProfile.phone,
+    email: senderProfile.email || email,
+    body,
+    message_type: messageType,
+  }
+  if (messageType === 'voice') {
+    payload.audio_url = input.audioUrl
+    if (input.audioDurationMs) payload.audio_duration_ms = input.audioDurationMs
+    if (input.transcriptText) payload.transcript_text = input.transcriptText
+    if (input.transcriptLang) payload.transcript_lang = input.transcriptLang
+  }
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -2080,21 +2143,14 @@ async function executeSendGroupMessage(input, env) {
 
   const result = {
     success: true,
-    messageId: data.messageId,
-    groupId: data.groupId,
-    groupName: data.groupName,
-    email: data.email,
-    body: data.body,
-    messageType: data.messageType,
-    createdAt: data.createdAt,
+    messageId: data.id || data.message_id,
+    groupId,
+    email,
+    body,
+    messageType,
     message: messageType === 'voice'
-      ? `Sent voice message to "${data.groupName}" as ${data.email}`
-      : `Sent message to "${data.groupName}" as ${data.email}`
-  }
-  if (messageType === 'voice') {
-    result.audioUrl = data.audioUrl
-    result.transcriptText = data.transcriptText
-    result.transcriptionStatus = data.transcriptionStatus
+      ? `Sent voice message to group ${groupId} as ${email}`
+      : `Sent message to group ${groupId} as ${email}`
   }
   return result
 }
@@ -2105,13 +2161,20 @@ async function executeCreateChatGroup(input, env) {
   if (!email) throw new Error('email is required')
   if (!name) throw new Error('name (group name) is required')
 
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/create-chat-group', {
+  // Resolve creator by email
+  const creatorProfile = await resolveUserProfile(email, env)
+  if (!creatorProfile) throw new Error(`User not found: ${email}`)
+  if (!creatorProfile.phone) throw new Error(`User ${email} has no phone number`)
+
+  const res = await env.CHAT_WORKER.fetch('https://group-chat-worker/groups', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      email,
       name,
-      graphId: input.graphId || undefined
+      created_by: creatorProfile.user_id,
+      phone: creatorProfile.phone,
+      email: creatorProfile.email || email,
+      graph_id: input.graphId || undefined,
     })
   })
   const data = await res.json()
@@ -2119,213 +2182,576 @@ async function executeCreateChatGroup(input, env) {
 
   return {
     success: true,
-    groupId: data.groupId,
-    groupName: data.groupName,
-    createdBy: data.createdBy,
-    role: data.role,
-    graphId: data.graphId,
-    createdAt: data.createdAt,
-    message: `Created chat group "${data.groupName}" with ${data.createdBy} as owner`
+    groupId: data.id,
+    groupName: data.name,
+    createdBy: email,
+    createdAt: data.created_at,
+    graphId: data.graph_id,
+    message: `Created chat group "${data.name}" with ${email} as owner`
   }
 }
 
 async function executeRegisterChatBot(input, env) {
-  const graphId = (input.graphId || '').trim()
   const botName = (input.botName || '').trim()
-  if (!graphId) throw new Error('graphId is required')
+  const username = (input.username || '').trim().toLowerCase().replace(/^@/, '')
   if (!botName) throw new Error('botName is required')
-  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+  if (!username) throw new Error('username is required')
 
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/register-chat-bot', {
+  // Resolve caller's profile for auth (Superadmin check happens in group-chat-worker)
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number — required for bot management')
+
+  // 1. Create the bot via group-chat-worker
+  const createRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bots', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      graphId,
-      botName,
-      groupId: input.groupId || undefined,
-      groupName: input.groupName || undefined
+      user_id: callerProfile.user_id || input.userId,
+      phone: callerProfile.phone,
+      email: callerProfile.email,
+      name: botName,
+      username,
+      graph_id: input.graphId || undefined,
+      system_prompt: input.systemPrompt || undefined,
+      avatar_url: input.avatarUrl || undefined,
+      model: input.model || undefined,
+      temperature: input.temperature,
+      max_turns: input.maxTurns || undefined,
+      tools: input.tools || [],
     })
   })
+  const createData = await createRes.json()
+  if (!createRes.ok) throw new Error(createData.error || 'Failed to create bot')
+
+  const bot = createData.bot
+  const result = {
+    success: true,
+    botId: bot.id,
+    botName: bot.name,
+    username: bot.username,
+    graphId: bot.graph_id,
+    model: bot.model,
+    message: `Created bot "${bot.name}" (@${bot.username})`,
+  }
+
+  // 2. If groupId provided, also add bot to the group
+  if (input.groupId) {
+    const addRes = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${input.groupId}/bots`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        user_id: callerProfile.user_id || input.userId,
+        phone: callerProfile.phone,
+        email: callerProfile.email,
+        bot_id: bot.id,
+      })
+    })
+    const addData = await addRes.json()
+    if (addRes.ok) {
+      result.groupId = input.groupId
+      result.message += ` and added to group ${input.groupId}`
+    } else {
+      result.groupWarning = addData.error || 'Failed to add bot to group'
+      result.message += ` (warning: could not add to group — ${result.groupWarning})`
+    }
+  }
+
+  return result
+}
+
+async function executeListBots(input, env) {
+  const auth = await chatAuth(input.userId, env)
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots?${auth.qs}`)
   const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to register chat bot')
+  if (!res.ok) throw new Error(data.error || 'Failed to list bots')
+
+  const bots = (data.bots || []).map(b => ({
+    id: b.id,
+    name: b.name,
+    username: b.username,
+    model: b.model,
+    graph_id: b.graph_id,
+    avatar_url: b.avatar_url,
+    is_active: b.is_active,
+    created_at: b.created_at,
+  }))
 
   return {
+    bots,
+    count: bots.length,
+    message: bots.length === 0
+      ? 'No active bots found.'
+      : `${bots.length} active bots: ${bots.map(b => `${b.name} (@${b.username})`).join(', ')}`,
+  }
+}
+
+async function executeGetBot(input, env) {
+  if (!input.botId) throw new Error('botId is required')
+  const auth = await chatAuth(input.userId, env)
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots/${input.botId}?${auth.qs}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Bot not found')
+
+  const bot = data.bot
+  const groups = data.groups || []
+
+  return {
+    bot,
+    groups,
+    message: `Bot "${bot.name}" (@${bot.username}) — model: ${bot.model}, graph: ${bot.graph_id || 'none'}, groups: ${groups.length === 0 ? 'none' : groups.map(g => g.name).join(', ')}`,
+  }
+}
+
+async function executeUpdateChatBot(input, env) {
+  if (!input.botId) throw new Error('botId is required')
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const body = {
+    user_id: callerProfile.user_id || input.userId,
+    phone: callerProfile.phone,
+    email: callerProfile.email || '',
+  }
+  if (input.name !== undefined) body.name = input.name
+  if (input.systemPrompt !== undefined) body.system_prompt = input.systemPrompt
+  if (input.graphId !== undefined) body.graph_id = input.graphId
+  if (input.avatarUrl !== undefined) body.avatar_url = input.avatarUrl
+  if (input.model !== undefined) body.model = input.model
+  if (input.temperature !== undefined) body.temperature = input.temperature
+  if (input.maxTurns !== undefined) body.max_turns = input.maxTurns
+  if (input.tools !== undefined) body.tools = input.tools
+  if (input.isActive !== undefined) body.is_active = input.isActive
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots/${input.botId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to update bot')
+
+  const bot = data.bot
+  return {
     success: true,
-    botUserId: data.botUserId,
-    botEmail: data.botEmail,
-    botName: data.botName,
-    groupId: data.groupId,
-    groupName: data.groupName,
-    graphId: data.graphId,
-    message: `Registered bot "${data.botName}" in group "${data.groupName}" (personality graph: ${data.graphId})`
+    botId: input.botId,
+    bot,
+    message: `Updated bot "${bot.name}" (@${bot.username})`,
   }
 }
 
 async function executeGetGroupMembers(input, env) {
   if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
-  const params = new URLSearchParams()
-  if (input.groupId) params.set('groupId', input.groupId)
-  if (input.groupName) params.set('groupName', input.groupName)
-  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-members?${params}`)
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to get group members')
-  return data
+
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const auth = await chatAuth(input.userId, env)
+
+  // Fetch members and bots in parallel from CHAT_WORKER
+  const [membersRes, botsRes] = await Promise.all([
+    env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/members?${auth.qs}`),
+    env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/bots?${auth.qs}`),
+  ])
+
+  const membersData = await membersRes.json()
+  if (!membersRes.ok) throw new Error(membersData.error || 'Failed to get group members')
+
+  const members = membersData.members || []
+
+  // Build bot lookup map
+  const botMap = {}
+  if (botsRes.ok) {
+    const botsData = await botsRes.json()
+    for (const b of (botsData.bots || [])) {
+      botMap[b.id] = b
+      botMap[`bot:${b.id}`] = b
+    }
+  }
+
+  // Enrich members: bot names + human profile lookup
+  for (const m of members) {
+    const bot = botMap[m.user_id] || botMap[m.bot_id]
+    if (bot) {
+      m.bot_name = bot.name
+      m.bot_username = bot.username
+      m.bot_model = bot.model
+      m.bot_graph_id = bot.graph_id
+      m.is_bot = true
+    }
+    // Try to resolve human member names from config
+    if (!bot && m.user_id && !m.email) {
+      try {
+        const profile = await resolveUserProfile(m.user_id, env)
+        if (profile) {
+          m.email = profile.email
+          m.phone = profile.phone
+        }
+      } catch { /* skip */ }
+    }
+  }
+
+  const humans = members.filter(m => !m.is_bot)
+  const bots = members.filter(m => m.is_bot)
+  const memberList = humans.map(m => `${m.email || m.phone || m.user_id} (${m.role})`).join(', ')
+  const botList = bots.map(m => m.bot_name ? `${m.bot_name} (@${m.bot_username})` : (m.user_id || m.bot_id)).join(', ')
+
+  return {
+    groupId,
+    members,
+    count: members.length,
+    humanCount: humans.length,
+    botCount: bots.length,
+    message: `${members.length} members (${humans.length} humans, ${bots.length} bots). Humans: ${memberList || 'none'}. Bots: ${botList || 'none'}`,
+  }
 }
 
 async function executeTriggerBotResponse(input, env) {
-  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
-  const messageCount = Math.min(input.messageCount || 10, 50)
+  if (!input.groupId) throw new Error('groupId is required')
+  const messageCount = Math.min(input.messageCount || 20, 50)
 
-  // 1. Get bots in group
-  const botParams = new URLSearchParams()
-  if (input.groupId) botParams.set('groupId', input.groupId)
-  if (input.groupName) botParams.set('groupName', input.groupName)
-  const botRes = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-bots?${botParams}`)
-  const botData = await botRes.json()
-  if (!botRes.ok) throw new Error(botData.error || 'Failed to get group bots')
-  if (!botData.bots || botData.bots.length === 0) throw new Error(`No bots registered in group "${botData.groupName}"`)
+  // Resolve caller for auth on group-chat-worker endpoints
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+  const authQS = `user_id=${encodeURIComponent(callerProfile.user_id || input.userId)}&phone=${encodeURIComponent(callerProfile.phone)}&email=${encodeURIComponent(callerProfile.email || '')}`
 
-  // Filter to specific bot if requested
-  let bots = botData.bots
-  if (input.botGraphId) {
-    bots = bots.filter(b => b.graphId === input.botGraphId)
-    if (bots.length === 0) throw new Error(`Bot with graph "${input.botGraphId}" not found in group`)
+  // 1. Get bots in the group via group-chat-worker
+  const botsRes = await env.CHAT_WORKER.fetch(
+    `https://group-chat-worker/groups/${input.groupId}/bots?${authQS}`
+  )
+  const botsData = await botsRes.json()
+  if (!botsRes.ok) throw new Error(botsData.error || 'Failed to get group bots')
+  if (!botsData.bots || botsData.bots.length === 0) throw new Error('No bots in this group')
+
+  let bots = botsData.bots
+  if (input.botId) {
+    bots = bots.filter(b => b.id === input.botId)
+    if (bots.length === 0) throw new Error(`Bot ${input.botId} not found in group`)
   }
 
-  // 2. Get recent messages
-  const msgParams = new URLSearchParams()
-  msgParams.set('groupId', botData.groupId)
-  msgParams.set('limit', String(messageCount))
-  const msgRes = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/group-messages?${msgParams}`)
+  // 2. Get recent messages from the group
+  const msgRes = await env.CHAT_WORKER.fetch(
+    `https://group-chat-worker/groups/${input.groupId}/messages?${authQS}&limit=${messageCount}`
+  )
   const msgData = await msgRes.json()
-  if (!msgRes.ok) throw new Error(msgData.error || 'Failed to get group messages')
+  if (!msgRes.ok) throw new Error(msgData.error || 'Failed to get messages')
+  const recentMessages = (msgData.messages || []).reverse() // oldest first
 
-  // Format messages as conversation context
-  const now = Date.now()
-  const formattedMessages = (msgData.messages || []).reverse().map(m => {
-    const ago = Math.round((now - new Date(m.createdAt).getTime()) / 60000)
-    const timeStr = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago / 60)}h ago`
-    const text = m.messageType === 'voice' && m.transcriptText ? `[voice] ${m.transcriptText}` : m.body
-    return `[${m.email}, ${timeStr}]: ${text}`
-  }).join('\n')
+  // 3. Get group name from groups list
+  const groupsRes = await env.CHAT_WORKER.fetch(
+    `https://group-chat-worker/groups?${authQS}`
+  )
+  const groupsData = await groupsRes.json()
+  const matchingGroup = (groupsData.groups || []).find(g => g.id === input.groupId)
+  const groupName = matchingGroup?.name || input.groupId
 
-  // 3. For each bot, generate and post response
+  // 4. For each bot, run the chatbot subagent
   const results = []
   for (const bot of bots) {
-    const isAgentBot = bot.userId.startsWith('bot-agent-')
-    let botTitle = bot.botName || bot.email
-    let personality = ''
-    let botModel = 'claude-haiku-4-5-20251001'
-    let botTemp = 0.7
-    let systemPromptOverride = ''
+    try {
+      const subagentResult = await runChatbotSubagent({
+        bot: {
+          id: bot.id,
+          name: bot.name,
+          username: bot.username,
+          system_prompt: bot.system_prompt,
+          graph_id: bot.graph_id,
+          tools: bot.tools,
+          model: bot.model,
+          max_turns: bot.max_turns,
+          temperature: bot.temperature,
+        },
+        groupId: input.groupId,
+        groupName,
+        triggerMessage: null,
+        recentMessages,
+      }, env, executeTool)
 
-    let botAvatarUrl = null
+      if (subagentResult.success && subagentResult.response) {
+        // Post the response to the group via bot-message endpoint
+        const postRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bot-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bot_id: bot.id,
+            group_id: input.groupId,
+            body: subagentResult.response,
+          })
+        })
+        const postData = await postRes.json()
 
-    if (isAgentBot) {
-      // Agent-based bot: load agent_config for model/temp, then knowledge graph for personality
-      const agentId = bot.userId.replace('bot-agent-', '')
-      const agentConfig = await env.DB.prepare('SELECT * FROM agent_configs WHERE id = ?').bind(agentId).first()
-      if (agentConfig) {
-        botTitle = agentConfig.name || botTitle
-        botModel = agentConfig.model || botModel
-        botTemp = agentConfig.temperature ?? botTemp
-        botAvatarUrl = agentConfig.avatar_url || null
-        if (agentConfig.system_prompt) systemPromptOverride = agentConfig.system_prompt
-        // Get graphId from agent metadata
-        try {
-          const meta = JSON.parse(agentConfig.metadata || '{}')
-          if (meta.botGraphId && !bot.graphId) bot.graphId = meta.botGraphId
-        } catch {}
+        results.push({
+          botName: bot.name,
+          username: bot.username,
+          response: subagentResult.response,
+          turns: subagentResult.turns,
+          messageId: postData.message_id,
+          success: true,
+        })
+      } else {
+        results.push({ botName: bot.name, error: subagentResult.error || 'No response', success: false })
       }
+    } catch (err) {
+      results.push({ botName: bot.name, error: err.message, success: false })
     }
-
-    // Load knowledge graph for personality (both agent-based and graph-only bots)
-    if (bot.graphId) {
-      const kgRes = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${bot.graphId}`)
-      const kgData = await kgRes.json()
-      if (kgRes.ok && kgData.nodes) {
-        if (!isAgentBot) botTitle = kgData.metadata?.title || botTitle
-        const fulltextNodes = kgData.nodes.filter(n => n.type === 'fulltext' && n.info)
-        personality = fulltextNodes.map(n => n.info).join('\n\n---\n\n')
-      } else if (!isAgentBot) {
-        results.push({ bot: bot.email, error: `Failed to load graph ${bot.graphId}` })
-        continue
-      }
-    } else if (!systemPromptOverride) {
-      results.push({ bot: bot.email, error: 'No knowledge graph or system prompt configured' })
-      continue
-    }
-
-    const systemPrompt = `${systemPromptOverride ? systemPromptOverride + '\n\n' : ''}You are ${botTitle}, a chatbot in the "${botData.groupName}" chat group.
-
-${personality}
-
-Below are recent messages from the group. Respond naturally as ${botTitle}.
-Keep your response concise and conversational. Do not repeat what others said.
-Do not prefix your response with your name or any label.`
-
-    const userMessage = `Here are the recent messages in the group:\n\n${formattedMessages}\n\nPlease respond as ${botTitle}.`
-
-    // Call Claude
-    const aiRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: bot.userId,
-        messages: [{ role: 'user', content: userMessage }],
-        system: systemPrompt,
-        model: botModel,
-        max_tokens: 1024,
-        temperature: botTemp
-      })
-    })
-    const aiData = await aiRes.json()
-    if (!aiRes.ok) {
-      results.push({ bot: bot.email, error: `Claude API error: ${aiData.error || 'unknown'}` })
-      continue
-    }
-
-    const textBlock = (aiData.content || []).find(c => c.type === 'text')
-    const responseText = textBlock?.text || ''
-    if (!responseText) {
-      results.push({ bot: bot.email, error: 'Empty response from Claude' })
-      continue
-    }
-
-    // Post bot response to group
-    const sendPayload = {
-      email: bot.email,
-      groupId: botData.groupId,
-      body: responseText
-    }
-    if (botAvatarUrl) sendPayload.senderAvatarUrl = botAvatarUrl
-    const sendRes = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/send-group-message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(sendPayload)
-    })
-    const sendData = await sendRes.json()
-    if (!sendRes.ok) {
-      results.push({ bot: bot.email, error: sendData.error || 'Failed to post response' })
-      continue
-    }
-
-    results.push({
-      bot: bot.email,
-      botName: botTitle,
-      messageId: sendData.messageId,
-      response: responseText,
-      success: true
-    })
   }
 
   return {
-    groupId: botData.groupId,
-    groupName: botData.groupName,
-    messagesAnalyzed: msgData.messages?.length || 0,
+    groupId: input.groupId,
+    groupName,
+    messagesAnalyzed: recentMessages.length,
     botResponses: results,
-    message: results.map(r => r.success ? `${r.botName}: "${r.response.substring(0, 100)}..."` : `${r.bot}: ERROR - ${r.error}`).join('\n')
+    message: results.map(r => r.success
+      ? `@${r.username}: "${r.response.substring(0, 100)}..." (${r.turns} turns)`
+      : `@${r.botName}: ERROR — ${r.error}`
+    ).join('\n'),
   }
+}
+
+// ── Chat group management (new tools) ─────────────────────────────
+
+async function executeDeleteChatGroup(input, env) {
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+
+  // Resolve groupId from groupName if needed
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: callerProfile.user_id || input.userId,
+      phone: callerProfile.phone,
+      email: callerProfile.email || '',
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to archive group')
+
+  return {
+    success: true,
+    groupId,
+    message: `Archived group ${groupId}. Use restore_chat_group to undo.`,
+  }
+}
+
+async function executeRestoreChatGroup(input, env) {
+  if (!input.groupId) throw new Error('groupId is required')
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${input.groupId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: callerProfile.user_id || input.userId,
+      phone: callerProfile.phone,
+      email: callerProfile.email || '',
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to restore group')
+
+  return {
+    success: true,
+    groupId: input.groupId,
+    message: `Restored group ${input.groupId}`,
+  }
+}
+
+async function executeUpdateChatGroup(input, env) {
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+  if (!input.name && input.imageUrl === undefined) throw new Error('At least one of name or imageUrl must be provided')
+
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const body = {
+    user_id: callerProfile.user_id || input.userId,
+    phone: callerProfile.phone,
+    email: callerProfile.email || '',
+  }
+  if (input.name) body.name = input.name
+  if (input.imageUrl !== undefined) body.image_url = input.imageUrl
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to update group')
+
+  return {
+    success: true,
+    groupId,
+    name: data.name,
+    imageUrl: data.image_url,
+    message: `Updated group "${data.name || groupId}"`,
+  }
+}
+
+async function executeRemoveChatBot(input, env) {
+  if (!input.botId) throw new Error('botId is required')
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+  const authQS = `user_id=${encodeURIComponent(callerProfile.user_id || input.userId)}&phone=${encodeURIComponent(callerProfile.phone)}&email=${encodeURIComponent(callerProfile.email || '')}`
+
+  if (input.groupId) {
+    // Remove bot from specific group
+    const res = await env.CHAT_WORKER.fetch(
+      `https://group-chat-worker/groups/${input.groupId}/bots/${input.botId}?${authQS}`,
+      { method: 'DELETE' }
+    )
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to remove bot from group')
+
+    return {
+      success: true,
+      botId: input.botId,
+      groupId: input.groupId,
+      message: `Removed bot ${input.botId} from group ${input.groupId}`,
+    }
+  } else {
+    // Deactivate bot entirely
+    const res = await env.CHAT_WORKER.fetch(
+      `https://group-chat-worker/bots/${input.botId}?${authQS}`,
+      { method: 'DELETE' }
+    )
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to deactivate bot')
+
+    return {
+      success: true,
+      botId: input.botId,
+      message: `Deactivated bot ${input.botId}`,
+    }
+  }
+}
+
+async function executeCreatePoll(input, env) {
+  if (!input.question) throw new Error('question is required')
+  if (!input.options || !Array.isArray(input.options) || input.options.length < 2) {
+    throw new Error('options must be an array with at least 2 choices')
+  }
+  if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
+
+  let groupId = input.groupId
+  if (!groupId && input.groupName) {
+    groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/polls`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: callerProfile.user_id || input.userId,
+      phone: callerProfile.phone,
+      email: callerProfile.email || '',
+      question: input.question,
+      options: input.options,
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to create poll')
+
+  return {
+    success: true,
+    pollId: data.id || data.poll_id,
+    groupId,
+    question: input.question,
+    options: input.options,
+    message: `Created poll "${input.question}" with ${input.options.length} options in group ${groupId}`,
+  }
+}
+
+async function executeClosePoll(input, env) {
+  if (!input.pollId) throw new Error('pollId is required')
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/polls/${input.pollId}/close`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      user_id: callerProfile.user_id || input.userId,
+      phone: callerProfile.phone,
+      email: callerProfile.email || '',
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to close poll')
+
+  return {
+    success: true,
+    pollId: input.pollId,
+    message: `Closed poll ${input.pollId} — no more votes accepted`,
+  }
+}
+
+async function executeGetPollResults(input, env) {
+  if (!input.pollId) throw new Error('pollId is required')
+
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  if (!callerProfile) throw new Error('Could not resolve your user profile')
+  if (!callerProfile.phone) throw new Error('Your profile has no phone number')
+  const authQS = `user_id=${encodeURIComponent(callerProfile.user_id || input.userId)}&phone=${encodeURIComponent(callerProfile.phone)}&email=${encodeURIComponent(callerProfile.email || '')}`
+
+  const res = await env.CHAT_WORKER.fetch(
+    `https://group-chat-worker/polls/${input.pollId}?${authQS}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to get poll results')
+
+  return {
+    pollId: input.pollId,
+    question: data.question,
+    options: data.options,
+    closed: !!data.closed_at,
+    createdBy: data.created_by,
+    message: `Poll "${data.question}" — ${data.options?.length || 0} options${data.closed_at ? ' (closed)' : ' (open)'}`,
+  }
+}
+
+// Helper: resolve groupName → groupId via CHAT_WORKER
+async function resolveGroupIdByName(groupName, userId, env) {
+  const auth = await chatAuth(userId, env)
+  const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups?${auth.qs}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error('Failed to list groups for name resolution')
+  const match = (data.groups || []).find(
+    g => g.name && g.name.toLowerCase() === groupName.toLowerCase()
+  )
+  if (!match) throw new Error(`No group found with name "${groupName}"`)
+  return match.id
 }
 
 // ── Describe capabilities ─────────────────────────────────────────
@@ -2672,6 +3098,44 @@ async function executeCalendarGetStatus(input, env) {
   }
 }
 
+// ── Bot tools (used by chatbot subagent) ──────────────────────────
+
+async function executeSearchKnowledge(input, env) {
+  const query = (input.query || '').trim()
+  if (!query) throw new Error('query is required')
+  const params = new URLSearchParams({ q: query })
+  if (input.nodeType) params.set('nodeType', input.nodeType)
+  if (input.limit) params.set('limit', String(input.limit))
+  const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/searchGraphs?${params}`)
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Search failed')
+  return { results: data.results || data.graphs || [], count: (data.results || data.graphs || []).length }
+}
+
+async function executeTranslate(input, env) {
+  const text = (input.text || '').trim()
+  const targetLang = (input.target_language || '').trim()
+  if (!text) throw new Error('text is required')
+  if (!targetLang) throw new Error('target_language is required')
+
+  // Use Anthropic to translate via a simple prompt
+  const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: 'system:translate',
+      messages: [{ role: 'user', content: `Translate the following text to ${targetLang}. Return ONLY the translated text, nothing else.\n\n${text}` }],
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 2048,
+      temperature: 0,
+    })
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Translation failed')
+  const translated = (data.content || []).find(c => c.type === 'text')?.text || ''
+  return { original: text, translated, target_language: targetLang, source_language: input.source_language || 'auto' }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -2707,6 +3171,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListGraphs(toolInput, env)
     case 'list_meta_areas':
       return await executeListMetaAreas(toolInput, env)
+    case 'search_knowledge':
+      return await executeSearchKnowledge(toolInput, env)
+    case 'translate':
+      return await executeTranslate(toolInput, env)
     case 'perplexity_search':
       return await executePerplexitySearch(toolInput, env)
     case 'search_pexels':
@@ -2771,6 +3239,41 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetGroupMembers(toolInput, env)
     case 'trigger_bot_response':
       return await executeTriggerBotResponse(toolInput, env)
+    case 'delete_chat_group':
+      return await executeDeleteChatGroup(toolInput, env)
+    case 'restore_chat_group':
+      return await executeRestoreChatGroup(toolInput, env)
+    case 'update_chat_group':
+      return await executeUpdateChatGroup(toolInput, env)
+    case 'remove_chat_bot':
+      return await executeRemoveChatBot(toolInput, env)
+    case 'list_bots':
+      return await executeListBots(toolInput, env)
+    case 'get_bot':
+      return await executeGetBot(toolInput, env)
+    case 'update_chat_bot':
+      return await executeUpdateChatBot(toolInput, env)
+    case 'create_poll':
+      return await executeCreatePoll(toolInput, env)
+    case 'close_poll':
+      return await executeClosePoll(toolInput, env)
+    case 'get_poll_results':
+      return await executeGetPollResults(toolInput, env)
+    case 'delegate_to_chat': {
+      const result = await runChatSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        groupId: result.groupId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Chat subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Chat subagent failed: ${result.error || 'Unknown error'}`,
+      }
+    }
     case 'describe_capabilities':
       return await executeDescribeCapabilities(toolInput, env)
     case 'db_list_tables':
@@ -2831,6 +3334,21 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
+      }
+    }
+    case 'delegate_to_bot': {
+      const result = await runBotSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        botId: result.botId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Bot subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Bot subagent failed: ${result.error || 'Unknown error'}`,
       }
     }
     default:

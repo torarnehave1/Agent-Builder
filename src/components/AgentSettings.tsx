@@ -108,7 +108,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
             // Load bot metadata
             try {
               const meta = JSON.parse(a.metadata || '{}');
-              if (meta.botGraphId) {
+              if (meta.chatBotId || meta.botGraphId) {
                 setIsChatBot(true);
                 setBotGraphId(meta.botGraphId || '');
               } else {
@@ -120,7 +120,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
         })
         .catch(() => {});
       // Load bot group registrations
-      fetch(`${AGENT_API}/agent-bot-groups?agentId=${agentId}`)
+      fetch(`${AGENT_API}/agent-bot-groups?agentId=${agentId}&userId=${encodeURIComponent(userId)}`)
         .then(res => res.json())
         .then(data => {
           const groups = (data.groups || []).map((g: any) => ({ groupId: g.groupId, groupName: g.groupName }));
@@ -136,13 +136,13 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
 
   // Load available chat groups
   useEffect(() => {
-    fetch(`${AGENT_API}/chat-groups`)
+    fetch(`${AGENT_API}/chat-groups?userId=${encodeURIComponent(userId)}`)
       .then(res => res.json())
       .then(data => {
         if (data.groups) setAvailableGroups(data.groups.map((g: any) => ({ id: g.id, name: g.name })));
       })
       .catch(() => {});
-  }, []);
+  }, [userId]);
 
   // Load available tools
   useEffect(() => {
@@ -236,7 +236,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
             await fetch(`${AGENT_API}/register-agent-bot`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ agentId: savedId, groupId: g.groupId, botName: name.trim(), graphId: botGraphId.trim() || undefined }),
+              body: JSON.stringify({ agentId: savedId, groupId: g.groupId, botName: name.trim(), graphId: botGraphId.trim() || undefined, userId }),
             });
           }
         }
@@ -246,7 +246,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
             await fetch(`${AGENT_API}/unregister-agent-bot`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ agentId: savedId, groupId: g.groupId }),
+              body: JSON.stringify({ agentId: savedId, groupId: g.groupId, userId }),
             });
           }
         }

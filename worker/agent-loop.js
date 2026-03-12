@@ -29,10 +29,18 @@ async function loadAllTools(env) {
   // Remove tools that subagents handle — forces orchestrator to delegate
   // edit_html_node → delegate_to_html_builder
   // KG write tools → delegate_to_kg (reads kept for quick lookups)
+  // Chat tools → delegate_to_chat (all chat group management)
   const ORCHESTRATOR_BLOCKED_TOOLS = new Set([
     'edit_html_node',
     'create_graph', 'create_node', 'patch_node', 'add_edge',
     'patch_graph_metadata',
+    'list_chat_groups', 'create_chat_group', 'update_chat_group',
+    'delete_chat_group', 'restore_chat_group',
+    'add_user_to_chat_group', 'get_group_members', 'get_group_messages',
+    'get_group_stats', 'send_group_message',
+    'create_poll', 'close_poll', 'get_poll_results',
+    'register_chat_bot', 'remove_chat_bot', 'trigger_bot_response',
+    'list_bots', 'get_bot', 'update_chat_bot',
   ])
   const filteredTools = TOOL_DEFINITIONS.filter(t => !ORCHESTRATOR_BLOCKED_TOOLS.has(t.name))
   const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL]
@@ -199,7 +207,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
           'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg'
+          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
@@ -392,7 +400,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         'create_graph', 'create_node', 'create_html_node', 'add_edge',
         'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
         'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg'
+        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot'
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

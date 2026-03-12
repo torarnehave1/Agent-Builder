@@ -16,6 +16,7 @@ import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
+import { runChatbotSubagent } from './chatbot-subagent.js'
 
 export default {
   async fetch(request, env, ctx) {
@@ -571,46 +572,248 @@ export default {
         return new Response(JSON.stringify({ id: agentId, deleted: true }), { headers: corsHeaders })
       }
 
-      // ── Chat Bot management proxies ──
+      // ── Chat Bot management proxies (via CHAT_WORKER) ──
 
-      // GET /chat-groups — proxy to drizzle-worker
+      // Helper: resolve user profile for CHAT_WORKER auth
+      async function resolveProfileForProxy(userId) {
+        if (!userId) return null
+        try {
+          // Try by user_id first, then by email
+          let row = await env.DB.prepare('SELECT user_id, email, phone FROM config WHERE user_id = ?').bind(userId).first()
+          if (!row) row = await env.DB.prepare('SELECT user_id, email, phone FROM config WHERE email = ?').bind(userId).first()
+          if (!row) {
+            // Try smsgway profile API as fallback
+            const profileRes = await fetch(`https://smsgway.vegvisr.org/api/auth/profile?userId=${encodeURIComponent(userId)}`)
+            if (profileRes.ok) {
+              const p = await profileRes.json()
+              if (p.phone) return { user_id: p.user_id || userId, email: p.email || userId, phone: p.phone }
+            }
+            return null
+          }
+          return { user_id: row.user_id || userId, email: row.email || userId, phone: row.phone }
+        } catch { return null }
+      }
+
+      // GET /chat-groups — list groups via CHAT_WORKER
       if (pathname === '/chat-groups' && request.method === 'GET') {
-        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/chat-groups')
+        const userId = url.searchParams.get('userId')
+        const profile = userId ? await resolveProfileForProxy(userId) : null
+        if (!profile) {
+          return new Response(JSON.stringify({ error: 'Could not resolve user profile. Pass ?userId=<email>' }), { status: 400, headers: corsHeaders })
+        }
+        const qs = `user_id=${encodeURIComponent(profile.user_id)}&phone=${encodeURIComponent(profile.phone)}&email=${encodeURIComponent(profile.email)}`
+        const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups?${qs}`)
         const data = await res.text()
         return new Response(data, { status: res.status, headers: corsHeaders })
       }
 
-      // GET /agent-bot-groups?agentId=X — get groups where agent is a bot
+      // GET /agent-bot-groups?agentId=X — get groups where agent's bot is registered
       if (pathname === '/agent-bot-groups' && request.method === 'GET') {
         const agentId = url.searchParams.get('agentId')
+        const userId = url.searchParams.get('userId')
         if (!agentId) return new Response(JSON.stringify({ error: 'agentId required' }), { status: 400, headers: corsHeaders })
-        const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/agent-bot-groups?agentId=${encodeURIComponent(agentId)}`)
-        const data = await res.text()
-        return new Response(data, { status: res.status, headers: corsHeaders })
+
+        // Look up the agent's chat_bot_id from metadata
+        const agent = await env.DB.prepare('SELECT metadata FROM agent_configs WHERE id = ?').bind(agentId).first()
+        const meta = agent?.metadata ? JSON.parse(agent.metadata) : {}
+        const chatBotId = meta.chatBotId
+
+        if (!chatBotId) {
+          // No bot registered yet — return empty
+          return new Response(JSON.stringify({ groups: [] }), { headers: corsHeaders })
+        }
+
+        // Get bot details (includes groups) from CHAT_WORKER
+        const profile = userId ? await resolveProfileForProxy(userId) : null
+        if (!profile) {
+          return new Response(JSON.stringify({ error: 'Could not resolve user profile. Pass ?userId=<email>' }), { status: 400, headers: corsHeaders })
+        }
+        const qs = `user_id=${encodeURIComponent(profile.user_id)}&phone=${encodeURIComponent(profile.phone)}&email=${encodeURIComponent(profile.email)}`
+        const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots/${chatBotId}?${qs}`)
+        const data = await res.json()
+        if (!res.ok) {
+          return new Response(JSON.stringify({ groups: [] }), { headers: corsHeaders })
+        }
+        const groups = (data.groups || []).map(g => ({ groupId: g.id, groupName: g.name }))
+        return new Response(JSON.stringify({ groups }), { headers: corsHeaders })
       }
 
-      // POST /register-agent-bot — register agent as bot in a group
+      // POST /register-agent-bot — create bot via CHAT_WORKER and add to group
       if (pathname === '/register-agent-bot' && request.method === 'POST') {
         const body = await request.json()
-        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/register-chat-bot', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        })
-        const data = await res.text()
-        return new Response(data, { status: res.status, headers: corsHeaders })
+        const { agentId, groupId, botName, graphId, userId } = body
+        if (!agentId) return new Response(JSON.stringify({ error: 'agentId required' }), { status: 400, headers: corsHeaders })
+
+        const profile = userId ? await resolveProfileForProxy(userId) : null
+        if (!profile) {
+          return new Response(JSON.stringify({ error: 'Could not resolve user profile. Include userId in request.' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Check if agent already has a bot
+        const agent = await env.DB.prepare('SELECT metadata FROM agent_configs WHERE id = ?').bind(agentId).first()
+        const meta = agent?.metadata ? JSON.parse(agent.metadata) : {}
+        let chatBotId = meta.chatBotId
+
+        if (!chatBotId) {
+          // Create the bot via CHAT_WORKER
+          const agentConfig = await env.DB.prepare('SELECT name FROM agent_configs WHERE id = ?').bind(agentId).first()
+          const username = (botName || agentConfig?.name || 'agent').toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 30)
+
+          const createRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bots', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: profile.user_id,
+              phone: profile.phone,
+              email: profile.email,
+              name: botName || agentConfig?.name || 'Agent Bot',
+              username,
+              graph_id: graphId || undefined,
+              tools: [],
+            })
+          })
+          const createData = await createRes.json()
+          if (!createRes.ok) {
+            return new Response(JSON.stringify({ error: createData.error || 'Failed to create bot' }), { status: 500, headers: corsHeaders })
+          }
+          chatBotId = createData.bot.id
+
+          // Store chatBotId in agent metadata
+          meta.chatBotId = chatBotId
+          if (graphId) meta.botGraphId = graphId
+          await env.DB.prepare('UPDATE agent_configs SET metadata = ? WHERE id = ?')
+            .bind(JSON.stringify(meta), agentId).run()
+        }
+
+        // Add bot to group if groupId provided
+        if (groupId) {
+          const addRes = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/bots`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: profile.user_id,
+              phone: profile.phone,
+              email: profile.email,
+              bot_id: chatBotId,
+            })
+          })
+          const addData = await addRes.json()
+          if (!addRes.ok) {
+            return new Response(JSON.stringify({ error: addData.error || 'Bot created but failed to add to group', chatBotId }), { status: 500, headers: corsHeaders })
+          }
+        }
+
+        return new Response(JSON.stringify({ success: true, chatBotId, agentId, groupId }), { headers: corsHeaders })
       }
 
       // POST /unregister-agent-bot — remove bot from a group
       if (pathname === '/unregister-agent-bot' && request.method === 'POST') {
         const body = await request.json()
-        const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/unregister-chat-bot', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
+        const { agentId, groupId, userId } = body
+        if (!agentId || !groupId) return new Response(JSON.stringify({ error: 'agentId and groupId required' }), { status: 400, headers: corsHeaders })
+
+        const profile = userId ? await resolveProfileForProxy(userId) : null
+        if (!profile) {
+          return new Response(JSON.stringify({ error: 'Could not resolve user profile. Include userId in request.' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Get chatBotId from agent metadata
+        const agent = await env.DB.prepare('SELECT metadata FROM agent_configs WHERE id = ?').bind(agentId).first()
+        const meta = agent?.metadata ? JSON.parse(agent.metadata) : {}
+        const chatBotId = meta.chatBotId
+        if (!chatBotId) {
+          return new Response(JSON.stringify({ error: 'Agent has no registered bot' }), { status: 400, headers: corsHeaders })
+        }
+
+        const qs = `user_id=${encodeURIComponent(profile.user_id)}&phone=${encodeURIComponent(profile.phone)}&email=${encodeURIComponent(profile.email)}`
+        const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/bots/${chatBotId}?${qs}`, {
+          method: 'DELETE'
         })
-        const data = await res.text()
-        return new Response(data, { status: res.status, headers: corsHeaders })
+        const data = await res.json()
+        if (!res.ok) {
+          return new Response(JSON.stringify({ error: data.error || 'Failed to remove bot from group' }), { status: 500, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({ success: true, agentId, groupId, chatBotId }), { headers: corsHeaders })
+      }
+
+      // POST /bot-respond — Chatbot subagent: generate and post bot response
+      if (pathname === '/bot-respond' && request.method === 'POST') {
+        const body = await request.json()
+        const { bot, group_id, group_name, trigger_message, recent_messages } = body
+
+        if (!bot || !group_id) {
+          return new Response(JSON.stringify({ error: 'bot and group_id are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+
+        try {
+          const result = await runChatbotSubagent(
+            {
+              bot,
+              groupId: group_id,
+              groupName: group_name || 'Unknown Group',
+              triggerMessage: trigger_message,
+              recentMessages: recent_messages || [],
+            },
+            env,
+            executeTool
+          )
+
+          if (!result.success || !result.response) {
+            return new Response(JSON.stringify({
+              success: false,
+              error: result.error || 'Bot generated no response',
+              turns: result.turns,
+            }), { status: 500, headers: corsHeaders })
+          }
+
+          // Post the bot's response back to the group via CHAT_WORKER
+          if (env.CHAT_WORKER) {
+            const postRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bot-message', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                bot_id: bot.id,
+                group_id,
+                body: result.response,
+              }),
+            })
+            const postData = await postRes.json()
+            if (!postRes.ok) {
+              return new Response(JSON.stringify({
+                success: false,
+                error: postData.error || 'Failed to post bot message',
+                response: result.response,
+                turns: result.turns,
+              }), { status: 500, headers: corsHeaders })
+            }
+
+            return new Response(JSON.stringify({
+              success: true,
+              message_id: postData.message?.id,
+              bot_name: bot.name,
+              bot_username: bot.username,
+              response: result.response,
+              turns: result.turns,
+            }), { headers: corsHeaders })
+          }
+
+          // No CHAT_WORKER binding — return response for caller to post
+          return new Response(JSON.stringify({
+            success: true,
+            response: result.response,
+            turns: result.turns,
+            bot_name: bot.name,
+            note: 'CHAT_WORKER not bound — response not posted automatically',
+          }), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[bot-respond] Error:', err)
+          return new Response(JSON.stringify({ error: err.message }), {
+            status: 500, headers: corsHeaders
+          })
+        }
       }
 
       // GET /health - Health check
@@ -624,7 +827,7 @@ export default {
 
       return new Response(JSON.stringify({
         error: 'Not found',
-        available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/health']
+        available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/bot-respond', '/health']
       }), { status: 404, headers: corsHeaders })
 
     } catch (error) {

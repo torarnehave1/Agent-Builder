@@ -988,16 +988,22 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'register_chat_bot',
-    description: 'Register an AI chatbot in a chat group. The bot personality is defined by a knowledge graph (fulltext nodes become the system prompt). Use this to add a bot to a group.',
+    description: 'Register an AI chatbot in a Hallo Vegvisr chat group. Creates the bot and optionally adds it to a group. Only Superadmin can do this. The bot can be @mentioned by users in the group to trigger responses.',
     input_schema: {
       type: 'object',
       properties: {
-        graphId: { type: 'string', description: 'Knowledge graph ID containing bot personality and guidelines' },
-        groupId: { type: 'string', description: 'Chat group UUID' },
-        groupName: { type: 'string', description: 'Chat group name' },
-        botName: { type: 'string', description: 'Display name for the bot (e.g. "SIMULA")' }
+        botName: { type: 'string', description: 'Display name for the bot (e.g. "SIMULA")' },
+        username: { type: 'string', description: 'Unique @username for the bot (lowercase, alphanumeric, - or _). Users @mention this to trigger the bot.' },
+        graphId: { type: 'string', description: 'Knowledge graph ID containing bot personality (fulltext nodes become personality context)' },
+        systemPrompt: { type: 'string', description: 'System prompt for the bot (optional, used alongside graph personality)' },
+        avatarUrl: { type: 'string', description: 'URL to bot avatar image' },
+        model: { type: 'string', description: 'Claude model to use (default: claude-haiku-4-5-20251001)' },
+        temperature: { type: 'number', description: 'Response temperature 0-1 (default: 0.7)' },
+        maxTurns: { type: 'number', description: 'Max tool-use turns per response (default: 10, max: 20)' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Bot tools to enable: search_knowledge, read_node, web_search, translate' },
+        groupId: { type: 'string', description: 'Chat group UUID to add the bot to (optional — can add later)' },
       },
-      required: ['graphId', 'botName']
+      required: ['botName', 'username']
     }
   },
   {
@@ -1014,16 +1020,100 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'trigger_bot_response',
-    description: 'Trigger a chatbot to respond to recent messages in its group. Loads bot personality from its knowledge graph, reads recent messages, generates a response via Claude, and posts it to the group.',
+    description: 'Trigger a chatbot to respond in its group. The bot uses the chatbot subagent (with tools like search_knowledge, web_search). Posts the response back to the group automatically.',
     input_schema: {
       type: 'object',
       properties: {
         groupId: { type: 'string', description: 'Chat group UUID' },
-        groupName: { type: 'string', description: 'Chat group name' },
-        botGraphId: { type: 'string', description: 'Specific bot graph ID (if group has multiple bots). If omitted, triggers all bots.' },
-        messageCount: { type: 'number', description: 'Number of recent messages to include as context (default 10, max 50)' }
+        botId: { type: 'string', description: 'Specific bot ID to trigger. If omitted, triggers all bots in the group.' },
+        messageCount: { type: 'number', description: 'Number of recent messages to include as context (default 20, max 50)' }
+      },
+      required: ['groupId']
+    }
+  },
+  {
+    name: 'delete_chat_group',
+    description: 'Archive (soft-delete) a Hallo Vegvisr chat group. Only Superadmin can do this. The group can be restored later with restore_chat_group.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID to archive' },
+        groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' }
       },
       required: []
+    }
+  },
+  {
+    name: 'restore_chat_group',
+    description: 'Restore a previously archived Hallo Vegvisr chat group. Only Superadmin can do this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID to restore' }
+      },
+      required: ['groupId']
+    }
+  },
+  {
+    name: 'update_chat_group',
+    description: 'Update a Hallo Vegvisr chat group name or image. Only the group owner or admin can do this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' },
+        name: { type: 'string', description: 'New group name' },
+        imageUrl: { type: 'string', description: 'New group image URL (empty string to remove)' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'remove_chat_bot',
+    description: 'Remove an AI chatbot from a Hallo Vegvisr chat group, or deactivate the bot entirely. Only Superadmin can do this.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        botId: { type: 'string', description: 'Bot ID to remove' },
+        groupId: { type: 'string', description: 'Group UUID to remove the bot from. If omitted, deactivates the bot entirely.' }
+      },
+      required: ['botId']
+    }
+  },
+  {
+    name: 'create_poll',
+    description: 'Create a poll in a Hallo Vegvisr chat group. The poll appears as a message that members can vote on.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        groupId: { type: 'string', description: 'Chat group UUID' },
+        groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' },
+        question: { type: 'string', description: 'Poll question' },
+        options: { type: 'array', items: { type: 'string' }, description: 'Array of poll options (2-6 choices)' }
+      },
+      required: ['question', 'options']
+    }
+  },
+  {
+    name: 'close_poll',
+    description: 'Close a poll so no more votes can be cast. Only the poll creator or Superadmin can close it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pollId: { type: 'string', description: 'Poll UUID to close' }
+      },
+      required: ['pollId']
+    }
+  },
+  {
+    name: 'get_poll_results',
+    description: 'Get the current results of a poll, including vote counts per option and who voted.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pollId: { type: 'string', description: 'Poll UUID' }
+      },
+      required: ['pollId']
     }
   },
   {
@@ -1090,6 +1180,90 @@ const TOOL_DEFINITIONS = [
         nodeId: {
           type: 'string',
           description: 'A specific node ID to work with, if applicable.'
+        }
+      },
+      required: ['task']
+    }
+  },
+  {
+    name: 'list_bots',
+    description: 'List all active AI chatbots in the Hallo Vegvisr system. Returns bot names, usernames, models, graph IDs, and creation dates.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'get_bot',
+    description: 'Get detailed information about a specific AI chatbot, including its configuration and which groups it belongs to.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        botId: { type: 'string', description: 'Bot UUID' }
+      },
+      required: ['botId']
+    }
+  },
+  {
+    name: 'update_chat_bot',
+    description: 'Update an AI chatbot configuration. Can change name, system prompt, knowledge graph, avatar, model, temperature, tools, and active status. Superadmin only.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        botId: { type: 'string', description: 'Bot UUID to update' },
+        name: { type: 'string', description: 'New display name' },
+        systemPrompt: { type: 'string', description: 'New system prompt' },
+        graphId: { type: 'string', description: 'Knowledge graph ID for bot personality' },
+        avatarUrl: { type: 'string', description: 'Avatar image URL' },
+        model: { type: 'string', description: 'Claude model to use' },
+        temperature: { type: 'number', description: 'Response temperature 0-1' },
+        maxTurns: { type: 'number', description: 'Max tool-use turns per response' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Bot tools: search_knowledge, read_node, web_search, translate' },
+        isActive: { type: 'boolean', description: 'Set to false to deactivate' }
+      },
+      required: ['botId']
+    }
+  },
+  {
+    name: 'delegate_to_chat',
+    description: 'Delegate chat group tasks to the Chat Groups subagent. Use this for: list/create/delete/update groups, list members, add/remove members, send messages, read messages, create/close/view polls, get group statistics. Do NOT use this for bot management — use delegate_to_bot instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do: create group, add members, create poll, get stats, etc. Include all context the subagent needs.'
+        },
+        groupId: {
+          type: 'string',
+          description: 'The chat group UUID to work with, if known.'
+        },
+        groupName: {
+          type: 'string',
+          description: 'The chat group name to work with. The subagent resolves it to a UUID.'
+        }
+      },
+      required: ['task']
+    }
+  },
+  {
+    name: 'delegate_to_bot',
+    description: 'Delegate ANY bot management task to the specialized Bot Management subagent. Use this for ALL questions about AI chatbots — including: list/create/update/delete bots, get bot details, add/remove bots from groups, trigger bot responses, change bot configuration (model, temperature, tools, personality graph). If the user asks anything about bots, bot creation, bot configuration, or triggering bot responses, ALWAYS delegate here.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do: list bots, create bot, update bot config, remove bot, trigger response, etc. Include all context the subagent needs.'
+        },
+        botId: {
+          type: 'string',
+          description: 'The bot UUID to work with, if known.'
+        },
+        groupId: {
+          type: 'string',
+          description: 'The chat group UUID, if relevant.'
         }
       },
       required: ['task']
