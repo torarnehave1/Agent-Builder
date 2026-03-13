@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
+import AgentSettings from './AgentSettings';
 import DataExplorer from './DataExplorer';
 import HtmlPreview from './HtmlPreview';
 
-type View = 'chat' | 'data';
+type View = 'chat' | 'data' | 'agents';
 
 interface Props {
   userId: string;
@@ -17,7 +18,7 @@ interface Props {
 
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
   const [graphId, setGraphId] = useState('graph_agent_builder_development');
-  const [selectedAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [view, setView] = useState<View>('chat');
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
@@ -30,7 +31,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className="text-base font-bold text-white">Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['chat', 'data'] as const).map((tab) => (
+            {(['chat', 'agents', 'data'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -41,7 +42,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                     : 'text-white/50 hover:text-white/80'
                 }`}
               >
-                {tab === 'chat' ? 'Chat' : 'Data'}
+                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : 'Data'}
               </button>
             ))}
           </nav>
@@ -86,6 +87,15 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
             </div>
           )}
         </div>
+      )}
+      {view === 'agents' && (
+        <AgentSettings
+          agentId={selectedAgentId}
+          userId={userId}
+          onSave={() => {}}
+          onCancel={() => setSelectedAgentId(null)}
+          onSelectAgent={setSelectedAgentId}
+        />
       )}
       {view === 'data' && <DataExplorer />}
     </div>
