@@ -656,7 +656,7 @@ export default {
 
         if (!chatBotId) {
           // Create the bot via CHAT_WORKER
-          const agentConfig = await env.DB.prepare('SELECT name FROM agent_configs WHERE id = ?').bind(agentId).first()
+          const agentConfig = await env.DB.prepare('SELECT name, avatar_url FROM agent_configs WHERE id = ?').bind(agentId).first()
           const username = (botName || agentConfig?.name || 'agent').toLowerCase().replace(/[^a-z0-9_-]/g, '-').slice(0, 30)
 
           const createRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bots', {
@@ -669,6 +669,7 @@ export default {
               name: botName || agentConfig?.name || 'Agent Bot',
               username,
               graph_id: graphId || undefined,
+              avatar_url: agentConfig?.avatar_url || undefined,
               tools: [],
             })
           })

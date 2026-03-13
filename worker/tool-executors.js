@@ -14,6 +14,7 @@ import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
 import { runBotSubagent } from './bot-subagent.js'
+import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -2260,6 +2261,184 @@ async function executeRegisterChatBot(input, env) {
   return result
 }
 
+async function executeListAgents(env) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, name, description, avatar_url, model, tools, is_active, metadata
+     FROM agent_configs WHERE is_active = 1 ORDER BY name`
+  ).all()
+
+  const agents = (results || []).map(a => ({
+    id: a.id,
+    name: a.name,
+    description: a.description,
+    model: a.model,
+    avatar_url: a.avatar_url,
+    tools: a.tools ? JSON.parse(a.tools) : [],
+    chatBotId: a.metadata ? (JSON.parse(a.metadata).chatBotId || null) : null,
+  }))
+
+  return {
+    agents,
+    count: agents.length,
+    message: agents.length === 0
+      ? 'No active agents configured.'
+      : `${agents.length} active agents: ${agents.map(a => a.name).join(', ')}`,
+  }
+}
+
+async function executeGetAgent(input, env) {
+  if (!input.agentId) throw new Error('agentId is required')
+  const agent = await env.DB.prepare(
+    'SELECT * FROM agent_configs WHERE id = ?'
+  ).bind(input.agentId).first()
+  if (!agent) throw new Error(`Agent "${input.agentId}" not found`)
+
+  let meta = {}
+  try { meta = agent.metadata ? JSON.parse(agent.metadata) : {} } catch { /* ignore */ }
+
+  return {
+    agent: {
+      id: agent.id,
+      name: agent.name,
+      description: agent.description,
+      system_prompt: (agent.system_prompt || '').slice(0, 500) + (agent.system_prompt?.length > 500 ? '...' : ''),
+      model: agent.model,
+      temperature: agent.temperature,
+      max_tokens: agent.max_tokens,
+      tools: agent.tools ? JSON.parse(agent.tools) : [],
+      avatar_url: agent.avatar_url,
+      is_active: agent.is_active,
+      chatBotId: meta.chatBotId || null,
+      botGraphId: meta.botGraphId || null,
+    },
+    message: `Agent "${agent.name}" — model: ${agent.model}, tools: ${agent.tools ? JSON.parse(agent.tools).length : 0}, active: ${agent.is_active ? 'yes' : 'no'}`,
+  }
+}
+
+async function executeCreateAgent(input, env) {
+  if (!input.name) throw new Error('name is required')
+  const id = `agent_${crypto.randomUUID().slice(0, 8)}`
+  await env.DB.prepare(
+    `INSERT INTO agent_configs (id, name, description, system_prompt, model, max_tokens, temperature, tools, metadata, is_active, avatar_url)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10)`
+  ).bind(
+    id,
+    input.name,
+    input.description || '',
+    input.systemPrompt || '',
+    input.model || 'claude-haiku-4-5-20251001',
+    input.maxTokens || 4096,
+    input.temperature ?? 0.3,
+    JSON.stringify(input.tools || []),
+    JSON.stringify({}),
+    input.avatarUrl || null
+  ).run()
+
+  return {
+    agentId: id,
+    name: input.name,
+    model: input.model || 'claude-haiku-4-5-20251001',
+    message: `Created agent "${input.name}" with ID ${id}`,
+  }
+}
+
+async function executeUpdateAgent(input, env) {
+  if (!input.agentId) throw new Error('agentId is required')
+
+  // Verify agent exists
+  const existing = await env.DB.prepare('SELECT id FROM agent_configs WHERE id = ?').bind(input.agentId).first()
+  if (!existing) throw new Error(`Agent "${input.agentId}" not found`)
+
+  const fieldMap = {
+    name: input.name,
+    description: input.description,
+    system_prompt: input.systemPrompt,
+    model: input.model,
+    max_tokens: input.maxTokens,
+    temperature: input.temperature,
+    avatar_url: input.avatarUrl,
+  }
+
+  const sets = []
+  const values = []
+  for (const [col, val] of Object.entries(fieldMap)) {
+    if (val !== undefined) {
+      sets.push(`${col} = ?`)
+      values.push(val)
+    }
+  }
+  if (input.tools !== undefined) {
+    sets.push('tools = ?')
+    values.push(JSON.stringify(input.tools))
+  }
+  if (input.metadata !== undefined) {
+    sets.push('metadata = ?')
+    values.push(JSON.stringify(input.metadata))
+  }
+
+  if (sets.length === 0) throw new Error('No fields to update')
+
+  values.push(input.agentId)
+  await env.DB.prepare(
+    `UPDATE agent_configs SET ${sets.join(', ')} WHERE id = ?`
+  ).bind(...values).run()
+
+  const updated = await env.DB.prepare('SELECT * FROM agent_configs WHERE id = ?').bind(input.agentId).first()
+  return {
+    agentId: input.agentId,
+    name: updated?.name,
+    message: `Updated agent "${updated?.name || input.agentId}" — changed: ${sets.map(s => s.split(' = ')[0]).join(', ')}`,
+  }
+}
+
+async function executeDeactivateAgent(input, env) {
+  if (!input.agentId) throw new Error('agentId is required')
+  const agent = await env.DB.prepare('SELECT name FROM agent_configs WHERE id = ?').bind(input.agentId).first()
+  if (!agent) throw new Error(`Agent "${input.agentId}" not found`)
+
+  await env.DB.prepare('UPDATE agent_configs SET is_active = 0 WHERE id = ?').bind(input.agentId).run()
+  return {
+    agentId: input.agentId,
+    name: agent.name,
+    message: `Deactivated agent "${agent.name}" (${input.agentId})`,
+  }
+}
+
+async function executeUploadAgentAvatar(input, env) {
+  if (!input.agentId) throw new Error('agentId is required')
+  if (!input.base64) throw new Error('base64 image data is required')
+
+  // Verify agent exists
+  const agent = await env.DB.prepare('SELECT name FROM agent_configs WHERE id = ?').bind(input.agentId).first()
+  if (!agent) throw new Error(`Agent "${input.agentId}" not found`)
+
+  // Upload via photos-worker
+  const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'agent-builder',
+      base64: input.base64,
+      mediaType: input.mediaType || 'image/png',
+      filename: input.filename || `avatar-${input.agentId}.png`,
+    }),
+  })
+  const uploadData = await uploadRes.json()
+  if (!uploadRes.ok) throw new Error(uploadData.error || 'Failed to upload avatar')
+
+  const avatarUrl = uploadData.url
+  if (!avatarUrl) throw new Error('Upload succeeded but no URL returned')
+
+  // Update agent with avatar URL
+  await env.DB.prepare('UPDATE agent_configs SET avatar_url = ? WHERE id = ?').bind(avatarUrl, input.agentId).run()
+
+  return {
+    agentId: input.agentId,
+    avatarUrl,
+    message: `Uploaded avatar for agent "${agent.name}" — ${avatarUrl}`,
+  }
+}
+
 async function executeListBots(input, env) {
   const auth = await chatAuth(input.userId, env)
   const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots?${auth.qs}`)
@@ -3253,6 +3432,33 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetBot(toolInput, env)
     case 'update_chat_bot':
       return await executeUpdateChatBot(toolInput, env)
+    case 'list_agents':
+      return await executeListAgents(env)
+    case 'get_agent':
+      return await executeGetAgent(toolInput, env)
+    case 'create_agent':
+      return await executeCreateAgent(toolInput, env)
+    case 'update_agent':
+      return await executeUpdateAgent(toolInput, env)
+    case 'deactivate_agent':
+      return await executeDeactivateAgent(toolInput, env)
+    case 'upload_agent_avatar':
+      return await executeUploadAgentAvatar(toolInput, env)
+    case 'delegate_to_agent_builder': {
+      const result = await runAgentBuilderSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        agentId: result.agentId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Agent builder subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Agent builder subagent failed: ${result.error || 'Unknown error'}`,
+      }
+    }
     case 'create_poll':
       return await executeCreatePoll(toolInput, env)
     case 'close_poll':

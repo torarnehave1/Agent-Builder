@@ -1268,6 +1268,109 @@ const TOOL_DEFINITIONS = [
       },
       required: ['task']
     }
+  },
+  {
+    name: 'list_agents',
+    description: 'List all active AI agents configured in the Agent Builder. Returns agent names, descriptions, models, tools, and avatar URLs.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+    }
+  },
+  {
+    name: 'get_agent',
+    description: 'Get detailed configuration for a specific agent by ID. Returns name, description, system prompt, model, temperature, tools, metadata (including chatBotId), and avatar URL.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agentId: {
+          type: 'string',
+          description: 'The agent ID (e.g. "agent_abc12345")'
+        }
+      },
+      required: ['agentId']
+    }
+  },
+  {
+    name: 'create_agent',
+    description: 'Create a new AI agent with a name and optional configuration. Returns the new agent ID.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name for the agent (required)' },
+        description: { type: 'string', description: 'Short description of what the agent does' },
+        systemPrompt: { type: 'string', description: 'System prompt that defines the agent behavior' },
+        model: { type: 'string', description: 'LLM model ID. Options: claude-haiku-4-5-20251001, claude-sonnet-4-20250514, claude-opus-4-20250514' },
+        temperature: { type: 'number', description: 'Temperature (0.0–1.0). Default 0.3' },
+        maxTokens: { type: 'integer', description: 'Max response tokens. Default 4096' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'Array of tool names the agent can use' },
+        avatarUrl: { type: 'string', description: 'URL to avatar image' },
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'update_agent',
+    description: 'Update an existing agent configuration. Only provided fields are changed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID to update' },
+        name: { type: 'string', description: 'New display name' },
+        description: { type: 'string', description: 'New description' },
+        systemPrompt: { type: 'string', description: 'New system prompt' },
+        model: { type: 'string', description: 'New model ID' },
+        temperature: { type: 'number', description: 'New temperature' },
+        maxTokens: { type: 'integer', description: 'New max tokens' },
+        tools: { type: 'array', items: { type: 'string' }, description: 'New tool list' },
+        avatarUrl: { type: 'string', description: 'New avatar URL' },
+        metadata: { type: 'object', description: 'New metadata object' },
+      },
+      required: ['agentId']
+    }
+  },
+  {
+    name: 'deactivate_agent',
+    description: 'Soft-delete an agent by setting is_active = 0. The agent can be reactivated later.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID to deactivate' }
+      },
+      required: ['agentId']
+    }
+  },
+  {
+    name: 'upload_agent_avatar',
+    description: 'Upload a base64-encoded image as an agent avatar. The image is stored in R2 via photos-worker and the URL is saved on the agent.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        agentId: { type: 'string', description: 'The agent ID to set the avatar for' },
+        base64: { type: 'string', description: 'Base64-encoded image data (PNG, JPG, or WebP)' },
+        mediaType: { type: 'string', description: 'MIME type (e.g. "image/png"). Default: image/png' },
+        filename: { type: 'string', description: 'Optional filename for the image' },
+      },
+      required: ['agentId', 'base64']
+    }
+  },
+  {
+    name: 'delegate_to_agent_builder',
+    description: 'Delegate agent management tasks to the Agent Builder subagent. Use this for ALL questions about AI agents — including: list/create/update/delete agents, get agent details, change agent configuration (model, temperature, tools, system prompt), upload agent avatars. If the user asks anything about agents, agent creation, agent configuration, how many agents they have, or agent avatars, ALWAYS delegate here. Do NOT use this for chatbot/bot management — use delegate_to_bot instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do: list agents, create agent, update config, upload avatar, etc. Include all context.'
+        },
+        agentId: {
+          type: 'string',
+          description: 'The agent ID to work with, if known.'
+        }
+      },
+      required: ['task']
+    }
   }
 ]
 
