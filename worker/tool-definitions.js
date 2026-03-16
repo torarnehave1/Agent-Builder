@@ -772,6 +772,19 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'delete_app_records',
+    description: 'Delete records from an app data table. Can delete all records (clear table), delete by specific IDs, or delete by filter conditions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tableId: { type: 'string', description: 'Table UUID (returned by create_app_table)' },
+        ids: { type: 'array', items: { type: 'string' }, description: 'Optional: array of _id values to delete specific records' },
+        where: { type: 'object', description: 'Optional: filter conditions as key-value pairs (e.g., {"worker":"kg-worker"}). Omit both ids and where to delete ALL records.' }
+      },
+      required: ['tableId']
+    }
+  },
+  {
     name: 'generate_with_ai',
     description: 'Generate text content using a specific AI provider. Use this when the user asks to generate content with a particular AI (Claude, OpenAI/GPT, Grok, Gemini). Returns the generated text. For bulk operations (e.g., filling a table), call this once per item and insert the result with insert_app_record.',
     input_schema: {

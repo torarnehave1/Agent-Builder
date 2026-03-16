@@ -1945,6 +1945,29 @@ async function executeInsertAppRecord(input, env) {
   }
 }
 
+async function executeDeleteAppRecords(input, env) {
+  const tableId = (input.tableId || '').trim()
+  if (!tableId) throw new Error('tableId is required')
+
+  const body = { tableId }
+  if (input.ids) body.ids = input.ids
+  if (input.where) body.where = input.where
+
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/delete-records', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed to delete records')
+
+  return {
+    success: true,
+    deleted: data.deleted,
+    message: `Deleted ${data.deleted} record(s) from table ${tableId}`
+  }
+}
+
 async function executeQueryAppTable(input, env) {
   const tableId = (input.tableId || '').trim()
   if (!tableId) throw new Error('tableId is required')
@@ -4244,6 +4267,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeInsertAppRecord(toolInput, env)
     case 'query_app_table':
       return await executeQueryAppTable(toolInput, env)
+    case 'delete_app_records':
+      return await executeDeleteAppRecords(toolInput, env)
     case 'generate_with_ai':
       return await executeGenerateWithAi(toolInput, env)
     case 'get_app_table_schema':
