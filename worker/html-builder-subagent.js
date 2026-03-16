@@ -555,8 +555,8 @@ async function executeRollbackHtmlNode(input, env) {
   const histData = await histRes.json()
   if (!histRes.ok) throw new Error(histData.error || 'Could not fetch history')
 
-  // histData.results is array of { version, timestamp } ordered by version DESC
-  const versions = histData.results || histData
+  // Response: { graphId, history: { results: [{version, timestamp}, ...] } }
+  const versions = histData.history?.results || histData.results || []
   if (!Array.isArray(versions) || versions.length < 2) {
     throw new Error(`Only ${versions?.length || 0} version(s) in history — need at least 2 to roll back`)
   }

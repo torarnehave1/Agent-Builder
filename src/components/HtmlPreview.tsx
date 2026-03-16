@@ -131,7 +131,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       const res = await fetch(`https://knowledge.vegvisr.org/getknowgraphhistory?id=${encodeURIComponent(graphId)}`);
       if (!res.ok) return;
       const data = await res.json();
-      setVersions(data.results || data || []);
+      setVersions(data.history?.results || data.results || []);
     } catch { /* ignore */ }
   };
 
