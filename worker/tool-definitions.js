@@ -772,6 +772,20 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'generate_with_ai',
+    description: 'Generate text content using a specific AI provider. Use this when the user asks to generate content with a particular AI (Claude, OpenAI/GPT, Grok, Gemini). Returns the generated text. For bulk operations (e.g., filling a table), call this once per item and insert the result with insert_app_record.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        provider: { type: 'string', enum: ['claude', 'openai', 'grok', 'gemini'], description: 'Which AI provider to use' },
+        prompt: { type: 'string', description: 'The prompt/instruction for content generation' },
+        model: { type: 'string', description: 'Optional: specific model name (e.g., "claude-sonnet-4-5", "gpt-4o", "grok-4-latest", "gemini-2.5-flash"). If omitted, uses the provider default.' },
+        maxTokens: { type: 'number', description: 'Max tokens to generate (default: 2048)' }
+      },
+      required: ['provider', 'prompt']
+    }
+  },
+  {
     name: 'db_list_tables',
     description: 'List all tables in the main vegvisr_org database with their columns. Use this to explore the database schema (config, user_api_keys, graphs, etc.).',
     input_schema: {

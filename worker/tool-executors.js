@@ -1838,6 +1838,54 @@ async function executeQueryDataNodes(input, env) {
   }
 }
 
+// ── AI content generation (multi-provider) ───────────────────────
+
+async function executeGenerateWithAi(input, env) {
+  const provider = (input.provider || '').toLowerCase()
+  const prompt = (input.prompt || '').trim()
+  const maxTokens = input.maxTokens || 2048
+  if (!prompt) throw new Error('prompt is required')
+
+  // Map provider to service binding and default model
+  const providers = {
+    claude:  { binding: env.ANTHROPIC,       url: 'https://anthropic.vegvisr.org/chat',  defaultModel: 'claude-sonnet-4-5' },
+    openai:  { binding: env.OPENAI_WORKER,   url: 'https://openai.vegvisr.org/chat',     defaultModel: 'gpt-4o' },
+    grok:    { binding: env.GROK_WORKER,     url: 'https://grok.vegvisr.org/chat',       defaultModel: 'grok-4-latest' },
+    gemini:  { binding: env.GEMINI_WORKER,   url: 'https://gemini.vegvisr.org/chat',     defaultModel: 'gemini-2.5-flash' },
+  }
+
+  const cfg = providers[provider]
+  if (!cfg) throw new Error(`Unknown provider "${provider}". Use: claude, openai, grok, or gemini.`)
+  if (!cfg.binding) throw new Error(`Service binding for "${provider}" is not configured.`)
+
+  const model = input.model || cfg.defaultModel
+
+  const res = await cfg.binding.fetch(cfg.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages: [{ role: 'user', content: prompt }],
+      model,
+      max_tokens: maxTokens,
+    }),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`${provider} returned ${res.status}: ${errText.slice(0, 500)}`)
+  }
+
+  const data = await res.json()
+
+  // Anthropic returns content[0].text, OpenAI/Grok/Gemini return choices[0].message.content
+  const text = data.content?.[0]?.text
+    || data.choices?.[0]?.message?.content
+    || data.text
+    || JSON.stringify(data)
+
+  return { provider, model, text, tokenCount: text.length }
+}
+
 // ── Drizzle worker executors (relational D1 tables) ──────────────
 
 async function executeCreateAppTable(input, env) {
@@ -4195,6 +4243,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeInsertAppRecord(toolInput, env)
     case 'query_app_table':
       return await executeQueryAppTable(toolInput, env)
+    case 'generate_with_ai':
+      return await executeGenerateWithAi(toolInput, env)
     case 'get_app_table_schema':
       return await executeGetAppTableSchema(toolInput, env)
     case 'add_app_table_column':

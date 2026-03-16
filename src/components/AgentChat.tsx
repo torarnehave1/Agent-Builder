@@ -308,6 +308,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
   const [current, setCurrent] = useState<AssistantState | null>(null);
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
   const [showLog, setShowLog] = useState(false);
@@ -1043,6 +1044,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     let finalToolCalls: ToolCall[] = [];
     let pendingClientTranscription: { audioUrl: string; recordingId: string | null; language: string | null; saveToGraph: boolean; graphTitle: string | null } | null = null;
 
+    const abort = new AbortController();
+    abortRef.current = abort;
+
     try {
       const res = await fetch(`${AGENT_API}/chat`, {
         method: 'POST',
@@ -1054,6 +1058,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           agentId: agentId || undefined,
           activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
         }),
+        signal: abort.signal,
       });
 
       if (!res.ok) {
@@ -1374,19 +1379,28 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         }
       }
     } catch (err) {
-      setCurrent(prev => prev ? { ...prev, thinking: false, error: err instanceof Error ? err.message : String(err) } : prev);
-      // Still save what we have
+      const isAbort = err instanceof DOMException && err.name === 'AbortError';
+      setCurrent(prev => prev ? { ...prev, thinking: false, error: isAbort ? undefined : (err instanceof Error ? err.message : String(err)) } : prev);
+      // Save what we have — show "Stopped by user" for aborts
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: current?.text || `Error: ${err instanceof Error ? err.message : String(err)}`,
+        content: current?.text || (isAbort ? '*(Stopped by user)*' : `Error: ${err instanceof Error ? err.message : String(err)}`),
         toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
       }]);
     }
 
+    abortRef.current = null;
     setCurrent(null);
     setStreaming(false);
     setSubagentProgress(null);
   }, [input, streaming, messages, userId, graphId, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
+
+  const stopStreaming = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
+  }, []);
 
   const hasMessages = messages.length > 0 || current !== null;
 
@@ -1822,14 +1836,24 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             rows={1}
             className="flex-1 min-w-0 px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
           />
-          <button
-            type="button"
-            onClick={() => sendMessage()}
-            disabled={streaming || (!input.trim() && pendingImages.length === 0)}
-            className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {streaming ? '...' : 'Send'}
-          </button>
+          {streaming ? (
+            <button
+              type="button"
+              onClick={stopStreaming}
+              className="px-3 sm:px-5 py-2.5 rounded-xl border border-rose-400/40 bg-rose-400/[0.16] text-rose-300 text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-rose-400/[0.24]"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => sendMessage()}
+              disabled={!input.trim() && pendingImages.length === 0}
+              className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
+          )}
         </div>
         <input
           ref={imageInputRef}
