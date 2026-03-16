@@ -501,12 +501,27 @@ async function executeValidateHtmlSyntax(input, env) {
     // Check for unclosed strings
     if (inBlockComment) issues.push({ type: 'unclosed_comment', message: 'Unclosed block comment /* ... */' })
     if (inTemplateLiteral) issues.push({ type: 'unclosed_template', message: 'Unclosed template literal `...`' })
+
+    // Full JS syntax check using V8 parser (catches everything brackets miss)
+    try {
+      new Function(script.content)
+    } catch (syntaxErr) {
+      // Extract line number from V8 error if possible
+      const errMsg = syntaxErr.message || String(syntaxErr)
+      // V8 doesn't give line numbers in new Function errors, but the message is precise
+      issues.push({
+        type: 'js_syntax_error',
+        message: `JavaScript syntax error in script block starting at line ${script.startLine}: ${errMsg}`,
+        scriptStartLine: script.startLine,
+        scriptEndLine: script.startLine + lines.length - 1
+      })
+    }
   }
 
   if (issues.length === 0) {
     return {
       valid: true,
-      message: `All brackets balanced. ${scripts.length} script block(s) checked.`,
+      message: `All brackets balanced and JS syntax valid. ${scripts.length} script block(s) checked.`,
       totalLines: html.split('\n').length,
       scriptBlocks: scripts.length
     }

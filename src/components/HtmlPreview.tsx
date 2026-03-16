@@ -116,7 +116,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
   const reportedRef = useRef<Set<string>>(new Set());
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   // Version history
   const [versions, setVersions] = useState<VersionEntry[] | null>(null);
@@ -191,34 +191,28 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
 
-  // Clear console and reported errors when html changes
+  // Clear console entries (visual) when html changes, but KEEP reportedRef
+  // so the same error message isn't re-sent to the agent after a fix attempt
   useEffect(() => {
     setEntries([]);
-    reportedRef.current = new Set();
   }, [html]);
 
-  // Debounced error reporting to parent
+  // Reset dedup set when switching to a different node
   useEffect(() => {
+    reportedRef.current = new Set();
+  }, [nodeId]);
+
+  // Manual "Fix" button handler — sends current errors to the agent
+  const handleFixErrors = useCallback(() => {
     if (!onConsoleErrors) return;
-    const errors = entries
-      .filter(e => e.level === 'error' || e.level === 'network')
-      .filter(e => !reportedRef.current.has(e.message));
+    const errors = entries.filter(e => e.level === 'error' || e.level === 'network');
     if (errors.length === 0) return;
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const newErrors = errors.filter(e => !reportedRef.current.has(e.message));
-      if (newErrors.length > 0) {
-        newErrors.forEach(e => reportedRef.current.add(e.message));
-        // Context comes from the entry itself (baked into the bridge), not from React props
-        onConsoleErrors(newErrors.map(e => {
-          const ctx = e.graphId && e.nodeId ? ` [graphId: ${e.graphId}, nodeId: ${e.nodeId}]` : '';
-          return e.message + ctx;
-        }));
-      }
-    }, 2000);
-
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+    const unique = [...new Map(errors.map(e => [e.message, e])).values()];
+    unique.forEach(e => reportedRef.current.add(e.message));
+    onConsoleErrors(unique.map(e => {
+      const ctx = e.graphId && e.nodeId ? ` [graphId: ${e.graphId}, nodeId: ${e.nodeId}]` : '';
+      return e.message + ctx;
+    }));
   }, [entries, onConsoleErrors]);
 
   // Auto-scroll console
@@ -264,10 +258,22 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               </button>
             </>
           )}
-          {errorCount > 0 && activeVersion === null && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400">
-              {errorCount} {errorCount === 1 ? 'error' : 'errors'}
-            </span>
+          {errorCount > 0 && (
+            <>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400">
+                {errorCount} {errorCount === 1 ? 'error' : 'errors'}
+              </span>
+              {onConsoleErrors && (
+                <button
+                  type="button"
+                  onClick={handleFixErrors}
+                  className="text-[10px] px-2 py-0.5 rounded bg-rose-500/30 text-rose-300 hover:bg-rose-500/50 hover:text-white transition-colors font-medium"
+                  title="Send errors to agent for fixing"
+                >
+                  Fix
+                </button>
+              )}
+            </>
           )}
         </div>
         <div className="flex items-center gap-1">

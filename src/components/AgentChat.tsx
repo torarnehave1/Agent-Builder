@@ -358,31 +358,12 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   // Keep ref in sync for use inside callbacks
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
 
-  // --- Autonomous dev loop: auto-send console errors to agent ---
-  // ONLY active after agent creates/patches HTML, NOT when loading existing apps via Develop
-  const devLoopCountRef = useRef(0);
-  const devLoopEnabledRef = useRef(false);
+  // --- Manual fix: user clicks "Fix" button in HtmlPreview to send errors to agent ---
   const lastHtmlNodeIdRef = useRef<string | null>(null);
-  const MAX_DEV_LOOP_ITERATIONS = 3;
 
   useEffect(() => {
-    if (!devLoopEnabledRef.current) {
-      // Auto-feedback disabled — user loaded an existing app, discard errors
-      if (consoleErrors && consoleErrors.length > 0) onConsoleErrorsHandled?.();
-      return;
-    }
     if (!consoleErrors || consoleErrors.length === 0 || streaming) return;
 
-    if (devLoopCountRef.current >= MAX_DEV_LOOP_ITERATIONS) {
-      setMessages(prev => [...prev, {
-        role: 'assistant',
-        content: `Auto-fix reached ${MAX_DEV_LOOP_ITERATIONS} attempts. Please review the remaining errors and provide guidance.`,
-      }]);
-      onConsoleErrorsHandled?.();
-      return;
-    }
-
-    devLoopCountRef.current += 1;
     onConsoleErrorsHandled?.();
 
     const nodeRef = lastHtmlNodeIdRef.current;
@@ -390,7 +371,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     const errorMsg = [
       'The HTML preview is showing these runtime errors:',
       '',
-      ...consoleErrors.map(e => `- ${e}`),
+      ...[...new Set(consoleErrors)].map(e => `- ${e}`),
       '',
       ...(nodeRef && graphRef ? [
         `The HTML source is in graph "${graphRef}", node "${nodeRef}".`,
@@ -400,7 +381,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       ]),
     ].join('\n');
 
-    // Use setTimeout to avoid calling sendMessage during render
     setTimeout(() => sendMessage(errorMsg), 100);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consoleErrors, streaming]);
@@ -1001,9 +981,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     const images = pendingImages;
     if ((!text && images.length === 0) || streaming) return;
 
-    // Reset dev loop counter on user-initiated sends (not auto-feedback)
-    if (!overrideText) devLoopCountRef.current = 0;
-
     setInput('');
     setSuggestions([]);
     setPendingImages([]);
@@ -1110,8 +1087,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         if (ev.type === 'tool_result' && ev.data.success && onPreview) {
           const toolName = ev.data.tool as string;
           if (toolName === 'create_html_node' || toolName === 'create_html_from_template') {
-            devLoopEnabledRef.current = true;
-            devLoopCountRef.current = 0;
             // Read nodeId from result first (executor may auto-generate it), fall back to input
             const resultNodeId = (ev.data as Record<string, unknown>).nodeId as string | undefined;
             if (resultNodeId) { lastHtmlNodeIdRef.current = resultNodeId; onActiveHtmlNode?.(resultNodeId); }
@@ -1127,8 +1102,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               return prev;
             });
           } else if (toolName === 'patch_node') {
-            devLoopEnabledRef.current = true;
-            devLoopCountRef.current = 0;
             setCurrent(prev => {
               if (!prev) return prev;
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
@@ -1142,8 +1115,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               return prev;
             });
           } else if (toolName === 'edit_html_node') {
-            devLoopEnabledRef.current = true;
-            // Don't reset devLoopCount — edit_html_node is often a fix attempt within the loop
             const resultData = ev.data as Record<string, unknown>;
             if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string); }
             const updatedHtml = resultData.updatedHtml as string;
@@ -1151,8 +1122,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               setTimeout(() => onPreview(updatedHtml), 0);
             }
           } else if (toolName === 'delegate_to_html_builder') {
-            devLoopEnabledRef.current = true;
-            devLoopCountRef.current = 0;
             const resultData = ev.data as Record<string, unknown>;
             const subNodeId = resultData.nodeId as string;
             const subGraphId = resultData.graphId as string;
@@ -1499,7 +1468,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
                     if (nodes.length === 0) { alert('No HTML app nodes found in this graph.'); return; }
                     if (nodes.length === 1) {
-                      devLoopEnabledRef.current = false;
                       lastAgentGraphRef.current = targetGraph;
                       lastHtmlNodeIdRef.current = nodes[0].id;
                       onActiveHtmlNode?.(nodes[0].id);
@@ -1520,7 +1488,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { devLoopEnabledRef.current = false; lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id); onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id); onPreview(n.info); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
                     >
                       {n.label}
