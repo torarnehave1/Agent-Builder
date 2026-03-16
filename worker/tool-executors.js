@@ -3023,7 +3023,8 @@ function registryNodesByType(graph, type) {
 
 async function fetchWorkerSpec(fetcher, baseUrl) {
   try {
-    const res = await fetcher.fetch(`${baseUrl}/openapi.json`)
+    let res = await fetcher.fetch(`${baseUrl}/openapi.json`)
+    if (!res.ok) res = await fetcher.fetch(`${baseUrl}/api/docs`)
     if (!res.ok) return null
     return await res.json()
   } catch {
