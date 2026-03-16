@@ -17,7 +17,7 @@ interface Props {
 }
 
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
-  const [graphId, setGraphId] = useState('graph_agent_builder_development');
+  const [graphId, setGraphId] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [view, setView] = useState<View>('chat');
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);

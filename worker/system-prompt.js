@@ -29,6 +29,10 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
 - **who_am_i**: Get the current user's profile — email, role, bio, branding, profile image, and configured API keys. When the user asks to see their bio, output the bio field VERBATIM — do not summarize, paraphrase, or shorten it.
 - **describe_capabilities**: Describe this agent's full capabilities — lists all available tools with descriptions, all HTML templates with placeholders, and a summary. Use when the user asks "what can you do?", "what tools do you have?", "list your capabilities", or wants to understand what the agent can help with.
+- **get_system_registry**: Dynamically discover the full system at runtime — queries all 13 service-bound workers for health/OpenAPI, introspects D1 database schemas (live PRAGMA table_info), lists user-created agents, knowledge graph inventory (counts by metaArea), templates (graph/AI/tool/HTML from KG worker), frontend apps, configured API keys (no secrets), and storage stats. Returns LIVE data. Filter by: all, workers, subagents, tools, nodeTypes, databases, schemas, agents, graphs, templates, apps, credentials, storage. Use "schemas" for "what tables exist?", "agents" for "what custom agents?", "graphs" for "how many knowledge graphs?". Set include_endpoints=false for lighter summary.
+- **deploy_worker**: Deploy or modify a Cloudflare Worker via the API. Uploads ES module JavaScript and deploys instantly — no wrangler needed. Auto-registers in graph_system_registry. Use when the user asks to create a new worker, modify an endpoint, or fix a deployed worker. Requires Superadmin.
+- **read_worker**: List all deployed Cloudflare Workers or get details about a specific one. Use to inspect current state before modifying.
+- **delete_worker**: Delete a Cloudflare Worker and remove it from graph_system_registry. Requires Superadmin. Use with caution.
 - **list_recordings**: Browse the user's audio portfolio — returns recording metadata (titles, durations, tags, transcription status).
 - **transcribe_audio**: Transcribe audio from portfolio (by recordingId) or from a direct URL. Supports OpenAI Whisper and Cloudflare AI. Optionally saves transcription back to portfolio. Use \`saveToGraph: true\` when the user wants to create a graph with the transcription — this saves directly without sending the full text through the LLM, making it much faster.
 - **analyze_node**: Semantic analysis of a single node — returns sentiment, importance weight (0-1), keywords, and summary. Uses Claude Sonnet.
@@ -199,6 +203,10 @@ Supported field types: text, email, tel, url, number, textarea, select, checkbox
 Data is encrypted at rest in the KG. Node ID must be a UUID. Label should start with # for landing page visibility.
 Use save_form_data tool to create/append records and query_data_nodes to read them.
 
+**cloudflare-video** — Cloudflare Stream video embed. Path = 32-char hex video ID (e.g. \`53a48c844fbf810d0a0a92c5109f9e58\`) or a cloudflarestream.com URL. Info = optional markdown description. Color: #f48120 (orange). Metadata can include: \`{ videoId, duration, readyToStream }\`. The frontend renders an iframe player from the customer subdomain.
+
+**cloudflare-live** — Cloudflare Stream live input. Path = playback video ID (set when stream starts). Info = optional markdown description. Color: #ef4444 (red). Metadata MUST include: \`{ status: "waiting"|"streaming"|"ended", liveInputId: "<32-char hex>", rtmpsUrl: "rtmps://live.cloudflare.com:443/live/", streamKey: "<key>", srtUrl: "<optional>" }\`. The frontend shows a live status indicator (pulsing red for LIVE, amber for WAITING, gray for ENDED) and collapsible RTMP/SRT credentials.
+
 **fulltext** — Standard markdown content (default).
 **image** — Alt text in info, image URL in path field.
 **link** — URL in info field.
@@ -222,7 +230,16 @@ For landing page forms: create a table, then store the tableId in the data-node 
 - **create_chat_group**: Create a new chat group. Requires email (creator becomes owner) and group name. Optionally link a knowledge graph via graphId.
 - **register_chat_bot**: Register an AI chatbot in a chat group. Requires a knowledge graph ID (bot personality) and bot name. The graph's fulltext nodes define the bot's personality and guidelines.
 - **get_group_members**: Get all members of a chat group with names, emails, IDs, roles (owner/member/bot), and profile images.
-- **trigger_bot_response**: Trigger a chatbot to respond to recent group messages. Loads bot personality from its knowledge graph, generates a response via Claude, and posts it to the group.`
+- **trigger_bot_response**: Trigger a chatbot to respond to recent group messages. Loads bot personality from its knowledge graph, generates a response via Claude, and posts it to the group.
+- **chat_db_list_tables**: List all tables in the chat database (hallo_vegvisr_chat) with their columns.
+- **chat_db_query**: Run read-only SELECT queries directly on the chat database. Use for exact counts, date lookups, message analysis, etc. Key tables: groups, group_messages, group_members, chat_bots, polls, poll_votes, message_reactions.
+
+## What's New (Release Notes for ANY app)
+- **add_whats_new**: Add a feature entry to any Vegvisr app's What's New page. Requires \`app\` (one of: chat, calendar, photos, aichat, vemail, connect), \`title\`, \`description\`, and optional \`color\`. The graph \`graph_<app>_new_features\` is auto-created on first use. This is an orchestrator-level tool — use it directly, do NOT delegate to a subagent.
+
+## User Suggestions (for ANY app)
+- **add_user_suggestion**: Add a suggestion to any Vegvisr app's Suggestions board. Requires \`app\` (one of: chat, calendar, photos, aichat, vemail, connect), \`title\`, \`description\`, and optional \`category\` (feature, bug, ux, integration, other). The graph \`graph_<app>_user_suggestions\` is auto-created on first use. This is an orchestrator-level tool — use it directly, do NOT delegate to a subagent.
+- **update_suggestion_status**: Change the status of a suggestion (new/reviewed/planned/shipped). Requires \`app\`, \`suggestionId\` (node ID), and \`status\`. Updates both the metadata and the node color.`
 
 /**
  * HTML Builder Reference — returned by get_html_builder_reference tool

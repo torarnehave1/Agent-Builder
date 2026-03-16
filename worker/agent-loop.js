@@ -39,6 +39,7 @@ async function loadAllTools(env) {
     'add_user_to_chat_group', 'get_group_members', 'get_group_messages',
     'get_group_stats', 'send_group_message',
     'create_poll', 'close_poll', 'get_poll_results',
+    'chat_db_list_tables', 'chat_db_query',
     'register_chat_bot', 'remove_chat_bot', 'trigger_bot_response',
     'list_bots', 'get_bot', 'update_chat_bot',
     'list_agents', 'get_agent', 'create_agent', 'update_agent',
@@ -209,7 +210,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
           'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder'
+          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

@@ -15,6 +15,7 @@ import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
 import { runBotSubagent } from './bot-subagent.js'
 import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
+import { runVideoSubagent } from './video-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -2040,19 +2041,39 @@ async function executeGetGroupMessages(input, env) {
   }
 
   const auth = await chatAuth(input.userId, env)
-  const limit = Math.min(input.limit || 50, 200)
-  const res = await env.CHAT_WORKER.fetch(
-    `https://group-chat-worker/groups/${groupId}/messages?${auth.qs}&limit=${limit}`
-  )
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || 'Failed to get group messages')
+  const requestedLimit = input.limit || 200
+  const allMessages = []
+  let before = 0
+  const pageSize = 200 // max per API call
+  const maxPages = 20 // safety limit: 20 * 200 = 4000 messages max
 
-  const messages = data.messages || []
+  for (let page = 0; page < maxPages; page++) {
+    const params = `${auth.qs}&latest=1&limit=${pageSize}${before > 0 ? `&before=${before}` : ''}`
+    const res = await env.CHAT_WORKER.fetch(
+      `https://group-chat-worker/groups/${groupId}/messages?${params}`
+    )
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.error || 'Failed to get group messages')
+
+    const messages = data.messages || []
+    allMessages.push(...messages)
+
+    // Stop if we have enough or no more pages
+    if (!data.paging?.has_more || allMessages.length >= requestedLimit) break
+    before = data.paging.next_before
+    if (!before) break
+  }
+
+  // Sort chronologically (oldest first) and trim to requested limit
+  allMessages.sort((a, b) => a.id - b.id)
+  const trimmed = allMessages.slice(0, requestedLimit)
+
   return {
     groupId,
-    messages,
-    count: messages.length,
-    message: `Retrieved ${messages.length} messages from group ${groupId}`
+    messages: trimmed,
+    count: trimmed.length,
+    totalFetched: allMessages.length,
+    message: `Retrieved ${trimmed.length} messages from group ${groupId}`
   }
 }
 
@@ -2933,6 +2954,511 @@ async function resolveGroupIdByName(groupName, userId, env) {
   return match.id
 }
 
+// ── System Registry (Dynamic — reads config from graph_system_registry KG) ──
+
+// Fetch the registry graph and extract nodes by type
+async function fetchRegistryGraph(env) {
+  try {
+    const kgFetcher = env.KG_WORKER
+    if (!kgFetcher) return { nodes: [], edges: [] }
+    const res = await kgFetcher.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_system_registry')
+    if (!res.ok) return { nodes: [], edges: [] }
+    return await res.json()
+  } catch {
+    return { nodes: [], edges: [] }
+  }
+}
+
+function registryNodesByType(graph, type) {
+  return (graph.nodes || []).filter(n => n.type === type)
+}
+
+async function fetchWorkerSpec(fetcher, baseUrl) {
+  try {
+    const res = await fetcher.fetch(`${baseUrl}/openapi.json`)
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+async function fetchWorkerHealth(fetcher, baseUrl) {
+  try {
+    let res = await fetcher.fetch(`${baseUrl}/health`)
+    if (!res.ok) res = await fetcher.fetch(`${baseUrl}/api/health`)
+    if (!res.ok) return { status: 'unreachable' }
+    const data = await res.json()
+    // Normalize varying health response formats
+    if (data.status === 'healthy' || data.status === 'ok' || data.ok === true || data.endpoints) {
+      return { ...data, status: 'healthy' }
+    }
+    return { ...data, status: data.status || 'healthy' }
+  } catch {
+    return { status: 'unreachable' }
+  }
+}
+
+async function executeGetSystemRegistry(input, env) {
+  const filter = input.filter || 'all'
+  const includeEndpoints = input.include_endpoints !== false
+
+  // Helper: only run a section if filter is 'all' or matches the section name
+  const need = (section) => filter === 'all' || filter === section
+
+  // ── 0. Read config from graph_system_registry (single source of truth) ──
+  const registry = await fetchRegistryGraph(env)
+  const regWorkers     = registryNodesByType(registry, 'system-worker')
+  const regSubagents   = registryNodesByType(registry, 'system-subagent')
+  const regNodeTypes   = registryNodesByType(registry, 'system-nodetype')
+  const regTemplates   = registryNodesByType(registry, 'system-template')
+  const regDatabases   = registryNodesByType(registry, 'system-database')
+  const regApps        = registryNodesByType(registry, 'system-app')
+  const regCredentials = registryNodesByType(registry, 'system-credential')
+
+  // ── 1. Workers: health + OpenAPI from graph-defined bindings ──
+  let workers = []
+  if (need('workers')) {
+    const workerPromises = regWorkers.map(async (node) => {
+      const meta = node.metadata || {}
+      const binding = meta.binding
+      if (!binding || binding === 'self') return { id: node.id, label: node.label, binding, name: meta.name || node.label, domain: meta.domain || meta.url || null, status: 'self', endpointCount: 0 }
+      const fetcher = env[binding]
+      if (!fetcher) return { id: node.id, label: node.label, binding, name: meta.name || node.label, domain: meta.domain || null, status: 'no-binding', endpointCount: 0 }
+
+      const workerName = meta.name || node.label
+      const baseUrl = `https://${workerName}`
+      const [health, spec] = await Promise.all([
+        fetchWorkerHealth(fetcher, baseUrl),
+        fetchWorkerSpec(fetcher, baseUrl),
+      ])
+
+      const endpoints = []
+      if (spec?.paths) {
+        for (const [path, methods] of Object.entries(spec.paths)) {
+          for (const [method, detail] of Object.entries(methods)) {
+            endpoints.push({ method: method.toUpperCase(), path, summary: detail.summary || detail.description || '' })
+          }
+        }
+      }
+
+      return {
+        id: node.id, label: node.label, binding, name: workerName,
+        domain: meta.domain || null,
+        status: health.status || 'unknown',
+        apiTitle: spec?.info?.title || null,
+        apiVersion: spec?.info?.version || null,
+        endpointCount: endpoints.length,
+        endpoints: includeEndpoints ? endpoints : undefined,
+      }
+    })
+    workers = await Promise.all(workerPromises)
+  }
+
+  // ── 2. Tools from code (still introspected — tool defs are in JS) ──
+  const tools = TOOL_DEFINITIONS.map(t => ({ name: t.name, description: t.description }))
+
+  // ── 3. Subagents from graph ──
+  const subagents = regSubagents.map(n => ({
+    name: n.label, delegationTool: n.metadata?.delegationTool, model: n.metadata?.model,
+    tools: n.metadata?.tools || [], file: n.metadata?.file,
+  }))
+
+  // ── 4. Node types from graph ──
+  const nodeTypes = regNodeTypes.map(n => n.label)
+
+  // ── 5. Databases from graph ──
+  const dbNodes = regDatabases.map(n => ({
+    binding: n.metadata?.binding, name: n.metadata?.name || n.label, purpose: n.info,
+  }))
+
+  // ── 6. D1 Database Schemas (live introspection using graph-defined DBs) ──
+  let schemas = undefined
+  if (need('schemas')) {
+    schemas = await Promise.all(dbNodes.map(async (db) => {
+      const d1 = env[db.binding]
+      if (!d1) return { ...db, tables: [], tableCount: 0, error: 'no-binding' }
+      try {
+        const tablesRes = await d1.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all()
+        const tableNames = tablesRes.results.map(r => r.name)
+        const tables = await Promise.all(tableNames.map(async (tbl) => {
+          try {
+            const colsRes = await d1.prepare(`PRAGMA table_info(${tbl})`).all()
+            const countRes = await d1.prepare(`SELECT COUNT(*) as cnt FROM "${tbl}"`).first()
+            return {
+              name: tbl,
+              columns: colsRes.results.map(c => ({ name: c.name, type: c.type, pk: c.pk === 1, notNull: c.notnull === 1 })),
+              rowCount: countRes?.cnt || 0,
+            }
+          } catch {
+            return { name: tbl, columns: [], rowCount: 0, error: 'introspection-failed' }
+          }
+        }))
+        return { binding: db.binding, name: db.name, purpose: db.purpose, tableCount: tables.length, tables }
+      } catch (e) {
+        return { ...db, tables: [], tableCount: 0, error: e.message }
+      }
+    }))
+  }
+
+  // ── 7. User-Created Agents (from agent_configs D1 table) ──
+  let userAgents = undefined
+  if (need('agents')) {
+    try {
+      const agentsRes = await env.DB.prepare(
+        'SELECT id, user_id, name, description, model, tools, is_active, created_at FROM agent_configs WHERE is_active = 1 ORDER BY created_at DESC'
+      ).all()
+      userAgents = agentsRes.results.map(a => {
+        let toolCount = 0
+        try { toolCount = JSON.parse(a.tools || '[]').length } catch {}
+        return { id: a.id, name: a.name, description: a.description, model: a.model, toolCount, createdBy: a.user_id, createdAt: a.created_at }
+      })
+    } catch {
+      userAgents = []
+    }
+  }
+
+  // ── 8. Knowledge Graph Inventory (via KG_WORKER) ──
+  let knowledgeGraphs = undefined
+  if (need('graphs')) {
+    try {
+      const kgFetcher = env.KG_WORKER
+      if (kgFetcher) {
+        const res = await kgFetcher.fetch('https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500')
+        if (res.ok) {
+          const data = await res.json()
+          const graphs = data.graphs || data || []
+          const byMetaArea = {}
+          const recentlyUpdated = []
+          for (const g of graphs) {
+            const area = g.metaArea || g.metadata?.metaArea || 'uncategorized'
+            byMetaArea[area] = (byMetaArea[area] || 0) + 1
+            recentlyUpdated.push({
+              id: g.id, title: g.title || g.metadata?.title || g.id, metaArea: area,
+              nodeCount: g.nodeCount || g.nodes?.length || 0,
+              updatedAt: g.updatedAt || g.metadata?.updatedAt || null,
+            })
+          }
+          recentlyUpdated.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+          knowledgeGraphs = { total: graphs.length, byMetaArea, recentlyUpdated: recentlyUpdated.slice(0, 10) }
+        }
+      }
+    } catch {
+      knowledgeGraphs = { total: 0, byMetaArea: {}, recentlyUpdated: [], error: 'fetch-failed' }
+    }
+  }
+
+  // ── 9. Templates (dynamic from KG_WORKER + graph-defined templates) ──
+  let templates = undefined
+  if (need('templates')) {
+    try {
+      const kgFetcher = env.KG_WORKER
+      const [graphTplRes, aiTplRes, toolTplRes] = kgFetcher ? await Promise.all([
+        kgFetcher.fetch('https://knowledge-graph-worker/getTemplates').then(r => r.ok ? r.json() : []).catch(() => []),
+        kgFetcher.fetch('https://knowledge-graph-worker/getAITemplates').then(r => r.ok ? r.json() : []).catch(() => []),
+        kgFetcher.fetch('https://knowledge-graph-worker/getToolTemplates').then(r => r.ok ? r.json() : []).catch(() => []),
+      ]) : [[], [], []]
+      const graphTemplates = Array.isArray(graphTplRes) ? graphTplRes : graphTplRes.templates || []
+      const aiTemplates = Array.isArray(aiTplRes) ? aiTplRes : aiTplRes.templates || []
+      const toolTemplates = Array.isArray(toolTplRes) ? toolTplRes : toolTplRes.templates || []
+      // HTML templates from code
+      let htmlTemplates = []
+      try { htmlTemplates = listTemplates() } catch {}
+      // Also include any templates registered in the graph
+      const graphRegTemplates = regTemplates.map(t => ({ id: t.id, name: t.label, description: t.info || '' }))
+      templates = {
+        graph: graphTemplates.map(t => ({ id: t.id, name: t.name || t.title, description: t.description || '' })),
+        ai: aiTemplates.map(t => ({ id: t.id, name: t.name || t.title, description: t.description || '' })),
+        tool: toolTemplates.map(t => ({ id: t.id, name: t.name || t.title, description: t.description || '' })),
+        html: htmlTemplates.map(t => ({ id: t.id || t.name, name: t.name || t.label, description: t.description || '' })),
+        registered: graphRegTemplates,
+        total: graphTemplates.length + aiTemplates.length + toolTemplates.length + htmlTemplates.length + graphRegTemplates.length,
+      }
+    } catch {
+      templates = { graph: [], ai: [], tool: [], html: [], registered: [], total: 0, error: 'fetch-failed' }
+    }
+  }
+
+  // ── 10. Frontend Apps (from graph) ──
+  let frontendApps = undefined
+  if (need('apps')) {
+    frontendApps = regApps.map(n => ({
+      name: n.label, url: n.metadata?.url, repo: n.metadata?.repo,
+      framework: n.metadata?.framework, deployMethod: n.metadata?.deployMethod,
+    }))
+  }
+
+  // ── 11. Credentials Check (from graph + env inspection) ──
+  let credentials = undefined
+  if (need('credentials')) {
+    credentials = regCredentials.map(n => ({
+      name: n.label, envName: n.metadata?.envName || n.label,
+      configured: !!(n.metadata?.envName && env[n.metadata.envName]),
+      usedBy: n.metadata?.usedBy,
+    }))
+  }
+
+  // ── 12. Storage Inventory (query workers that have storage) ──
+  let storage = undefined
+  if (need('storage')) {
+    // Use workers that have storage — identified by having a binding we can query
+    const storageWorkers = regWorkers.filter(n => {
+      const b = n.metadata?.binding
+      return b && b !== 'self' && env[b]
+    })
+    storage = await Promise.all(storageWorkers.map(async (node) => {
+      const binding = node.metadata.binding
+      const workerName = node.metadata.name || node.label
+      const fetcher = env[binding]
+      try {
+        const res = await fetcher.fetch(`https://${workerName}/storage-stats`)
+        if (res.ok) {
+          const stats = await res.json()
+          return { binding, name: workerName, stats }
+        }
+        return null // no storage-stats endpoint = no storage to report
+      } catch {
+        return null
+      }
+    }))
+    storage = storage.filter(Boolean) // only include workers that responded
+  }
+
+  // ── Build sections + discover available filters dynamically ──
+  const sections = {
+    workers:         need('workers') ? workers : undefined,
+    subagents:       need('subagents') ? subagents : undefined,
+    tools:           need('tools') ? { count: tools.length, list: tools } : undefined,
+    nodeTypes:       need('nodeTypes') ? nodeTypes : undefined,
+    databases:       need('databases') ? dbNodes : undefined,
+    schemas:         schemas,
+    userAgents:      userAgents,
+    knowledgeGraphs: knowledgeGraphs,
+    templates:       templates,
+    apps:            frontendApps,
+    credentials:     credentials,
+    storage:         storage,
+  }
+
+  // Filter aliases: what the agent passes → key in sections
+  // Built dynamically from what sections exist
+  const filterAliases = {}
+  for (const key of Object.keys(sections)) {
+    filterAliases[key] = key // direct name works
+  }
+  // Friendlier aliases
+  filterAliases.agents = 'userAgents'
+  filterAliases.graphs = 'knowledgeGraphs'
+  const availableFilters = ['all', ...Object.keys(filterAliases)]
+
+  const totalEndpoints = workers.reduce((sum, w) => sum + (w.endpointCount || 0), 0)
+  const healthyCount = workers.filter(w => w.status === 'healthy').length
+  const totalTables = schemas ? schemas.reduce((sum, db) => sum + (db.tableCount || 0), 0) : 0
+
+  const summary = {
+    workers: workers.length || regWorkers.length,
+    workersHealthy: healthyCount,
+    totalEndpoints,
+    subagents: subagents.length,
+    tools: tools.length,
+    nodeTypes: nodeTypes.length,
+    databases: dbNodes.length,
+    totalTables,
+    userAgents: userAgents?.length || 0,
+    knowledgeGraphs: knowledgeGraphs?.total || 0,
+    templates: templates?.total || 0,
+    frontendApps: frontendApps?.length || regApps.length,
+    credentialsConfigured: credentials ? credentials.filter(c => c.configured).length : 0,
+    credentialsTotal: credentials?.length || regCredentials.length,
+    registrySource: 'graph_system_registry',
+  }
+
+  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.frontendApps} frontend apps, ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
+
+  // Apply filter
+  if (filter !== 'all') {
+    const key = filterAliases[filter]
+    if (key && sections[key] !== undefined) {
+      return { [key]: sections[key], availableFilters, summary, message }
+    }
+    return { error: `Unknown filter "${filter}"`, availableFilters, summary, message }
+  }
+
+  return { ...sections, availableFilters, summary, message }
+}
+
+// ── Worker Management (Cloudflare API) ───────────────────────────
+
+const CF_ACCOUNT_ID = '5d9b2060ef095c777711a8649c24914e'
+const CF_API_BASE = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers`
+
+async function executeDeployWorker(input, env) {
+  const token = env.CLOUDFLARE_API_TOKEN
+  if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured. Add it as a secret: wrangler secret put CLOUDFLARE_API_TOKEN' }
+
+  const { workerName, code } = input
+  if (!workerName || !code) return { error: 'workerName and code are required' }
+
+  const enableSubdomain = input.enableSubdomain !== false
+  const compatDate = input.compatibilityDate || '2024-11-01'
+  const registerInGraph = input.registerInGraph !== false
+
+  // Step 1: Deploy the worker code via multipart form
+  const metadata = JSON.stringify({ main_module: 'index.js', compatibility_date: compatDate })
+  const formData = new FormData()
+  formData.append('metadata', new Blob([metadata], { type: 'application/json' }))
+  formData.append('index.js', new Blob([code], { type: 'application/javascript+module' }), 'index.js')
+
+  const deployRes = await fetch(`${CF_API_BASE}/scripts/${workerName}`, {
+    method: 'PUT',
+    headers: { 'Authorization': `Bearer ${token}` },
+    body: formData,
+  })
+  const deployData = await deployRes.json()
+  if (!deployData.success) {
+    return { error: 'Deploy failed', details: deployData.errors }
+  }
+
+  // Step 2: Enable workers.dev subdomain
+  let subdomainResult = null
+  if (enableSubdomain) {
+    const subRes = await fetch(`${CF_API_BASE}/scripts/${workerName}/subdomain`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    subdomainResult = await subRes.json()
+  }
+
+  // Step 3: Register in graph_system_registry
+  let graphResult = null
+  if (registerInGraph && env.KG_WORKER) {
+    try {
+      const nodePayload = {
+        graphId: 'graph_system_registry',
+        node: {
+          id: `worker-${workerName}`,
+          label: workerName,
+          type: 'system-worker',
+          color: '#f59e0b',
+          info: `Deployed via Cloudflare API. Last deployed: ${new Date().toISOString()}`,
+          metadata: {
+            binding: null,
+            name: workerName,
+            domain: `${workerName}.torarnehave.workers.dev`,
+            deployedVia: 'cloudflare-api',
+            deployedAt: new Date().toISOString(),
+          },
+        },
+      }
+      const gRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nodePayload),
+      })
+      graphResult = await gRes.json()
+    } catch (e) {
+      graphResult = { error: e.message }
+    }
+  }
+
+  return {
+    success: true,
+    workerName,
+    url: `https://${workerName}.torarnehave.workers.dev`,
+    deploymentId: deployData.result?.deployment_id,
+    deployedFrom: deployData.result?.last_deployed_from,
+    modifiedOn: deployData.result?.modified_on,
+    subdomainEnabled: subdomainResult?.success || false,
+    registeredInGraph: graphResult?.ok || false,
+    message: `Worker "${workerName}" deployed successfully. Live at https://${workerName}.torarnehave.workers.dev`,
+  }
+}
+
+async function executeReadWorker(input, env) {
+  const token = env.CLOUDFLARE_API_TOKEN
+  if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
+
+  const { workerName } = input
+
+  if (workerName) {
+    // Get details for a specific worker
+    const res = await fetch(`${CF_API_BASE}/scripts/${workerName}`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    })
+    const data = await res.json()
+    if (!data.success) return { error: `Worker "${workerName}" not found`, details: data.errors }
+
+    const r = data.result
+    return {
+      name: r.id,
+      modifiedOn: r.modified_on,
+      createdOn: r.created_on,
+      deploymentId: r.deployment_id,
+      lastDeployedFrom: r.last_deployed_from,
+      hasModules: r.has_modules,
+      compatibilityDate: r.compatibility_date,
+      handlers: r.handlers,
+    }
+  }
+
+  // List all workers
+  const res = await fetch(`${CF_API_BASE}/scripts`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  })
+  const data = await res.json()
+  if (!data.success) return { error: 'Failed to list workers', details: data.errors }
+
+  const workers = data.result.map(w => ({
+    name: w.id,
+    modifiedOn: w.modified_on,
+    lastDeployedFrom: w.last_deployed_from,
+  }))
+
+  return { total: workers.length, workers }
+}
+
+async function executeDeleteWorker(input, env) {
+  const token = env.CLOUDFLARE_API_TOKEN
+  if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
+
+  const { workerName } = input
+  if (!workerName) return { error: 'workerName is required' }
+
+  const removeFromGraph = input.removeFromGraph !== false
+
+  // Delete the worker
+  const res = await fetch(`${CF_API_BASE}/scripts/${workerName}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` },
+  })
+  const data = await res.json()
+  if (!data.success) return { error: `Failed to delete "${workerName}"`, details: data.errors }
+
+  // Remove from graph
+  let graphResult = null
+  if (removeFromGraph && env.KG_WORKER) {
+    try {
+      const gRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/removeNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graphId: 'graph_system_registry', nodeId: `worker-${workerName}` }),
+      })
+      graphResult = await gRes.json()
+    } catch (e) {
+      graphResult = { error: e.message }
+    }
+  }
+
+  return {
+    success: true,
+    workerName,
+    deleted: true,
+    removedFromGraph: graphResult?.ok || false,
+    message: `Worker "${workerName}" deleted.`,
+  }
+}
+
 // ── Describe capabilities ─────────────────────────────────────────
 
 async function executeDescribeCapabilities(input, env) {
@@ -3015,6 +3541,279 @@ async function executeDbQuery(input, env) {
     records: result.results,
     count: result.results.length,
     message: `Returned ${result.results.length} records`
+  }
+}
+
+// ── Chat DB tools ─────────────────────────────────────────────────
+
+async function executeChatDbListTables(env) {
+  const db = env.CHAT_DB
+  if (!db) throw new Error('CHAT_DB binding not available')
+
+  const result = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%' ORDER BY name"
+  ).all()
+
+  const tables = []
+  for (const row of result.results) {
+    const info = await db.prepare(`PRAGMA table_info(${row.name})`).all()
+    tables.push({
+      name: row.name,
+      columns: info.results.map(c => ({ name: c.name, type: c.type, notnull: !!c.notnull, pk: !!c.pk }))
+    })
+  }
+
+  return { tables, message: `Found ${tables.length} tables in hallo_vegvisr_chat` }
+}
+
+async function executeChatDbQuery(input, env) {
+  const db = env.CHAT_DB
+  if (!db) throw new Error('CHAT_DB binding not available')
+
+  const sql = (input.sql || '').trim()
+  if (!sql) throw new Error('sql is required')
+
+  // Only allow SELECT queries
+  if (!/^SELECT\b/i.test(sql)) {
+    throw new Error('Only SELECT queries are allowed on chat_db. Use chat tools for modifications.')
+  }
+
+  const params = input.params || []
+  let stmt = db.prepare(sql)
+  if (params.length > 0) stmt = stmt.bind(...params)
+
+  const result = await stmt.all()
+  return {
+    records: result.results,
+    count: result.results.length,
+    message: `Returned ${result.results.length} records from chat_db`
+  }
+}
+
+// ── What's New (per-app release notes) ───────────────────────────
+
+const VALID_APPS = new Set(['chat', 'calendar', 'photos', 'aichat', 'vemail', 'connect'])
+
+const APP_TITLES = {
+  chat: 'Vegvisr Chat',
+  calendar: 'Vegvisr Calendar',
+  photos: 'Vegvisr Photos',
+  aichat: 'Vegvisr AI Chat',
+  vemail: 'Vegvisr Email',
+  connect: 'Vegvisr Connect',
+}
+
+async function executeAddWhatsNew(input, env) {
+  const app = (input.app || '').trim().toLowerCase()
+  const title = (input.title || '').trim()
+  const description = (input.description || '').trim()
+
+  if (!app || !VALID_APPS.has(app)) {
+    throw new Error(`app must be one of: ${[...VALID_APPS].join(', ')}. Got: "${app}"`)
+  }
+  if (!title || !description) throw new Error('title and description are required')
+
+  const graphId = `graph_${app}_new_features`
+  const nodeId = `feature-${Date.now()}`
+  const color = input.color || '#38bdf8'
+
+  // Check if graph exists — auto-create if not
+  const existsRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  if (!existsRes.ok) {
+    // Graph doesn't exist — create it
+    const createRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: graphId,
+        graphData: {
+          nodes: [],
+          edges: [],
+          metadata: {
+            title: `${APP_TITLES[app] || app} New Features`,
+            description: `Release notes and new features for ${APP_TITLES[app] || app}`,
+            metaArea: app,
+          }
+        },
+        override: true,
+      })
+    })
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to create graph ${graphId}`)
+    }
+    console.log(`[add_whats_new] Auto-created graph ${graphId}`)
+  }
+
+  // Add the feature node
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId,
+      node: {
+        id: nodeId,
+        label: title,
+        type: 'fulltext',
+        info: description,
+        color,
+      }
+    })
+  })
+
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || 'Failed to add feature node')
+
+  return {
+    message: `Added "${title}" to ${APP_TITLES[app] || app} What's New (node ${nodeId})`,
+    nodeId,
+    graphId,
+    app,
+    version: data.newVersion,
+  }
+}
+
+async function executeAddUserSuggestion(input, env) {
+  const app = (input.app || '').trim().toLowerCase()
+  const title = (input.title || '').trim()
+  const description = (input.description || '').trim()
+  const category = (input.category || 'feature').trim().toLowerCase()
+
+  if (!app || !VALID_APPS.has(app)) {
+    throw new Error(`app must be one of: ${[...VALID_APPS].join(', ')}. Got: "${app}"`)
+  }
+  if (!title || !description) throw new Error('title and description are required')
+
+  const graphId = `graph_${app}_user_suggestions`
+  const nodeId = `suggestion-${Date.now()}`
+  const validCategories = new Set(['feature', 'bug', 'ux', 'integration', 'other'])
+  const safeCategory = validCategories.has(category) ? category : 'feature'
+
+  const STATUS_COLORS = { new: '#38bdf8', reviewed: '#f59e0b', planned: '#a78bfa', shipped: '#34d399' }
+
+  // Check if graph exists — auto-create if not
+  const existsRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  if (!existsRes.ok) {
+    const createRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: graphId,
+        graphData: {
+          nodes: [],
+          edges: [],
+          metadata: {
+            title: `${APP_TITLES[app] || app} User Suggestions`,
+            description: `User suggestions for ${APP_TITLES[app] || app}`,
+            metaArea: app,
+          }
+        },
+        override: true,
+      })
+    })
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}))
+      throw new Error(err.error || `Failed to create graph ${graphId}`)
+    }
+    console.log(`[add_user_suggestion] Auto-created graph ${graphId}`)
+  }
+
+  // Add the suggestion node
+  const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId,
+      node: {
+        id: nodeId,
+        label: title,
+        type: 'fulltext',
+        info: description,
+        color: STATUS_COLORS.new,
+        metadata: {
+          status: 'new',
+          category: safeCategory,
+          submittedBy: 'agent',
+          submittedByEmail: 'agent@vegvisr.org',
+          votes: 0,
+          votedBy: [],
+          createdAt: new Date().toISOString(),
+        },
+      }
+    })
+  })
+
+  const data = await response.json()
+  if (!response.ok) throw new Error(data.error || 'Failed to add suggestion node')
+
+  return {
+    message: `Added suggestion "${title}" to ${APP_TITLES[app] || app} Suggestions (node ${nodeId})`,
+    nodeId,
+    graphId,
+    app,
+    category: safeCategory,
+    version: data.newVersion,
+  }
+}
+
+async function executeUpdateSuggestionStatus(input, env) {
+  const app = (input.app || '').trim().toLowerCase()
+  const suggestionId = (input.suggestionId || '').trim()
+  const status = (input.status || '').trim().toLowerCase()
+
+  if (!app || !VALID_APPS.has(app)) {
+    throw new Error(`app must be one of: ${[...VALID_APPS].join(', ')}. Got: "${app}"`)
+  }
+  if (!suggestionId) throw new Error('suggestionId is required')
+
+  const validStatuses = new Set(['new', 'reviewed', 'planned', 'shipped'])
+  if (!validStatuses.has(status)) {
+    throw new Error(`status must be one of: ${[...validStatuses].join(', ')}. Got: "${status}"`)
+  }
+
+  const STATUS_COLORS = { new: '#38bdf8', reviewed: '#f59e0b', planned: '#a78bfa', shipped: '#34d399' }
+  const graphId = `graph_${app}_user_suggestions`
+
+  // Fetch the graph to get the current node
+  const graphRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  if (!graphRes.ok) throw new Error(`Graph ${graphId} not found`)
+
+  const graphData = await graphRes.json()
+  const node = (graphData.nodes || []).find(n => n.id === suggestionId)
+  if (!node) throw new Error(`Suggestion ${suggestionId} not found in ${graphId}`)
+
+  const meta = node.metadata || {}
+  const oldStatus = meta.status || 'new'
+
+  // Patch the node with new status and color
+  const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId,
+      nodeId: suggestionId,
+      fields: {
+        color: STATUS_COLORS[status],
+        metadata: { ...meta, status },
+      },
+    }),
+  })
+
+  const data = await patchRes.json()
+  if (!patchRes.ok) throw new Error(data.error || 'Failed to update suggestion status')
+
+  return {
+    message: `Updated suggestion "${node.label}" status from ${oldStatus} to ${status}`,
+    suggestionId,
+    graphId,
+    oldStatus,
+    newStatus: status,
   }
 }
 
@@ -3482,6 +4281,14 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     }
     case 'describe_capabilities':
       return await executeDescribeCapabilities(toolInput, env)
+    case 'get_system_registry':
+      return await executeGetSystemRegistry(toolInput, env)
+    case 'deploy_worker':
+      return await executeDeployWorker(toolInput, env)
+    case 'read_worker':
+      return await executeReadWorker(toolInput, env)
+    case 'delete_worker':
+      return await executeDeleteWorker(toolInput, env)
     case 'db_list_tables':
       return await executeDbListTables(env)
     case 'db_query':
@@ -3490,6 +4297,16 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCalendarListTables(env)
     case 'calendar_query':
       return await executeCalendarQuery(toolInput, env)
+    case 'chat_db_list_tables':
+      return await executeChatDbListTables(env)
+    case 'chat_db_query':
+      return await executeChatDbQuery(toolInput, env)
+    case 'add_whats_new':
+      return await executeAddWhatsNew(toolInput, env)
+    case 'add_user_suggestion':
+      return await executeAddUserSuggestion(toolInput, env)
+    case 'update_suggestion_status':
+      return await executeUpdateSuggestionStatus(toolInput, env)
     case 'calendar_get_settings':
       return await executeCalendarGetSettings(toolInput, env)
     case 'calendar_check_availability':
@@ -3555,6 +4372,25 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         message: result.success
           ? `Bot subagent completed: ${(result.summary || '').slice(0, 500)}`
           : `Bot subagent failed: ${result.error || 'Unknown error'}`,
+      }
+    }
+    case 'delegate_to_video': {
+      const result = await runVideoSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        graphId: result.graphId,
+        nodeId: result.nodeId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Video subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Video subagent failed: ${result.error || 'Unknown error'}`,
+        viewUrl: result.graphId
+          ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
+          : undefined,
       }
     }
     default:

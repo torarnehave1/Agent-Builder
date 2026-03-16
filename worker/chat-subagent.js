@@ -36,6 +36,15 @@ const CHAT_SUBAGENT_SYSTEM_PROMPT = `You are a Hallo Vegvisr Chat Groups special
 12. \`close_poll\` — close a poll so voting stops
 13. \`get_poll_results\` — get current vote counts and voter details
 
+## Direct Database Access (read-only)
+14. \`chat_db_list_tables\` — list all tables and columns in the chat database
+15. \`chat_db_query\` — run SELECT queries directly on the chat database (groups, group_messages, group_members, chat_bots, polls, poll_votes, message_reactions). Use this for counts, date lookups, and any analysis that needs exact data.
+
+## Release Notes
+16. \`add_whats_new\` — add a feature entry to a What's New page. Requires \`app\` parameter — always use \`app: "chat"\` since you are the chat subagent. Use this after a new chat feature is deployed.
+17. \`add_user_suggestion\` — add a user suggestion to the Suggestions board. Requires \`app\` (always use \`app: "chat"\`), \`title\`, \`description\`, and optional \`category\` (feature, bug, ux, integration, other).
+18. \`update_suggestion_status\` — change the status of a suggestion (new → reviewed → planned → shipped). Requires \`app\` (always use \`app: "chat"\`), \`suggestionId\` (the node ID), and \`status\`.
+
 ## Workflows
 
 ### Setting up a new group:
@@ -49,15 +58,19 @@ const CHAT_SUBAGENT_SYSTEM_PROMPT = `You are a Hallo Vegvisr Chat Groups special
 4. \`close_poll\` when voting should end
 
 ### Analyzing group activity:
-1. \`get_group_stats\` for overview of all groups
-2. \`get_group_messages\` to read specific conversations
+1. \`chat_db_query\` for exact counts, date ranges, and SQL analysis (preferred for data questions)
+2. \`get_group_messages\` to read message content for sentiment/topic analysis
 3. \`get_group_members\` to see who is in a group
+4. \`get_group_stats\` for a quick overview of all groups
 
 ## Rules
 - Use groupName when you have a name but not a UUID — tools resolve it automatically
 - email must be a registered vegvisr.org user for member operations
 - Archive (delete) is reversible — use delete_chat_group, not a permanent delete
 - When creating polls, provide 2-6 clear, distinct options
+- **ALWAYS use \`chat_db_query\` for counting, date lookups, and data analysis** — it gives exact results via SQL. Use \`chat_db_list_tables\` first if you need to discover the schema.
+- Examples: "how many messages" → \`SELECT COUNT(*) FROM group_messages WHERE group_id = ?\`, "last message" → \`SELECT * FROM group_messages WHERE group_id = ? ORDER BY id DESC LIMIT 1\`
+- First resolve the group ID with \`list_chat_groups\` or \`chat_db_query\`, then query group_messages.
 
 After completing your task, provide a brief summary of what you did.`
 
@@ -79,6 +92,11 @@ const CHAT_SUBAGENT_TOOL_NAMES = new Set([
   'create_poll',
   'close_poll',
   'get_poll_results',
+  'chat_db_list_tables',
+  'chat_db_query',
+  'add_whats_new',
+  'add_user_suggestion',
+  'update_suggestion_status',
 ])
 
 function getChatSubagentTools() {
@@ -129,6 +147,9 @@ async function runChatSubagent(input, env, onProgress, executeTool) {
     create_poll: ['Creating a poll...', 'The question is posed...'],
     close_poll: ['Closing the poll...', 'Voting has ended...'],
     get_poll_results: ['Counting votes...', 'The results emerge...'],
+    add_whats_new: ['Publishing release notes...', 'Announcing the feature...'],
+    add_user_suggestion: ['Recording the suggestion...', 'Your idea has been noted...'],
+    update_suggestion_status: ['Updating suggestion status...', 'Changing the roadmap...'],
   }
 
   // Build initial user message with context

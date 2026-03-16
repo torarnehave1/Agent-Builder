@@ -7,6 +7,8 @@
  * The subagent generates a response and posts it back as the bot.
  */
 
+import { TOOL_DEFINITIONS } from './tool-definitions.js'
+
 // ---------------------------------------------------------------------------
 // System Prompt — built dynamically per bot
 // ---------------------------------------------------------------------------
@@ -31,62 +33,21 @@ ${personality ? `## Your Knowledge & Personality\n${personality}` : ''}
 // Tool definitions for bots — subset of available tools
 // ---------------------------------------------------------------------------
 
-const BOT_TOOL_CATALOG = {
-  search_knowledge: {
-    name: 'search_knowledge',
-    description: 'Search knowledge graphs for information. Returns matching graphs and nodes.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query text' },
-        nodeType: { type: 'string', description: 'Filter by node type (fulltext, html-node, etc.)' },
-        limit: { type: 'number', description: 'Max results (default 10)' },
-      },
-      required: ['query'],
-    },
-  },
-  read_node: {
-    name: 'read_node',
-    description: 'Read the full content of a specific node in a knowledge graph.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        graphId: { type: 'string', description: 'Graph ID' },
-        nodeId: { type: 'string', description: 'Node ID' },
-      },
-      required: ['graphId', 'nodeId'],
-    },
-  },
-  web_search: {
-    name: 'perplexity_search',
-    description: 'Search the web for current information using Perplexity AI.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Search query' },
-      },
-      required: ['query'],
-    },
-  },
-  translate: {
-    name: 'translate',
-    description: 'Translate text between languages.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Text to translate' },
-        target_language: { type: 'string', description: 'Target language (en, no, is, nl)' },
-        source_language: { type: 'string', description: 'Source language (auto-detected if omitted)' },
-      },
-      required: ['text', 'target_language'],
-    },
-  },
+// Aliases: bot config may use friendly names that map to actual tool names
+const BOT_TOOL_ALIASES = {
+  web_search: 'perplexity_search',
 }
+
+// Build a lookup map from the main TOOL_DEFINITIONS (single source of truth)
+const TOOL_BY_NAME = new Map(TOOL_DEFINITIONS.map(t => [t.name, t]))
 
 function getBotTools(enabledToolNames) {
   if (!enabledToolNames || enabledToolNames.length === 0) return []
   return enabledToolNames
-    .map(name => BOT_TOOL_CATALOG[name])
+    .map(name => {
+      const resolved = BOT_TOOL_ALIASES[name] || name
+      return TOOL_BY_NAME.get(resolved)
+    })
     .filter(Boolean)
 }
 

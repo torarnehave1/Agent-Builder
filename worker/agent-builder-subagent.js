@@ -55,12 +55,16 @@ const AGENT_BUILDER_SYSTEM_PROMPT = `You are a Vegvisr Agent Builder specialist.
 - **avatar_url**: URL to the agent's avatar image
 - **metadata**: JSON object for extra config (e.g. chatBotId linking to a chat bot)
 
+## System Discovery
+- \`get_system_registry\` — Read the live system registry to discover all available tools, subagents, workers, node types, and templates. **ALWAYS call this before configuring an agent's tools** so you know what tools actually exist. You can filter by: all, subagents, workers, nodetypes, templates.
+
 ## Rules
 - Agent IDs follow the pattern "agent_<8chars>" (auto-generated on create)
 - Default model is claude-haiku-4-5-20251001
 - When listing agents, always mention count and names
 - When creating, confirm the ID and settings back to the user
 - Deactivation is a soft-delete — the agent can be reactivated by updating is_active
+- **ALWAYS call get_system_registry before creating or updating an agent's tools** — never guess tool names
 
 After completing your task, provide a brief summary of what you did.`
 
@@ -75,6 +79,7 @@ const AGENT_BUILDER_TOOL_NAMES = new Set([
   'update_agent',
   'deactivate_agent',
   'upload_agent_avatar',
+  'get_system_registry',
 ])
 
 function getAgentBuilderTools() {

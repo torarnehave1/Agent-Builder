@@ -817,6 +817,594 @@ export default {
         }
       }
 
+      // GET /openapi.json - OpenAPI 3.0 specification
+      if (pathname === '/openapi.json' && request.method === 'GET') {
+        const spec = {
+          openapi: '3.0.3',
+          info: {
+            title: 'Agent Worker API',
+            version: '1.0.0',
+            description: 'HTTP API for the Vegvisr Agent Worker — agent execution, streaming chat, image upload, semantic analysis, HTML building, template management, agent CRUD, chat-bot management, and health checks.',
+          },
+          servers: [{ url: '/' }],
+          paths: {
+            '/api/data-node/submit': {
+              post: {
+                summary: 'Submit a record to a data-node',
+                description: 'Public form submission endpoint. Landing pages POST here to append records to data-nodes (no auth required).',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['graphId', 'nodeId', 'record'],
+                    properties: {
+                      graphId: { type: 'string' },
+                      nodeId: { type: 'string' },
+                      record: { type: 'object', description: 'Arbitrary key-value record to append' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Record saved', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, recordId: { type: 'string' }, recordCount: { type: 'integer' } } } } } },
+                  '400': { description: 'Missing required fields' },
+                  '404': { description: 'Graph or data-node not found' },
+                  '500': { description: 'Failed to save record' },
+                },
+              },
+            },
+            '/execute': {
+              post: {
+                summary: 'Execute an agent',
+                description: 'Run a configured agent with a given task. Returns the agent execution result.',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['agentId', 'task', 'userId'],
+                    properties: {
+                      agentId: { type: 'string' },
+                      task: { type: 'string' },
+                      userId: { type: 'string' },
+                      contractId: { type: 'string', description: 'Optional contract ID override' },
+                      graphId: { type: 'string', description: 'Optional target graph ID (auto-generated if omitted)' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Agent execution result', content: { 'application/json': { schema: { type: 'object' } } } },
+                  '400': { description: 'Missing required fields' },
+                  '404': { description: 'Agent not found or inactive' },
+                },
+              },
+            },
+            '/chat': {
+              post: {
+                summary: 'Streaming conversational agent chat (SSE)',
+                description: 'Send messages and receive a Server-Sent Events stream with agent responses and tool calls.',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['userId', 'messages'],
+                    properties: {
+                      userId: { type: 'string' },
+                      messages: { type: 'array', items: { type: 'object', properties: { role: { type: 'string' }, content: { type: 'string' } } } },
+                      graphId: { type: 'string' },
+                      model: { type: 'string', description: 'Model ID override' },
+                      maxTurns: { type: 'integer', description: 'Max agent turns (default 8)' },
+                      agentId: { type: 'string', description: 'Load per-agent config (system prompt, tools, model)' },
+                      activeHtmlNodeId: { type: 'string', description: 'Active HTML node context' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'SSE stream', content: { 'text/event-stream': { schema: { type: 'string' } } } },
+                  '400': { description: 'Missing required fields' },
+                },
+              },
+            },
+            '/upload-image': {
+              post: {
+                summary: 'Upload a base64 image',
+                description: 'Upload a base64-encoded image to the photos API and return an imgix URL.',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['userId', 'base64'],
+                    properties: {
+                      userId: { type: 'string' },
+                      base64: { type: 'string', description: 'Base64-encoded image data' },
+                      mediaType: { type: 'string', description: 'MIME type (default image/png)' },
+                      filename: { type: 'string' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Upload result', content: { 'application/json': { schema: { type: 'object', properties: { key: { type: 'string' }, url: { type: 'string' } } } } } },
+                  '400': { description: 'Missing required fields' },
+                },
+              },
+            },
+            '/analyze': {
+              post: {
+                summary: 'Direct semantic analysis',
+                description: 'Run semantic analysis on a graph or a specific node (no agent loop).',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['graphId'],
+                    properties: {
+                      graphId: { type: 'string' },
+                      nodeId: { type: 'string', description: 'If provided, analyze a single node; otherwise analyze the whole graph' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Analysis result', content: { 'application/json': { schema: { type: 'object' } } } },
+                  '400': { description: 'Missing graphId' },
+                  '500': { description: 'Analysis error' },
+                },
+              },
+            },
+            '/layout': {
+              get: {
+                summary: 'Get saved node layout',
+                description: 'Retrieve saved node layout positions for an agent contract.',
+                parameters: [
+                  { name: 'contractId', in: 'query', required: true, schema: { type: 'string' } },
+                ],
+                responses: {
+                  '200': { description: 'Layout data', content: { 'application/json': { schema: { type: 'object', properties: { contractId: { type: 'string' }, layout: { type: 'object', nullable: true } } } } } },
+                  '400': { description: 'Missing contractId' },
+                },
+              },
+              put: {
+                summary: 'Save node layout positions',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['contractId', 'layout'],
+                    properties: {
+                      contractId: { type: 'string' },
+                      layout: { type: 'object', description: 'Node position data' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Layout saved', content: { 'application/json': { schema: { type: 'object', properties: { contractId: { type: 'string' }, saved: { type: 'boolean' } } } } } },
+                  '400': { description: 'Missing required fields' },
+                },
+              },
+            },
+            '/build-html-page': {
+              post: {
+                summary: 'Create an html-node directly (no agent needed)',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['graphId', 'title', 'userId'],
+                    properties: {
+                      graphId: { type: 'string' },
+                      title: { type: 'string' },
+                      userId: { type: 'string' },
+                      templateId: { type: 'string', description: 'Template to use (uses default if omitted)' },
+                      description: { type: 'string' },
+                      footerText: { type: 'string' },
+                      sections: { type: 'array', items: { type: 'object' } },
+                      headerImage: { type: 'string', nullable: true },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'HTML node created', content: { 'application/json': { schema: { type: 'object' } } } },
+                  '400': { description: 'Missing required fields' },
+                  '500': { description: 'Creation error' },
+                },
+              },
+            },
+            '/template-version': {
+              get: {
+                summary: 'Get current template version(s)',
+                parameters: [
+                  { name: 'templateId', in: 'query', required: false, schema: { type: 'string' }, description: 'Specific template ID. If omitted, returns default template version and all template listings.' },
+                ],
+                responses: {
+                  '200': { description: 'Template version info', content: { 'application/json': { schema: { type: 'object', properties: { templateId: { type: 'string' }, version: { type: 'string' }, templates: { type: 'array', items: { type: 'object' } } } } } } },
+                },
+              },
+            },
+            '/templates': {
+              get: {
+                summary: 'List all available templates',
+                responses: {
+                  '200': { description: 'Template list', content: { 'application/json': { schema: { type: 'object', properties: { templates: { type: 'array', items: { type: 'object' } } } } } } },
+                },
+              },
+            },
+            '/upgrade-html-node': {
+              post: {
+                summary: 'Upgrade existing html-node to latest template',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['graphId', 'nodeId'],
+                    properties: {
+                      graphId: { type: 'string' },
+                      nodeId: { type: 'string' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Upgrade result', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, nodeId: { type: 'string' }, templateId: { type: 'string' }, oldVersion: { type: 'string' }, newVersion: { type: 'string' }, title: { type: 'string' }, htmlSize: { type: 'integer' }, message: { type: 'string' } } } } } },
+                  '500': { description: 'Upgrade error' },
+                },
+              },
+            },
+            '/tools': {
+              get: {
+                summary: 'List all available tools',
+                description: 'Returns hardcoded tool definitions and dynamically loaded OpenAPI tools.',
+                responses: {
+                  '200': { description: 'Tool listing', content: { 'application/json': { schema: { type: 'object', properties: { hardcoded: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' } } } }, dynamic: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' } } } }, total: { type: 'integer' } } } } } },
+                },
+              },
+            },
+            '/agents': {
+              get: {
+                summary: 'List all active agents',
+                responses: {
+                  '200': { description: 'Agent list', content: { 'application/json': { schema: { type: 'object', properties: { agents: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, avatar_url: { type: 'string', nullable: true }, model: { type: 'string' }, tools: { type: 'string' }, is_active: { type: 'integer' } } } } } } } } },
+                },
+              },
+              post: {
+                summary: 'Create a new agent',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['name'],
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      system_prompt: { type: 'string' },
+                      model: { type: 'string', description: 'Default: claude-haiku-4-5-20251001' },
+                      max_tokens: { type: 'integer', description: 'Default: 4096' },
+                      temperature: { type: 'number', description: 'Default: 0.3' },
+                      tools: { type: 'array', items: { type: 'string' } },
+                      metadata: { type: 'object' },
+                      avatar_url: { type: 'string', nullable: true },
+                    },
+                  } } },
+                },
+                responses: {
+                  '201': { description: 'Agent created', content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, created: { type: 'boolean' } } } } } },
+                  '400': { description: 'Missing name' },
+                },
+              },
+            },
+            '/agent': {
+              get: {
+                summary: 'Get single agent details',
+                parameters: [
+                  { name: 'id', in: 'query', required: true, schema: { type: 'string' } },
+                ],
+                responses: {
+                  '200': { description: 'Agent details', content: { 'application/json': { schema: { type: 'object', properties: { agent: { type: 'object' } } } } } },
+                  '400': { description: 'Missing id' },
+                  '404': { description: 'Agent not found' },
+                },
+              },
+              put: {
+                summary: 'Update agent fields',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['id'],
+                    properties: {
+                      id: { type: 'string' },
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      system_prompt: { type: 'string' },
+                      model: { type: 'string' },
+                      max_tokens: { type: 'integer' },
+                      temperature: { type: 'number' },
+                      avatar_url: { type: 'string' },
+                      is_active: { type: 'integer' },
+                      tools: { type: 'array', items: { type: 'string' } },
+                      metadata: { type: 'object' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Agent updated', content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'string' }, updated: { type: 'boolean' } } } } } },
+                  '400': { description: 'Missing id or no fields' },
+                },
+              },
+              delete: {
+                summary: 'Soft-delete agent (set is_active = 0)',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['id'],
+                    properties: {
+                      id: { type: 'string' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Agent deleted', content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'string' }, deleted: { type: 'boolean' } } } } } },
+                  '400': { description: 'Missing id' },
+                },
+              },
+            },
+            '/chat-groups': {
+              get: {
+                summary: 'List chat groups for a user',
+                description: 'Proxy to CHAT_WORKER to list groups the user belongs to.',
+                parameters: [
+                  { name: 'userId', in: 'query', required: true, schema: { type: 'string' }, description: 'User email or ID' },
+                ],
+                responses: {
+                  '200': { description: 'Group list from CHAT_WORKER' },
+                  '400': { description: 'Could not resolve user profile' },
+                },
+              },
+            },
+            '/agent-bot-groups': {
+              get: {
+                summary: 'Get groups where agent bot is registered',
+                parameters: [
+                  { name: 'agentId', in: 'query', required: true, schema: { type: 'string' } },
+                  { name: 'userId', in: 'query', required: true, schema: { type: 'string' } },
+                ],
+                responses: {
+                  '200': { description: 'Group list', content: { 'application/json': { schema: { type: 'object', properties: { groups: { type: 'array', items: { type: 'object', properties: { groupId: { type: 'string' }, groupName: { type: 'string' } } } } } } } } },
+                  '400': { description: 'Missing agentId or user profile' },
+                },
+              },
+            },
+            '/register-agent-bot': {
+              post: {
+                summary: 'Create bot via CHAT_WORKER and add to group',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['agentId'],
+                    properties: {
+                      agentId: { type: 'string' },
+                      groupId: { type: 'string', description: 'Optional group to add bot to' },
+                      botName: { type: 'string' },
+                      graphId: { type: 'string' },
+                      userId: { type: 'string' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Bot registered', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, chatBotId: { type: 'string' }, agentId: { type: 'string' }, groupId: { type: 'string' } } } } } },
+                  '400': { description: 'Missing agentId or user profile' },
+                  '500': { description: 'Registration error' },
+                },
+              },
+            },
+            '/unregister-agent-bot': {
+              post: {
+                summary: 'Remove bot from a group',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['agentId', 'groupId'],
+                    properties: {
+                      agentId: { type: 'string' },
+                      groupId: { type: 'string' },
+                      userId: { type: 'string' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Bot removed from group', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, agentId: { type: 'string' }, groupId: { type: 'string' }, chatBotId: { type: 'string' } } } } } },
+                  '400': { description: 'Missing required fields or no bot registered' },
+                  '500': { description: 'Removal error' },
+                },
+              },
+            },
+            '/bot-respond': {
+              post: {
+                summary: 'Generate and post bot response via chatbot subagent',
+                requestBody: {
+                  required: true,
+                  content: { 'application/json': { schema: {
+                    type: 'object',
+                    required: ['bot', 'group_id'],
+                    properties: {
+                      bot: { type: 'object', description: 'Bot config (id, name, username, etc.)' },
+                      group_id: { type: 'string' },
+                      group_name: { type: 'string' },
+                      trigger_message: { type: 'object', description: 'Message that triggered the bot' },
+                      recent_messages: { type: 'array', items: { type: 'object' }, description: 'Recent conversation context' },
+                    },
+                  } } },
+                },
+                responses: {
+                  '200': { description: 'Bot response generated and posted', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, message_id: { type: 'string' }, bot_name: { type: 'string' }, bot_username: { type: 'string' }, response: { type: 'string' }, turns: { type: 'integer' } } } } } },
+                  '400': { description: 'Missing bot or group_id' },
+                  '500': { description: 'Bot response error' },
+                },
+              },
+            },
+            '/introspect': {
+              get: {
+                summary: 'Full agent self-knowledge and introspection',
+                description: 'Returns the agent complete internal configuration: all workers (with live health), subagents (with system prompts, tools, models), tool definitions, databases, frontend apps, credentials, node types, and templates. All data read dynamically from graph_system_registry + live service bindings.',
+                responses: {
+                  '200': { description: 'Agent introspection data', content: { 'application/json': { schema: {
+                    type: 'object',
+                    properties: {
+                      agent: { type: 'object', properties: { name: { type: 'string' }, version: { type: 'string' }, registrySource: { type: 'string' }, selfModifiable: { type: 'boolean' } } },
+                      workers: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, binding: { type: 'string' }, domain: { type: 'string', nullable: true }, status: { type: 'string' }, endpointCount: { type: 'integer' } } } },
+                      subagents: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, delegationTool: { type: 'string' }, model: { type: 'string' }, tools: { type: 'array', items: { type: 'string' } }, source: { type: 'string', enum: ['graph', 'code'] } } } },
+                      tools: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, parameters: { type: 'array', items: { type: 'string' } } } } },
+                      databases: { type: 'array', items: { type: 'object' } },
+                      apps: { type: 'array', items: { type: 'object' } },
+                      credentials: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, configured: { type: 'boolean' }, usedBy: { type: 'string' } } } },
+                      summary: { type: 'object' },
+                      message: { type: 'string' },
+                    },
+                  } } } },
+                  '500': { description: 'Introspection failed' },
+                },
+              },
+            },
+            '/health': {
+              get: {
+                summary: 'Health check',
+                responses: {
+                  '200': { description: 'Worker is healthy', content: { 'application/json': { schema: { type: 'object', properties: { status: { type: 'string' }, worker: { type: 'string' }, timestamp: { type: 'string', format: 'date-time' } } } } } },
+                },
+              },
+            },
+            '/openapi.json': {
+              get: {
+                summary: 'OpenAPI 3.0 specification',
+                responses: {
+                  '200': { description: 'This OpenAPI spec', content: { 'application/json': { schema: { type: 'object' } } } },
+                },
+              },
+            },
+          },
+        }
+        return new Response(JSON.stringify(spec, null, 2), { headers: corsHeaders })
+      }
+
+      // GET /introspect - Full agent self-knowledge (reads from graph_system_registry)
+      if (pathname === '/introspect' && request.method === 'GET') {
+        try {
+          // 1. Fetch registry graph
+          let registryNodes = []
+          try {
+            const regRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_system_registry')
+            if (regRes.ok) {
+              const regData = await regRes.json()
+              registryNodes = regData.nodes || []
+            }
+          } catch {}
+
+          const byType = (type) => registryNodes.filter(n => n.type === type)
+
+          // 2. Workers — from graph + live health
+          const workerNodes = byType('system-worker')
+          const workers = await Promise.all(workerNodes.map(async (node) => {
+            const meta = node.metadata || {}
+            const binding = meta.binding
+            if (!binding || binding === 'self') return { id: node.id, name: meta.name || node.label, binding, status: 'self', endpointCount: 0 }
+            const fetcher = env[binding]
+            if (!fetcher) return { id: node.id, name: meta.name || node.label, binding, status: 'no-binding', endpointCount: 0 }
+            const workerName = meta.name || node.label
+            try {
+              let hRes = await fetcher.fetch(`https://${workerName}/health`)
+              if (!hRes.ok) hRes = await fetcher.fetch(`https://${workerName}/api/health`)
+              const hData = hRes.ok ? await hRes.json() : {}
+              const healthy = hData.status === 'healthy' || hData.status === 'ok' || hData.ok === true || hData.endpoints
+              let endpointCount = 0
+              try {
+                const specRes = await fetcher.fetch(`https://${workerName}/openapi.json`)
+                if (specRes.ok) {
+                  const spec = await specRes.json()
+                  if (spec.paths) {
+                    for (const methods of Object.values(spec.paths)) {
+                      endpointCount += Object.keys(methods).length
+                    }
+                  }
+                }
+              } catch {}
+              return { id: node.id, name: workerName, binding, domain: meta.domain || null, status: healthy ? 'healthy' : 'unhealthy', endpointCount }
+            } catch {
+              return { id: node.id, name: workerName, binding, status: 'unreachable', endpointCount: 0 }
+            }
+          }))
+
+          // 3. Subagents — from graph (full config)
+          const subagentNodes = byType('system-subagent')
+          const subagents = subagentNodes.map(n => ({
+            id: n.id,
+            name: n.label,
+            description: n.info,
+            delegationTool: n.metadata?.delegationTool,
+            model: n.metadata?.model,
+            maxTurns: n.metadata?.maxTurns,
+            tools: n.metadata?.tools || [],
+            triggerPatterns: n.metadata?.triggerPatterns || [],
+            file: n.metadata?.file,
+            source: (n.info && n.info.length > 200) ? 'graph' : 'code',
+          }))
+
+          // 4. Tools — from code (TOOL_DEFINITIONS)
+          const { TOOL_DEFINITIONS } = await import('./tool-definitions.js')
+          const tools = TOOL_DEFINITIONS.map(t => ({
+            name: t.name,
+            description: t.description,
+            parameters: t.input_schema?.properties ? Object.keys(t.input_schema.properties) : [],
+          }))
+
+          // 5. Databases, apps, credentials from graph
+          const databases = byType('system-database').map(n => ({
+            id: n.id, name: n.metadata?.name || n.label, binding: n.metadata?.binding, purpose: n.info,
+          }))
+          const apps = byType('system-app').map(n => ({
+            id: n.id, name: n.label, url: n.metadata?.url, repo: n.metadata?.repo, framework: n.metadata?.framework,
+          }))
+          const credentials = byType('system-credential').map(n => ({
+            name: n.label, envName: n.metadata?.envName, configured: !!(n.metadata?.envName && env[n.metadata.envName]), usedBy: n.metadata?.usedBy,
+          }))
+          const nodeTypes = byType('system-nodetype').map(n => n.label)
+          const templates = byType('system-template').map(n => ({ id: n.id, name: n.label, description: n.info }))
+
+          const healthyCount = workers.filter(w => w.status === 'healthy').length
+          const totalEndpoints = workers.reduce((sum, w) => sum + (w.endpointCount || 0), 0)
+
+          return new Response(JSON.stringify({
+            agent: {
+              name: 'agent-worker',
+              version: '2.0.0',
+              registrySource: 'graph_system_registry',
+              selfModifiable: true,
+            },
+            workers,
+            subagents,
+            tools,
+            databases,
+            nodeTypes,
+            templates,
+            apps,
+            credentials,
+            summary: {
+              workers: workers.length,
+              workersHealthy: healthyCount,
+              totalEndpoints,
+              subagents: subagents.length,
+              tools: tools.length,
+              databases: databases.length,
+              nodeTypes: nodeTypes.length,
+              templates: templates.length,
+              apps: apps.length,
+              credentialsConfigured: credentials.filter(c => c.configured).length,
+              credentialsTotal: credentials.length,
+            },
+            message: `Agent introspection: ${workers.length} workers (${healthyCount} healthy, ${totalEndpoints} endpoints), ${subagents.length} subagents, ${tools.length} tools, ${databases.length} databases, ${apps.length} frontend apps. Config source: graph_system_registry.`,
+          }, null, 2), { headers: corsHeaders })
+        } catch (error) {
+          return new Response(JSON.stringify({ error: 'Introspection failed', details: error.message }), { status: 500, headers: corsHeaders })
+        }
+      }
+
       // GET /health - Health check
       if (pathname === '/health' && request.method === 'GET') {
         return new Response(JSON.stringify({
@@ -828,7 +1416,7 @@ export default {
 
       return new Response(JSON.stringify({
         error: 'Not found',
-        available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/bot-respond', '/health']
+        available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/bot-respond', '/introspect', '/health', '/openapi.json']
       }), { status: 404, headers: corsHeaders })
 
     } catch (error) {

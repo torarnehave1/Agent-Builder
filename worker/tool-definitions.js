@@ -61,7 +61,7 @@ const TOOL_DEFINITIONS = [
         },
         nodeType: {
           type: 'string',
-          enum: ['fulltext', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
+          enum: ['fulltext', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'cloudflare-video', 'cloudflare-live', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
           description: 'Node type. Call get_node_types_reference for data format details.'
         },
         content: {
@@ -497,7 +497,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_node_types_reference',
-    description: 'Get data format reference for node types (mermaid-diagram, youtube-video, chart, linechart, bubblechart, notes, worknote, map). Call this when creating nodes other than fulltext, image, or link.',
+    description: 'Get data format reference for node types (mermaid-diagram, youtube-video, cloudflare-video, cloudflare-live, chart, linechart, bubblechart, notes, worknote, map). Call this when creating nodes other than fulltext, image, or link.',
     input_schema: {
       type: 'object',
       properties: {}
@@ -822,6 +822,72 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'chat_db_list_tables',
+    description: 'List all tables in the chat database (hallo_vegvisr_chat). Returns table names so you can explore the chat schema — groups, group_messages, group_members, chat_bots, polls, etc.',
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  },
+  {
+    name: 'chat_db_query',
+    description: 'Run a read-only SQL SELECT query against the chat database (hallo_vegvisr_chat). Use this to count messages, analyze chat data, check group membership, inspect bots, etc. Only SELECT queries are allowed. Key tables: groups, group_messages, group_members, chat_bots, polls, poll_votes, message_reactions.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        sql: { type: 'string', description: 'SQL SELECT query to execute (e.g., "SELECT COUNT(*) FROM group_messages WHERE group_id = ?")' },
+        params: {
+          type: 'array',
+          description: 'Optional bind parameters for the query (e.g., ["66229483-281d-4be2-86d7-c63858f8fdc6"])',
+          items: { type: 'string' }
+        }
+      },
+      required: ['sql']
+    }
+  },
+  {
+    name: 'add_whats_new',
+    description: "Add a feature entry to any Vegvisr app's What's New page. Creates a node in graph_<app>_new_features (auto-creates the graph if it doesn't exist). Users see new entries via the info icon in each app. Use after deploying a feature or when the user asks to document a change.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Target app: "chat", "calendar", "photos", "aichat", "vemail", "connect". Determines which graph to update (graph_<app>_new_features).' },
+        title: { type: 'string', description: 'Short feature title (e.g., "Voice Message Titles")' },
+        description: { type: 'string', description: 'One-paragraph explanation of the feature and how users benefit from it' },
+        color: { type: 'string', description: 'Hex color for the feature dot (e.g., "#38bdf8" for blue, "#a78bfa" for purple, "#34d399" for green, "#f59e0b" for amber). Optional, defaults to sky blue.' }
+      },
+      required: ['app', 'title', 'description']
+    }
+  },
+  {
+    name: 'add_user_suggestion',
+    description: "Add a user suggestion to any Vegvisr app's Suggestions board. Creates a node in graph_<app>_user_suggestions (auto-creates the graph if it doesn't exist). Use when a user asks to submit a feature request, bug report, or improvement idea.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Target app: "chat", "calendar", "photos", "aichat", "vemail", "connect". Determines which graph to update (graph_<app>_user_suggestions).' },
+        title: { type: 'string', description: 'Short suggestion title (e.g., "Add dark mode")' },
+        description: { type: 'string', description: 'Detailed description of the suggestion' },
+        category: { type: 'string', description: 'Category: "feature", "bug", "ux", "integration", "other". Defaults to "feature".' }
+      },
+      required: ['app', 'title', 'description']
+    }
+  },
+  {
+    name: 'update_suggestion_status',
+    description: "Update the status of an existing user suggestion. Use when an admin wants to mark a suggestion as reviewed, planned, or shipped. Requires the suggestion node ID (e.g., 'suggestion-1710000000000').",
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: 'Target app: "chat", "calendar", "photos", "aichat", "vemail", "connect". Determines which graph to query (graph_<app>_user_suggestions).' },
+        suggestionId: { type: 'string', description: 'The node ID of the suggestion to update (e.g., "suggestion-1710000000000")' },
+        status: { type: 'string', enum: ['new', 'reviewed', 'planned', 'shipped'], description: 'New status for the suggestion' }
+      },
+      required: ['app', 'suggestionId', 'status']
+    }
+  },
+  {
     name: 'calendar_get_settings',
     description: 'Get a user\'s booking profile — availability hours, available days of the week, meeting types (with durations), and upcoming group meetings. Use this before booking to understand what slots and meeting types are available.',
     input_schema: {
@@ -934,13 +1000,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_group_messages',
-    description: 'Get recent messages from a Hallo Vegvisr chat group. Returns message text, sender email, and timestamp. Use this to read, analyze, summarize, or do sentiment analysis on group conversations.',
+    description: 'Get ALL messages from a Hallo Vegvisr chat group. Automatically paginates to fetch the complete history. Returns message text, sender email, and timestamp. Use this to read, analyze, summarize, or do sentiment analysis on group conversations.',
     input_schema: {
       type: 'object',
       properties: {
         groupId: { type: 'string', description: 'Chat group UUID' },
         groupName: { type: 'string', description: 'Chat group name (resolves to groupId if groupId not provided)' },
-        limit: { type: 'number', description: 'Number of messages to return (default 10, max 100)' }
+        limit: { type: 'number', description: 'Max messages to return (default 200, max 4000). Fetches all by paginating automatically.' }
       },
       required: []
     }
@@ -1134,6 +1200,84 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: []
+    }
+  },
+  {
+    name: 'get_system_registry',
+    description: 'Dynamically discover the full system at runtime. Queries all 13 service-bound workers for health/OpenAPI, introspects D1 database schemas (PRAGMA table_info), lists user-created agents, knowledge graph inventory, templates (graph/AI/tool/HTML), frontend apps, configured API keys, and storage stats. Returns live data. Use for "what can you do?", "what tables exist?", "how many graphs?", "what agents exist?", etc.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        filter: {
+          type: 'string',
+          description: 'Return only one section. Pass "all" or omit for everything. Available filters are returned dynamically in the response under availableFilters.'
+        },
+        include_endpoints: {
+          type: 'boolean',
+          description: 'Include full endpoint lists from each worker OpenAPI spec. Default: true. Set false for a lighter summary.'
+        }
+      }
+    }
+  },
+  {
+    name: 'deploy_worker',
+    description: 'Deploy or modify a Cloudflare Worker via the API. Can create new workers or update existing ones. The worker code (ES module JavaScript) is uploaded and deployed instantly — no wrangler or git needed. Use when the user asks to create a new worker, modify an existing endpoint, add functionality to a worker, or fix a bug in a deployed worker. Requires Superadmin role.',
+    input_schema: {
+      type: 'object',
+      required: ['workerName', 'code'],
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'The worker script name (e.g., "my-new-worker"). Used in the URL: https://<name>.torarnehave.workers.dev'
+        },
+        code: {
+          type: 'string',
+          description: 'Full ES module JavaScript code for the worker. Must export default with a fetch handler.'
+        },
+        enableSubdomain: {
+          type: 'boolean',
+          description: 'Enable workers.dev subdomain route. Default: true'
+        },
+        compatibilityDate: {
+          type: 'string',
+          description: 'Cloudflare compatibility date. Default: 2024-11-01'
+        },
+        registerInGraph: {
+          type: 'boolean',
+          description: 'Register the worker as a system-worker node in graph_system_registry. Default: true'
+        },
+      }
+    }
+  },
+  {
+    name: 'read_worker',
+    description: 'List all deployed Cloudflare Workers or get details about a specific worker. Use to inspect the current state before modifying.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'If provided, get details for this specific worker. If omitted, lists all workers.'
+        },
+      }
+    }
+  },
+  {
+    name: 'delete_worker',
+    description: 'Delete a Cloudflare Worker. Requires Superadmin role. Use with caution — this removes the worker from Cloudflare entirely.',
+    input_schema: {
+      type: 'object',
+      required: ['workerName'],
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'The worker script name to delete'
+        },
+        removeFromGraph: {
+          type: 'boolean',
+          description: 'Also remove the system-worker node from graph_system_registry. Default: true'
+        },
+      }
     }
   },
   {
@@ -1367,6 +1511,28 @@ const TOOL_DEFINITIONS = [
         agentId: {
           type: 'string',
           description: 'The agent ID to work with, if known.'
+        }
+      },
+      required: ['task']
+    }
+  },
+  {
+    name: 'delegate_to_video',
+    description: 'Delegate video and streaming tasks to the Video & Streaming subagent. Use this when the user asks to: upload/list/delete videos, create/manage live streams, create cloudflare-video or cloudflare-live nodes, get video playback URLs, set up RTMP streaming, or add video nodes to a graph. The subagent talks to the Cloudflare Stream API via videostream-worker and can create proper video/live node types in knowledge graphs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The graph to add video nodes to. Omit if just managing videos/streams without a graph.'
+        },
+        nodeId: {
+          type: 'string',
+          description: 'An existing video node ID to update. Omit for new operations.'
+        },
+        task: {
+          type: 'string',
+          description: 'What to do: upload video, list videos, create live stream, add video to graph, etc. Include all user requirements.'
         }
       },
       required: ['task']
