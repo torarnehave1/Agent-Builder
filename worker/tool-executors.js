@@ -9,7 +9,7 @@ import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } f
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { runHtmlBuilderSubagent } from './html-builder-subagent.js'
+import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
@@ -4322,7 +4322,38 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     case 'calendar_get_status':
       return await executeCalendarGetStatus(toolInput, env)
     case 'delegate_to_html_builder': {
-      const result = await runHtmlBuilderSubagent(toolInput, env, progress, executeTool)
+      // Pre-validate & pre-analyze before delegating — gives the subagent a head start
+      const enrichedInput = { ...toolInput }
+      if (toolInput.graphId && toolInput.nodeId) {
+        try {
+          const [structure, validation] = await Promise.all([
+            executeGetHtmlStructure({ graphId: toolInput.graphId, nodeId: toolInput.nodeId }, env),
+            executeValidateHtmlSyntax({ graphId: toolInput.graphId, nodeId: toolInput.nodeId }, env),
+          ])
+          // Prepend analysis to the task so the subagent starts informed
+          let preContext = `\n\n## Pre-analysis (from orchestrator)\n`
+          preContext += `**File structure**: ${structure.summary}\n`
+          if (structure.scriptBlocks?.length > 0) {
+            preContext += `**Script blocks**:\n`
+            for (const block of structure.scriptBlocks) {
+              preContext += `  - Lines ${block.startLine}-${block.endLine} (${block.lineCount} lines): ${block.functions.map(f => f.name).join(', ') || 'no named functions'}\n`
+            }
+          }
+          if (validation.valid) {
+            preContext += `**Syntax**: All brackets balanced ✓\n`
+          } else {
+            preContext += `**Syntax issues** (${validation.issueCount}):\n`
+            for (const issue of (validation.issues || []).slice(0, 5)) {
+              preContext += `  - ${issue.message}\n`
+            }
+            preContext += `Fix these FIRST. Use read_html_section with startLine/endLine around the reported lines.\n`
+          }
+          enrichedInput.task = (toolInput.task || '') + preContext
+        } catch (e) {
+          console.log(`[delegate_to_html_builder] pre-analysis failed: ${e.message}`)
+        }
+      }
+      const result = await runHtmlBuilderSubagent(enrichedInput, env, progress, executeTool)
       return {
         success: result.success,
         summary: result.summary,

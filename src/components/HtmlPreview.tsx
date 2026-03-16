@@ -4,6 +4,7 @@ interface Props {
   html: string | null;
   onClose: () => void;
   onConsoleErrors?: (errors: string[]) => void;
+  onHtmlChange?: (html: string) => void;
   graphId?: string | null;
   nodeId?: string | null;
 }
@@ -105,12 +106,71 @@ const LEVEL_STYLE: Record<string, { icon: string; color: string }> = {
   network: { icon: '↔', color: 'text-orange-400' },
 };
 
-export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, nodeId }: Props) {
+interface VersionEntry {
+  version: number;
+  timestamp: string;
+}
+
+export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
   const reportedRef = useRef<Set<string>>(new Set());
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Version history
+  const [versions, setVersions] = useState<VersionEntry[] | null>(null);
+  const [versionHtml, setVersionHtml] = useState<string | null>(null);
+  const [activeVersion, setActiveVersion] = useState<number | null>(null);
+  const [loadingVersion, setLoadingVersion] = useState(false);
+
+  const fetchVersions = async () => {
+    if (!graphId) return;
+    if (versions) { setVersions(null); setVersionHtml(null); setActiveVersion(null); return; }
+    try {
+      const res = await fetch(`https://knowledge.vegvisr.org/getknowgraphhistory?id=${encodeURIComponent(graphId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setVersions(data.results || data || []);
+    } catch { /* ignore */ }
+  };
+
+  const previewVersion = async (version: number) => {
+    if (!graphId || !nodeId) return;
+    setLoadingVersion(true);
+    try {
+      const res = await fetch(`https://knowledge.vegvisr.org/getknowgraphversion?id=${encodeURIComponent(graphId)}&version=${version}`);
+      if (!res.ok) { setLoadingVersion(false); return; }
+      const data = await res.json();
+      const node = (data.nodes || []).find((n: { id: string }) => n.id === nodeId);
+      if (node?.info) {
+        setVersionHtml(node.info);
+        setActiveVersion(version);
+      }
+    } catch { /* ignore */ }
+    setLoadingVersion(false);
+  };
+
+  const clearVersionPreview = () => {
+    setVersionHtml(null);
+    setActiveVersion(null);
+  };
+
+  const restoreVersion = async () => {
+    if (!graphId || !nodeId || !versionHtml) return;
+    try {
+      const res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml } }),
+      });
+      if (!res.ok) return;
+      onHtmlChange?.(versionHtml);
+      setVersionHtml(null);
+      setActiveVersion(null);
+      setVersions(null);
+    } catch { /* ignore */ }
+  };
 
   // graphId/nodeId now come FROM the postMessage itself (baked into the bridge script),
   // so there's no closure staleness risk.
@@ -181,13 +241,46 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
       <div className="flex items-center justify-between px-3 h-[36px] border-b border-white/10 bg-slate-900/50 flex-shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-xs text-white/50">Preview</span>
-          {errorCount > 0 && (
+          {activeVersion !== null && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
+              v{activeVersion}
+            </span>
+          )}
+          {activeVersion !== null && (
+            <>
+              <button
+                type="button"
+                onClick={clearVersionPreview}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 transition-colors"
+              >
+                Back to current
+              </button>
+              <button
+                type="button"
+                onClick={restoreVersion}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 transition-colors"
+              >
+                Restore v{activeVersion}
+              </button>
+            </>
+          )}
+          {errorCount > 0 && activeVersion === null && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-rose-500/20 text-rose-400">
               {errorCount} {errorCount === 1 ? 'error' : 'errors'}
             </span>
           )}
         </div>
         <div className="flex items-center gap-1">
+          {graphId && nodeId && (
+            <button
+              type="button"
+              onClick={fetchVersions}
+              className={`text-white/40 hover:text-white text-[10px] px-1.5 py-0.5 rounded hover:bg-white/10 transition-colors ${versions ? 'text-sky-400' : ''}`}
+              title="Show version history"
+            >
+              Versions
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setConsoleOpen(p => !p)}
@@ -214,8 +307,28 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, graphId, n
           </button>
         </div>
       </div>
+      {versions && (
+        <div className="flex gap-1 px-3 py-1.5 border-b border-white/10 bg-slate-900/30 overflow-x-auto flex-shrink-0">
+          {versions.map(v => (
+            <button
+              key={v.version}
+              type="button"
+              onClick={() => previewVersion(v.version)}
+              disabled={loadingVersion}
+              className={`text-[10px] px-2 py-0.5 rounded whitespace-nowrap transition-colors ${
+                activeVersion === v.version
+                  ? 'bg-sky-500/30 text-sky-300 border border-sky-500/40'
+                  : 'text-white/40 hover:text-white hover:bg-white/10 border border-transparent'
+              }`}
+              title={v.timestamp || `Version ${v.version}`}
+            >
+              v{v.version}
+            </button>
+          ))}
+        </div>
+      )}
       <iframe
-        srcDoc={injectBridge(html, graphId, nodeId)}
+        srcDoc={injectBridge(versionHtml || html, graphId, nodeId)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"

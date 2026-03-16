@@ -81,6 +81,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                 html={previewHtml}
                 onClose={() => { setPreviewHtml(null); setActiveHtmlNodeId(null); }}
                 onConsoleErrors={setConsoleErrors}
+                onHtmlChange={setPreviewHtml}
                 graphId={graphId}
                 nodeId={activeHtmlNodeId}
               />
