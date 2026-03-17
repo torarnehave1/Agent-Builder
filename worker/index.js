@@ -35,21 +35,20 @@ const AGENT_VERSION_NOTE = 'KG fast-path, history cap, self-check, tool result t
 function detectKgFastPath(message) {
   const m = message.toLowerCase().trim()
 
-  // "list meta areas" / "what meta areas" / "show meta areas"
-  if (/(?:list|show|what|get).{0,15}meta.?areas?/.test(m)) {
+  // "list meta areas" / "what meta areas exist" / "show meta areas"
+  // Require meta areas to be the primary subject — not just a qualifier like "with meta area X"
+  if (/(?:list|show|what|get)\s+(all\s+)?meta.?areas?\b/.test(m)) {
     return { action: 'list_meta_areas', params: {} }
   }
 
-  // "list graphs" / "show graphs" / "what graphs" / "my graphs"
-  // with optional "meta area X" / "metaArea X" qualifier
-  if (/(?:list|show|what|get|find).{0,15}graphs?/.test(m) || /graphs?.{0,10}(?:do i have|exist|available)/.test(m)) {
+  // Only match clearly plural / bulk-list intents — e.g. "list graphs", "show all graphs", "what graphs do I have"
+  // Do NOT match: "list the last graph", "find this graph", "the graph" — those need the agent
+  if (/(?:list|show|get|find)\s+(all\s+)?graphs\b/.test(m) || /\bgraphs\b.{0,15}(?:do i have|exist|available)/.test(m)) {
+    // Bail out if the message contains intent for a specific/recent/single graph
+    if (/\b(last|latest|recent|first|specific|that|this|the)\b/.test(m)) return null
     const metaMatch = message.match(/meta.?area[:\s]+([A-Z][A-Z0-9 _-]+)/i)
                    || message.match(/\barea[:\s]+([A-Z][A-Z0-9 _-]+)/i)
-                   || message.match(/\b([A-Z]{2,}(?:\s[A-Z]+)*)\b/)  // ALL_CAPS word
-    // Only extract metaArea if it's clearly a metaArea reference, not just any caps
-    const metaArea = metaMatch && /meta.?area|area/i.test(message.slice(0, metaMatch.index + 20))
-      ? metaMatch[1].trim().toUpperCase()
-      : null
+    const metaArea = metaMatch ? metaMatch[1].trim().toUpperCase() : null
     return { action: 'list_graphs', params: metaArea ? { metaArea } : {} }
   }
 
