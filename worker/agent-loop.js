@@ -216,13 +216,13 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
 
         const executeAndStream = async (toolUse) => {
-          // Auto-inject graphId/nodeId into delegation tools if the LLM forgot to include them
+          // Auto-inject nodeId into HTML builder delegation (HTML edits always target a specific node)
           const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video'])
           if (DELEGATION_TOOLS.has(toolUse.name)) {
-            if (!toolUse.input.graphId && options.graphId) {
-              toolUse.input.graphId = options.graphId
-              log(`auto-injected graphId=${options.graphId} into ${toolUse.name}`)
-            }
+            // NOTE: Do NOT auto-inject graphId into delegations. The LLM must explicitly include graphId
+            // when it wants the subagent to work on a specific graph. If omitted, the subagent is free to
+            // create new graphs. Auto-injection was causing "create new graph" requests to silently
+            // add content to the last-used graph instead.
             if (!toolUse.input.nodeId && options.activeHtmlNodeId && toolUse.name === 'delegate_to_html_builder') {
               toolUse.input.nodeId = options.activeHtmlNodeId
               log(`auto-injected nodeId=${options.activeHtmlNodeId} into ${toolUse.name}`)
