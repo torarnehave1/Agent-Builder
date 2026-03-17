@@ -84,15 +84,11 @@ export default {
     try {
       // GET /bots — List all registered chat bots (for @mention in AgentChat)
       if (pathname === '/bots' && request.method === 'GET') {
-        const uid = url.searchParams.get('userId')
-        if (!uid) return new Response(JSON.stringify({ error: 'userId required' }), { status: 400, headers: corsHeaders })
-        const profileRes = await env.DB.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(uid).first()
-        const phone = profileRes?.phone || ''
-        const email = profileRes?.email || ''
-        const authQS = `user_id=${encodeURIComponent(uid)}&phone=${encodeURIComponent(phone)}&email=${encodeURIComponent(email)}`
-        const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots?${authQS}`)
-        const data = await res.json()
-        const bots = (data.bots || []).map(b => ({ id: b.id, name: b.name, username: b.username, avatar_url: b.avatar_url, is_active: b.is_active }))
+        // Query bots directly from CHAT_DB — bots are global, not per-user
+        const { results } = await env.CHAT_DB.prepare(
+          'SELECT id, name, username, avatar_url, is_active FROM chat_bots WHERE is_active = 1 ORDER BY name'
+        ).all()
+        const bots = (results || []).map(b => ({ id: b.id, name: b.name, username: b.username, avatar_url: b.avatar_url }))
         return new Response(JSON.stringify({ bots }), { headers: corsHeaders })
       }
 
@@ -181,6 +177,7 @@ export default {
 
       // POST /bot-chat - Direct bot conversation (SSE)
       // Used by AgentChat when user types @botname message
+      // Uses runChatbotSubagent for full tool execution (same as group chat bots)
       if (pathname === '/bot-chat' && request.method === 'POST') {
         const body = await request.json()
         const { userId, botId, message, conversationHistory } = body
@@ -188,46 +185,13 @@ export default {
           return new Response(JSON.stringify({ error: 'userId, botId, and message required' }), { status: 400, headers: corsHeaders })
         }
 
-        // Load bot config from chat worker
-        const profileRes = await env.DB.prepare('SELECT * FROM user_profiles WHERE user_id = ?').bind(userId).first()
-        const phone = profileRes?.phone || ''
-        const email = profileRes?.email || ''
-        const authQS = `user_id=${encodeURIComponent(userId)}&phone=${encodeURIComponent(phone)}&email=${encodeURIComponent(email)}`
-        const botRes = await env.CHAT_WORKER.fetch(`https://group-chat-worker/bots/${botId}?${authQS}`)
-        const botData = await botRes.json()
-        if (!botRes.ok || !botData.bot) {
+        // Load bot config directly from CHAT_DB (avoids auth issues with Clerk userIds)
+        const bot = await env.CHAT_DB.prepare(
+          'SELECT id, name, username, avatar_url, system_prompt, graph_id, model, temperature, tools, max_turns, is_active FROM chat_bots WHERE id = ? AND is_active = 1'
+        ).bind(botId).first()
+        if (!bot) {
           return new Response(JSON.stringify({ error: 'Bot not found' }), { status: 404, headers: corsHeaders })
         }
-        const bot = botData.bot
-
-        // Load personality from knowledge graph
-        let personality = ''
-        if (bot.graph_id) {
-          try {
-            const kgRes = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${bot.graph_id}`)
-            const kgData = await kgRes.json()
-            if (kgRes.ok && kgData.nodes) {
-              personality = (kgData.nodes || []).filter(n => n.type === 'fulltext' && n.info).map(n => n.info).join('\n\n---\n\n')
-            }
-          } catch { /* ignore */ }
-        }
-
-        // Build system prompt for direct conversation (not group chat)
-        const systemPrompt = `You are ${bot.name} (@${bot.username}), an AI assistant.
-
-${bot.system_prompt || ''}
-
-${personality ? `## Your Knowledge & Personality\n${personality}` : ''}
-
-## Rules
-- Respond naturally and helpfully
-- Keep responses concise unless asked for detail
-- Do not prefix your response with your name
-- If you don't know something, say so honestly`
-
-        // Build messages array from conversation history
-        const messages = (conversationHistory || []).map(m => ({ role: m.role, content: m.content }))
-        messages.push({ role: 'user', content: message })
 
         // Stream response via SSE
         const { readable, writable } = new TransformStream()
@@ -238,35 +202,45 @@ ${personality ? `## Your Knowledge & Personality\n${personality}` : ''}
           try {
             // Send bot info
             if (bot.avatar_url) {
-              writer.write(encoder.encode(`event: agent_info\ndata: ${JSON.stringify({ avatarUrl: bot.avatar_url, botName: bot.name, botUsername: bot.username })}\n\n`))
+              await writer.write(encoder.encode(`event: agent_info\ndata: ${JSON.stringify({ avatarUrl: bot.avatar_url, botName: bot.name, botUsername: bot.username })}\n\n`))
             }
 
-            const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                userId: `bot:${bot.id}`,
-                messages,
-                model: bot.model || 'claude-haiku-4-5-20251001',
-                max_tokens: 2048,
-                temperature: bot.temperature ?? 0.7,
-                system: systemPrompt,
-              }),
+            // Build recent messages as the subagent expects (with user_id, body, created_at)
+            const recentMessages = (conversationHistory || []).map((m, i) => ({
+              user_id: m.role === 'assistant' ? `bot:${bot.id}` : userId,
+              body: m.content,
+              created_at: Date.now() - (conversationHistory.length - i) * 60000,
+            }))
+            // Add the trigger message
+            recentMessages.push({
+              user_id: userId,
+              body: message,
+              created_at: Date.now(),
             })
-            const data = await response.json()
-            if (!response.ok) {
-              writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Bot API error' })}\n\n`))
+
+            // Run the chatbot subagent with full tool execution
+            const result = await runChatbotSubagent(
+              {
+                bot,
+                groupId: 'agent-chat-direct',
+                groupName: 'Agent Chat',
+                triggerMessage: message,
+                recentMessages,
+              },
+              env,
+              executeTool
+            )
+
+            if (result.success && result.response) {
+              await writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: result.response })}\n\n`))
+              await writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: result.turns })}\n\n`))
             } else {
-              const textBlocks = (data.content || []).filter(c => c.type === 'text')
-              for (const block of textBlocks) {
-                writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
-              }
-              writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: 1 })}\n\n`))
+              await writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: result.error || 'Bot failed to respond' })}\n\n`))
             }
           } catch (err) {
-            writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
+            await writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
           } finally {
-            writer.close()
+            await writer.close()
           }
         })())
 
