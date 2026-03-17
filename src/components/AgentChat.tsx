@@ -1202,6 +1202,13 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           };
         }
 
+        // Accumulate text OUTSIDE setCurrent so it's available immediately for finalization
+        // (React 18 batches state updaters — they may not run before parseSSE returns)
+        if (ev.type === 'text') {
+          const content = ev.data.content;
+          assistantText += typeof content === 'string' ? content : JSON.stringify(content);
+        }
+
         setCurrent(prev => {
           if (!prev) return prev;
           const next = { ...prev, toolCalls: [...prev.toolCalls] };
@@ -1255,10 +1262,6 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
             case 'text':
               next.thinking = false;
-              {
-                const content = ev.data.content;
-                assistantText += typeof content === 'string' ? content : JSON.stringify(content);
-              }
               next.text = assistantText;
               break;
 
