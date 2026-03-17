@@ -723,7 +723,7 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        tableId: { type: 'string', description: 'Table UUID (returned by create_app_table)' },
+        tableId: { type: 'string', description: 'Table UUID, table name, or display name' },
         record: { type: 'object', description: 'Key-value pairs matching the table columns (e.g., {"name":"John","email":"john@test.com"})' }
       },
       required: ['tableId', 'record']
@@ -735,7 +735,7 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        tableId: { type: 'string', description: 'Table UUID' },
+        tableId: { type: 'string', description: 'Table UUID, table name, or display name' },
         where: { type: 'object', description: 'Optional filter conditions as key-value pairs (e.g., {"email":"john@test.com"})' },
         orderBy: { type: 'string', description: 'Column to order by (default: _created_at)' },
         order: { type: 'string', enum: ['asc', 'desc'], description: 'Sort direction (default: desc)' },
@@ -751,7 +751,7 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        tableId: { type: 'string', description: 'Table UUID' },
+        tableId: { type: 'string', description: 'Table UUID, table name, or display name' },
         name: { type: 'string', description: 'Column name (lowercase, alphanumeric with underscores, e.g. "birthday")' },
         type: { type: 'string', enum: ['text', 'integer', 'real', 'boolean', 'datetime'], description: 'Column data type' },
         label: { type: 'string', description: 'Display label (e.g. "Bursdag")' },
@@ -766,7 +766,7 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        tableId: { type: 'string', description: 'Table UUID (found in HTML source as TABLE_ID constant, or returned by create_app_table)' }
+        tableId: { type: 'string', description: 'Table UUID, table name, or display name' }
       },
       required: ['tableId']
     }
@@ -777,7 +777,7 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        tableId: { type: 'string', description: 'Table UUID (returned by create_app_table)' },
+        tableId: { type: 'string', description: 'Table UUID, table name, or display name' },
         ids: { type: 'array', items: { type: 'string' }, description: 'Optional: array of _id values to delete specific records' },
         where: { type: 'object', description: 'Optional: filter conditions as key-value pairs (e.g., {"worker":"kg-worker"}). Omit both ids and where to delete ALL records.' }
       },
@@ -796,6 +796,19 @@ const TOOL_DEFINITIONS = [
         maxTokens: { type: 'number', description: 'Max tokens to generate (default: 2048)' }
       },
       required: ['provider', 'prompt']
+    }
+  },
+  {
+    name: 'save_learning',
+    description: 'Save a learned behavior to graph_system_prompt so it persists across conversations. Use this when the user corrects your behavior or teaches you something about how to handle requests. The learning becomes a permanent rule loaded at every conversation start.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        label: { type: 'string', description: 'Short name for the learning (e.g., "Don\'t use Perplexity for data generation")' },
+        rule: { type: 'string', description: 'The full description of what was learned and how to behave differently' },
+        category: { type: 'string', enum: ['routing', 'behavior', 'error', 'formatting'], description: 'Category of the learning' }
+      },
+      required: ['label', 'rule']
     }
   },
   {

@@ -1840,6 +1840,39 @@ async function executeQueryDataNodes(input, env) {
 
 // ── AI content generation (multi-provider) ───────────────────────
 
+async function executeSaveLearning(input, env) {
+  const label = (input.label || '').trim()
+  const rule = (input.rule || '').trim()
+  const category = input.category || 'behavior'
+  if (!label || !rule) throw new Error('label and rule are required')
+
+  const nodeId = 'learning-' + Date.now()
+  const today = new Date().toISOString().split('T')[0]
+
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      graphId: 'graph_system_prompt',
+      node: {
+        id: nodeId,
+        label: label,
+        type: 'system-learning',
+        color: '#ef4444',
+        info: `LEARNED: ${rule}`,
+        metadata: { source: 'agent-self', category, date: today },
+      }
+    }),
+  })
+
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw new Error(`Failed to save learning: ${res.status} ${err}`)
+  }
+
+  return { saved: true, nodeId, label, message: `Learning saved to graph_system_prompt. It will be loaded in all future conversations.` }
+}
+
 async function executeGenerateWithAi(input, env) {
   const provider = (input.provider || '').toLowerCase()
   const prompt = (input.prompt || '').trim()
@@ -1888,6 +1921,30 @@ async function executeGenerateWithAi(input, env) {
 
 // ── Drizzle worker executors (relational D1 tables) ──────────────
 
+// Resolve tableId from UUID, table_name, or display_name
+async function resolveTableId(input, env) {
+  const tableId = (input.tableId || '').trim()
+  const tableName = (input.tableName || '').trim()
+  const nameToFind = tableId || tableName
+  if (!nameToFind) throw new Error('tableId or tableName is required')
+
+  // If it looks like a UUID, use directly
+  if (/^[0-9a-f]{8}-/.test(nameToFind)) return nameToFind
+
+  // Look up by name
+  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/tables')
+  if (!res.ok) throw new Error('Failed to list tables')
+  const data = await res.json()
+  const tableList = data.tables || data || []
+  const match = tableList.find(t =>
+    t.tableName === nameToFind || t.displayName === nameToFind ||
+    t.tableName?.toLowerCase() === nameToFind.toLowerCase() ||
+    t.displayName?.toLowerCase() === nameToFind.toLowerCase()
+  )
+  if (match) return match.id
+  throw new Error(`Table not found: "${nameToFind}". Available tables: ${tableList.map(t => t.displayName || t.tableName).join(', ')}`)
+}
+
 async function executeCreateAppTable(input, env) {
   const graphId = (input.graphId || '').trim()
   const displayName = (input.displayName || '').trim()
@@ -1920,8 +1977,7 @@ async function executeCreateAppTable(input, env) {
 }
 
 async function executeInsertAppRecord(input, env) {
-  const tableId = (input.tableId || '').trim()
-  if (!tableId) throw new Error('tableId is required')
+  const tableId = await resolveTableId(input, env)
   if (!input.record || typeof input.record !== 'object') {
     throw new Error('record object is required')
   }
@@ -1946,8 +2002,7 @@ async function executeInsertAppRecord(input, env) {
 }
 
 async function executeDeleteAppRecords(input, env) {
-  const tableId = (input.tableId || '').trim()
-  if (!tableId) throw new Error('tableId is required')
+  const tableId = await resolveTableId(input, env)
 
   const body = { tableId }
   if (input.ids) body.ids = input.ids
@@ -1969,8 +2024,7 @@ async function executeDeleteAppRecords(input, env) {
 }
 
 async function executeQueryAppTable(input, env) {
-  const tableId = (input.tableId || '').trim()
-  if (!tableId) throw new Error('tableId is required')
+  const tableId = await resolveTableId(input, env)
 
   const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/query', {
     method: 'POST',
@@ -1997,8 +2051,7 @@ async function executeQueryAppTable(input, env) {
 }
 
 async function executeAddAppTableColumn(input, env) {
-  const tableId = (input.tableId || '').trim()
-  if (!tableId) throw new Error('tableId is required')
+  const tableId = await resolveTableId(input, env)
   if (!input.name || !input.type) throw new Error('name and type are required')
 
   const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/add-column', {
@@ -2025,8 +2078,7 @@ async function executeAddAppTableColumn(input, env) {
 }
 
 async function executeGetAppTableSchema(input, env) {
-  const tableId = (input.tableId || '').trim()
-  if (!tableId) throw new Error('tableId is required')
+  const tableId = await resolveTableId(input, env)
 
   const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/table/${tableId}`)
   const data = await res.json()
@@ -4271,6 +4323,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDeleteAppRecords(toolInput, env)
     case 'generate_with_ai':
       return await executeGenerateWithAi(toolInput, env)
+    case 'save_learning':
+      return await executeSaveLearning(toolInput, env)
     case 'get_app_table_schema':
       return await executeGetAppTableSchema(toolInput, env)
     case 'add_app_table_column':

@@ -18,6 +18,53 @@ import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 
+/**
+ * Load dynamic behavior rules from graph_system_prompt.
+ * Falls back gracefully if the graph is unavailable.
+ */
+async function loadDynamicPrompt(env) {
+  try {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_system_prompt')
+    if (!res.ok) return ''
+    const data = await res.json()
+    const nodes = data.nodes || []
+
+    const rules = nodes.filter(n => n.type === 'system-rule').sort((a, b) => (a.metadata?.priority || 99) - (b.metadata?.priority || 99))
+    const routing = nodes.filter(n => n.type === 'system-routing')
+    const learnings = nodes.filter(n => n.type === 'system-learning')
+
+    if (rules.length === 0 && routing.length === 0 && learnings.length === 0) return ''
+
+    let prompt = '\n\n## Dynamic Behavior Rules (from graph_system_prompt)\n'
+
+    if (rules.length > 0) {
+      prompt += '\n### Rules\n'
+      for (const r of rules) {
+        prompt += `- **${r.label}**: ${r.info}\n`
+      }
+    }
+
+    if (routing.length > 0) {
+      prompt += '\n### Routing\n'
+      for (const r of routing) {
+        prompt += `- **${r.label}**: ${r.info}\n`
+      }
+    }
+
+    if (learnings.length > 0) {
+      prompt += '\n### Learned Behaviors\n'
+      for (const l of learnings) {
+        prompt += `- **${l.label}**: ${l.info}\n`
+      }
+    }
+
+    return prompt
+  } catch (e) {
+    console.error('[loadDynamicPrompt] Failed to load graph_system_prompt:', e.message)
+    return ''
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -135,6 +182,10 @@ export default {
         let agentAvatarUrl = null
         let agentModel = model || 'claude-haiku-4-5-20251001'
 
+        // Load dynamic behavior rules from graph_system_prompt
+        const dynamicRules = await loadDynamicPrompt(env)
+        if (dynamicRules) systemPrompt += dynamicRules
+
         // Load per-agent config if agentId provided
         if (agentId) {
           const agentConfig = await env.DB.prepare(
@@ -177,6 +228,8 @@ export default {
             maxTurns: maxTurns || 8,
             toolFilter,
             avatarUrl: agentAvatarUrl,
+            graphId: graphId || null,
+            activeHtmlNodeId: activeHtmlNodeId || null,
           })
         )
 
