@@ -203,6 +203,7 @@ interface GraphMeta {
 
 function GraphCard({ graphId, title, href }: { graphId: string; title: string; href: string }) {
   const [meta, setMeta] = useState<GraphMeta | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   useEffect(() => {
     if (!graphId) return;
@@ -225,35 +226,60 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
   const categoryTags = meta?.category ? meta.category.split(/\s+/).filter(t => t.startsWith('#')) : [];
 
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="block my-3 p-4 rounded-lg border border-sky-400/20 bg-sky-400/[0.06] hover:bg-sky-400/[0.12] transition-colors no-underline group"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-white font-semibold text-sm">{meta?.title || title}</div>
-          {meta?.description && (
-            <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
-          )}
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {categoryTags.map(tag => (
-              <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
-            ))}
-            {meta?.nodeTypes.map(type => (
-              <span key={type} className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px]">{type}</span>
-            ))}
-            {meta && (
-              <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{meta.nodeCount} nodes</span>
+    <>
+      <div className="my-3 p-4 rounded-lg border border-sky-400/20 bg-sky-400/[0.06]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-white font-semibold text-sm">{meta?.title || title}</div>
+            {meta?.description && (
+              <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
             )}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {categoryTags.map(tag => (
+                <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
+              ))}
+              {meta?.nodeTypes.map(type => (
+                <span key={type} className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px]">{type}</span>
+              ))}
+              {meta && (
+                <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{meta.nodeCount} nodes</span>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5 flex-shrink-0 mt-1">
+            <button
+              type="button"
+              onClick={() => setPreviewing(true)}
+              className="px-3 py-1.5 rounded-md bg-emerald-600/20 text-emerald-400 text-xs font-medium hover:bg-emerald-600/30 transition-colors"
+            >
+              Preview
+            </button>
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium hover:bg-sky-400/30 transition-colors text-center no-underline"
+            >
+              View →
+            </a>
           </div>
         </div>
-        <span className="flex-shrink-0 mt-1 px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium group-hover:bg-sky-400/30 transition-colors">
-          View Graph &rarr;
-        </span>
       </div>
-    </a>
+      {previewing && (
+        <GraphPreviewLazy graphId={graphId} title={meta?.title || title} onClose={() => setPreviewing(false)} />
+      )}
+    </>
+  );
+}
+
+// Lazy-load GraphPreview to keep initial bundle small
+import { lazy, Suspense } from 'react';
+const GraphPreviewComponent = lazy(() => import('./GraphPreview'));
+function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () => void }) {
+  return (
+    <Suspense fallback={null}>
+      <GraphPreviewComponent {...props} />
+    </Suspense>
   );
 }
 
