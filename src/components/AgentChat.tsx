@@ -328,7 +328,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     if (!userId) return;
     fetch(`${AGENT_API}/bots?userId=${encodeURIComponent(userId)}`)
       .then(r => r.json())
-      .then(data => { if (data.bots) setBots(data.bots.filter((b: { is_active?: boolean }) => b.is_active !== false)); })
+      .then(data => { if (data.bots) { const filtered = data.bots.filter((b: { is_active?: boolean }) => b.is_active !== false); console.log('[AgentChat] bots loaded:', filtered.map((b: { username: string }) => b.username)); setBots(filtered); } })
       .catch(() => {});
   }, [userId]);
 
@@ -1075,6 +1075,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       const botMention = text.match(/^@(\S+)\s*([\s\S]*)$/);
       const mentionedBot = botMention ? bots.find(b => b.username.toLowerCase() === botMention[1].toLowerCase()) : null;
       const botMessage = mentionedBot ? (botMention![2] || '').trim() || text : null;
+      console.log('[AgentChat] bot detection:', { text: text.slice(0, 50), botsLoaded: bots.length, botMention: botMention?.[1], mentionedBot: mentionedBot?.username, botMessage, routeTo: mentionedBot ? '/bot-chat' : '/chat' });
 
       const res = mentionedBot ? await fetch(`${AGENT_API}/bot-chat`, {
         method: 'POST',
