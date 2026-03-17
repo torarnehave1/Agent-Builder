@@ -322,6 +322,16 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
 
+  // Bot @mention state
+  const [bots, setBots] = useState<Array<{ id: string; name: string; username: string; avatar_url?: string }>>([]);
+  useEffect(() => {
+    if (!userId) return;
+    fetch(`${AGENT_API}/bots?userId=${encodeURIComponent(userId)}`)
+      .then(r => r.json())
+      .then(data => { if (data.bots) setBots(data.bots.filter((b: { is_active?: boolean }) => b.is_active !== false)); })
+      .catch(() => {});
+  }, [userId]);
+
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
@@ -439,6 +449,19 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       if (sessionIdRef.current === sid) { setSessionId(null); setMessages([]); }
     } catch { /* ignore */ }
   }, [userId]);
+
+  // Rename a session
+  const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameSession = useCallback(async (sid: string) => {
+    const title = renameValue.trim();
+    if (!title) { setRenamingSessionId(null); return; }
+    try {
+      await historyFetch(`/sessions/${sid}`, userId, { method: 'PATCH', body: JSON.stringify({ title }) });
+      setSessions(prev => prev.map(s => s.id === sid ? { ...s, title } : s));
+    } catch { /* ignore */ }
+    setRenamingSessionId(null);
+  }, [userId, renameValue]);
 
   // Close sessions dropdown on outside click
   useEffect(() => {
@@ -1048,7 +1071,22 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     abortRef.current = abort;
 
     try {
-      const res = await fetch(`${AGENT_API}/chat`, {
+      // Detect @botname at the start of the message
+      const botMention = text.match(/^@(\S+)\s*([\s\S]*)$/);
+      const mentionedBot = botMention ? bots.find(b => b.username.toLowerCase() === botMention[1].toLowerCase()) : null;
+      const botMessage = mentionedBot ? (botMention![2] || '').trim() || text : null;
+
+      const res = mentionedBot ? await fetch(`${AGENT_API}/bot-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          botId: mentionedBot.id,
+          message: botMessage,
+          conversationHistory: messages.filter(m => !m.images).map(m => ({ role: m.role, content: m.content })),
+        }),
+        signal: abort.signal,
+      }) : await fetch(`${AGENT_API}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1398,7 +1436,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     setCurrent(null);
     setStreaming(false);
     setSubagentProgress(null);
-  }, [input, streaming, messages, userId, graphId, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
+  }, [input, streaming, messages, userId, graphId, bots, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
 
   const stopStreaming = useCallback(() => {
     if (abortRef.current) {
@@ -1436,24 +1474,46 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                   <div className="px-3 py-3 text-white/30 text-xs">No saved sessions</div>
                 )}
                 {sessions.map(s => (
-                  <button
+                  <div
                     key={s.id}
-                    type="button"
-                    onClick={() => loadSession(s.id)}
-                    className={`w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] flex items-center gap-2 ${s.id === sessionId ? 'text-sky-400 bg-sky-400/[0.06]' : 'text-white/60'}`}
+                    className={`w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] flex items-center gap-1 ${s.id === sessionId ? 'text-sky-400 bg-sky-400/[0.06]' : 'text-white/60'}`}
                   >
-                    <div className="flex-1 min-w-0">
-                      <div className="truncate">{s.title}</div>
-                      {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
-                    </div>
+                    {renamingSessionId === s.id ? (
+                      <input
+                        autoFocus
+                        title="Rename session"
+                        className="flex-1 min-w-0 bg-white/10 text-white text-xs px-1 py-0.5 rounded outline-none"
+                        value={renameValue}
+                        onChange={e => setRenameValue(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') renameSession(s.id); if (e.key === 'Escape') setRenamingSessionId(null); }}
+                        onBlur={() => renameSession(s.id)}
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        className="flex-1 min-w-0 text-left"
+                        onClick={() => loadSession(s.id)}
+                        onDoubleClick={(e) => { e.stopPropagation(); setRenamingSessionId(s.id); setRenameValue(s.title); }}
+                      >
+                        <div className="truncate">{s.title}</div>
+                        {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
+                      </button>
+                    )}
+                    <span
+                      onClick={(e) => { e.stopPropagation(); setRenamingSessionId(s.id); setRenameValue(s.title); }}
+                      className="flex-shrink-0 text-white/20 hover:text-sky-400 text-[10px] px-0.5 cursor-pointer"
+                      title="Rename session"
+                    >
+                      &#9998;
+                    </span>
                     <span
                       onClick={(e) => deleteSession(s.id, e)}
-                      className="flex-shrink-0 text-white/20 hover:text-rose-400 text-sm px-1 cursor-pointer"
+                      className="flex-shrink-0 text-white/20 hover:text-rose-400 text-sm px-0.5 cursor-pointer"
                       title="Delete session"
                     >
                       &times;
                     </span>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -1829,18 +1889,39 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           >
             &#x1F5BC;
           </button>
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={e => handleInput(e.target.value)}
-            onKeyDown={e => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
-            }}
-            onPaste={handleImagePaste}
-            placeholder={pendingImages.length > 0 ? 'Ask about the image(s)...' : 'Type your message...'}
-            rows={1}
-            className="flex-1 min-w-0 px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
-          />
+          <div className="flex-1 min-w-0 relative">
+            {/* Bot @mention dropdown */}
+            {input.match(/^@\S*$/) && bots.length > 0 && (
+              <div className="absolute bottom-full mb-1 left-0 w-full max-h-40 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+                {bots
+                  .filter(b => !input.slice(1) || b.username.toLowerCase().startsWith(input.slice(1).toLowerCase()) || b.name.toLowerCase().startsWith(input.slice(1).toLowerCase()))
+                  .map(b => (
+                    <button
+                      key={b.id}
+                      type="button"
+                      onClick={() => { setInput(`@${b.username} `); textareaRef.current?.focus(); }}
+                      className="w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] text-white/70 flex items-center gap-2"
+                    >
+                      {b.avatar_url && <img src={b.avatar_url} className="w-5 h-5 rounded-full" alt="" />}
+                      <span className="font-medium text-white/90">@{b.username}</span>
+                      <span className="text-white/40">{b.name}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={e => handleInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+              }}
+              onPaste={handleImagePaste}
+              placeholder={pendingImages.length > 0 ? 'Ask about the image(s)...' : bots.length > 0 ? 'Type your message or @bot...' : 'Type your message...'}
+              rows={1}
+              className="w-full px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
+            />
+          </div>
           {streaming ? (
             <button
               type="button"
