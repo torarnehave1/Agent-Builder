@@ -3303,13 +3303,34 @@ async function executeGetSystemRegistry(input, env) {
     }
   }
 
-  // ── 10. Frontend Apps (from graph) ──
-  let frontendApps = undefined
+  // ── 10. Vegvisr Ecosystem Apps (READ-ONLY — these are the platform apps, NOT modifiable by the agent) ──
+  let ecosystemApps = undefined
   if (need('apps')) {
-    frontendApps = regApps.map(n => ({
-      name: n.label, url: n.metadata?.url, repo: n.metadata?.repo,
-      framework: n.metadata?.framework, deployMethod: n.metadata?.deployMethod,
-    }))
+    try {
+      const kgFetcher = env.KG_WORKER
+      if (kgFetcher) {
+        const ecoRes = await kgFetcher.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_vegvisr_ecosystem_apps')
+        if (ecoRes.ok) {
+          const ecoData = await ecoRes.json()
+          const appNodes = (ecoData.nodes || []).filter(n => n.id.startsWith('app-'))
+          ecosystemApps = {
+            _note: 'READ-ONLY reference. These are platform apps built in React/Vue/Flutter/Node. The agent cannot modify them.',
+            apps: appNodes.map(n => ({
+              id: n.id,
+              name: n.label?.replace(/^#\s*/, ''),
+              description: (n.info || '').split('\n').find(l => l.startsWith('- **Description**'))?.replace('- **Description**: ', '') || '',
+              domain: (n.info || '').split('\n').find(l => l.startsWith('- **Domain**'))?.replace('- **Domain**: ', '') || null,
+              stack: (n.info || '').split('\n').find(l => l.startsWith('- **Stack**'))?.replace('- **Stack**: ', '') || null,
+              deploy: (n.info || '').split('\n').find(l => l.startsWith('- **Deploy**'))?.replace('- **Deploy**: ', '') || null,
+              repo: (n.info || '').split('\n').find(l => l.startsWith('- **Repo**'))?.replace('- **Repo**: ', '') || null,
+            })),
+            source: 'graph_vegvisr_ecosystem_apps',
+          }
+        }
+      }
+    } catch {
+      ecosystemApps = { _note: 'READ-ONLY. Failed to load graph_vegvisr_ecosystem_apps.', apps: [] }
+    }
   }
 
   // ── 11. Credentials Check (from graph + env inspection) ──
@@ -3359,7 +3380,7 @@ async function executeGetSystemRegistry(input, env) {
     userAgents:      userAgents,
     knowledgeGraphs: knowledgeGraphs,
     templates:       templates,
-    apps:            frontendApps,
+    apps:            ecosystemApps,
     credentials:     credentials,
     storage:         storage,
   }
@@ -3391,13 +3412,13 @@ async function executeGetSystemRegistry(input, env) {
     userAgents: userAgents?.length || 0,
     knowledgeGraphs: knowledgeGraphs?.total || 0,
     templates: templates?.total || 0,
-    frontendApps: frontendApps?.length || regApps.length,
+    ecosystemApps: ecosystemApps?.apps?.length || regApps.length,
     credentialsConfigured: credentials ? credentials.filter(c => c.configured).length : 0,
     credentialsTotal: credentials?.length || regCredentials.length,
     registrySource: 'graph_system_registry',
   }
 
-  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.frontendApps} frontend apps, ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
+  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.ecosystemApps} ecosystem apps (read-only), ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
 
   // Apply filter
   if (filter !== 'all') {

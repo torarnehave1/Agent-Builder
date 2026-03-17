@@ -287,14 +287,17 @@ function App() {
 
       {/* Agent Builder — full screen when authenticated */}
       {authStatus === 'authed' && authUser && (
-        <AgentBuilder
-          userId={authUser.userId}
-          userEmail={authUser.email}
-          role={authUser.role}
-          language={language}
-          onLanguageChange={setLanguage}
-          onLogout={handleLogout}
-        />
+        <div className="flex flex-col h-screen">
+          <EcosystemNav className="flex-shrink-0 px-4 py-2 border-b border-white/10 bg-slate-950" />
+          <AgentBuilder
+            userId={authUser.userId}
+            userEmail={authUser.email}
+            role={authUser.role}
+            language={language}
+            onLanguageChange={setLanguage}
+            onLogout={handleLogout}
+          />
+        </div>
       )}
     </LanguageContext.Provider>
   );

@@ -25,7 +25,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
 
   return (
-    <div className="flex flex-col h-screen bg-slate-950 text-white">
+    <div className="flex flex-col flex-1 min-h-0 bg-slate-950 text-white">
       <header className="flex items-center justify-between px-4 h-[48px] border-b border-white/10 bg-slate-950/95 flex-shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-base font-bold text-white">Vegvisr</span>
