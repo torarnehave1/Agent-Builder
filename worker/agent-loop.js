@@ -240,6 +240,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const summary = result.message || `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
             log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
+            // Track graphId from delegation results so subsequent delegations reuse the same graph
+            if (DELEGATION_TOOLS.has(toolUse.name) && result.graphId && !options.graphId) {
+              options.graphId = result.graphId
+              log(`tracked graphId=${result.graphId} from ${toolUse.name} — will auto-inject into future delegations`)
+            }
             const ssePayload = { tool: toolUse.name, success: true, summary }
             // Pass nodeId and graphId for tools that create or edit HTML nodes
             if (result.nodeId) ssePayload.nodeId = result.nodeId

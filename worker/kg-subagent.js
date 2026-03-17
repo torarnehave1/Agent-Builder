@@ -60,10 +60,11 @@ const KG_SUBAGENT_SYSTEM_PROMPT = `You are a Knowledge Graph specialist. You cre
 3. \`patch_graph_metadata\` for graph-level changes
 
 ## Rules
-- Graph IDs MUST be UUIDs — NEVER human-readable names
+- **CRITICAL**: If a graphId is provided in Context, you MUST use that graph. Do NOT create a new graph. Add content to the existing graph using create_node.
+- Graph IDs MUST be UUIDs — NEVER human-readable names. NEVER invent/hallucinate graph IDs.
 - Node IDs should be lowercase-kebab-case (e.g. "node-intro", "node-contact-john")
 - ALWAYS read before writing to understand current state
-- Track node IDs from tool results — use exact IDs, never guess
+- Track node IDs and graph IDs from tool results — use exact IDs, never guess or hallucinate
 - When creating from perplexity_search results, include citations in a "## Sources" section and populate bibl array
 - Format graph results as markdown links: \`[Title](https://www.vegvisr.org/gnew-viewer?graphId=THE_ID)\`
 - metaArea should be ALL CAPS (e.g. "NEUROSCIENCE", "AI TECHNOLOGY")
@@ -99,7 +100,9 @@ function getKgSubagentTools() {
 // ---------------------------------------------------------------------------
 
 async function runKgSubagent(input, env, onProgress, executeTool) {
-  const { task, graphId, nodeId, userId } = input
+  const { task, nodeId, userId } = input
+  // Mutable — tracks the active graphId (from input or from first create_graph)
+  let graphId = input.graphId || null
   const maxTurns = 15
   const model = 'claude-sonnet-4-20250514'
 
@@ -200,10 +203,37 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       for (const toolUse of toolUses) {
         const msgs = toolMessages[toolUse.name] || [`Working on ${toolUse.name}...`]
         progress(msgs[Math.floor(Math.random() * msgs.length)])
+
+        // Code-level enforcement: auto-inject graphId into all graph-mutation tools
+        // This prevents the LLM from hallucinating IDs or creating duplicate graphs
+        const GRAPH_MUTATION_TOOLS = new Set(['create_node', 'patch_node', 'add_edge', 'patch_graph_metadata', 'read_graph', 'read_graph_content', 'read_node'])
+        if (graphId && GRAPH_MUTATION_TOOLS.has(toolUse.name) && !toolUse.input.graphId) {
+          toolUse.input.graphId = graphId
+          log(`auto-injected graphId=${graphId} into ${toolUse.name}`)
+        }
+        // If graphId is provided and LLM tries to create a NEW graph, block it
+        if (graphId && toolUse.name === 'create_graph') {
+          log(`BLOCKED create_graph — graphId=${graphId} already provided. Skipping.`)
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({ error: `Graph ${graphId} already exists and is your target. Use create_node to add content to it. Do NOT create a new graph.` }),
+          })
+          continue
+        }
+
         try {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, {})
 
           const resultStr = JSON.stringify(result)
+          // Track graphId from create_graph so subsequent tools auto-inject it
+          if (toolUse.name === 'create_graph' && !graphId) {
+            const createdId = toolUse.input.graphId || result.graphId
+            if (createdId) {
+              graphId = createdId
+              log(`tracked graphId=${graphId} from create_graph — will auto-inject into future tools`)
+            }
+          }
           actions.push({
             tool: toolUse.name,
             success: true,

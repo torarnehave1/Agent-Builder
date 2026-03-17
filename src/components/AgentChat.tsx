@@ -1131,7 +1131,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             const subNodeId = resultData.nodeId as string;
             const subGraphId = resultData.graphId as string;
             if (subNodeId) { lastHtmlNodeIdRef.current = subNodeId; onActiveHtmlNode?.(subNodeId); }
-            if (subGraphId) { lastAgentGraphRef.current = subGraphId; }
+            if (subGraphId) { lastAgentGraphRef.current = subGraphId; onGraphChange(subGraphId); }
             // Fetch the updated HTML from the node to show in preview
             if (subGraphId && subNodeId) {
               fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(subGraphId)}`)
@@ -1144,6 +1144,11 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                 })
                 .catch(() => {});
             }
+          } else if (toolName === 'delegate_to_kg' || toolName === 'delegate_to_video') {
+            // Track graphId from KG/video delegation results so the dropdown stays in sync
+            const resultData = ev.data as Record<string, unknown>;
+            const subGraphId = resultData.graphId as string;
+            if (subGraphId) { lastAgentGraphRef.current = subGraphId; onGraphChange(subGraphId); }
           }
         }
 
