@@ -81,6 +81,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const model = options.model || 'claude-haiku-4-5-20251001'
   let turn = 0
   const startTime = Date.now()
+  const sessionId = crypto.randomUUID()
+
+  // Stats accumulation — written to STATS_DB in finally block
+  const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
 
   const log = (msg) => {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
@@ -109,12 +113,35 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       log(`turn ${turn}/${maxTurns} — calling Anthropic`)
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
+      // Cap history: keep first message + last 10 messages to limit input token growth.
+      // Tool results from early turns are rarely needed by turn 5+.
+      // Always keep messages in assistant/user pairs so tool_use/tool_result stay paired.
+      const MAX_HISTORY = 10
+      const cappedMessages = messages.length > MAX_HISTORY + 1
+        ? [messages[0], ...messages.slice(-(MAX_HISTORY))]
+        : [...messages]
+
+      // Self-check at every 3rd turn: inject a progress review instruction.
+      // No extra API call — appended to the last user message so the next response includes reflection.
+      if (turn > 1 && turn % 3 === 0) {
+        const last = cappedMessages[cappedMessages.length - 1]
+        const selfCheck = `\n\n[SELF-CHECK turn ${turn}: Review your progress against the user's original request. Have you been repeating the same action without different results? If yes — stop and try a completely different approach. If the task is already done — end your turn and summarize. Do not use more turns than necessary.]`
+        if (last && last.role === 'user') {
+          if (typeof last.content === 'string') {
+            cappedMessages[cappedMessages.length - 1] = { ...last, content: last.content + selfCheck }
+          } else if (Array.isArray(last.content)) {
+            cappedMessages[cappedMessages.length - 1] = { ...last, content: [...last.content, { type: 'text', text: selfCheck }] }
+          }
+          log(`injected self-check at turn ${turn}`)
+        }
+      }
+
       const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
-          messages,
+          messages: cappedMessages,
           model,
           max_tokens: 16384,
           temperature: 0.3,
@@ -126,8 +153,16 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       const data = await response.json()
       log(`turn ${turn} response: status=${response.status} stop_reason=${data.stop_reason} content_blocks=${(data.content||[]).length}`)
 
+      // Accumulate token usage across turns
+      if (data.usage) {
+        stats.inputTokens += data.usage.input_tokens || 0
+        stats.outputTokens += data.usage.output_tokens || 0
+      }
+
       if (!response.ok) {
         log(`ERROR: Anthropic API error — ${JSON.stringify(data.error || 'unknown')}`)
+        stats.success = false
+        stats.error = JSON.stringify(data.error || 'Anthropic API error')
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Anthropic API error' })}\n\n`))
         break
       }
@@ -141,8 +176,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         }
 
         // Generate follow-up suggestions using a fast Haiku call
+        // Skip if no assistant text (pure tool-call turns produce no useful suggestions)
         try {
           const lastAssistantText = textBlocks.map(b => b.text).join('\n')
+          if (!lastAssistantText.trim()) throw new Error('no text — skip suggestions')
           const recentContext = messages.slice(-4).map(m => {
             let content
             if (typeof m.content === 'string') {
@@ -199,6 +236,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const toolUses = (data.content || []).filter(c => c.type === 'tool_use')
         const textBlocks = (data.content || []).filter(c => c.type === 'text')
 
+        // Accumulate tool calls for stats
+        for (const t of toolUses) stats.toolCalls.push(t.name)
+
         log(`tool_use — ${toolUses.length} tools: [${toolUses.map(t => t.name).join(', ')}]`)
 
         for (const block of textBlocks) {
@@ -239,12 +279,25 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap, onProgress)
             const summary = result.message || `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
-            log(`${toolUse.name} OK (${((Date.now() - toolStart) / 1000).toFixed(1)}s, ${resultLen} chars)`)
-            // Track graphId from delegation results so subsequent delegations reuse the same graph
-            if (DELEGATION_TOOLS.has(toolUse.name) && result.graphId && !options.graphId) {
-              options.graphId = result.graphId
-              log(`tracked graphId=${result.graphId} from ${toolUse.name} — will auto-inject into future delegations`)
+            const toolDuration = Date.now() - toolStart
+            log(`${toolUse.name} OK (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
+
+            // Record tool call in session_tools
+            if (env.STATS_DB) {
+              const subagent = toolUse.name.startsWith('delegate_to_') ? toolUse.name.replace('delegate_to_', '') : null
+              const templateId = toolUse.name === 'create_html_from_template' ? (toolUse.input.templateId || null) : null
+              env.STATS_DB.prepare(
+                `INSERT INTO session_tools (id, session_id, tool_name, subagent, template_id, graph_id, node_id, success, duration_ms, occurred_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+              ).bind(
+                crypto.randomUUID(), sessionId, toolUse.name,
+                subagent, templateId,
+                result.graphId || toolUse.input.graphId || null,
+                result.nodeId || toolUse.input.nodeId || null,
+                toolDuration, new Date().toISOString()
+              ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
+
             const ssePayload = { tool: toolUse.name, success: true, summary }
             // Pass nodeId and graphId for tools that create or edit HTML nodes
             if (result.nodeId) ssePayload.nodeId = result.nodeId
@@ -269,7 +322,18 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const resultStr = truncateResult(resultForClaude)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: resultStr }
           } catch (error) {
-            log(`${toolUse.name} FAILED (${((Date.now() - toolStart) / 1000).toFixed(1)}s): ${error.message}`)
+            const toolDuration = Date.now() - toolStart
+            log(`${toolUse.name} FAILED (${(toolDuration / 1000).toFixed(1)}s): ${error.message}`)
+            if (env.STATS_DB) {
+              env.STATS_DB.prepare(
+                `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at)
+                 VALUES (?, ?, ?, ?, 0, ?, ?)`
+              ).bind(
+                crypto.randomUUID(), sessionId, toolUse.name,
+                toolUse.name.startsWith('delegate_to_') ? toolUse.name.replace('delegate_to_', '') : null,
+                toolDuration, new Date().toISOString()
+              ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
+            }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, error: error.message })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
           }
@@ -284,9 +348,24 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         const parallelResults = await Promise.all(parallelTools.map(executeAndStream))
         const toolResults = [...sequentialResults, ...parallelResults]
 
+        // Fix 4: Strip large `info` fields from graph read results before storing in history.
+        // Graph nodes can be 10-50K chars each; keeping them in history inflates every subsequent turn.
+        const trimmedResults = toolResults.map(r => {
+          try {
+            const parsed = JSON.parse(r.content)
+            if (parsed.nodes) {
+              parsed.nodes = parsed.nodes.map(n => n.info && n.info.length > 500
+                ? { ...n, info: n.info.slice(0, 500) + '… [trimmed from history]' }
+                : n)
+              return { ...r, content: JSON.stringify(parsed) }
+            }
+          } catch {}
+          return r
+        })
+
         messages.push(
           { role: 'assistant', content: data.content },
-          { role: 'user', content: toolResults },
+          { role: 'user', content: trimmedResults },
         )
       } else if (data.stop_reason === 'max_tokens') {
         log(`max_tokens hit on turn ${turn} — sending continuation`)
@@ -306,15 +385,41 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     }
 
     if (turn >= maxTurns) {
+      stats.maxTurnsReached = true
       log(`max turns reached (${maxTurns})`)
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
+    stats.success = false
+    stats.error = err.message
     log(`FATAL ERROR: ${err.message}\n${err.stack}`)
     writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
   } finally {
-    log(`stream closed — ${turn} turns, ${((Date.now() - startTime) / 1000).toFixed(1)}s total`)
+    const durationMs = Date.now() - startTime
+    log(`stream closed — ${turn} turns, ${(durationMs / 1000).toFixed(1)}s total, tokens in=${stats.inputTokens} out=${stats.outputTokens}`)
     writer.close()
+
+    // Write session stats to STATS_DB — awaited so it completes before waitUntil context closes
+    if (env.STATS_DB) {
+      const now = new Date().toISOString()
+      await env.STATS_DB.prepare(
+        `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, model,
+          input_tokens, output_tokens, tool_calls, success, error, agent_id, max_turns_reached, version, version_note)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        sessionId, userId || 'unknown',
+        new Date(startTime).toISOString(), now, durationMs,
+        turn, model,
+        stats.inputTokens, stats.outputTokens,
+        JSON.stringify(stats.toolCalls),
+        stats.success ? 1 : 0,
+        stats.error || null,
+        options.agentId || null,
+        stats.maxTurnsReached ? 1 : 0,
+        options.version || null,
+        options.versionNote || null
+      ).run()
+    }
   }
 }
 

@@ -103,7 +103,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   const { task, nodeId, userId } = input
   // Mutable — tracks the active graphId (from input or from first create_graph)
   let graphId = input.graphId || null
-  const maxTurns = 15
+  const maxTurns = 10
   const model = 'claude-sonnet-4-20250514'
 
   const log = (msg) => console.log(`[kg-subagent] ${msg}`)
@@ -180,17 +180,20 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions }
     }
 
-    // End turn — return summary
+    // End turn — verify graph has nodes before declaring success
     if (data.stop_reason === 'end_turn') {
       const text = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
+      const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
       log(`end_turn — summary: ${text.slice(0, 200)}`)
+      const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
       return {
-        success: true,
-        summary: text,
+        success: verification.valid,
+        summary: verification.valid ? text : `Graph ${resolvedGraphId} was created but has 0 nodes. Task incomplete.`,
         turns: turn,
         actions,
-        graphId: graphId || actions.find(a => a.graphId)?.graphId,
+        graphId: resolvedGraphId,
         nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
+        ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
       }
     }
 
@@ -277,14 +280,39 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   }
 
   log(`max turns reached (${maxTurns})`)
+  const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
+  const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
   return {
-    success: actions.some(a => a.success),
-    summary: `KG subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`,
+    success: verification.valid,
+    summary: verification.valid
+      ? `KG subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`
+      : `Graph ${resolvedGraphId} was created but has 0 nodes after ${turn} turns. Task incomplete.`,
     turns: turn,
     actions,
-    graphId: graphId || actions.find(a => a.graphId)?.graphId,
+    graphId: resolvedGraphId,
     nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
     maxTurnsReached: true,
+    ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
+  }
+}
+
+/**
+ * Verify a graph exists and has at least 1 node.
+ * If no graphId (read-only or no-graph task), treat as valid.
+ */
+async function verifyGraphHasNodes(graphId, env, log) {
+  if (!graphId) return { valid: true }
+  try {
+    const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+    if (!res.ok) return { valid: true } // can't verify — don't block
+    const data = await res.json()
+    const nodeCount = (data.nodes || []).length
+    log(`verify graph ${graphId}: ${nodeCount} nodes`)
+    if (nodeCount === 0) return { valid: false, nodeCount: 0 }
+    return { valid: true, nodeCount }
+  } catch (err) {
+    log(`verify graph failed (non-fatal): ${err.message}`)
+    return { valid: true } // network error — don't block
   }
 }
 

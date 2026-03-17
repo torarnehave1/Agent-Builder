@@ -18,6 +18,97 @@ import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 
+// ---------------------------------------------------------------------------
+// Agent version — bump this string when deploying an improvement.
+// Every session in the stats DB will be tagged with this version so you can
+// compare metrics before/after each change.
+// Format: v<number>-<short-description>
+// ---------------------------------------------------------------------------
+const AGENT_VERSION = 'v5-stats-db'
+const AGENT_VERSION_NOTE = 'KG fast-path, history cap, self-check, tool result trimming, KG subagent max turns 10, stats DB'
+
+// ---------------------------------------------------------------------------
+// KG Fast-path — bypass Claude for simple read operations
+// Saves an entire Anthropic API call for unambiguous KG read queries.
+// ---------------------------------------------------------------------------
+
+function detectKgFastPath(message) {
+  const m = message.toLowerCase().trim()
+
+  // "list meta areas" / "what meta areas" / "show meta areas"
+  if (/(?:list|show|what|get).{0,15}meta.?areas?/.test(m)) {
+    return { action: 'list_meta_areas', params: {} }
+  }
+
+  // "list graphs" / "show graphs" / "what graphs" / "my graphs"
+  // with optional "meta area X" / "metaArea X" qualifier
+  if (/(?:list|show|what|get|find).{0,15}graphs?/.test(m) || /graphs?.{0,10}(?:do i have|exist|available)/.test(m)) {
+    const metaMatch = message.match(/meta.?area[:\s]+([A-Z][A-Z0-9 _-]+)/i)
+                   || message.match(/\barea[:\s]+([A-Z][A-Z0-9 _-]+)/i)
+                   || message.match(/\b([A-Z]{2,}(?:\s[A-Z]+)*)\b/)  // ALL_CAPS word
+    // Only extract metaArea if it's clearly a metaArea reference, not just any caps
+    const metaArea = metaMatch && /meta.?area|area/i.test(message.slice(0, metaMatch.index + 20))
+      ? metaMatch[1].trim().toUpperCase()
+      : null
+    return { action: 'list_graphs', params: metaArea ? { metaArea } : {} }
+  }
+
+  return null
+}
+
+async function executeKgFastPath({ action, params }, writer, encoder, env, userId) {
+  const write = (event, data) =>
+    writer.write(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+  const startTime = Date.now()
+
+  try {
+    if (action === 'list_meta_areas') {
+      const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/listMetaAreas')
+      const data = res.ok ? await res.json() : null
+      const areas = data?.metaAreas || data?.areas || []
+      if (areas.length === 0) {
+        write('text', { content: 'No meta areas found.' })
+      } else {
+        const lines = areas.map(a => `- **${a.metaArea || a}** (${a.count || ''} graphs)`).join('\n')
+        write('text', { content: `## Meta Areas\n\n${lines}` })
+      }
+    }
+
+    if (action === 'list_graphs') {
+      const qs = params.metaArea ? `?metaArea=${encodeURIComponent(params.metaArea)}&limit=80` : '?limit=80'
+      const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraphsummaries${qs}`)
+      const data = res.ok ? await res.json() : null
+      const graphs = data?.graphs || data || []
+      if (!Array.isArray(graphs) || graphs.length === 0) {
+        const label = params.metaArea ? ` with meta area **${params.metaArea}**` : ''
+        write('text', { content: `No graphs found${label}.` })
+      } else {
+        const label = params.metaArea ? ` (meta area: ${params.metaArea})` : ''
+        const lines = graphs.map(g =>
+          `- [${g.title || g.id}](https://www.vegvisr.org/gnew-viewer?graphId=${g.id})${g.metaArea ? ` — ${g.metaArea}` : ''}`
+        ).join('\n')
+        write('text', { content: `## Graphs${label}\n\n${lines}` })
+      }
+    }
+
+    write('done', { turns: 0, fastPath: true })
+
+    if (env.STATS_DB) {
+      const now = new Date().toISOString()
+      await env.STATS_DB.prepare(
+        `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, fast_path_action, model, success, version, version_note)
+         VALUES (?, ?, ?, ?, ?, 0, 1, ?, 'fast-path', 1, ?, ?)`
+      ).bind(
+        crypto.randomUUID(), userId || 'unknown',
+        new Date(startTime).toISOString(), now, Date.now() - startTime,
+        action, AGENT_VERSION, AGENT_VERSION_NOTE
+      ).run()
+    }
+  } catch (err) {
+    write('error', { error: `Fast-path failed: ${err.message}` })
+  }
+}
+
 /**
  * Load dynamic behavior rules from graph_system_prompt.
  * Falls back gracefully if the graph is unavailable.
@@ -284,23 +375,48 @@ export default {
           }
         }
 
-        if (graphId) {
-          let ctx = `\n\n## Current Context\nThe user has selected graph "${graphId}". Use this graphId for operations unless they specify otherwise.`
-          if (activeHtmlNodeId) {
-            ctx += `\nThe active HTML node is "${activeHtmlNodeId}". Use this nodeId when reading or editing the HTML app — do NOT guess node IDs.`
-          }
-          systemPrompt += ctx
+        // Only inject HTML node context — never inject graphId as a KG target.
+        // The LLM must decide which graph to use/create based on the user's request.
+        if (activeHtmlNodeId) {
+          systemPrompt += `\n\n## Active HTML App\nThe active HTML node is "${activeHtmlNodeId}" in graph "${graphId}". Use this nodeId when reading or editing the HTML app — do NOT guess node IDs.`
         }
 
         const chatMessages = userMessages.map(m => ({ role: m.role, content: m.content }))
 
-        // Inject active context into last user message so the model doesn't miss it
-        if (graphId && activeHtmlNodeId && chatMessages.length > 0) {
+        // Inject active HTML context into last user message so the model doesn't miss it
+        if (activeHtmlNodeId && chatMessages.length > 0) {
           const last = chatMessages[chatMessages.length - 1]
           if (last.role === 'user' && typeof last.content === 'string' && !last.content.includes(activeHtmlNodeId)) {
             last.content += `\n\n[Context: graphId="${graphId}", nodeId="${activeHtmlNodeId}"]`
           }
         }
+
+        // --- Fast-path: bypass Claude for simple KG read operations ---
+        // Detects unambiguous read intents and calls KG worker directly.
+        // Saves entire Anthropic API call + multiple turns for trivial queries.
+        const lastUserMsg = chatMessages.filter(m => m.role === 'user').pop()
+        const fastPath = lastUserMsg ? detectKgFastPath(typeof lastUserMsg.content === 'string' ? lastUserMsg.content : '') : null
+        if (fastPath && !agentId && !toolFilter) {
+          const { readable, writable } = new TransformStream()
+          const writer = writable.getWriter()
+          const encoder = new TextEncoder()
+          ctx.waitUntil((async () => {
+            try {
+              await executeKgFastPath(fastPath, writer, encoder, env, userId)
+            } finally {
+              await writer.close()
+            }
+          })())
+          return new Response(readable, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+              'Access-Control-Allow-Origin': '*',
+            },
+          })
+        }
+        // --- End fast-path ---
 
         const { readable, writable } = new TransformStream()
         const writer = writable.getWriter()
@@ -314,6 +430,9 @@ export default {
             avatarUrl: agentAvatarUrl,
             graphId: graphId || null,
             activeHtmlNodeId: activeHtmlNodeId || null,
+            agentId: agentId || null,
+            version: AGENT_VERSION,
+            versionNote: AGENT_VERSION_NOTE,
           })
         )
 

@@ -2,6 +2,97 @@ import { useState, useEffect, useCallback } from 'react';
 
 const DRIZZLE_API = 'https://drizzle.vegvisr.org';
 
+// Preset queries per database — shown as a dropdown in the SQL bar
+const PRESET_QUERIES: Record<string, { label: string; sql: string }[]> = {
+  agent_stats_db: [
+    {
+      label: 'Benchmark by version',
+      sql: `SELECT version, COUNT(*) sessions,
+  ROUND(AVG(duration_ms)/1000.0,1) avg_sec,
+  ROUND(AVG(turns),1) avg_turns,
+  ROUND(AVG(input_tokens+output_tokens)) avg_tokens,
+  SUM(fast_path) fast_path_hits,
+  SUM(max_turns_reached) timeouts,
+  SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) failures
+FROM sessions
+GROUP BY version
+ORDER BY MIN(started_at) DESC`,
+    },
+    {
+      label: 'Sessions over time (daily)',
+      sql: `SELECT DATE(started_at) day,
+  COUNT(*) sessions,
+  ROUND(AVG(duration_ms)/1000.0,1) avg_sec,
+  ROUND(AVG(turns),1) avg_turns,
+  SUM(fast_path) fast_path_hits
+FROM sessions
+GROUP BY day
+ORDER BY day DESC
+LIMIT 30`,
+    },
+    {
+      label: 'Most used tools',
+      sql: `SELECT tool_name, subagent,
+  COUNT(*) calls,
+  ROUND(AVG(duration_ms)) avg_ms,
+  SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) failures
+FROM session_tools
+GROUP BY tool_name
+ORDER BY calls DESC`,
+    },
+    {
+      label: 'Subagent usage',
+      sql: `SELECT subagent,
+  COUNT(*) delegations,
+  ROUND(AVG(duration_ms)/1000.0,1) avg_sec,
+  SUM(CASE WHEN success=0 THEN 1 ELSE 0 END) failures
+FROM session_tools
+WHERE subagent IS NOT NULL
+GROUP BY subagent
+ORDER BY delegations DESC`,
+    },
+    {
+      label: 'Templates created',
+      sql: `SELECT template_id, COUNT(*) created
+FROM session_tools
+WHERE template_id IS NOT NULL
+GROUP BY template_id
+ORDER BY created DESC`,
+    },
+    {
+      label: 'Full session trace (recent 20)',
+      sql: `SELECT s.started_at, s.user_id, s.version, s.turns,
+  ROUND(s.duration_ms/1000.0,1) sec,
+  s.input_tokens, s.output_tokens,
+  s.fast_path, s.success,
+  GROUP_CONCAT(t.tool_name, ' → ') tools
+FROM sessions s
+LEFT JOIN session_tools t ON t.session_id = s.id
+GROUP BY s.id
+ORDER BY s.started_at DESC
+LIMIT 20`,
+    },
+    {
+      label: 'Failed sessions',
+      sql: `SELECT started_at, user_id, version, turns, error
+FROM sessions
+WHERE success = 0
+ORDER BY started_at DESC
+LIMIT 50`,
+    },
+    {
+      label: 'Fast-path vs agent (this week)',
+      sql: `SELECT
+  SUM(fast_path) fast_path,
+  SUM(CASE WHEN fast_path=0 THEN 1 ELSE 0 END) agent,
+  ROUND(AVG(CASE WHEN fast_path=1 THEN duration_ms END)/1000.0,2) fast_path_avg_sec,
+  ROUND(AVG(CASE WHEN fast_path=0 THEN duration_ms END)/1000.0,1) agent_avg_sec
+FROM sessions
+WHERE started_at >= DATE('now', '-7 days')`,
+    },
+  ],
+};
+
 interface D1Table {
   name: string;
   rows: number;
@@ -265,6 +356,27 @@ export default function DataExplorer() {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* SQL Query bar */}
         <div className="px-4 py-3 border-b border-white/10 bg-slate-900/50">
+          {/* Preset queries dropdown — shown only when presets exist for this DB */}
+          {PRESET_QUERIES[selectedDb] && (
+            <div className="mb-2">
+              <select
+                title="Preset queries"
+                defaultValue=""
+                onChange={e => {
+                  if (e.target.value) setSqlInput(e.target.value);
+                  e.target.value = '';
+                }}
+                className="w-full text-xs bg-slate-950 border border-white/10 rounded-md px-3 py-1.5 text-amber-300 font-medium focus:outline-none focus:border-amber-500/50"
+              >
+                <option value="" disabled>— Preset queries —</option>
+                {PRESET_QUERIES[selectedDb].map(q => (
+                  <option key={q.label} value={q.sql} className="bg-slate-900 text-white">
+                    {q.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="flex gap-2">
             <textarea
               value={sqlInput}
