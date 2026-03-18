@@ -286,15 +286,17 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             if (env.STATS_DB) {
               const subagent = toolUse.name.startsWith('delegate_to_') ? toolUse.name.replace('delegate_to_', '') : null
               const templateId = toolUse.name === 'create_html_from_template' ? (toolUse.input.templateId || null) : null
+              // For delegation tools use the subagent's model; for direct tools use the orchestrator model
+              const toolModel = result.model || model
               env.STATS_DB.prepare(
-                `INSERT INTO session_tools (id, session_id, tool_name, subagent, template_id, graph_id, node_id, success, duration_ms, occurred_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`
+                `INSERT INTO session_tools (id, session_id, tool_name, subagent, template_id, graph_id, node_id, success, duration_ms, occurred_at, model)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
               ).bind(
                 crypto.randomUUID(), sessionId, toolUse.name,
                 subagent, templateId,
                 result.graphId || toolUse.input.graphId || null,
                 result.nodeId || toolUse.input.nodeId || null,
-                toolDuration, new Date().toISOString()
+                toolDuration, new Date().toISOString(), toolModel
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
 
@@ -326,12 +328,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             log(`${toolUse.name} FAILED (${(toolDuration / 1000).toFixed(1)}s): ${error.message}`)
             if (env.STATS_DB) {
               env.STATS_DB.prepare(
-                `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at)
-                 VALUES (?, ?, ?, ?, 0, ?, ?)`
+                `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at, model)
+                 VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
               ).bind(
                 crypto.randomUUID(), sessionId, toolUse.name,
                 toolUse.name.startsWith('delegate_to_') ? toolUse.name.replace('delegate_to_', '') : null,
-                toolDuration, new Date().toISOString()
+                toolDuration, new Date().toISOString(), model
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, error: error.message })}\n\n`))

@@ -728,6 +728,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         summary: text,
         turns: turn,
         actions,
+        model,
         graphId,
         nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
       }
@@ -852,6 +853,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
     summary: `HTML Builder completed ${actions.length} actions in ${turn} turns (max turns reached).`,
     turns: turn,
     actions,
+    model,
     graphId,
     nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
     maxTurnsReached: true,

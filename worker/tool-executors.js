@@ -1931,8 +1931,10 @@ async function resolveTableId(input, env) {
   // If it looks like a UUID, use directly
   if (/^[0-9a-f]{8}-/.test(nameToFind)) return nameToFind
 
-  // Look up by name
-  const res = await env.DRIZZLE_WORKER.fetch('https://drizzle-worker/tables')
+  // Look up by name — scope to the current user's tables when userId is available
+  const userId = (input.userId || '').trim()
+  const scopeParam = userId ? `?userId=${encodeURIComponent(userId)}` : ''
+  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/tables${scopeParam}`)
   if (!res.ok) throw new Error('Failed to list tables')
   const data = await res.json()
   const tableList = data.tables || data || []
@@ -1987,6 +1989,7 @@ async function executeInsertAppRecord(input, env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       tableId,
+      userId: input.userId || undefined,
       record: input.record
     })
   })
@@ -2004,7 +2007,7 @@ async function executeInsertAppRecord(input, env) {
 async function executeDeleteAppRecords(input, env) {
   const tableId = await resolveTableId(input, env)
 
-  const body = { tableId }
+  const body = { tableId, userId: input.userId || undefined }
   if (input.ids) body.ids = input.ids
   if (input.where) body.where = input.where
 
@@ -2031,6 +2034,7 @@ async function executeQueryAppTable(input, env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       tableId,
+      userId: input.userId || undefined,
       where: input.where || undefined,
       orderBy: input.orderBy || undefined,
       order: input.order || undefined,
@@ -2059,6 +2063,7 @@ async function executeAddAppTableColumn(input, env) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       tableId,
+      userId: input.userId || undefined,
       name: input.name,
       type: input.type,
       label: input.label || input.name,
@@ -2080,7 +2085,8 @@ async function executeAddAppTableColumn(input, env) {
 async function executeGetAppTableSchema(input, env) {
   const tableId = await resolveTableId(input, env)
 
-  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/table/${tableId}`)
+  const userParam = input.userId ? `?userId=${encodeURIComponent(input.userId)}` : ''
+  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker/table/${tableId}${userParam}`)
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Failed to get table schema')
 
