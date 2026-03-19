@@ -5,8 +5,9 @@ import AgentSettings from './AgentSettings';
 import DataExplorer from './DataExplorer';
 import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel } from './ModelSettings';
+import UsageDashboard from './UsageDashboard';
 
-type View = 'chat' | 'data' | 'agents' | 'settings';
+type View = 'chat' | 'data' | 'agents' | 'settings' | 'usage';
 
 interface Props {
   userId: string;
@@ -33,7 +34,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className="text-base font-bold text-white">Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['chat', 'agents', 'data', 'settings'] as const).map((tab) => (
+            {(['chat', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -44,7 +45,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                     : 'text-white/50 hover:text-white/80'
                 }`}
               >
-                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : tab === 'data' ? 'Data' : 'Settings'}
+                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : tab === 'data' ? 'Data' : tab === 'usage' ? 'Usage' : 'Settings'}
               </button>
             ))}
           </nav>
@@ -102,6 +103,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         />
       )}
       {view === 'data' && <DataExplorer />}
+      {view === 'usage' && <UsageDashboard userId={userId} />}
       {view === 'settings' && (
         <ModelSettings model={model} onChange={setModel} />
       )}

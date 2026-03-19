@@ -104,7 +104,9 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   // Mutable — tracks the active graphId (from input or from first create_graph)
   let graphId = input.graphId || null
   const maxTurns = 10
-  const model = 'claude-sonnet-4-20250514'
+  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  let inputTokens = 0
+  let outputTokens = 0
 
   const log = (msg) => console.log(`[kg-subagent] ${msg}`)
   const progress = typeof onProgress === 'function' ? onProgress : () => {}
@@ -165,6 +167,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: userId || 'kg-subagent',
+        apiKey: env.ANTHROPIC_API_KEY || undefined,
         messages,
         model,
         max_tokens: 8192,
@@ -177,14 +180,19 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     const data = await response.json()
     if (!response.ok) {
       log(`ERROR: ${JSON.stringify(data.error)}`)
-      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions }
+      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
+    }
+
+    if (data.usage) {
+      inputTokens += data.usage.input_tokens || 0
+      outputTokens += data.usage.output_tokens || 0
     }
 
     // End turn — verify graph has nodes before declaring success
     if (data.stop_reason === 'end_turn') {
       const text = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
       const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
-      log(`end_turn — summary: ${text.slice(0, 200)}`)
+      log(`end_turn — summary: ${text.slice(0, 200)} | tokens in=${inputTokens} out=${outputTokens}`)
       const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
       return {
         success: verification.valid,
@@ -194,6 +202,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         model,
         graphId: resolvedGraphId,
         nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
+        inputTokens,
+        outputTokens,
         ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
       }
     }
@@ -280,7 +290,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     }
   }
 
-  log(`max turns reached (${maxTurns})`)
+  log(`max turns reached (${maxTurns}) | tokens in=${inputTokens} out=${outputTokens}`)
   const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
   const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
   return {
@@ -293,6 +303,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     model,
     graphId: resolvedGraphId,
     nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
+    inputTokens,
+    outputTokens,
     maxTurnsReached: true,
     ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
   }

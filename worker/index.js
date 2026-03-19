@@ -95,8 +95,8 @@ async function executeKgFastPath({ action, params }, writer, encoder, env, userI
     if (env.STATS_DB) {
       const now = new Date().toISOString()
       await env.STATS_DB.prepare(
-        `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, fast_path_action, model, success, version, version_note)
-         VALUES (?, ?, ?, ?, ?, 0, 1, ?, 'fast-path', 1, ?, ?)`
+        `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, fast_path_action, model, success, version, version_note, cost_usd)
+         VALUES (?, ?, ?, ?, ?, 0, 1, ?, 'fast-path', 1, ?, ?, 0)`
       ).bind(
         crypto.randomUUID(), userId || 'unknown',
         new Date(startTime).toISOString(), now, Date.now() - startTime,
@@ -445,6 +445,78 @@ export default {
             'Access-Control-Allow-Headers': 'Content-Type, Authorization',
           },
         })
+      }
+
+      // GET /api/usage - Usage & cost dashboard data
+      if (pathname === '/api/usage' && request.method === 'GET') {
+        const params = url.searchParams
+        const days = Math.min(parseInt(params.get('days') || '30', 10), 90)
+        const userId = params.get('userId')
+
+        if (!env.STATS_DB) {
+          return new Response(JSON.stringify({ error: 'Stats DB not configured' }), { status: 503, headers: corsHeaders })
+        }
+
+        const since = new Date(Date.now() - days * 86400_000).toISOString()
+
+        // Totals
+        const totals = await env.STATS_DB.prepare(
+          `SELECT
+            COUNT(*) AS sessions,
+            SUM(input_tokens) AS input_tokens,
+            SUM(output_tokens) AS output_tokens,
+            SUM(cost_usd) AS cost_usd,
+            SUM(turns) AS turns,
+            AVG(duration_ms) AS avg_duration_ms,
+            SUM(fast_path) AS fast_path_sessions
+           FROM sessions WHERE started_at >= ? ${userId ? 'AND user_id = ?' : ''}`
+        ).bind(...(userId ? [since, userId] : [since])).first()
+
+        // By model
+        const byModel = await env.STATS_DB.prepare(
+          `SELECT model,
+            COUNT(*) AS sessions,
+            SUM(input_tokens) AS input_tokens,
+            SUM(output_tokens) AS output_tokens,
+            SUM(cost_usd) AS cost_usd
+           FROM sessions WHERE started_at >= ? ${userId ? 'AND user_id = ?' : ''}
+           GROUP BY model ORDER BY cost_usd DESC`
+        ).bind(...(userId ? [since, userId] : [since])).all()
+
+        // Daily cost (last N days)
+        const dailyCost = await env.STATS_DB.prepare(
+          `SELECT substr(started_at, 1, 10) AS day,
+            COUNT(*) AS sessions,
+            SUM(cost_usd) AS cost_usd,
+            SUM(input_tokens) AS input_tokens,
+            SUM(output_tokens) AS output_tokens
+           FROM sessions WHERE started_at >= ? ${userId ? 'AND user_id = ?' : ''}
+           GROUP BY day ORDER BY day ASC`
+        ).bind(...(userId ? [since, userId] : [since])).all()
+
+        // Top tool calls
+        const topTools = await env.STATS_DB.prepare(
+          `SELECT tool_name, COUNT(*) AS calls, SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS successes
+           FROM session_tools WHERE occurred_at >= ?
+           GROUP BY tool_name ORDER BY calls DESC LIMIT 20`
+        ).bind(since).all()
+
+        // Recent sessions (last 20)
+        const recent = await env.STATS_DB.prepare(
+          `SELECT id, user_id, started_at, model, turns, input_tokens, output_tokens,
+            cost_usd, success, duration_ms, agent_id, max_turns_reached
+           FROM sessions WHERE started_at >= ? ${userId ? 'AND user_id = ?' : ''}
+           ORDER BY started_at DESC LIMIT 20`
+        ).bind(...(userId ? [since, userId] : [since])).all()
+
+        return new Response(JSON.stringify({
+          period: { days, since },
+          totals,
+          byModel: byModel.results || [],
+          dailyCost: dailyCost.results || [],
+          topTools: topTools.results || [],
+          recentSessions: recent.results || [],
+        }), { headers: corsHeaders })
       }
 
       // POST /upload-image - Upload base64 image to photos API, return imgix URL

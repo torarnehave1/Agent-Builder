@@ -93,7 +93,9 @@ function getAgentBuilderTools() {
 async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
   const { task, agentId, userId } = input
   const maxTurns = 15
-  const model = 'claude-sonnet-4-20250514'
+  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  let inputTokens = 0
+  let outputTokens = 0
 
   const log = (msg) => console.log(`[agent-builder-subagent] ${msg}`)
   const progress = typeof onProgress === 'function' ? onProgress : () => {}
@@ -142,6 +144,7 @@ async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: userId || 'agent-builder-subagent',
+        apiKey: env.ANTHROPIC_API_KEY || undefined,
         messages,
         model,
         max_tokens: 8192,
@@ -154,19 +157,27 @@ async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
     const data = await response.json()
     if (!response.ok) {
       log(`ERROR: ${JSON.stringify(data.error)}`)
-      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions }
+      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
+    }
+
+    if (data.usage) {
+      inputTokens += data.usage.input_tokens || 0
+      outputTokens += data.usage.output_tokens || 0
     }
 
     // End turn — return summary
     if (data.stop_reason === 'end_turn') {
       const text = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
-      log(`end_turn — summary: ${text.slice(0, 200)}`)
+      log(`end_turn — summary: ${text.slice(0, 200)} | tokens in=${inputTokens} out=${outputTokens}`)
       return {
         success: true,
         summary: text,
         turns: turn,
         actions,
+        model,
         agentId: agentId || actions.find(a => a.agentId)?.agentId,
+        inputTokens,
+        outputTokens,
       }
     }
 
@@ -223,13 +234,16 @@ async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
     }
   }
 
-  log(`max turns reached (${maxTurns})`)
+  log(`max turns reached (${maxTurns}) | tokens in=${inputTokens} out=${outputTokens}`)
   return {
     success: actions.some(a => a.success),
     summary: `Agent builder subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`,
     turns: turn,
     actions,
+    model,
     agentId: agentId || actions.find(a => a.agentId)?.agentId,
+    inputTokens,
+    outputTokens,
     maxTurnsReached: true,
   }
 }

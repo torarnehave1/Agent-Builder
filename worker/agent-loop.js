@@ -10,6 +10,28 @@ import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 
 /**
+ * Calculate cost in USD for a completed session.
+ * Prices per million tokens (as of 2026-03).
+ * Cache tokens cost 10% of input price — we don't distinguish here, so this is a conservative estimate.
+ */
+function calculateCost(model, inputTokens, outputTokens) {
+  const PRICES = {
+    // Haiku 4.5
+    'claude-haiku-4-5-20251001': { in: 0.80, out: 4.00 },
+    // Sonnet 4.6
+    'claude-sonnet-4-6':         { in: 3.00, out: 15.00 },
+    'claude-sonnet-4-20250514':  { in: 3.00, out: 15.00 },
+    // Opus 4.6
+    'claude-opus-4-6':           { in: 15.00, out: 75.00 },
+    'claude-opus-4-20250514':    { in: 15.00, out: 75.00 },
+    // Fast path
+    'fast-path':                 { in: 0, out: 0 },
+  }
+  const price = PRICES[model] || PRICES['claude-haiku-4-5-20251001']
+  return ((inputTokens / 1_000_000) * price.in) + ((outputTokens / 1_000_000) * price.out)
+}
+
+/**
  * Load and merge all tools: hardcoded + OpenAPI dynamic + web_search
  */
 async function loadAllTools(env) {
@@ -410,10 +432,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     // Write session stats to STATS_DB — awaited so it completes before waitUntil context closes
     if (env.STATS_DB) {
       const now = new Date().toISOString()
+      const costUsd = calculateCost(model, stats.inputTokens, stats.outputTokens)
       await env.STATS_DB.prepare(
         `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, model,
-          input_tokens, output_tokens, tool_calls, success, error, agent_id, max_turns_reached, version, version_note)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          input_tokens, output_tokens, tool_calls, success, error, agent_id, max_turns_reached, version, version_note, cost_usd)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(
         sessionId, userId || 'unknown',
         new Date(startTime).toISOString(), now, durationMs,
@@ -425,7 +448,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         options.agentId || null,
         stats.maxTurnsReached ? 1 : 0,
         options.version || null,
-        options.versionNote || null
+        options.versionNote || null,
+        costUsd
       ).run()
     }
   }
