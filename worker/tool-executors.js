@@ -16,6 +16,7 @@ import { runChatSubagent } from './chat-subagent.js'
 import { runBotSubagent } from './bot-subagent.js'
 import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
 import { runVideoSubagent } from './video-subagent.js'
+import { runContactSubagent } from './contact-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -1836,6 +1837,96 @@ async function executeQueryDataNodes(input, env) {
     schema: node.metadata?.schema || null,
     message: `Returned ${records.length} of ${total} records from data-node "${nodeId}"${input.filterKey ? ` (filtered: ${filtered} matches)` : ''}`
   }
+}
+
+// ── Contact Management ───────────────────────────────────────────
+
+const CONTACTS_TABLE_ID = '8daf6422-f738-4d24-aa52-7c23abf53d1b'
+const CONTACT_LOG_TABLE_ID = '96ff306a-45ad-4163-a3e3-362610d35106'
+const DRIZZLE_BASE = 'https://drizzle.vegvisr.org'
+
+async function executeListContacts(input, env) {
+  const { limit = 50, offset = 0, label } = input
+  const body = { tableId: CONTACTS_TABLE_ID, limit, offset, orderBy: 'name', order: 'asc' }
+  if (label) body.where = { labels: label }
+  const res = await fetch(`${DRIZZLE_BASE}/query`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  })
+  if (!res.ok) throw new Error(`list_contacts failed: ${res.status}`)
+  const data = await res.json()
+  return { contacts: data.records || data.rows || data, total: data.total }
+}
+
+async function executeSearchContacts(input, env) {
+  const { query, limit = 20 } = input
+  if (!query) throw new Error('query is required')
+  // Fetch a broad set and filter — drizzle /query only does equality filters
+  const res = await fetch(`${DRIZZLE_BASE}/query`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableId: CONTACTS_TABLE_ID, limit: 200, orderBy: 'name', order: 'asc' })
+  })
+  if (!res.ok) throw new Error(`search_contacts failed: ${res.status}`)
+  const data = await res.json()
+  const q = query.toLowerCase()
+  const all = data.records || data.rows || data
+  const filtered = all.filter(c =>
+    (c.name || '').toLowerCase().includes(q) ||
+    (c.company || '').toLowerCase().includes(q) ||
+    (c.email || '').toLowerCase().includes(q) ||
+    (c.phone || '').includes(q)
+  ).slice(0, limit)
+  return { contacts: filtered, query, count: filtered.length }
+}
+
+async function executeGetContactLogs(input, env) {
+  const { contactId, limit = 20 } = input
+  if (!contactId) throw new Error('contactId is required')
+  const res = await fetch(`${DRIZZLE_BASE}/query`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableId: CONTACT_LOG_TABLE_ID, where: { contact_id: contactId }, limit, orderBy: 'logged_at', order: 'desc' })
+  })
+  if (!res.ok) throw new Error(`get_contact_logs failed: ${res.status}`)
+  const data = await res.json()
+  return { logs: data.records || data.rows || data, contactId }
+}
+
+async function executeAddContactLog(input, env) {
+  const { contactId, contactName, contact_type, notes, logged_at } = input
+  if (!contactId || !contactName || !notes) throw new Error('contactId, contactName, and notes are required')
+  const record = {
+    contact_id: contactId,
+    contact_name: contactName,
+    contact_type: contact_type || 'Annet',
+    notes,
+    logged_at: logged_at || new Date().toISOString()
+  }
+  const res = await fetch(`${DRIZZLE_BASE}/insert`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableId: CONTACT_LOG_TABLE_ID, record })
+  })
+  if (!res.ok) throw new Error(`add_contact_log failed: ${res.status}`)
+  const data = await res.json()
+  return { success: true, logId: data._id || data.id, message: `Log entry added for ${contactName}` }
+}
+
+async function executeCreateContact(input, env) {
+  const { name, email, phone, company, job_title, tags, labels, notes } = input
+  if (!name) throw new Error('name is required')
+  const record = { name }
+  if (email) record.email = email
+  if (phone) record.phone = phone
+  if (company) record.company = company
+  if (job_title) record.job_title = job_title
+  if (tags) record.tags = tags
+  if (labels) record.labels = labels
+  if (notes) record.notes = notes
+  const res = await fetch(`${DRIZZLE_BASE}/insert`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tableId: CONTACTS_TABLE_ID, record })
+  })
+  if (!res.ok) throw new Error(`create_contact failed: ${res.status}`)
+  const data = await res.json()
+  return { success: true, contactId: data._id || data.id, name, message: `Contact "${name}" created` }
 }
 
 // ── AI content generation (multi-provider) ───────────────────────
@@ -4352,6 +4443,16 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGenerateWithAi(toolInput, env)
     case 'save_learning':
       return await executeSaveLearning(toolInput, env)
+    case 'list_contacts':
+      return await executeListContacts(toolInput, env)
+    case 'search_contacts':
+      return await executeSearchContacts(toolInput, env)
+    case 'get_contact_logs':
+      return await executeGetContactLogs(toolInput, env)
+    case 'add_contact_log':
+      return await executeAddContactLog(toolInput, env)
+    case 'create_contact':
+      return await executeCreateContact(toolInput, env)
     case 'get_app_table_schema':
       return await executeGetAppTableSchema(toolInput, env)
     case 'add_app_table_column':
@@ -4594,6 +4695,24 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
+      }
+    }
+    case 'delegate_to_contact': {
+      const result = await runContactSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        contactId: result.contactId,
+        turns: result.turns,
+        model: result.model,
+        inputTokens: result.inputTokens || 0,
+        outputTokens: result.outputTokens || 0,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Contact subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Contact subagent failed: ${result.error || 'Unknown error'}`,
       }
     }
     default:

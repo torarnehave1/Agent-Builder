@@ -1556,6 +1556,105 @@ const TOOL_DEFINITIONS = [
       required: ['task']
     }
   },
+  // -------------------------------------------------------------------------
+  // Contact Management
+  // -------------------------------------------------------------------------
+  {
+    name: 'delegate_to_contact',
+    description: 'Delegate contact management tasks to the Contact subagent. Use for: listing/searching contacts, viewing contact details, adding interaction logs (text or transcribed voice notes), creating or updating contacts. The subagent knows the exact table IDs and column names.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do: search contacts, get contact details, add a log entry, list recent interactions, create a contact, etc. Include all relevant details (contact name, note text, interaction type, etc.)'
+        },
+        contactId: {
+          type: 'string',
+          description: 'Optional: the _id of a specific contact to work with'
+        },
+        contactName: {
+          type: 'string',
+          description: 'Optional: name of the contact (used to look up the contactId if not known)'
+        }
+      },
+      required: ['task']
+    }
+  },
+  {
+    name: 'list_contacts',
+    description: 'List contacts from the contacts table. Supports filtering by label/tag and pagination.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max results (default 50)' },
+        offset: { type: 'number', description: 'Pagination offset' },
+        label: { type: 'string', description: 'Filter by label/tag value' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'search_contacts',
+    description: 'Search contacts by name, company, email, or phone. Returns matching contacts with their IDs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search string to match against name, company, email, phone' },
+        limit: { type: 'number', description: 'Max results (default 20)' }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'get_contact_logs',
+    description: 'Get interaction log entries for a specific contact. Returns all logged interactions ordered by most recent first.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The _id of the contact' },
+        limit: { type: 'number', description: 'Max log entries to return (default 20)' }
+      },
+      required: ['contactId']
+    }
+  },
+  {
+    name: 'add_contact_log',
+    description: 'Add an interaction log entry for a contact. Use after a meeting, call, or any interaction. Can include voice transcription text.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        contactId: { type: 'string', description: 'The _id of the contact' },
+        contactName: { type: 'string', description: 'Display name of the contact' },
+        contact_type: {
+          type: 'string',
+          enum: ['Møte', 'Telefon', 'E-post', 'Melding', 'Annet'],
+          description: 'Type of interaction'
+        },
+        notes: { type: 'string', description: 'Notes or transcribed voice content from the interaction' },
+        logged_at: { type: 'string', description: 'ISO datetime of the interaction (defaults to now if omitted)' }
+      },
+      required: ['contactId', 'contactName', 'contact_type', 'notes']
+    }
+  },
+  {
+    name: 'create_contact',
+    description: 'Create a new contact record.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Full name (required)' },
+        email: { type: 'string', description: 'Email address' },
+        phone: { type: 'string', description: 'Phone number' },
+        company: { type: 'string', description: 'Company/organisation name' },
+        job_title: { type: 'string', description: 'Job title / role' },
+        tags: { type: 'string', description: 'Comma-separated tags' },
+        labels: { type: 'string', description: 'Comma-separated labels (e.g. "Aktiv,Kunde")' },
+        notes: { type: 'string', description: 'General notes about the contact' }
+      },
+      required: ['name']
+    }
+  },
   {
     name: 'delegate_to_video',
     description: 'Delegate video and streaming tasks to the Video & Streaming subagent. Use this when the user asks to: upload/list/delete videos, create/manage live streams, create cloudflare-video or cloudflare-live nodes, get video playback URLs, set up RTMP streaming, or add video nodes to a graph. The subagent talks to the Cloudflare Stream API via videostream-worker and can create proper video/live node types in knowledge graphs.',
