@@ -4,8 +4,9 @@ import AgentChat from './AgentChat';
 import AgentSettings from './AgentSettings';
 import DataExplorer from './DataExplorer';
 import HtmlPreview from './HtmlPreview';
+import ModelSettings, { getStoredModel } from './ModelSettings';
 
-type View = 'chat' | 'data' | 'agents';
+type View = 'chat' | 'data' | 'agents' | 'settings';
 
 interface Props {
   userId: string;
@@ -23,6 +24,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
   const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
+  const [model, setModel] = useState(getStoredModel);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-slate-950 text-white">
@@ -31,7 +33,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className="text-base font-bold text-white">Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['chat', 'agents', 'data'] as const).map((tab) => (
+            {(['chat', 'agents', 'data', 'settings'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -42,7 +44,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                     : 'text-white/50 hover:text-white/80'
                 }`}
               >
-                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : 'Data'}
+                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : tab === 'data' ? 'Data' : 'Settings'}
               </button>
             ))}
           </nav>
@@ -73,6 +75,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               consoleErrors={consoleErrors}
               onConsoleErrorsHandled={() => setConsoleErrors(null)}
               onActiveHtmlNode={setActiveHtmlNodeId}
+              model={model}
             />
           </div>
           {previewHtml && (
@@ -99,6 +102,9 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         />
       )}
       {view === 'data' && <DataExplorer />}
+      {view === 'settings' && (
+        <ModelSettings model={model} onChange={setModel} />
+      )}
     </div>
   );
 }

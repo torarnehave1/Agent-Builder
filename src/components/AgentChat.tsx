@@ -42,6 +42,7 @@ interface Props {
   consoleErrors?: string[] | null;
   onConsoleErrorsHandled?: () => void;
   onActiveHtmlNode?: (nodeId: string | null) => void;
+  model?: string;
 }
 
 interface ToolCall {
@@ -330,7 +331,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode }: Props) {
+export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -1122,6 +1123,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           graphId: lastAgentGraphRef.current || graphId || undefined,
           agentId: agentId || undefined,
           activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
+          model: model || undefined,
         }),
         signal: abort.signal,
       });
