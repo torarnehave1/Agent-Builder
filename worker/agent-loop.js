@@ -141,6 +141,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
+          apiKey: env.ANTHROPIC_API_KEY || undefined,
           messages: cappedMessages,
           model,
           max_tokens: 16384,
@@ -199,6 +200,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               userId,
+              apiKey: env.ANTHROPIC_API_KEY || undefined,
               messages: [{
                 role: 'user',
                 content: `Based on this conversation context and the assistant's last response, suggest exactly 3 short follow-up prompts the user might want to ask next. Each should be a natural next step, question, or action. Return ONLY a JSON array of 3 strings, no explanation.\n\nRecent conversation:\n${recentContext}\n\nAssistant's response:\n${lastAssistantText.slice(0, 500)}`
@@ -456,6 +458,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: userId,
+        apiKey: env.ANTHROPIC_API_KEY || undefined,
         messages: messages,
         model: agentConfig.model || 'claude-haiku-4-5-20251001',
         max_tokens: agentConfig.max_tokens || 4096,
