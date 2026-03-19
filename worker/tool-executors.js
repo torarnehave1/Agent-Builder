@@ -20,25 +20,28 @@ import { runContactSubagent } from './contact-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
-async function executeCreateGraph(input, env) {
-  const existsRes = await env.KG_WORKER.fetch(
-    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
-  )
+// Valid UUID v4 pattern
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-  if (existsRes.ok) {
-    const existing = await existsRes.json()
-    if (existing && existing.nodes) {
-      return {
-        graphId: input.graphId,
-        version: existing.metadata?.version || 0,
-        alreadyExists: true,
-        nodeCount: existing.nodes.length,
-        edgeCount: existing.edges?.length || 0,
-        message: `Graph "${input.graphId}" already exists (${existing.nodes.length} nodes). You can add nodes to it directly.`,
-        viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
-      }
+async function executeCreateGraph(input, env) {
+  // Resolve email for createdBy — userId may be a UUID, we always want an email
+  let createdByEmail = input.userId || 'agent-worker'
+  if (createdByEmail && !createdByEmail.includes('@')) {
+    const profile = await resolveUserProfile(createdByEmail, env).catch(() => null)
+    if (profile?.email) {
+      createdByEmail = profile.email
+    } else {
+      // User not found in DB (non-existent UUID) — fall back to agent identity
+      // rather than leaving a bare UUID that renders as "Unknown" in the viewer
+      createdByEmail = 'agent@vegvisr.org'
     }
   }
+
+  // Always generate the graph ID server-side — never trust the LLM to invent one.
+  // The LLM often hallucinates known test UUIDs (e.g. a1b2c3d4-...). We ignore
+  // any LLM-supplied graphId and always generate a fresh one to prevent
+  // accidentally overwriting existing graphs.
+  const graphId = crypto.randomUUID()
 
   const graphData = {
     metadata: {
@@ -46,7 +49,7 @@ async function executeCreateGraph(input, env) {
       description: input.description || '',
       category: input.category || '',
       metaArea: input.metaArea || '',
-      createdBy: input.userId || 'agent-worker',
+      createdBy: createdByEmail,
       version: 0,
       userId: input.userId || 'agent-system',
       tags: input.tags || []
@@ -58,7 +61,7 @@ async function executeCreateGraph(input, env) {
   const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: input.graphId, graphData })
+    body: JSON.stringify({ id: graphId, graphData })
   })
 
   const data = await response.json()
@@ -66,10 +69,10 @@ async function executeCreateGraph(input, env) {
     throw new Error(data.error || `Failed to create graph (status: ${response.status})`)
   }
   return {
-    graphId: data.id || input.graphId,
+    graphId: data.id || graphId,
     version: data.newVersion || 1,
     message: `Graph "${input.title}" created successfully`,
-    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${input.graphId}`
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`
   }
 }
 
@@ -1840,59 +1843,84 @@ async function executeQueryDataNodes(input, env) {
 }
 
 // ── Contact Management ───────────────────────────────────────────
+// Table IDs are resolved dynamically per user via the Drizzle API.
+// We use env.DRIZZLE_WORKER service binding (same pattern as other tools in this file).
 
-const CONTACTS_TABLE_ID = '8daf6422-f738-4d24-aa52-7c23abf53d1b'
-const CONTACT_LOG_TABLE_ID = '96ff306a-45ad-4163-a3e3-362610d35106'
-const DRIZZLE_BASE = 'https://drizzle.vegvisr.org'
+async function drizzleFetch(env, path, body) {
+  // Always use service binding — no external HTTP
+  const res = await env.DRIZZLE_WORKER.fetch(`https://drizzle-worker${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) {
+    const err = await res.text().catch(() => '')
+    throw new Error(`Drizzle ${path} failed (${res.status}): ${err}`)
+  }
+  return res.json()
+}
+
+async function resolveContactTableIds(userId, env) {
+  if (!userId) throw new Error('userId required to resolve contact tables')
+  const res = await env.DRIZZLE_WORKER.fetch(
+    `https://drizzle-worker/tables?graphId=${encodeURIComponent(userId)}`
+  )
+  if (!res.ok) throw new Error(`Failed to list Drizzle tables for user (${res.status})`)
+  const data = await res.json()
+  const tables = data.tables || []
+  const contacts = tables.find(t => t.displayName === 'contacts')
+  const logs = tables.find(t => t.displayName === 'contact_logs')
+  if (!contacts) throw new Error(`No contacts table found for user ${userId}. Import contacts first.`)
+  return {
+    contactsTableId: contacts.id,
+    logsTableId: logs?.id || null
+  }
+}
 
 async function executeListContacts(input, env) {
-  const { limit = 50, offset = 0, label } = input
-  const body = { tableId: CONTACTS_TABLE_ID, limit, offset, orderBy: 'name', order: 'asc' }
+  const { limit = 50, offset = 0, label, userId } = input
+  const { contactsTableId } = await resolveContactTableIds(userId, env)
+  const body = { tableId: contactsTableId, limit, offset, orderBy: 'full_name', order: 'asc' }
   if (label) body.where = { labels: label }
-  const res = await fetch(`${DRIZZLE_BASE}/query`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-  })
-  if (!res.ok) throw new Error(`list_contacts failed: ${res.status}`)
-  const data = await res.json()
+  const data = await drizzleFetch(env, '/query', body)
   return { contacts: data.records || data.rows || data, total: data.total }
 }
 
 async function executeSearchContacts(input, env) {
-  const { query, limit = 20 } = input
+  const { query, limit = 20, userId } = input
   if (!query) throw new Error('query is required')
-  // Fetch a broad set and filter — drizzle /query only does equality filters
-  const res = await fetch(`${DRIZZLE_BASE}/query`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tableId: CONTACTS_TABLE_ID, limit: 200, orderBy: 'name', order: 'asc' })
+  const { contactsTableId } = await resolveContactTableIds(userId, env)
+  // Fetch broad set and filter client-side (Drizzle /query only supports equality where)
+  const data = await drizzleFetch(env, '/query', {
+    tableId: contactsTableId, limit: 1000, orderBy: 'full_name', order: 'asc'
   })
-  if (!res.ok) throw new Error(`search_contacts failed: ${res.status}`)
-  const data = await res.json()
   const q = query.toLowerCase()
   const all = data.records || data.rows || data
   const filtered = all.filter(c =>
-    (c.name || '').toLowerCase().includes(q) ||
-    (c.company || '').toLowerCase().includes(q) ||
-    (c.email || '').toLowerCase().includes(q) ||
-    (c.phone || '').includes(q)
+    (c.full_name || c.name || '').toLowerCase().includes(q) ||
+    (c.organization || '').toLowerCase().includes(q) ||
+    (c.emails || '').toLowerCase().includes(q) ||
+    (c.phones || '').includes(q)
   ).slice(0, limit)
   return { contacts: filtered, query, count: filtered.length }
 }
 
 async function executeGetContactLogs(input, env) {
-  const { contactId, limit = 20 } = input
+  const { contactId, limit = 20, userId } = input
   if (!contactId) throw new Error('contactId is required')
-  const res = await fetch(`${DRIZZLE_BASE}/query`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tableId: CONTACT_LOG_TABLE_ID, where: { contact_id: contactId }, limit, orderBy: 'logged_at', order: 'desc' })
+  const { logsTableId } = await resolveContactTableIds(userId, env)
+  if (!logsTableId) return { logs: [], contactId, message: 'No contact log table found' }
+  const data = await drizzleFetch(env, '/query', {
+    tableId: logsTableId, where: { contact_id: contactId }, limit, orderBy: 'logged_at', order: 'desc'
   })
-  if (!res.ok) throw new Error(`get_contact_logs failed: ${res.status}`)
-  const data = await res.json()
   return { logs: data.records || data.rows || data, contactId }
 }
 
 async function executeAddContactLog(input, env) {
-  const { contactId, contactName, contact_type, notes, logged_at } = input
+  const { contactId, contactName, contact_type, notes, logged_at, userId } = input
   if (!contactId || !contactName || !notes) throw new Error('contactId, contactName, and notes are required')
+  const { logsTableId } = await resolveContactTableIds(userId, env)
+  if (!logsTableId) throw new Error('No contact_logs table found for this user')
   const record = {
     contact_id: contactId,
     contact_name: contactName,
@@ -1900,32 +1928,22 @@ async function executeAddContactLog(input, env) {
     notes,
     logged_at: logged_at || new Date().toISOString()
   }
-  const res = await fetch(`${DRIZZLE_BASE}/insert`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tableId: CONTACT_LOG_TABLE_ID, record })
-  })
-  if (!res.ok) throw new Error(`add_contact_log failed: ${res.status}`)
-  const data = await res.json()
+  const data = await drizzleFetch(env, '/insert', { tableId: logsTableId, record })
   return { success: true, logId: data._id || data.id, message: `Log entry added for ${contactName}` }
 }
 
 async function executeCreateContact(input, env) {
-  const { name, email, phone, company, job_title, tags, labels, notes } = input
+  const { name, email, phone, company, job_title, tags, labels, notes, userId } = input
   if (!name) throw new Error('name is required')
-  const record = { name }
-  if (email) record.email = email
-  if (phone) record.phone = phone
-  if (company) record.company = company
-  if (job_title) record.job_title = job_title
-  if (tags) record.tags = tags
-  if (labels) record.labels = labels
+  const { contactsTableId } = await resolveContactTableIds(userId, env)
+  const record = { full_name: name }
+  if (email) record.emails = JSON.stringify([{ label: 'home', value: email }])
+  if (phone) record.phones = JSON.stringify([{ label: 'mobile', value: phone }])
+  if (company) record.organization = JSON.stringify({ name: company, title: job_title || '', department: '' })
+  if (tags) record.labels = JSON.stringify(tags.split(',').map(t => t.trim()).filter(Boolean))
+  if (labels) record.labels = JSON.stringify(labels.split(',').map(t => t.trim()).filter(Boolean))
   if (notes) record.notes = notes
-  const res = await fetch(`${DRIZZLE_BASE}/insert`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ tableId: CONTACTS_TABLE_ID, record })
-  })
-  if (!res.ok) throw new Error(`create_contact failed: ${res.status}`)
-  const data = await res.json()
+  const data = await drizzleFetch(env, '/insert', { tableId: contactsTableId, record })
   return { success: true, contactId: data._id || data.id, name, message: `Contact "${name}" created` }
 }
 
@@ -1936,6 +1954,30 @@ async function executeSaveLearning(input, env) {
   const rule = (input.rule || '').trim()
   const category = input.category || 'behavior'
   if (!label || !rule) throw new Error('label and rule are required')
+
+  // Deduplication: check if a system-learning node with this label or rule already exists.
+  // Normalize for comparison: lowercase, strip punctuation, collapse whitespace.
+  const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, ' ').trim()
+  const normLabel = normalize(label)
+  const normRule = normalize(rule)
+
+  const existingRes = await env.KG_WORKER.fetch(
+    'https://knowledge-graph-worker/getknowgraph?id=graph_system_prompt'
+  ).catch(() => null)
+  if (existingRes && existingRes.ok) {
+    const existingGraph = await existingRes.json().catch(() => null)
+    const nodes = existingGraph?.nodes || []
+    const duplicate = nodes.find(n => {
+      if (n.type !== 'system-learning') return false
+      if (normalize(n.label || '') === normLabel) return true
+      // Also match on rule content (stored as "LEARNED: <rule>")
+      const existingRule = normalize((n.info || '').replace(/^learned:\s*/i, ''))
+      return existingRule === normRule
+    })
+    if (duplicate) {
+      return { saved: false, nodeId: duplicate.id, label, message: `Learning already exists (nodeId: ${duplicate.id}). Skipped duplicate.` }
+    }
+  }
 
   const nodeId = 'learning-' + Date.now()
   const today = new Date().toISOString().split('T')[0]
@@ -3531,8 +3573,11 @@ async function executeGetSystemRegistry(input, env) {
 
 // ── Worker Management (Cloudflare API) ───────────────────────────
 
-const CF_ACCOUNT_ID = '5d9b2060ef095c777711a8649c24914e'
-const CF_API_BASE = `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers`
+// CF_ACCOUNT_ID comes from env — hardcoded value is last-resort fallback only
+function getCfApiBase(env) {
+  const accountId = env?.CF_ACCOUNT_ID || '5d9b2060ef095c777711a8649c24914e'
+  return `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers`
+}
 
 async function executeDeployWorker(input, env) {
   const token = env.CLOUDFLARE_API_TOKEN
@@ -3541,6 +3586,7 @@ async function executeDeployWorker(input, env) {
   const { workerName, code } = input
   if (!workerName || !code) return { error: 'workerName and code are required' }
 
+  const CF_API_BASE = getCfApiBase(env)
   const enableSubdomain = input.enableSubdomain !== false
   const compatDate = input.compatibilityDate || '2024-11-01'
   const registerInGraph = input.registerInGraph !== false
@@ -3621,6 +3667,7 @@ async function executeReadWorker(input, env) {
   const token = env.CLOUDFLARE_API_TOKEN
   if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
 
+  const CF_API_BASE = getCfApiBase(env)
   const { workerName } = input
 
   if (workerName) {
@@ -3664,6 +3711,7 @@ async function executeDeleteWorker(input, env) {
   const token = env.CLOUDFLARE_API_TOKEN
   if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
 
+  const CF_API_BASE = getCfApiBase(env)
   const { workerName } = input
   if (!workerName) return { error: 'workerName is required' }
 

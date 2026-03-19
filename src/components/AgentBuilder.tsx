@@ -3,11 +3,12 @@ import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
 import AgentSettings from './AgentSettings';
 import DataExplorer from './DataExplorer';
+import GraphPortfolioTab from './GraphPortfolioTab';
 import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel } from './ModelSettings';
 import UsageDashboard from './UsageDashboard';
 
-type View = 'chat' | 'data' | 'agents' | 'settings' | 'usage';
+type View = 'chat' | 'graphs' | 'data' | 'agents' | 'settings' | 'usage';
 
 interface Props {
   userId: string;
@@ -34,18 +35,30 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className="text-base font-bold text-white">Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['chat', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
+            {(['chat', 'graphs', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
                 onClick={() => setView(tab)}
-                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                className={`relative px-3 py-1 text-xs rounded-md transition-colors ${
                   view === tab
                     ? 'bg-white/10 text-white'
                     : 'text-white/50 hover:text-white/80'
                 }`}
               >
-                {tab === 'chat' ? 'Chat' : tab === 'agents' ? 'Agents' : tab === 'data' ? 'Data' : tab === 'usage' ? 'Usage' : 'Settings'}
+                {tab === 'chat' ? 'Chat'
+                  : tab === 'graphs' ? (
+                    <>
+                      Graphs
+                      {graphId && (
+                        <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-purple-400" title="Graph context active" />
+                      )}
+                    </>
+                  )
+                  : tab === 'agents' ? 'Agents'
+                  : tab === 'data' ? 'Data'
+                  : tab === 'usage' ? 'Usage'
+                  : 'Settings'}
               </button>
             ))}
           </nav>
@@ -92,6 +105,13 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
             </div>
           )}
         </div>
+      )}
+      {view === 'graphs' && (
+        <GraphPortfolioTab
+          graphId={graphId}
+          onGraphChange={setGraphId}
+          onNavigateToChat={() => setView('chat')}
+        />
       )}
       {view === 'agents' && (
         <AgentSettings

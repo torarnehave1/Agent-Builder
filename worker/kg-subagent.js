@@ -99,10 +99,17 @@ function getKgSubagentTools() {
 // Inner agent loop
 // ---------------------------------------------------------------------------
 
+const UUID_RE_KG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 async function runKgSubagent(input, env, onProgress, executeTool) {
   const { task, nodeId, userId } = input
-  // Mutable — tracks the active graphId (from input or from first create_graph)
-  let graphId = input.graphId || null
+  // Validate any caller-supplied graphId is a real UUID.
+  // Reject non-UUID strings (human-readable names, hallucinated IDs, empty).
+  const rawGraphId = input.graphId || null
+  let graphId = (rawGraphId && UUID_RE_KG.test(rawGraphId)) ? rawGraphId : null
+  if (rawGraphId && !graphId) {
+    console.log(`[kg-subagent] REJECTED non-UUID graphId="${rawGraphId}" — treating as new-graph task`)
+  }
   const maxTurns = 10
   const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
   let inputTokens = 0
@@ -110,6 +117,21 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
 
   const log = (msg) => console.log(`[kg-subagent] ${msg}`)
   const progress = typeof onProgress === 'function' ? onProgress : () => {}
+
+  // If a graphId was provided, verify the graph actually exists before proceeding.
+  // If it doesn't exist, treat as a new-graph task (prevents silent failures on create_node).
+  if (graphId) {
+    try {
+      const checkRes = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+      if (!checkRes.ok) {
+        log(`provided graphId=${graphId} not found in KG — treating as new-graph task`)
+        graphId = null
+      }
+    } catch (err) {
+      log(`graphId existence check failed (non-fatal): ${err.message}`)
+      // Keep graphId — network blip shouldn't reset it
+    }
+  }
 
   // Mystical progress messages
   const thinkingMessages = [
@@ -240,18 +262,20 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, {})
 
           const resultStr = JSON.stringify(result)
-          // Track graphId from create_graph so subsequent tools auto-inject it
+          // Track graphId from create_graph so subsequent tools auto-inject it.
+          // ALWAYS prefer result.graphId (server-assigned) over toolUse.input.graphId
+          // (LLM-supplied, may be hallucinated). The executor ignores LLM-supplied IDs.
           if (toolUse.name === 'create_graph' && !graphId) {
-            const createdId = toolUse.input.graphId || result.graphId
+            const createdId = result.graphId || toolUse.input.graphId
             if (createdId) {
               graphId = createdId
-              log(`tracked graphId=${graphId} from create_graph — will auto-inject into future tools`)
+              log(`tracked graphId=${graphId} from create_graph result — will auto-inject into future tools`)
             }
           }
           actions.push({
             tool: toolUse.name,
             success: true,
-            graphId: toolUse.input.graphId || result.graphId,
+            graphId: result.graphId || toolUse.input.graphId,
             nodeId: toolUse.input.nodeId || result.nodeId,
             summary: result.message || `${toolUse.name} ok`,
           })
