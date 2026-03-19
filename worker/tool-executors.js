@@ -4517,6 +4517,9 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         graphId: result.graphId,
         nodeId: result.nodeId,
         turns: result.turns,
+        model: result.model,
+        inputTokens: result.inputTokens || 0,
+        outputTokens: result.outputTokens || 0,
         actionsPerformed: (result.actions || []).map(a => ({
           tool: a.tool, success: a.success, summary: a.summary || a.error,
         })),

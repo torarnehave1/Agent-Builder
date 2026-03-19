@@ -284,6 +284,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const toolDuration = Date.now() - toolStart
             log(`${toolUse.name} OK (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
 
+            // Roll subagent tokens into parent session totals
+            if (result.inputTokens) stats.inputTokens += result.inputTokens
+            if (result.outputTokens) stats.outputTokens += result.outputTokens
+
             // Record tool call in session_tools
             if (env.STATS_DB) {
               const subagent = toolUse.name.startsWith('delegate_to_') ? toolUse.name.replace('delegate_to_', '') : null
