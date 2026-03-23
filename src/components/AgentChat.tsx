@@ -63,10 +63,18 @@ interface ImageAttachment {
   label?: string;
 }
 
+interface FileAttachment {
+  name: string;
+  mediaType: string;
+  data: string; // base64 for PDF, plain text for text files
+  size: number;
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   images?: ImageAttachment[];
+  files?: FileAttachment[];
   toolCalls?: ToolCall[];
 }
 
@@ -373,6 +381,10 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
   const [imageDragActive, setImageDragActive] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+
+  // File attachment state (PDF, text files)
+  const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Audio transcription state (same UX as GrokChatPanel)
   const [selectedAudioFile, setSelectedAudioFile] = useState<AudioFileInfo | null>(null);
@@ -1027,14 +1039,54 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     setPendingImages(prev => prev.filter((_, i) => i !== index));
   }, []);
 
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      const isPdf = file.type === 'application/pdf';
+      const isText = file.type === 'text/plain' || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv') || file.name.endsWith('.json') || file.name.endsWith('.xml') || file.name.endsWith('.html') || file.name.endsWith('.css') || file.name.endsWith('.js') || file.name.endsWith('.ts');
+      if (!isPdf && !isText) continue;
+
+      const reader = new FileReader();
+      if (isPdf) {
+        reader.onload = () => {
+          const base64 = (reader.result as string).split(',')[1];
+          setPendingFiles(prev => [...prev, {
+            name: file.name,
+            mediaType: 'application/pdf',
+            data: base64,
+            size: file.size,
+          }]);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        reader.onload = () => {
+          setPendingFiles(prev => [...prev, {
+            name: file.name,
+            mediaType: file.type || 'text/plain',
+            data: reader.result as string,
+            size: file.size,
+          }]);
+        };
+        reader.readAsText(file);
+      }
+    }
+    if (e.target) e.target.value = '';
+  }, []);
+
+  const removeFile = useCallback((index: number) => {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
   const sendMessage = useCallback(async (overrideText?: string) => {
     const text = (overrideText || input).trim();
     const images = pendingImages;
-    if ((!text && images.length === 0) || streaming) return;
+    const files = pendingFiles;
+    if ((!text && images.length === 0 && files.length === 0) || streaming) return;
 
     setInput('');
     setSuggestions([]);
     setPendingImages([]);
+    setPendingFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setStreaming(true);
 
@@ -1059,22 +1111,54 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
       } catch { /* continue without persistence */ }
     }
 
-    const userMsg: ChatMessage = { role: 'user', content: text || '(image attached)', images: images.length > 0 ? images : undefined };
+    const fileLabel = files.length > 0 ? `(${files.map(f => f.name).join(', ')} attached)` : '';
+    const contentLabel = text || (images.length > 0 ? '(image attached)' : fileLabel || '(file attached)');
+    const userMsg: ChatMessage = { role: 'user', content: contentLabel, images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined };
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
 
-    // Build multimodal content for the API when images are present
-    // All images are URL-based (pasted files are auto-uploaded to photos API)
+    // Build multimodal content for the API when images or files are present
     const apiMessages = updatedMessages.map(m => {
-      if (m.images && m.images.length > 0) {
-        const contentBlocks: unknown[] = m.images.map(img =>
-          ({ type: 'image', source: { type: 'url', url: img.url } })
-        );
-        const imageMeta = m.images.map((img, i) =>
+      const hasImages = m.images && m.images.length > 0;
+      const hasFiles = m.files && m.files.length > 0;
+      if (hasImages || hasFiles) {
+        const contentBlocks: unknown[] = [];
+
+        // Add image blocks
+        if (m.images) {
+          for (const img of m.images) {
+            contentBlocks.push({ type: 'image', source: { type: 'url', url: img.url } });
+          }
+        }
+
+        // Add file blocks (PDF as document, text inline)
+        if (m.files) {
+          for (const file of m.files) {
+            if (file.mediaType === 'application/pdf') {
+              contentBlocks.push({
+                type: 'document',
+                source: { type: 'base64', media_type: 'application/pdf', data: file.data },
+              });
+            } else {
+              // Text files: include content inline
+              contentBlocks.push({
+                type: 'text',
+                text: `--- File: ${file.name} ---\n${file.data}\n--- End of ${file.name} ---`,
+              });
+            }
+          }
+        }
+
+        // Add user text
+        const imageMeta = m.images ? m.images.map((img, i) =>
           `[Image ${i + 1}: ${img.url} — use this URL for graph nodes (type: markdown-image, path: "${img.url}")]`
-        ).join('\n');
-        const userText = m.content || 'What do you see in this image?';
-        contentBlocks.push({ type: 'text', text: `${imageMeta}\n\n${userText}` });
+        ).join('\n') : '';
+        const fileMeta = m.files ? m.files.map((f, i) =>
+          `[File ${i + 1}: ${f.name} (${(f.size / 1024).toFixed(1)} KB)]`
+        ).join('\n') : '';
+        const meta = [imageMeta, fileMeta].filter(Boolean).join('\n');
+        const userText = m.content || (hasImages ? 'What do you see in this image?' : 'Please analyze the attached file(s).');
+        contentBlocks.push({ type: 'text', text: meta ? `${meta}\n\n${userText}` : userText });
         return { role: m.role, content: contentBlocks };
       }
       return { role: m.role, content: m.content };
@@ -1856,6 +1940,30 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         </div>
       )}
 
+      {/* Pending file attachments */}
+      {pendingFiles.length > 0 && (
+        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+          <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
+            {pendingFiles.map((file, i) => (
+              <div key={i} className="relative group flex items-center gap-2 px-3 py-1.5 bg-white/[0.06] border border-white/10 rounded-lg">
+                <span className="text-lg">{file.mediaType === 'application/pdf' ? '\u{1F4D1}' : '\u{1F4C4}'}</span>
+                <div className="text-xs text-white/70">
+                  <div className="font-medium truncate max-w-[150px]">{file.name}</div>
+                  <div className="text-white/40">{(file.size / 1024).toFixed(1)} KB</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeFile(i)}
+                  className="w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Pending image thumbnails */}
       {pendingImages.length > 0 && (
         <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
@@ -1921,6 +2029,14 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           >
             &#x1F5BC;
           </button>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+            title="Attach PDF or text file"
+          >
+            &#x1F4CE;
+          </button>
           <div className="flex-1 min-w-0 relative">
             {/* Bot @mention dropdown */}
             {input.match(/^@\S*$/) && bots.length > 0 && (
@@ -1949,7 +2065,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                 if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
               }}
               onPaste={handleImagePaste}
-              placeholder={pendingImages.length > 0 ? 'Ask about the image(s)...' : bots.length > 0 ? 'Type your message or @bot...' : 'Type your message...'}
+              placeholder={pendingFiles.length > 0 ? 'Ask about the file(s)...' : pendingImages.length > 0 ? 'Ask about the image(s)...' : bots.length > 0 ? 'Type your message or @bot...' : 'Type your message...'}
               rows={1}
               className="w-full px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
             />
@@ -1966,7 +2082,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             <button
               type="button"
               onClick={() => sendMessage()}
-              disabled={!input.trim() && pendingImages.length === 0}
+              disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
               className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Send
@@ -1987,6 +2103,14 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           accept=".wav,.mp3,.m4a,.aac,.ogg,.opus,.mp4,.webm"
           disabled={audioProcessing}
           onChange={handleAudioFileSelect}
+          className="hidden"
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.ts"
+          multiple
+          onChange={handleFileSelect}
           className="hidden"
         />
       </div>
