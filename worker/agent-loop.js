@@ -96,6 +96,44 @@ function truncateResult(result) {
   return resultStr
 }
 
+function getTextContent(content) {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter((b) => b && b.type === 'text' && typeof b.text === 'string')
+      .map((b) => b.text)
+      .join('\n')
+  }
+  return ''
+}
+
+function isGraphWriteIntent(userText) {
+  const text = String(userText || '').toLowerCase()
+  if (!text) return false
+  const writeVerb = /(create|build|make|generate|add|write|compose|patch|update|modify)/
+  const graphTarget = /(graph|knowledge graph|node|nodes)/
+  return writeVerb.test(text) && graphTarget.test(text)
+}
+
+function hasGraphWriteCompletion(messages) {
+  for (const m of messages) {
+    if (!Array.isArray(m.content)) continue
+    for (const block of m.content) {
+      if (!block || block.type !== 'tool_result') continue
+      if (typeof block.content !== 'string') continue
+      try {
+        const parsed = JSON.parse(block.content)
+        if (parsed && (parsed.graphId || parsed.nodeId || parsed.viewUrl)) {
+          return true
+        }
+      } catch {
+        // ignore malformed tool payloads
+      }
+    }
+  }
+  return false
+}
+
 /**
  * Streaming agent loop — writes SSE events to a TransformStream writer
  */
@@ -105,6 +143,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   let turn = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
+  const originalUserRequest = getTextContent(messages[0]?.content)
+  const requiresGraphWrite = isGraphWriteIntent(originalUserRequest)
 
   // Stats accumulation — written to STATS_DB in finally block
   const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
@@ -146,7 +186,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
 
       // Self-check at every 3rd turn: inject a progress review instruction.
       // No extra API call — appended to the last user message so the next response includes reflection.
-      if (turn > 1 && turn % 3 === 0) {
+      if (turn > 1 && (turn % 3 === 0 || turn === 2)) {
         const last = cappedMessages[cappedMessages.length - 1]
         const selfCheck = `\n\n[SELF-CHECK turn ${turn}: Review your progress against the user's original request. Have you been repeating the same action without different results? If yes — stop and try a completely different approach. If the task is already done — end your turn and summarize. Do not use more turns than necessary.]`
         if (last && last.role === 'user') {
@@ -192,6 +232,17 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       }
 
       if (data.stop_reason === 'end_turn') {
+        // Guardrail: if user asked for graph creation/modification but no write was completed,
+        // force one continuation turn with a direct tool-routing reminder.
+        if (requiresGraphWrite && !hasGraphWriteCompletion(messages)) {
+          log('end_turn blocked: graph write requested but no graph-write completion detected; forcing continuation')
+          messages.push(
+            { role: 'assistant', content: data.content },
+            { role: 'user', content: 'You have not completed the requested graph write yet. Use delegate_to_kg now to perform the creation/update action before ending your turn.' }
+          )
+          continue
+        }
+
         const textBlocks = (data.content || []).filter(c => c.type === 'text')
         const textLen = textBlocks.reduce((sum, b) => sum + b.text.length, 0)
         log(`end_turn — ${textBlocks.length} text blocks (${textLen} chars)`)
@@ -466,6 +517,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
   }
 
   const messages = [{ role: 'user', content: taskWithContract }]
+  const requiresGraphWrite = isGraphWriteIntent(taskWithContract)
 
   const { allTools, operationMap } = await loadAllTools(env)
 
@@ -510,6 +562,20 @@ async function executeAgent(agentConfig, userTask, userId, env) {
     }
 
     if (data.stop_reason === 'end_turn') {
+      if (requiresGraphWrite && !hasGraphWriteCompletion(messages)) {
+        executionLog.push({
+          turn,
+          type: 'forced_continuation',
+          reason: 'Graph-write request not completed before end_turn',
+          timestamp: new Date().toISOString(),
+        })
+        messages.push(
+          { role: 'assistant', content: data.content },
+          { role: 'user', content: 'You have not completed the requested graph write yet. Use delegate_to_kg now before ending your turn.' }
+        )
+        continue
+      }
+
       const serverSearches = data.content.filter(c => c.type === 'server_tool_use')
       for (const search of serverSearches) {
         executionLog.push({

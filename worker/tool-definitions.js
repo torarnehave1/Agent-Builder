@@ -420,6 +420,24 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'fetch_url',
+    description: 'Fetch a public URL directly and return cleaned text plus metadata. Use this when the user provides a specific URL and asks for analysis or extraction. Prefer this over search tools when the exact page URL is known.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'Public HTTPS URL to fetch'
+        },
+        maxChars: {
+          type: 'number',
+          description: 'Optional max number of text characters to return (default 12000, max 40000).'
+        }
+      },
+      required: ['url']
+    }
+  },
+  {
     name: 'search_pexels',
     description: 'Search Pexels for free stock photos. Returns image URLs, photographer credits, and dimensions. Use the returned URLs in image nodes or as header images in templates.',
     input_schema: {

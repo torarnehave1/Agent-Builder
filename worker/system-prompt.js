@@ -22,6 +22,7 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_contract**: Retrieve a contract for content generation
 - **web_search**: Quick web search (built-in, lightweight)
 - **perplexity_search**: Deep web search with Perplexity AI — returns detailed answers with citations. Models: sonar (fast), sonar-pro (thorough), sonar-reasoning (complex analysis).
+- **fetch_url**: Fetch a specific public URL directly and extract readable text. Use this first when the user gives an exact URL and asks for findings/analysis.
 - **search_pexels** / **search_unsplash**: Search for free stock photos. Use returned URLs in image nodes or as headerImage in templates.
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **analyze_image**: Analyze an image by URL — describe content, extract text (OCR), identify objects, answer questions. Works with imgix CDN URLs and any public image URL. Use this when the user asks about a specific image from an album or graph node.
@@ -98,7 +99,13 @@ The following are tool-specific usage hints that stay close to the tool definiti
 - **Audio transcription**: Use \`list_recordings\` to find recordings, then \`transcribe_audio\`. Use \`saveToGraph: true\` when the user wants transcription + graph — much faster than separate calls. Use \`language\` param for non-English (e.g. "no" for Norwegian).
 - **Transcription analysis**: Use \`analyze_transcription\` for "vurdering"/"analyse"/"rapport". Set \`conversationType\` to "1-1" or "group".
 - **Custom apps**: Create graph first, then \`delegate_to_html_builder\`. Include viewUrl as markdown link.
-- **Learning**: When the user corrects your behavior, call \`save_learning\` to persist the correction to \`graph_system_prompt\`. It will be loaded in all future conversations.`
+- **Learning**: When the user corrects your behavior, call \`save_learning\` to persist the correction to \`graph_system_prompt\`. It will be loaded in all future conversations.
+
+## Completion Guardrail
+Do not end early on actionable graph-write tasks.
+If the user asks to create or modify graph content, the turn is NOT complete until a write action is executed (usually via \`delegate_to_kg\`).
+Do not end your turn with planning text like "I will..." or "next I will..." when you can act now.`
+
 
 /**
  * Fulltext Formatting Elements reference — returned by get_formatting_reference tool

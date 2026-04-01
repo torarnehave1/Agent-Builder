@@ -809,6 +809,63 @@ async function executePerplexitySearch(input, env) {
   }
 }
 
+async function executeFetchUrl(input, env) {
+  const url = String(input.url || '').trim()
+  if (!url) throw new Error('url is required')
+  if (!/^https:\/\//i.test(url)) {
+    throw new Error('fetch_url only supports HTTPS URLs')
+  }
+
+  const res = await fetch(url, {
+    method: 'GET',
+    redirect: 'follow',
+    headers: {
+      'user-agent': 'VegvisrAgent/1.0 (+https://agent.vegvisr.org)',
+      'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+    },
+  })
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch URL (${res.status} ${res.statusText})`)
+  }
+
+  const contentType = (res.headers.get('content-type') || '').toLowerCase()
+  const maxChars = Math.min(Math.max(Number(input.maxChars || 12000), 1000), 40000)
+  const raw = await res.text()
+
+  let text = raw
+  if (contentType.includes('text/html') || /<html[\s>]/i.test(raw)) {
+    // Remove scripts/styles and collapse tags to readable text.
+    text = raw
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
+  const title = titleMatch ? titleMatch[1].replace(/\s+/g, ' ').trim() : null
+  const truncated = text.length > maxChars
+
+  return {
+    url,
+    finalUrl: res.url,
+    status: res.status,
+    contentType,
+    title,
+    text: truncated ? text.slice(0, maxChars) + '... [truncated]' : text,
+    textLength: text.length,
+    truncated,
+    message: `Fetched ${res.url} (${contentType || 'unknown content type'})`,
+  }
+}
+
 async function executeSearchPexels(input, env) {
   const query = input.query
   if (!query) throw new Error('query is required')
@@ -4445,6 +4502,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeTranslate(toolInput, env)
     case 'perplexity_search':
       return await executePerplexitySearch(toolInput, env)
+    case 'fetch_url':
+      return await executeFetchUrl(toolInput, env)
     case 'search_pexels':
       return await executeSearchPexels(toolInput, env)
     case 'search_unsplash':
