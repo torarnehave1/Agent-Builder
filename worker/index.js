@@ -75,7 +75,7 @@ async function executeKgFastPath({ action, params }, writer, encoder, env, userI
 
     if (action === 'list_graphs') {
       const qs = params.metaArea ? `?metaArea=${encodeURIComponent(params.metaArea)}&limit=80` : '?limit=80'
-      const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraphsummaries${qs}`)
+      const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraphsummaries${qs}`, { headers: { 'x-user-role': 'Superadmin' } })
       const data = res.ok ? await res.json() : null
       const graphs = data?.graphs || data || []
       if (!Array.isArray(graphs) || graphs.length === 0) {

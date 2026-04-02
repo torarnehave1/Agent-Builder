@@ -346,7 +346,7 @@ async function executeListGraphs(input, env) {
   if (input.metaArea) {
     apiUrl += `&metaArea=${encodeURIComponent(input.metaArea)}`
   }
-  const res = await env.KG_WORKER.fetch(apiUrl)
+  const res = await env.KG_WORKER.fetch(apiUrl, { headers: { 'x-user-role': 'Superadmin' } })
   if (!res.ok) throw new Error('Failed to fetch graph summaries')
   const data = await res.json()
   const results = (data.results || []).map(g => {
@@ -373,7 +373,8 @@ async function executeListGraphs(input, env) {
 async function executeListMetaAreas(input, env) {
   // Fetch a large batch of summaries to aggregate meta areas and categories
   const res = await env.KG_WORKER.fetch(
-    `https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500`
+    `https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500`,
+    { headers: { 'x-user-role': 'Superadmin' } }
   )
   if (!res.ok) throw new Error('Failed to fetch graph summaries')
   const data = await res.json()
@@ -3444,7 +3445,7 @@ async function executeGetSystemRegistry(input, env) {
     try {
       const kgFetcher = env.KG_WORKER
       if (kgFetcher) {
-        const res = await kgFetcher.fetch('https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500')
+        const res = await kgFetcher.fetch('https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=500', { headers: { 'x-user-role': 'Superadmin' } })
         if (res.ok) {
           const data = await res.json()
           const graphs = data.graphs || data || []

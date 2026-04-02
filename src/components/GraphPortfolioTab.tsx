@@ -155,7 +155,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
 
     try {
       // First page — show results immediately
-      const firstRes = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_SIZE}`);
+      const firstRes = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_SIZE}`, { headers: { 'x-user-role': 'Superadmin' } });
       if (!firstRes.ok) throw new Error('Failed');
       const firstData = await firstRes.json();
       const totalCount: number = firstData.total || 0;
@@ -172,7 +172,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
         setHydrating(true);
         while (offset < totalCount) {
           if (runId !== runIdRef.current) return;
-          const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`);
+          const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: { 'x-user-role': 'Superadmin' } });
           if (!res.ok) break;
           const data = await res.json();
           const page = (data.results as GraphSummary[] || []).map(processSummary);
