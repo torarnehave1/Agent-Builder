@@ -91,6 +91,8 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
   const [selectedCreator, setSelectedCreator] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
   const [toast, setToast] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const runIdRef = useRef(0);
@@ -217,8 +219,30 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [search, loadAllGraphs]);
 
-  const selectGraph = (g: GraphSummary) => {
-    onGraphChange(g.id);
+  const deleteGraph = async (id: string) => {
+    setDeleting(true);
+    try {
+      const res = await fetch(`${KG_API}/deleteknowgraph`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) throw new Error('Delete failed');
+      setGraphs(prev => prev.filter(g => g.id !== id));
+      setTotal(prev => prev - 1);
+      const title = graphs.find(g => g.id === id)?.metadata?.title || id;
+      setToast(`Deleted: ${title}`);
+      setTimeout(() => setToast(null), 2500);
+    } catch {
+      setToast('Delete failed — please try again');
+      setTimeout(() => setToast(null), 3000);
+    } finally {
+      setDeleting(false);
+      setConfirmDeleteId(null);
+    }
+  };
+
+  const selectGraph = (g: GraphSummary) => {    onGraphChange(g.id);
     const name = g.metadata?.title || g.title;
     setToast(`Context set: ${name}`);
     setTimeout(() => setToast(null), 2500);
@@ -378,18 +402,18 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                 const createdBy = g.metadata?.createdBy;
                 const updatedAt = g.metadata?.updatedAt || g.updatedAt;
                 return (
-                  <button
-                    type="button"
-                    key={g.id}
-                    onClick={() => selectGraph(g)}
-                    className={`
-                      group text-left rounded-xl border p-3 flex flex-col gap-2 transition-all
-                      ${isActive
-                        ? 'border-purple-500 bg-purple-600/10 shadow-[0_0_0_1px_rgb(168_85_247/0.3)]'
-                        : 'border-white/8 bg-white/3 hover:border-white/20 hover:bg-white/6'
-                      }
-                    `}
-                  >
+                  <div key={g.id} className="relative group">
+                    <button
+                      type="button"
+                      onClick={() => selectGraph(g)}
+                      className={`
+                        w-full text-left rounded-xl border p-3 flex flex-col gap-2 transition-all
+                        ${isActive
+                          ? 'border-purple-500 bg-purple-600/10 shadow-[0_0_0_1px_rgb(168_85_247/0.3)]'
+                          : 'border-white/8 bg-white/3 hover:border-white/20 hover:bg-white/6'
+                        }
+                      `}
+                    >
                     {/* Image or placeholder */}
                     {g.portfolioImagePath ? (
                       <div className="w-full h-[80px] rounded-lg overflow-hidden bg-slate-800 flex-shrink-0">
@@ -447,7 +471,46 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                         Active context
                       </div>
                     )}
-                  </button>
+                    </button>
+
+                    {/* Delete button — appears on hover */}
+                    {confirmDeleteId !== g.id && (
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); setConfirmDeleteId(g.id); }}
+                        title="Delete graph"
+                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md bg-black/40 hover:bg-red-600/80 text-white/50 hover:text-white"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    )}
+
+                    {/* Confirm delete overlay */}
+                    {confirmDeleteId === g.id && (
+                      <div className="absolute inset-0 rounded-xl bg-black/80 flex flex-col items-center justify-center gap-3 z-10 p-3">
+                        <p className="text-xs text-white/80 text-center leading-snug">Delete <span className="text-white font-medium">{title}</span>?</p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={e => { e.stopPropagation(); setConfirmDeleteId(null); }}
+                            className="px-3 py-1 text-xs rounded-lg bg-white/10 text-white/70 hover:bg-white/20"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deleting}
+                            onClick={e => { e.stopPropagation(); deleteGraph(g.id); }}
+                            className="px-3 py-1 text-xs rounded-lg bg-red-600 text-white hover:bg-red-500 disabled:opacity-50"
+                          >
+                            {deleting ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
