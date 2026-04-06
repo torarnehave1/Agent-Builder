@@ -437,11 +437,28 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
   // Load graph list
   useEffect(() => {
-    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=50`)
+    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=200`)
       .then(r => r.json())
       .then(data => { if (data.results) setGraphs(data.results); })
       .catch(() => {});
   }, []);
+
+  // If the selected graph is not in the fetched list (e.g. user has >200 graphs),
+  // fetch its metadata so the dropdown and banner can display its title.
+  useEffect(() => {
+    if (!graphId) return;
+    setGraphs(prev => {
+      if (prev.some(g => g.id === graphId)) return prev;
+      fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+        .then(r => r.json())
+        .then(data => {
+          const title = (data.metadata?.title as string) || graphId;
+          setGraphs(p => p.some(g => g.id === graphId) ? p : [...p, { id: graphId, metadata_title: title }]);
+        })
+        .catch(() => {});
+      return prev;
+    });
+  }, [graphId]);
 
   // Load agent chat sessions
   useEffect(() => {
@@ -1722,6 +1739,25 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
           <pre className="whitespace-pre-wrap break-all text-white/50 font-mono text-xs m-0">
             {buildLog()}
           </pre>
+        </div>
+      )}
+
+      {/* Active graph context banner */}
+      {graphId && (
+        <div className="flex items-center gap-2 px-4 py-1.5 bg-purple-600/10 border-b border-purple-500/20 text-purple-300 text-xs flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0 animate-pulse" />
+          <span className="font-medium text-purple-200">Active context:</span>
+          <span className="truncate text-purple-300/90">
+            {graphs.find(g => g.id === graphId)?.metadata_title || graphId}
+          </span>
+          <button
+            type="button"
+            onClick={() => onGraphChange('')}
+            className="ml-auto text-purple-400/40 hover:text-purple-300 transition-colors flex-shrink-0 leading-none"
+            title="Clear graph context"
+          >
+            ✕
+          </button>
         </div>
       )}
 

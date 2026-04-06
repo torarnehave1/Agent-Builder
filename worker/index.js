@@ -374,19 +374,26 @@ export default {
           }
         }
 
-        // Only inject HTML node context — never inject graphId as a KG target.
-        // The LLM must decide which graph to use/create based on the user's request.
+        // Inject current graph context from the UI.
+        // This is not a forced KG target, but it gives the agent a stable reference when
+        // the user says "this graph", "the current graph", or asks what is in context now.
+        if (graphId) {
+          systemPrompt += `\n\n## Current Graph Context\nThe currently selected graph in the UI is "${graphId}". When the user refers to this graph/current graph/context, they mean this graph. Before creating a new graph on a related topic, check whether this selected graph or another existing graph already contains the relevant work.`
+        }
+
+        // Only inject HTML node context as a concrete editing target.
         if (activeHtmlNodeId) {
           systemPrompt += `\n\n## Active HTML App\nThe active HTML node is "${activeHtmlNodeId}" in graph "${graphId}". Use this nodeId when reading or editing the HTML app — do NOT guess node IDs.`
         }
 
         const chatMessages = userMessages.map(m => ({ role: m.role, content: m.content }))
 
-        // Inject active HTML context into last user message so the model doesn't miss it
-        if (activeHtmlNodeId && chatMessages.length > 0) {
+        // Inject current UI context into the last user message so the model doesn't miss it.
+        if (graphId && chatMessages.length > 0) {
           const last = chatMessages[chatMessages.length - 1]
-          if (last.role === 'user' && typeof last.content === 'string' && !last.content.includes(activeHtmlNodeId)) {
-            last.content += `\n\n[Context: graphId="${graphId}", nodeId="${activeHtmlNodeId}"]`
+          if (last.role === 'user' && typeof last.content === 'string' && !last.content.includes(graphId)) {
+            const htmlContext = activeHtmlNodeId ? `, activeHtmlNodeId="${activeHtmlNodeId}"` : ''
+            last.content += `\n\n[Current UI context: graphId="${graphId}"${htmlContext}]`
           }
         }
 

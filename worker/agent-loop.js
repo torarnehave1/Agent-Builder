@@ -107,6 +107,15 @@ function getTextContent(content) {
   return ''
 }
 
+function getLatestUserText(messages) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (messages[index]?.role === 'user') {
+      return getTextContent(messages[index].content)
+    }
+  }
+  return ''
+}
+
 function isGraphWriteIntent(userText) {
   const text = String(userText || '').toLowerCase()
   if (!text) return false
@@ -115,7 +124,8 @@ function isGraphWriteIntent(userText) {
   return writeVerb.test(text) && graphTarget.test(text)
 }
 
-function hasGraphWriteCompletion(messages) {
+function countGraphWriteCompletions(messages) {
+  let count = 0
   for (const m of messages) {
     if (!Array.isArray(m.content)) continue
     for (const block of m.content) {
@@ -124,14 +134,14 @@ function hasGraphWriteCompletion(messages) {
       try {
         const parsed = JSON.parse(block.content)
         if (parsed && (parsed.graphId || parsed.nodeId || parsed.viewUrl)) {
-          return true
+          count++
         }
       } catch {
         // ignore malformed tool payloads
       }
     }
   }
-  return false
+  return count
 }
 
 /**
@@ -143,8 +153,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   let turn = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
-  const originalUserRequest = getTextContent(messages[0]?.content)
-  const requiresGraphWrite = isGraphWriteIntent(originalUserRequest)
+  const latestUserRequest = getLatestUserText(messages)
+  const requiresGraphWrite = isGraphWriteIntent(latestUserRequest)
+  const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
 
   // Stats accumulation — written to STATS_DB in finally block
   const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
@@ -188,7 +199,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       // No extra API call — appended to the last user message so the next response includes reflection.
       if (turn > 1 && (turn % 3 === 0 || turn === 2)) {
         const last = cappedMessages[cappedMessages.length - 1]
-        const selfCheck = `\n\n[SELF-CHECK turn ${turn}: Review your progress against the user's original request. Have you been repeating the same action without different results? If yes — stop and try a completely different approach. If the task is already done — end your turn and summarize. Do not use more turns than necessary.]`
+        const selfCheck = `\n\n[SELF-CHECK turn ${turn}: Review progress against the user's latest unresolved request: "${latestUserRequest.slice(0, 300)}". If you are repeating the same failed pattern, switch approach now. Do not drift back to older questions from earlier in the conversation. Do not narrate internal process like "I have not done anything yet" or "now I will" unless you are blocked. If the task is done, summarize only the completed result.]`
         if (last && last.role === 'user') {
           if (typeof last.content === 'string') {
             cappedMessages[cappedMessages.length - 1] = { ...last, content: last.content + selfCheck }
@@ -234,7 +245,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       if (data.stop_reason === 'end_turn') {
         // Guardrail: if user asked for graph creation/modification but no write was completed,
         // force one continuation turn with a direct tool-routing reminder.
-        if (requiresGraphWrite && !hasGraphWriteCompletion(messages)) {
+        if (requiresGraphWrite && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
           log('end_turn blocked: graph write requested but no graph-write completion detected; forcing continuation')
           messages.push(
             { role: 'assistant', content: data.content },
