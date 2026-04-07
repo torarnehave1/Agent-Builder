@@ -4679,6 +4679,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAddUserSuggestion(toolInput, env)
     case 'update_suggestion_status':
       return await executeUpdateSuggestionStatus(toolInput, env)
+    case 'reorder_nodes':
+      return await executeReorderNodes(toolInput, env)
     case 'calendar_get_settings':
       return await executeCalendarGetSettings(toolInput, env)
     case 'calendar_check_availability':
@@ -4828,6 +4830,49 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
       }
       throw new Error(`Unknown tool: ${toolName}`)
+  }
+}
+
+async function executeReorderNodes(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  if (!res.ok) {
+    const err = await res.text()
+    throw new Error(`Failed to fetch graph: ${err}`)
+  }
+  const graphData = await res.json()
+  if (graphData.error) {
+    throw new Error(graphData.error || 'Graph not found')
+  }
+
+  const nodeMap = {}
+  for (const n of graphData.nodes) nodeMap[n.id] = n
+
+  // Build reordered list: requested IDs first, then any remaining in original order
+  const seen = new Set(input.nodeOrder)
+  const reordered = input.nodeOrder
+    .filter(id => nodeMap[id]) // only include IDs that actually exist
+    .map(id => nodeMap[id])
+  for (const n of graphData.nodes) {
+    if (!seen.has(n.id)) reordered.push(n)
+  }
+
+  const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: input.graphId, graphData: { ...graphData, nodes: reordered }, override: true })
+  })
+  const saveData = await saveRes.json()
+  if (!saveRes.ok) {
+    throw new Error(saveData.error || `Failed to save (status: ${saveRes.status})`)
+  }
+  return {
+    graphId: input.graphId,
+    version: saveData.newVersion,
+    nodeCount: reordered.length,
+    order: reordered.map(n => n.id),
+    message: `Nodes reordered successfully (${reordered.length} nodes, version ${saveData.newVersion})`
   }
 }
 

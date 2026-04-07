@@ -1694,6 +1694,25 @@ const TOOL_DEFINITIONS = [
       },
       required: ['task']
     }
+  },
+  {
+    name: 'reorder_nodes',
+    description: 'Reorder the nodes in a knowledge graph to a specific sequence. Fetches the full graph, reorders the nodes array to match the provided list of node IDs, and saves it back. Use this when the user asks to reorganise, reorder, or sort nodes. You MUST read_graph first to get the exact node IDs.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The ID of the graph whose nodes you want to reorder'
+        },
+        nodeOrder: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Ordered list of node IDs. Nodes will appear in this sequence. Any node IDs not listed will be appended at the end in their original order.'
+        }
+      },
+      required: ['graphId', 'nodeOrder']
+    }
   }
 ]
 

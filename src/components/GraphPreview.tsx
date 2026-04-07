@@ -66,8 +66,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
       .finally(() => setLoading(false))
   }, [graphId, title])
 
-  const SKIP_TYPES = new Set(['css-node', 'html-node', 'system-rule', 'system-routing', 'system-learning'])
-  const renderNodes = nodes.filter(n => !SKIP_TYPES.has(n.type))
+  const renderNodes = nodes
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
