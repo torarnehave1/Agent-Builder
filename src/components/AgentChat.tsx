@@ -208,6 +208,7 @@ interface GraphMeta {
   title: string;
   description: string;
   category: string;
+  metaArea?: string;
   nodeCount: number;
   nodeTypes: string[];
 }
@@ -227,6 +228,7 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
           title: data.metadata?.title || title,
           description: data.metadata?.description || '',
           category: data.metadata?.category || '',
+          metaArea: data.metadata?.metaArea || '',
           nodeCount: nodes.length,
           nodeTypes: types,
         });
@@ -246,6 +248,9 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
               <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
             )}
             <div className="flex flex-wrap gap-1.5 mt-2">
+              {meta?.metaArea && (
+                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold">#{meta.metaArea}</span>
+              )}
               {categoryTags.map(tag => (
                 <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
               ))}
