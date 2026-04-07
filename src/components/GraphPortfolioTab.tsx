@@ -30,6 +30,7 @@ interface Props {
   graphId: string;
   onGraphChange: (id: string) => void;
   onNavigateToChat: () => void;
+  onGraphSelected?: (id: string, title: string) => void;
 }
 
 function timeAgo(iso: string | null | undefined): string {
@@ -242,11 +243,16 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
     }
   };
 
-  const selectGraph = (g: GraphSummary) => {    onGraphChange(g.id);
+  const selectGraph = (g: GraphSummary) => {
+    onGraphChange(g.id);
     const name = g.metadata?.title || g.title;
     setToast(`Context set: ${name}`);
     setTimeout(() => setToast(null), 2500);
-    setTimeout(() => onNavigateToChat(), 800);
+    if (onGraphSelected) {
+      onGraphSelected(g.id, name);
+    } else {
+      setTimeout(() => onNavigateToChat(), 800);
+    }
   };
 
   return (

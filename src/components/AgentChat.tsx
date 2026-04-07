@@ -43,6 +43,8 @@ interface Props {
   onConsoleErrorsHandled?: () => void;
   onActiveHtmlNode?: (nodeId: string | null) => void;
   model?: string;
+  pendingGraphContext?: { id: string; title: string } | null;
+  onPendingGraphContextProcessed?: () => void;
 }
 
 interface ToolCall {
@@ -339,7 +341,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model }: Props) {
+export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -375,6 +377,9 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
   // Agent avatar state (from props or SSE agent_info event)
   const [agentAvatar, setAgentAvatar] = useState<string | null>(agentAvatarUrl || null);
+
+  // Display graph context from portfolio selection
+  const [displayGraphContext, setDisplayGraphContext] = useState<{ id: string; title: string } | null>(null);
 
   // Image attachment state
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -434,6 +439,17 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
     setTimeout(() => sendMessage(errorMsg), 100);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [consoleErrors, streaming]);
+
+  // Handle pending graph context from portfolio selection
+  useEffect(() => {
+    if (!pendingGraphContext) return;
+    // Display graph link as a visual reference (doesn't count toward message tokens)
+    setDisplayGraphContext(pendingGraphContext);
+    setTimeout(() => {
+      textareaRef.current?.focus();
+      onPendingGraphContextProcessed?.();
+    }, 100);
+  }, [pendingGraphContext, onPendingGraphContextProcessed]);
 
   // Load graph list
   useEffect(() => {
@@ -2047,6 +2063,30 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
         {imageDragActive && (
           <div className="text-center text-sky-300 text-sm py-1 mb-2">Drop images here</div>
         )}
+
+        {/* Graph context badge */}
+        {displayGraphContext && (
+          <div className="mb-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-400/20 max-w-[900px] mx-auto">
+            <span className="text-xs text-purple-300 font-medium">📊 Graph context:</span>
+            <a
+              href={`https://www.vegvisr.org/gnew-viewer?graphId=${displayGraphContext.id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-purple-400 hover:text-purple-300 underline flex-1 truncate"
+            >
+              {displayGraphContext.title}
+            </a>
+            <button
+              type="button"
+              onClick={() => setDisplayGraphContext(null)}
+              className="text-purple-300 hover:text-purple-200 transition-colors text-xs"
+              title="Clear graph context"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           <button
             type="button"

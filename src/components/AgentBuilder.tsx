@@ -19,6 +19,11 @@ interface Props {
   onLogout: () => void;
 }
 
+interface PendingGraphContext {
+  id: string;
+  title: string;
+}
+
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout }: Props) {
   const [graphId, setGraphId] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -27,6 +32,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
   const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
   const [model, setModel] = useState(getStoredModel);
+  const [pendingGraphContext, setPendingGraphContext] = useState<PendingGraphContext | null>(null);
 
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-slate-950 text-white">
@@ -90,6 +96,8 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               onConsoleErrorsHandled={() => setConsoleErrors(null)}
               onActiveHtmlNode={setActiveHtmlNodeId}
               model={model}
+              pendingGraphContext={pendingGraphContext}
+              onPendingGraphContextProcessed={() => setPendingGraphContext(null)}
             />
           </div>
           {previewHtml && (
@@ -111,6 +119,10 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           graphId={graphId}
           onGraphChange={setGraphId}
           onNavigateToChat={() => setView('chat')}
+          onGraphSelected={(id: string, title: string) => {
+            setPendingGraphContext({ id, title });
+            setTimeout(() => setView('chat'), 100);
+          }}
         />
       )}
       {view === 'agents' && (
