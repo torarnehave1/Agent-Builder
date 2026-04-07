@@ -320,10 +320,26 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   log(`max turns reached (${maxTurns}) | tokens in=${inputTokens} out=${outputTokens}`)
   const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
   const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
+
+  // Build summary with metadata for formatting in chat
+  const summaryParts = [`KG subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`]
+  if (verification.valid && verification.title) {
+    summaryParts.push(`Graph: "${verification.title}"`)
+  }
+  if (verification.valid && verification.metaArea) {
+    summaryParts.push(`Meta Area: **${verification.metaArea}**`)
+  }
+  if (verification.valid && verification.nodeTypes?.length > 0) {
+    summaryParts.push(`Node Types: ${verification.nodeTypes.join(', ')}`)
+  }
+  if (verification.valid && verification.nodeCount) {
+    summaryParts.push(`${verification.nodeCount} nodes`)
+  }
+
   return {
     success: verification.valid,
     summary: verification.valid
-      ? `KG subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`
+      ? summaryParts.join(' | ')
       : `Graph ${resolvedGraphId} was created but has 0 nodes after ${turn} turns. Task incomplete.`,
     turns: turn,
     actions,
@@ -333,12 +349,20 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     inputTokens,
     outputTokens,
     maxTurnsReached: true,
-    ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
+    // Include metadata for agent response formatting
+    ...(verification.valid ? {
+      title: verification.title,
+      description: verification.description,
+      metaArea: verification.metaArea,
+      nodeTypes: verification.nodeTypes,
+      nodeCount: verification.nodeCount,
+    } : { error: 'Graph created with 0 nodes' }),
   }
 }
 
 /**
  * Verify a graph exists and has at least 1 node.
+ * Also extract metadata (title, metaArea, description, nodeTypes) for response formatting.
  * If no graphId (read-only or no-graph task), treat as valid.
  */
 async function verifyGraphHasNodes(graphId, env, log) {
@@ -347,10 +371,28 @@ async function verifyGraphHasNodes(graphId, env, log) {
     const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
     if (!res.ok) return { valid: true } // can't verify — don't block
     const data = await res.json()
-    const nodeCount = (data.nodes || []).length
-    log(`verify graph ${graphId}: ${nodeCount} nodes`)
+    const nodes = data.nodes || []
+    const nodeCount = nodes.length
+
+    // Extract metadata and node types for response formatting
+    const metadata = data.metadata || {}
+    const nodeTypes = [...new Set(nodes.map(n => n.type).filter(Boolean))].sort()
+    const title = metadata.title || 'Untitled Graph'
+    const description = metadata.description || ''
+    const metaArea = metadata.metaArea || ''
+
+    log(`verify graph ${graphId}: ${nodeCount} nodes, metaArea=${metaArea || 'none'}, types=[${nodeTypes.join(',')}]`)
+
     if (nodeCount === 0) return { valid: false, nodeCount: 0 }
-    return { valid: true, nodeCount }
+    return {
+      valid: true,
+      nodeCount,
+      title,
+      description,
+      metaArea,
+      nodeTypes,
+      graphId
+    }
   } catch (err) {
     log(`verify graph failed (non-fatal): ${err.message}`)
     return { valid: true } // network error — don't block

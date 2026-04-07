@@ -30,7 +30,7 @@ interface Props {
   graphId: string;
   onGraphChange: (id: string) => void;
   onNavigateToChat: () => void;
-  onGraphSelected?: (id: string, title: string) => void;
+  onGraphSelected?: ((id: string, title: string) => void) | undefined;
 }
 
 function timeAgo(iso: string | null | undefined): string {
@@ -82,7 +82,7 @@ function processSummary(raw: GraphSummary): GraphSummary {
   };
 }
 
-export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateToChat }: Props) {
+export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateToChat, onGraphSelected }: Props) {
   const [graphs, setGraphs] = useState<GraphSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);

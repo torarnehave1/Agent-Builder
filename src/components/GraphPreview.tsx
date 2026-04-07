@@ -109,7 +109,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
 function processFancyBlocks(content: string): string {
   if (!content) return content
   const fancyRegex = /\[FANCY\s*\|\s*([^\]]*)\]\n?([\s\S]*?)\n?\[END FANCY\]/g
-  return content.replace(fancyRegex, (match, styles, innerContent) => {
+  return content.replace(fancyRegex, (_match: string, styles: string, innerContent: string) => {
     const cleanStyles = styles.trim()
     const htmlContent = innerContent.trim().replace(/\n/g, '<br/>')
     return `<div style="${cleanStyles}" class="fancy-block">${htmlContent}</div>`
@@ -143,7 +143,7 @@ function NodeBlock({ node }: { node: KgNode }) {
             prose-hr:border-white/10
             prose-table:text-gray-300 prose-th:text-white prose-th:border-white/20 prose-td:border-white/10
           ">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} allowDangerousHtml={true}>{processedInfo}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{processedInfo}</ReactMarkdown>
           </div>
         ) : (
           <p className="text-xs text-gray-600 italic">No content</p>
