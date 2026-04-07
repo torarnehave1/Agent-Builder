@@ -105,12 +105,24 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
   )
 }
 
+// Process [FANCY] blocks: [FANCY | css_styles]content[END FANCY]
+function processFancyBlocks(content: string): string {
+  if (!content) return content
+  const fancyRegex = /\[FANCY\s*\|\s*([^\]]*)\]\n?([\s\S]*?)\n?\[END FANCY\]/g
+  return content.replace(fancyRegex, (match, styles, innerContent) => {
+    const cleanStyles = styles.trim()
+    const htmlContent = innerContent.trim().replace(/\n/g, '<br/>')
+    return `<div style="${cleanStyles}" class="fancy-block">${htmlContent}</div>`
+  })
+}
+
 function NodeBlock({ node }: { node: KgNode }) {
   const type = node.type || 'unknown'
   const label = node.label?.startsWith('#') ? node.label.slice(1).trim() : node.label
 
   // ── Fulltext / notes / worknote — rendered markdown ──────────────────────
   if (['fulltext', 'info', 'notes', 'worknote', 'text'].includes(type)) {
+    const processedInfo = processFancyBlocks(node.info || '')
     return (
       <div className="border-b border-white/5 pb-6 last:border-0 last:pb-0">
         {label && <h3 className="text-base font-semibold text-white mb-3">{label}</h3>}
@@ -131,7 +143,7 @@ function NodeBlock({ node }: { node: KgNode }) {
             prose-hr:border-white/10
             prose-table:text-gray-300 prose-th:text-white prose-th:border-white/20 prose-td:border-white/10
           ">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.info}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm]} allowDangerousHtml={true}>{processedInfo}</ReactMarkdown>
           </div>
         ) : (
           <p className="text-xs text-gray-600 italic">No content</p>
