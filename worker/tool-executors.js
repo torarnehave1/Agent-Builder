@@ -4436,7 +4436,8 @@ async function executeCalendarGetStatus(input, env) {
 // ── Bot tools (used by chatbot subagent) ──────────────────────────
 
 async function executeSearchKnowledge(input, env) {
-  const query = (input.query || '').trim()
+  // Accept both 'query' (from search_knowledge) and 'q' (from search_graphs)
+  const query = (input.query || input.q || '').trim()
   if (!query) throw new Error('query is required')
   const params = new URLSearchParams({ q: query })
   if (input.nodeType) params.set('nodeType', input.nodeType)
