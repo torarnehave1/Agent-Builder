@@ -403,7 +403,7 @@ const TOOL_DEFINITIONS = [
       properties: {
         q: {
           type: 'string',
-          description: 'Search text to find (e.g., "Per Stilling", "Areopagos", "revenue")'
+          description: 'Search text to find. Supports * wildcard for unknown middle words (e.g., "Per * Stilling" matches "Per Egenæss Stilling"). Examples: "Areopagos", "revenue", "Per * Stilling".'
         },
         nodeType: {
           type: 'string',
