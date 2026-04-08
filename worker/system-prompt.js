@@ -22,6 +22,12 @@ You help users manage knowledge graphs, create and modify HTML apps, and build c
 - **get_contract**: Retrieve a contract for content generation
 - **web_search**: Quick web search (built-in, lightweight)
 - **perplexity_search**: Deep web search with Perplexity AI — returns detailed answers with citations. Models: sonar (fast), sonar-pro (thorough), sonar-reasoning (complex analysis).
+- **proff_search_companies**: Search for Norwegian companies in Brønnøysundregistrene. Returns company name, org number, address. Use this to find org.nr for financials/details lookups.
+- **proff_get_financials**: Get financial data (revenue/omsetning, profit/resultat, EBITDA) for a company. Requires org.nr from proff_search_companies.
+- **proff_get_company_details**: Get company details (board members, shareholders, status, addresses). Requires org.nr from proff_search_companies.
+- **proff_search_persons**: Search for people by name in the Norwegian business registry. Returns personId for other Proff person tools.
+- **proff_get_person_details**: Get person's board positions, roles, and connected companies. Requires personId from proff_search_persons.
+- **proff_find_business_network**: Find the shortest connection path between two people. Shows how they're linked through companies/roles. Requires personIds from proff_search_persons.
 - **fetch_url**: Fetch a specific public URL directly and extract readable text. Use this first when the user gives an exact URL and asks for findings/analysis.
 - **search_pexels** / **search_unsplash**: Search for free stock photos. Use returned URLs in image nodes or as headerImage in templates.
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).

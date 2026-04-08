@@ -5,7 +5,7 @@
  * executeAgent: log-based for /execute endpoint
  */
 
-import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL } from './tool-definitions.js'
+import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 
@@ -69,7 +69,7 @@ async function loadAllTools(env) {
     'list_contacts', 'search_contacts', 'get_contact_logs', 'add_contact_log', 'create_contact',
   ])
   const filteredTools = TOOL_DEFINITIONS.filter(t => !ORCHESTRATOR_BLOCKED_TOOLS.has(t.name))
-  const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL]
+  const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL, ...PROFF_TOOLS]
 
   return { allTools, operationMap }
 }

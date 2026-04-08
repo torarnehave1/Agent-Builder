@@ -4825,11 +4825,61 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
           : `Contact subagent failed: ${result.error || 'Unknown error'}`,
       }
     }
+    case 'proff_search_companies':
+      return await executeProffTool('search', toolInput)
+    case 'proff_get_financials':
+      return await executeProffTool('financials', toolInput)
+    case 'proff_get_company_details':
+      return await executeProffTool('company', toolInput)
+    case 'proff_search_persons':
+      return await executeProffTool('persons', toolInput)
+    case 'proff_get_person_details':
+      return await executeProffTool('person', toolInput)
+    case 'proff_find_business_network':
+      return await executeProffTool('network', toolInput)
     default:
       if (isOpenAPITool(toolName) && operationMap) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
       }
       throw new Error(`Unknown tool: ${toolName}`)
+  }
+}
+
+async function executeProffTool(endpoint, input) {
+  const PROFF_API_BASE = 'https://proff-worker.torarnehave.workers.dev'
+  const userId = input.userId || 'unknown'
+
+  try {
+    let url = `${PROFF_API_BASE}/${endpoint}`
+
+    // Build URL with query params based on endpoint
+    if (endpoint === 'search' && input.query) {
+      url += `?query=${encodeURIComponent(input.query)}&userId=${encodeURIComponent(userId)}`
+    } else if (endpoint === 'financials' && input.orgNr) {
+      url += `/${input.orgNr}?userId=${encodeURIComponent(userId)}`
+    } else if (endpoint === 'company' && input.orgNr) {
+      url += `/${input.orgNr}?userId=${encodeURIComponent(userId)}`
+    } else if (endpoint === 'persons' && input.query) {
+      url += `?query=${encodeURIComponent(input.query)}&userId=${encodeURIComponent(userId)}`
+    } else if (endpoint === 'person' && input.personId) {
+      url += `/${input.personId}?userId=${encodeURIComponent(userId)}`
+    } else if (endpoint === 'network' && input.fromPersonId && input.toPersonId) {
+      url += `?from=${encodeURIComponent(input.fromPersonId)}&to=${encodeURIComponent(input.toPersonId)}&userId=${encodeURIComponent(userId)}`
+    } else {
+      throw new Error(`Missing required parameters for Proff endpoint: ${endpoint}`)
+    }
+
+    const res = await fetch(url)
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(`Proff API error: ${res.status} - ${error}`)
+    }
+
+    const data = await res.json()
+    return data
+  } catch (err) {
+    console.error(`[executeProffTool] ${endpoint} failed:`, err.message)
+    throw err
   }
 }
 

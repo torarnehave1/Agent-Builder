@@ -1717,6 +1717,100 @@ const TOOL_DEFINITIONS = [
 ]
 
 /**
+ * Proff.no tools for Norwegian business/person lookups (Brønnøysundregistrene)
+ */
+const PROFF_TOOLS = [
+  {
+    name: 'proff_search_companies',
+    description: 'Search for Norwegian companies in Brønnøysundregistrene. Returns company name, org number, address, and other basic info. Use this to find the org.nr (organisasjonsnummer) needed for other Proff tools.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Company name to search for (e.g., "Equinor", "Spotify Norway")'
+        }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'proff_get_financials',
+    description: 'Get financial data for a Norwegian company: revenue (omsetning), profit (resultat), EBITDA, and other key metrics. Requires the org.nr from proff_search_companies.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        orgNr: {
+          type: 'string',
+          description: 'Norwegian organization number (org.nr) from proff_search_companies, e.g., "910298372"'
+        }
+      },
+      required: ['orgNr']
+    }
+  },
+  {
+    name: 'proff_get_company_details',
+    description: 'Get detailed company info: board members, shareholders, company status, addresses. Requires the org.nr from proff_search_companies.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        orgNr: {
+          type: 'string',
+          description: 'Norwegian organization number (org.nr) from proff_search_companies, e.g., "910298372"'
+        }
+      },
+      required: ['orgNr']
+    }
+  },
+  {
+    name: 'proff_search_persons',
+    description: 'Search for a person by name in the Norwegian business registry. Returns personId needed for other Proff person tools. Use this to find connections between people.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Person name to search for (e.g., "Maiken Sneeggen", "Tor Arne Håve")'
+        }
+      },
+      required: ['query']
+    }
+  },
+  {
+    name: 'proff_get_person_details',
+    description: 'Get detailed person info: board positions, roles, connected companies, roles and titles. Requires the personId from proff_search_persons.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        personId: {
+          type: 'string',
+          description: 'Proff personId from proff_search_persons'
+        }
+      },
+      required: ['personId']
+    }
+  },
+  {
+    name: 'proff_find_business_network',
+    description: 'Find the shortest path/connection between two people in the Norwegian business network. Shows how they are connected through companies and roles. Requires personIds from proff_search_persons.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        fromPersonId: {
+          type: 'string',
+          description: 'Proff personId of the first person (from proff_search_persons)'
+        },
+        toPersonId: {
+          type: 'string',
+          description: 'Proff personId of the second person (from proff_search_persons)'
+        }
+      },
+      required: ['fromPersonId', 'toPersonId']
+    }
+  }
+]
+
+/**
  * Claude API native web search tool (server-side — no API key needed from us)
  */
 const WEB_SEARCH_TOOL = {
@@ -1725,4 +1819,4 @@ const WEB_SEARCH_TOOL = {
   max_uses: 5
 }
 
-export { TOOL_DEFINITIONS, WEB_SEARCH_TOOL }
+export { TOOL_DEFINITIONS, WEB_SEARCH_TOOL, PROFF_TOOLS }
