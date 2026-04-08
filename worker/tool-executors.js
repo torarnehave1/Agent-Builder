@@ -8,7 +8,7 @@
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
-import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
@@ -3819,6 +3819,9 @@ async function executeDescribeCapabilities(input, env) {
     // Hardcoded tools
     const hardcoded = TOOL_DEFINITIONS.map(t => ({ name: t.name, description: t.description }))
 
+    // Proff Norwegian business registry tools
+    const proff = PROFF_TOOLS.map(t => ({ name: t.name, description: t.description }))
+
     // Dynamic KG API tools
     let dynamic = []
     try {
@@ -3831,9 +3834,10 @@ async function executeDescribeCapabilities(input, env) {
 
     result.tools = {
       hardcoded,
+      proff,
       dynamic,
       builtin: [{ name: 'web_search', description: 'Quick web search (Claude built-in, lightweight)' }],
-      total: hardcoded.length + dynamic.length + 1
+      total: hardcoded.length + proff.length + dynamic.length + 1
     }
   }
 
@@ -3841,7 +3845,7 @@ async function executeDescribeCapabilities(input, env) {
     result.templates = listTemplates()
   }
 
-  result.summary = `This agent has ${result.tools?.total || '?'} tools and ${result.templates?.length || '?'} HTML templates available. Tools cover knowledge graph management, web search, image search & analysis, audio transcription, semantic analysis, email, and HTML app creation.`
+  result.summary = `This agent has ${result.tools?.total || '?'} tools and ${result.templates?.length || '?'} HTML templates available. Tools cover knowledge graph management, web search, image search & analysis, audio transcription, semantic analysis, email, HTML app creation, and Norwegian business registry (Proff.no) lookups.`
 
   return result
 }
