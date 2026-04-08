@@ -385,6 +385,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
   // Display graph context from portfolio selection
   const [displayGraphContext, setDisplayGraphContext] = useState<{ id: string; title: string } | null>(null);
+  const [previewingGraphContext, setPreviewingGraphContext] = useState(false);
 
   // Image attachment state
   const [pendingImages, setPendingImages] = useState<ImageAttachment[]>([]);
@@ -2071,25 +2072,38 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
         {/* Graph context badge */}
         {displayGraphContext && (
-          <div className="mb-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-400/20 max-w-[900px] mx-auto">
-            <span className="text-xs text-purple-300 font-medium">📊 Graph context:</span>
-            <a
-              href={`https://www.vegvisr.org/gnew-viewer?graphId=${displayGraphContext.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs text-purple-400 hover:text-purple-300 underline flex-1 truncate"
-            >
-              {displayGraphContext.title}
-            </a>
-            <button
-              type="button"
-              onClick={() => setDisplayGraphContext(null)}
-              className="text-purple-300 hover:text-purple-200 transition-colors text-xs"
-              title="Clear graph context"
-            >
-              ✕
-            </button>
-          </div>
+          <>
+            <div className="mb-2 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-500/10 border border-purple-400/20 max-w-[900px] mx-auto">
+              <span className="text-xs text-purple-300 font-medium">📊 Graph context:</span>
+              <a
+                href={`https://www.vegvisr.org/gnew-viewer?graphId=${displayGraphContext.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs text-purple-400 hover:text-purple-300 underline flex-1 truncate"
+              >
+                {displayGraphContext.title}
+              </a>
+              <button
+                type="button"
+                onClick={() => setPreviewingGraphContext(true)}
+                className="px-2 py-0.5 text-xs rounded bg-purple-600/30 text-purple-300 hover:bg-purple-600/50 transition-colors whitespace-nowrap"
+                title="Preview graph"
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisplayGraphContext(null)}
+                className="text-purple-300 hover:text-purple-200 transition-colors text-xs"
+                title="Clear graph context"
+              >
+                ✕
+              </button>
+            </div>
+            {previewingGraphContext && (
+              <GraphPreviewLazy graphId={displayGraphContext.id} title={displayGraphContext.title} onClose={() => setPreviewingGraphContext(false)} />
+            )}
+          </>
         )}
 
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
