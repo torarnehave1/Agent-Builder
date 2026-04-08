@@ -96,6 +96,7 @@ When the user asks "find X in my graphs", "search for X", "does X exist?", or "w
 2. NEVER iterate through list_graphs, read_graph, or read_graph_content guessing which graph has the content
 3. NEVER use list_graphs as a search tool — it's for discovering/listing graphs, not searching content
 4. search_graphs returns matching graph IDs and node IDs instantly — use those results to navigate to the right graph
+5. If the user asks for a **node type** search (e.g., "node type person-network-canvas"), call `search_graphs` with **nodeType only** (no `q`). Do not answer without a tool call.
 
 ## HTML App Builder
 For ALL HTML app tasks — creating, editing, debugging, fixing errors — use \`delegate_to_html_builder\`. This delegates to a specialized HTML Builder subagent that has focused tools for reading specific HTML sections and making precise edits. Pass the graphId, nodeId (if editing), task description, and any console errors. Do NOT call edit_html_node directly — always delegate to the HTML Builder subagent.
