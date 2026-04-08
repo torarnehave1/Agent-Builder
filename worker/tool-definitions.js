@@ -397,7 +397,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'search_graphs',
-    description: 'Search graph content by text (searches across ALL nodes in ALL graphs). Fast direct search without using LLM tokens. Use when user asks "find where X is mentioned", "search for X in my graphs", "what graph contains X?". Returns matching graph IDs, titles, and which nodes matched.',
+    description: 'Search graph content by text (searches across ALL nodes in ALL graphs) OR filter by node type. Fast direct search without using LLM tokens. Use when user asks "find where X is mentioned", "search for X in my graphs", "what graph contains X?", or "find graphs with node type Y". Returns matching graph IDs, titles, and which nodes matched.',
     input_schema: {
       type: 'object',
       properties: {
@@ -409,12 +409,19 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           description: 'Optional: filter by node type (e.g., "fulltext", "html-node", "mermaid-diagram")'
         },
+        category: {
+          type: 'string',
+          description: 'Optional: filter by category tag (e.g., "#PROFF")'
+        },
         limit: {
           type: 'number',
           description: 'Max number of results (default 20, max 100)'
+        },
+        offset: {
+          type: 'number',
+          description: 'Offset for pagination (default 0)'
         }
-      },
-      required: ['q']
+      }
     }
   },
   {
