@@ -396,6 +396,28 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'search_graphs',
+    description: 'Search graph content by text (searches across ALL nodes in ALL graphs). Fast direct search without using LLM tokens. Use when user asks "find where X is mentioned", "search for X in my graphs", "what graph contains X?". Returns matching graph IDs, titles, and which nodes matched.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        q: {
+          type: 'string',
+          description: 'Search text to find (e.g., "Per Stilling", "Areopagos", "revenue")'
+        },
+        nodeType: {
+          type: 'string',
+          description: 'Optional: filter by node type (e.g., "fulltext", "html-node", "mermaid-diagram")'
+        },
+        limit: {
+          type: 'number',
+          description: 'Max number of results (default 20, max 100)'
+        }
+      },
+      required: ['q']
+    }
+  },
+  {
     name: 'perplexity_search',
     description: 'Search the web using Perplexity AI with real-time results and citations. Returns detailed answers with source URLs. Use this for in-depth research, recent news, or when you need cited sources. Choose model: "sonar" (fast), "sonar-pro" (deep search), or "sonar-reasoning" (complex analysis).',
     input_schema: {

@@ -4502,6 +4502,7 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     case 'list_meta_areas':
       return await executeListMetaAreas(toolInput, env)
     case 'search_knowledge':
+    case 'search_graphs':
       return await executeSearchKnowledge(toolInput, env)
     case 'translate':
       return await executeTranslate(toolInput, env)
