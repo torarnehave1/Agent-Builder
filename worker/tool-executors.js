@@ -3832,8 +3832,13 @@ async function executeDescribeCapabilities(input, env) {
         .map(t => ({ name: t.name, description: t.description }))
     } catch { /* ignore */ }
 
+    // Identify search-specific tools
+    const searchTools = hardcoded.filter(t => t.name === 'search_graphs' || t.name === 'list_graphs' || t.name === 'list_meta_areas')
+    const otherHardcoded = hardcoded.filter(t => !searchTools.some(st => st.name === t.name))
+
     result.tools = {
-      hardcoded,
+      search: searchTools,
+      hardcoded: otherHardcoded,
       proff,
       dynamic,
       builtin: [{ name: 'web_search', description: 'Quick web search (Claude built-in, lightweight)' }],
@@ -3845,7 +3850,7 @@ async function executeDescribeCapabilities(input, env) {
     result.templates = listTemplates()
   }
 
-  result.summary = `This agent has ${result.tools?.total || '?'} tools and ${result.templates?.length || '?'} HTML templates available. Tools cover knowledge graph management, web search, image search & analysis, audio transcription, semantic analysis, email, HTML app creation, and Norwegian business registry (Proff.no) lookups.`
+  result.summary = `This agent has ${result.tools?.total || '?'} tools and ${result.templates?.length || '?'} HTML templates available. **SEARCH FIRST**: Use search_graphs for fast text search across all graphs (NO token cost). Tools cover knowledge graph management, web search, image search & analysis, audio transcription, semantic analysis, email, HTML app creation, and Norwegian business registry (Proff.no) lookups.`
 
   return result
 }
