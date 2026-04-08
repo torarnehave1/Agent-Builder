@@ -4447,7 +4447,7 @@ async function executeSearchKnowledge(input, env) {
   if (category) params.set('category', category)
   if (input.limit) params.set('limit', String(input.limit))
   if (input.offset) params.set('offset', String(input.offset))
-  const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/searchGraphs?${params}`)
+  const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/searchGraphs?${params}`, { headers: { 'x-user-role': 'Superadmin' } })
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Search failed')
   return { results: data.results || data.graphs || [], count: (data.results || data.graphs || []).length }

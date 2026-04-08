@@ -397,7 +397,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'search_graphs',
-    description: 'Search graph content by text (searches across ALL nodes in ALL graphs) OR filter by node type. Fast direct search without using LLM tokens. Use when user asks "find where X is mentioned", "search for X in my graphs", "what graph contains X?", or "find graphs with node type Y". Returns matching graph IDs, titles, and which nodes matched.',
+    description: 'Search graph content by text (searches across ALL nodes in ALL graphs) OR filter by node type/category. Fast direct search without using LLM tokens. Use when user asks "find where X is mentioned", "search for X in my graphs", "what graph contains X?", or "find graphs with node type Y". For meta area filtering, use list_graphs with metaArea instead. Returns matching graph IDs, titles, and which nodes matched.',
     input_schema: {
       type: 'object',
       properties: {
