@@ -360,9 +360,20 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             if (toolUse.name === 'delegate_to_kg') {
               for (let mi = messages.length - 1; mi >= 0; mi--) {
                 const msgContent = getTextContent(messages[mi].content)
-                if (msgContent.includes('[TRANSCRIPTION_AVAILABLE')) {
-                  const tagEnd = msgContent.indexOf(']\n', msgContent.indexOf('[TRANSCRIPTION_AVAILABLE'))
-                  const transcriptionText = tagEnd >= 0 ? msgContent.slice(tagEnd + 2).trim() : ''
+                // Match tagged messages (new frontend) OR legacy "**Audio Transcription**" messages
+                const hasTag = msgContent.includes('[TRANSCRIPTION_AVAILABLE')
+                const hasLegacy = msgContent.includes('**Audio Transcription**')
+                if (hasTag || hasLegacy) {
+                  let transcriptionText = ''
+                  if (hasTag) {
+                    const tagEnd = msgContent.indexOf(']\n', msgContent.indexOf('[TRANSCRIPTION_AVAILABLE'))
+                    transcriptionText = tagEnd >= 0 ? msgContent.slice(tagEnd + 2).trim() : ''
+                  } else {
+                    // Legacy format: skip the first line (header) and extract the rest
+                    const lines = msgContent.split('\n')
+                    const bodyStart = lines.findIndex((l, i) => i > 0 && l.trim().length > 0)
+                    transcriptionText = bodyStart >= 0 ? lines.slice(bodyStart).join('\n').trim() : ''
+                  }
                   if (transcriptionText.length > 100) {
                     toolUse.input.task += '\n\n## TRANSCRIPTION CONTENT (from conversation — use this as the node info field):\n' + transcriptionText
                     log(`auto-injected ${transcriptionText.length} chars of transcription into delegate_to_kg task`)
