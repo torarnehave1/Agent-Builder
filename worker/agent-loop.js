@@ -354,6 +354,23 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               toolUse.input.nodeId = options.activeHtmlNodeId
               log(`auto-injected nodeId=${options.activeHtmlNodeId} into ${toolUse.name}`)
             }
+            // Auto-inject transcription content into delegate_to_kg tasks
+            // The KG subagent is stateless and cannot see conversation history,
+            // so we must pass transcription text explicitly in the task field.
+            if (toolUse.name === 'delegate_to_kg') {
+              for (let mi = messages.length - 1; mi >= 0; mi--) {
+                const msgContent = getTextContent(messages[mi].content)
+                if (msgContent.includes('[TRANSCRIPTION_AVAILABLE')) {
+                  const tagEnd = msgContent.indexOf(']\n', msgContent.indexOf('[TRANSCRIPTION_AVAILABLE'))
+                  const transcriptionText = tagEnd >= 0 ? msgContent.slice(tagEnd + 2).trim() : ''
+                  if (transcriptionText.length > 100) {
+                    toolUse.input.task += '\n\n## TRANSCRIPTION CONTENT (from conversation — use this as the node info field):\n' + transcriptionText
+                    log(`auto-injected ${transcriptionText.length} chars of transcription into delegate_to_kg task`)
+                  }
+                  break
+                }
+              }
+            }
           }
           const toolStart = Date.now()
           log(`executing ${toolUse.name} (input: ${JSON.stringify(toolUse.input).slice(0, 200)})`)
