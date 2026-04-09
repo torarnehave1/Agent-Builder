@@ -87,6 +87,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <div className={previewHtml ? 'w-[40%] min-w-[320px] flex flex-col min-h-0 border-r border-white/10' : 'flex-1 flex flex-col min-h-0'}>
             <AgentChat
               userId={userId}
+              userEmail={userEmail}
               graphId={graphId}
               onGraphChange={setGraphId}
               agentId={selectedAgentId}

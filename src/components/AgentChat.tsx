@@ -34,6 +34,7 @@ interface SessionInfo {
 
 interface Props {
   userId: string;
+  userEmail?: string;
   graphId: string;
   onGraphChange: (graphId: string) => void;
   agentId?: string | null;
@@ -346,7 +347,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed }: Props) {
+export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -1543,7 +1544,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             try {
               await fetch(`${KG_API}/saveGraphWithHistory`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
                 body: JSON.stringify({
                   id: newGraphId,
                   graphData: {
@@ -1853,7 +1854,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                         // Add node to existing graph
                         await fetch(`${KG_API}/addNode`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
                           body: JSON.stringify({
                             graphId: targetGraphId,
                             node: { id: nodeId, label: '# Audio Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' },
@@ -1869,7 +1870,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                         const title = `Transcription - ${new Date().toISOString().slice(0, 10)}`;
                         await fetch(`${KG_API}/saveGraphWithHistory`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
                           body: JSON.stringify({
                             id: gId,
                             graphData: {
