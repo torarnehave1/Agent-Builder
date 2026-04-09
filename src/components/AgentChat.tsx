@@ -1559,7 +1559,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             }
           }
 
-          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n${txText || '(No speech detected)'}`;
+          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n[TRANSCRIPTION_AVAILABLE: This transcription text is ready for graph creation. Use create_graph + create_node directly — do NOT delegate to subagent.]\n\n${txText || '(No speech detected)'}`;
 
           setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
 
