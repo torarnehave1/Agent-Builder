@@ -319,6 +319,15 @@ const markdownComponents = {
     if (href) {
       try {
         const url = new URL(href);
+        // Audio URLs → inline player
+        if (url.hostname === 'audio.vegvisr.org' || (url.hostname.includes('vegvisr') && /\.(webm|wav|mp3|m4a|ogg|flac)$/i.test(url.pathname))) {
+          return (
+            <span className="block my-2">
+              <audio controls preload="none" className="w-full max-w-md" src={href} />
+              <span className="block text-[11px] text-white/40 mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
+            </span>
+          );
+        }
         if (url.hostname.includes('vegvisr.org')) {
           const graphId = url.searchParams.get('graphId') || url.searchParams.get('id');
           if (graphId) {
