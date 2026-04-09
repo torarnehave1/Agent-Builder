@@ -1158,6 +1158,13 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
 
     // Build multimodal content for the API when images or files are present
     const apiMessages = updatedMessages.map(m => {
+      // Strip transcription body from messages sent to Claude — saves tokens.
+      // The full text is available locally for direct KG save via the button.
+      if (m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('**Audio Transcription**')) {
+        const firstNewline = m.content.indexOf('\n\n');
+        const summary = firstNewline > 0 ? m.content.slice(0, firstNewline) : m.content.slice(0, 120);
+        return { role: m.role, content: summary + '\n\n(Full transcription text available locally — use the "Save to Graph" button to save directly.)' };
+      }
       const hasImages = m.images && m.images.length > 0;
       const hasFiles = m.files && m.files.length > 0;
       if (hasImages || hasFiles) {
@@ -1559,7 +1566,7 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
             }
           }
 
-          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n[TRANSCRIPTION_AVAILABLE: This transcription text is ready for graph creation. Use create_graph + create_node directly — do NOT delegate to subagent.]\n\n${txText || '(No speech detected)'}`;
+          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n${txText || '(No speech detected)'}`;
 
           setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
 
@@ -1829,10 +1836,48 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
               </div>
             )}
             {msg.role === 'assistant' ? (
-              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-                  {preprocessGraphLinks(msg.content || '_(completed with tool calls only)_')}
-                </ReactMarkdown>
+              <div>
+                <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                    {preprocessGraphLinks(msg.content || '_(completed with tool calls only)_')}
+                  </ReactMarkdown>
+                </div>
+                {typeof msg.content === 'string' && msg.content.startsWith('**Audio Transcription**') && !msg.content.includes('[View Graph:') && (
+                  <button
+                    type="button"
+                    className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-medium hover:bg-emerald-600/50 transition-colors disabled:opacity-40"
+                    disabled={streaming}
+                    onClick={async () => {
+                      const txBody = msg.content.split('\n\n').slice(1).join('\n\n').trim();
+                      if (!txBody || txBody.length < 50) return;
+                      const gId = crypto.randomUUID();
+                      const title = `Transcription - ${new Date().toISOString().slice(0, 10)}`;
+                      try {
+                        await fetch(`${KG_API}/saveGraphWithHistory`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            id: gId,
+                            graphData: {
+                              nodes: [{ id: 'node-transcription', label: '# Full Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' }],
+                              edges: [],
+                              metadata: { title, description: 'Audio transcription', category: '#Transcription #Audio' },
+                            },
+                            override: true,
+                          }),
+                        });
+                        setMessages(prev => prev.map((m, mi) => mi === i
+                          ? { ...m, content: m.content + `\n\n[View Graph: ${title}](https://www.vegvisr.org/gnew-viewer?graphId=${gId})` }
+                          : m
+                        ));
+                      } catch (err) {
+                        console.error('Failed to save transcription graph:', err);
+                      }
+                    }}
+                  >
+                    📊 Save to Graph
+                  </button>
+                )}
               </div>
             ) : (
               <div className="flex flex-col gap-2">
