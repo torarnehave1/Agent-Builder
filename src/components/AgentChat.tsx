@@ -1842,42 +1842,77 @@ export default function AgentChat({ userId, graphId, onGraphChange, agentId, age
                     {preprocessGraphLinks(msg.content || '_(completed with tool calls only)_')}
                   </ReactMarkdown>
                 </div>
-                {typeof msg.content === 'string' && msg.content.startsWith('**Audio Transcription**') && !msg.content.includes('[View Graph:') && (
-                  <button
-                    type="button"
-                    className="mt-2 px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-medium hover:bg-emerald-600/50 transition-colors disabled:opacity-40"
-                    disabled={streaming}
-                    onClick={async () => {
-                      const txBody = msg.content.split('\n\n').slice(1).join('\n\n').trim();
-                      if (!txBody || txBody.length < 50) return;
-                      const gId = crypto.randomUUID();
-                      const title = `Transcription - ${new Date().toISOString().slice(0, 10)}`;
-                      try {
+                {typeof msg.content === 'string' && msg.content.startsWith('**Audio Transcription**') && !msg.content.includes('[View Graph:') && (() => {
+                  const ctxGraphId = lastAgentGraphRef.current || graphId;
+                  const saveToGraph = async (targetGraphId: string | null) => {
+                    const txBody = msg.content.split('\n\n').slice(1).join('\n\n').trim();
+                    if (!txBody || txBody.length < 50) return;
+                    const nodeId = `node-tx-${Date.now()}`;
+                    try {
+                      if (targetGraphId) {
+                        // Add node to existing graph
+                        await fetch(`${KG_API}/addNode`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                          body: JSON.stringify({
+                            graphId: targetGraphId,
+                            node: { id: nodeId, label: '# Audio Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' },
+                          }),
+                        });
+                        setMessages(prev => prev.map((m, mi) => mi === i
+                          ? { ...m, content: m.content + `\n\n[Saved to Graph](https://www.vegvisr.org/gnew-viewer?graphId=${targetGraphId})` }
+                          : m
+                        ));
+                      } else {
+                        // Create new graph
+                        const gId = crypto.randomUUID();
+                        const title = `Transcription - ${new Date().toISOString().slice(0, 10)}`;
                         await fetch(`${KG_API}/saveGraphWithHistory`, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
                             id: gId,
                             graphData: {
-                              nodes: [{ id: 'node-transcription', label: '# Full Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' }],
+                              nodes: [{ id: nodeId, label: '# Full Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' }],
                               edges: [],
                               metadata: { title, description: 'Audio transcription', category: '#Transcription #Audio' },
                             },
                             override: true,
                           }),
                         });
+                        onGraphChange(gId);
                         setMessages(prev => prev.map((m, mi) => mi === i
                           ? { ...m, content: m.content + `\n\n[View Graph: ${title}](https://www.vegvisr.org/gnew-viewer?graphId=${gId})` }
                           : m
                         ));
-                      } catch (err) {
-                        console.error('Failed to save transcription graph:', err);
                       }
-                    }}
-                  >
-                    📊 Save to Graph
-                  </button>
-                )}
+                    } catch (err) {
+                      console.error('Failed to save transcription:', err);
+                    }
+                  };
+                  return (
+                    <div className="mt-2 flex gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-medium hover:bg-emerald-600/50 transition-colors disabled:opacity-40"
+                        disabled={streaming}
+                        onClick={() => saveToGraph(null)}
+                      >
+                        📊 New Graph
+                      </button>
+                      {ctxGraphId && (
+                        <button
+                          type="button"
+                          className="px-3 py-1.5 rounded-lg bg-sky-600/30 border border-sky-500/40 text-sky-300 text-xs font-medium hover:bg-sky-600/50 transition-colors disabled:opacity-40"
+                          disabled={streaming}
+                          onClick={() => saveToGraph(ctxGraphId)}
+                        >
+                          📎 Add to Current Graph
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <div className="flex flex-col gap-2">
