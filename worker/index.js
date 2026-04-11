@@ -142,9 +142,21 @@ async function loadDynamicPrompt(env) {
     }
 
     if (learnings.length > 0) {
-      prompt += '\n### Learned Behaviors\n'
-      for (const l of learnings) {
-        prompt += `- **${l.label}**: ${l.info}\n`
+      const selfKnowledge = learnings.filter(l => l.metadata?.category === 'architecture' || l.metadata?.category === 'self-knowledge')
+      const behaviorLearnings = learnings.filter(l => l.metadata?.category !== 'architecture' && l.metadata?.category !== 'self-knowledge')
+
+      if (selfKnowledge.length > 0) {
+        prompt += '\n### Self-Knowledge (about your own system)\n'
+        for (const l of selfKnowledge) {
+          prompt += `- **${l.label}**: ${l.info}\n`
+        }
+      }
+
+      if (behaviorLearnings.length > 0) {
+        prompt += '\n### Learned Behaviors\n'
+        for (const l of behaviorLearnings) {
+          prompt += `- **${l.label}**: ${l.info}\n`
+        }
       }
     }
 
@@ -366,7 +378,11 @@ export default {
             'SELECT * FROM agent_configs WHERE id = ?1 AND is_active = 1'
           ).bind(agentId).first()
           if (agentConfig) {
-            if (agentConfig.system_prompt) systemPrompt = agentConfig.system_prompt
+            // Prepend custom agent prompt but KEEP base prompt + dynamic rules.
+            // Previously this replaced systemPrompt entirely, losing all learned behaviors.
+            if (agentConfig.system_prompt) {
+              systemPrompt = agentConfig.system_prompt + '\n\n' + systemPrompt
+            }
             agentAvatarUrl = agentConfig.avatar_url || null
             if (agentConfig.model) agentModel = agentConfig.model
             const tools = JSON.parse(agentConfig.tools || '[]')

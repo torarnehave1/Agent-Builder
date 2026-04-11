@@ -64,14 +64,8 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 ## HTML creation rules
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
-- Drizzle API: https://drizzle.vegvisr.org — POST /query { tableId }, POST /insert { tableId, record }. NO /update, NO /delete.
-- Knowledge Graph API: https://knowledge.vegvisr.org:
-  - GET /getknowgraph?id={graphId} — read graph
-  - POST /addNode { graphId, node: { id, label, type, info, path, color } }
-  - POST /patchNode { graphId, nodeId, fields: { info, label, path, color } }
-  - POST /removeNode { graphId, nodeId }
-  - POST /saveGraphWithHistory { id, graphData: { nodes, edges, metadata }, override: true }
-  - NO /api/graphs/ REST-style endpoints.
+- When you need API endpoints (Drizzle, Knowledge Graph, etc.), call \`get_system_registry\` to discover them dynamically. Do NOT guess or hardcode URLs.
+- When you learn something new (e.g. a correct endpoint URL, a working pattern, a common mistake to avoid), call \`save_learning\` to persist it for future sessions.
 
 After completing your task, provide a brief summary of what you changed and why.`
 
@@ -614,7 +608,8 @@ async function executeRollbackHtmlNode(input, env) {
 
 // ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
-  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column'
+  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
+  'get_system_registry', 'save_learning'
 ])
 
 function getSubagentTools() {
@@ -696,6 +691,25 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   log(`started | graphId=${graphId} nodeId=${nodeId || 'none'} task="${task.slice(0, 100)}"`)
   progress('Entering the flow...')
 
+  // Load dynamic learnings from graph_system_prompt so past corrections carry forward
+  let dynamicSystemPrompt = HTML_BUILDER_SYSTEM_PROMPT
+  try {
+    const lRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_system_prompt')
+    if (lRes.ok) {
+      const lData = await lRes.json()
+      const learnings = (lData.nodes || []).filter(n => n.type === 'system-learning')
+      if (learnings.length > 0) {
+        let learnedSection = '\n\n## Learned from past sessions\n'
+        for (const l of learnings) {
+          learnedSection += `- **${l.label}**: ${l.info}\n`
+        }
+        dynamicSystemPrompt += learnedSection
+      }
+    }
+  } catch (e) {
+    log(`dynamic learnings load failed (non-fatal): ${e.message}`)
+  }
+
   while (turn < maxTurns) {
     turn++
     log(`turn ${turn}/${maxTurns}`)
@@ -710,7 +724,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         model,
         max_tokens: 16384,
         temperature: 0.2,
-        system: HTML_BUILDER_SYSTEM_PROMPT,
+        system: dynamicSystemPrompt,
         tools,
       }),
     })

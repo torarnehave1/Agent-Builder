@@ -157,6 +157,9 @@ export async function loadOpenAPITools(env) {
     'kg_get_contract',       // → get_contract
     'kg_patch_node',         // → patch_node
     'kg_add_node',           // → create_node
+    'kg_add_a_i_template',   // broken handler — ignores input, use kg_add_template instead
+    'kg_get_a_i_templates',  // redundant — kg_get_templates returns all templates
+    'kg_get_tool_templates', // redundant — kg_get_templates returns all templates
   ])
 
   const tools = []
@@ -203,10 +206,10 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
     if (qs) url += '?' + qs
   }
 
-  // Build request options
+  // Build request options — include Superadmin auth for KG_WORKER access
   const fetchOpts = {
     method: meta.method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
   }
 
   // For POST/PUT/PATCH, send remaining fields as JSON body

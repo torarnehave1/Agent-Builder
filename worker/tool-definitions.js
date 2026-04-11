@@ -847,13 +847,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'save_learning',
-    description: 'Save a learned behavior to graph_system_prompt so it persists across conversations. Use this when the user corrects your behavior or teaches you something about how to handle requests. The learning becomes a permanent rule loaded at every conversation start.',
+    description: 'Save a learned behavior or self-knowledge to graph_system_prompt so it persists across conversations. Use this when: (1) the user corrects your behavior, (2) the user teaches you something about how your own system works (architecture, tools, databases, workers, data sources), (3) you discover something about yourself that should be remembered. The learning becomes a permanent rule loaded at every conversation start.',
     input_schema: {
       type: 'object',
       properties: {
-        label: { type: 'string', description: 'Short name for the learning (e.g., "Don\'t use Perplexity for data generation")' },
-        rule: { type: 'string', description: 'The full description of what was learned and how to behave differently' },
-        category: { type: 'string', enum: ['routing', 'behavior', 'error', 'formatting'], description: 'Category of the learning' }
+        label: { type: 'string', description: 'Short name for the learning (e.g., "Don\'t use Perplexity for data generation", "get_node_types_reference reads from system-prompt.js")' },
+        rule: { type: 'string', description: 'The full description of what was learned — behavior rule, architecture fact, tool data source, or system insight' },
+        category: { type: 'string', enum: ['routing', 'behavior', 'error', 'formatting', 'architecture', 'self-knowledge'], description: 'Category of the learning. Use architecture/self-knowledge for facts about your own system.' }
       },
       required: ['label', 'rule']
     }

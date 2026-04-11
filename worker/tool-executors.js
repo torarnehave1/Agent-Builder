@@ -4531,8 +4531,46 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAnalyzeImage(toolInput, env)
     case 'get_formatting_reference':
       return { reference: FORMATTING_REFERENCE }
-    case 'get_node_types_reference':
-      return { reference: NODE_TYPES_REFERENCE }
+    case 'get_node_types_reference': {
+      // Hybrid: hardcoded reference + live graphTemplates from D1
+      const result = { reference: NODE_TYPES_REFERENCE }
+      try {
+        const kgResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/getTemplates', {
+          headers: { 'x-user-role': 'Superadmin' }
+        })
+        if (kgResp.ok) {
+          const tplData = await kgResp.json()
+          const templates = Array.isArray(tplData) ? tplData : (tplData.templates || tplData.results || [])
+          result.graphTemplates = templates.map(t => {
+            const entry = {
+              id: t.id, name: t.name || t.title, category: t.category || '',
+              description: t.description || ''
+            }
+            // Include ai_instructions so the agent knows HOW to use each template
+            if (t.ai_instructions) entry.ai_instructions = t.ai_instructions
+            // Include node type summary so the agent knows WHAT nodes a template creates
+            if (t.nodes) {
+              try {
+                const nodes = typeof t.nodes === 'string' ? JSON.parse(t.nodes) : t.nodes
+                if (Array.isArray(nodes)) {
+                  entry.nodeTypes = nodes.map(n => ({ id: n.id, type: n.type, label: n.label }))
+                }
+              } catch (e) { /* skip unparseable nodes */ }
+            }
+            return entry
+          })
+          result.graphTemplatesCount = result.graphTemplates.length
+          result.source = 'Hardcoded node type reference from system-prompt.js + live graphTemplates from D1 database (vegvisr_org)'
+        } else {
+          result.graphTemplatesError = `Could not fetch graphTemplates: ${kgResp.status}`
+          result.source = 'Hardcoded node type reference from system-prompt.js (graphTemplates query failed)'
+        }
+      } catch (e) {
+        result.graphTemplatesError = e.message
+        result.source = 'Hardcoded node type reference from system-prompt.js (graphTemplates query failed)'
+      }
+      return result
+    }
     case 'get_html_builder_reference':
       return { reference: HTML_BUILDER_REFERENCE }
     case 'who_am_i':
