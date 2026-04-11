@@ -247,8 +247,12 @@ async function executeEditHtmlNode(input, env) {
   const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
 
   // 3. Normalize escaped sequences — LLMs often send \\n instead of real \n
-  let oldString = input.old_string
-  let newString = input.new_string
+  // Accept both old_string/new_string and oldText/newText (LLMs sometimes use either)
+  let oldString = input.old_string || input.oldText
+  let newString = input.new_string ?? input.newText ?? ''
+  if (!oldString) {
+    throw new Error('old_string is required. Provide the exact text to find and replace.')
+  }
   // Escaped newlines/tabs from JSON serialization
   if (oldString.includes('\\n')) oldString = oldString.replace(/\\n/g, '\n')
   if (newString.includes('\\n')) newString = newString.replace(/\\n/g, '\n')
