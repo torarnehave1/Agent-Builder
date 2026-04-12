@@ -1,0 +1,21 @@
+{
+  "name": "worker",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker that executes autonomous agents with Knowledge Graph tools.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.69",
+    "@ai-sdk/google": "^3.0.62",
+    "@cloudflare/ai-chat": "^0.4.2",
+    "agents": "^0.10.1",
+    "ai": "^6.0.158",
+    "workers-ai-provider": "^3.1.10",
+    "zod": "^4.3.6"
+  }
+}

@@ -1244,6 +1244,210 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       const botMessage = mentionedBot ? (botMention![2] || '').trim() || text : null;
       console.log('[AgentChat] bot detection:', { text: text.slice(0, 50), botsLoaded: bots.length, botMention: botMention?.[1], mentionedBot: mentionedBot?.username, botMessage, routeTo: mentionedBot ? '/bot-chat' : '/chat' });
 
+      // ── Local Ollama path ──────────────────────────────────────────────────
+      if (model?.startsWith('ollama/')) {
+        const ollamaModel = model.replace('ollama/', '');
+        const KG_BASE = 'https://knowledge.vegvisr.org';
+
+        // KG tool definitions (Ollama / OpenAI function-calling format)
+        const ollamaTools = [
+          {
+            type: 'function',
+            function: {
+              name: 'create_graph',
+              description: 'Create a new knowledge graph. The graph ID is assigned automatically — do not choose one.',
+              parameters: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Title of the graph' },
+                  description: { type: 'string', description: 'Short description (optional)' },
+                },
+                required: ['title'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'create_node',
+              description: 'Add a fulltext node (markdown content) to an existing knowledge graph',
+              parameters: {
+                type: 'object',
+                properties: {
+                  graphId: { type: 'string', description: 'The graph ID to add the node to' },
+                  label: { type: 'string', description: 'Title/label for the node' },
+                  content: { type: 'string', description: 'Markdown content for the node' },
+                },
+                required: ['graphId', 'label', 'content'],
+              },
+            },
+          },
+          {
+            type: 'function',
+            function: {
+              name: 'read_graph',
+              description: 'Read the contents of an existing knowledge graph by its ID',
+              parameters: {
+                type: 'object',
+                properties: {
+                  graphId: { type: 'string', description: 'The ID of the graph to read' },
+                },
+                required: ['graphId'],
+              },
+            },
+          },
+        ];
+
+        // Auto-load Gemma Rules graph as system context (best-effort, silent on failure)
+        let rulesSystemMessage = '';
+        try {
+          const rulesRes = await fetch(`${KG_BASE}/getknowgraph?id=gemma_rules`);
+          if (rulesRes.ok) {
+            const rulesGraph = await rulesRes.json() as { nodes?: Array<{ label?: string; info?: string }> };
+            const ruleNodes = (rulesGraph.nodes || [])
+              .filter(n => n.info)
+              .map(n => `### ${n.label || 'Rule'}\n${n.info}`)
+              .join('\n\n');
+            if (ruleNodes) {
+              rulesSystemMessage = `You are an AI agent with the following operating rules:\n\n${ruleNodes}\n\nFollow these rules for every response.`;
+            }
+          }
+        } catch { /* rules graph not found — proceed without */ }
+
+        // Flatten messages for Ollama (no multimodal blocks)
+        const ollamaMessages: Array<{ role: string; content: string }> = apiMessages.map(m => ({
+          role: m.role as string,
+          content: Array.isArray(m.content)
+            ? (m.content as Array<{ type: string; text?: string }>).map(c => c.text ?? '').join('')
+            : (m.content as string),
+        }));
+
+        // Prepend rules as system message if loaded
+        if (rulesSystemMessage) {
+          ollamaMessages.unshift({ role: 'system', content: rulesSystemMessage });
+        }
+
+        // Agentic loop — up to 5 turns to handle tool calls
+        let assistantText = '';
+        let toolCallsForUI: ToolCall[] = [];
+
+        for (let turn = 0; turn < 5; turn++) {
+          setCurrent({ text: assistantText, toolCalls: toolCallsForUI, thinking: turn > 0 });
+
+          const ollamaRes = await fetch('http://localhost:11434/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: ollamaModel, messages: ollamaMessages, tools: ollamaTools, stream: false }),
+            signal: abort.signal,
+          });
+
+          if (!ollamaRes.ok) throw new Error(`Ollama request failed: ${ollamaRes.status}. Is Ollama running at localhost:11434?`);
+
+          const ollamaData = await ollamaRes.json() as {
+            message: {
+              role: string;
+              content: string;
+              tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
+            };
+          };
+
+          const msg = ollamaData.message;
+          // Add assistant turn to conversation history
+          ollamaMessages.push({ role: msg.role, content: msg.content || '' });
+
+          // No tool calls → final text answer
+          if (!msg.tool_calls || msg.tool_calls.length === 0) {
+            assistantText = msg.content || '';
+            setCurrent({ text: assistantText, toolCalls: toolCallsForUI, thinking: false });
+            break;
+          }
+
+          // Execute each tool call against the KG API
+          for (const tc of msg.tool_calls) {
+            const { name, arguments: args } = tc.function;
+            const tcId = `tc_${Date.now()}_${toolCallsForUI.length}`;
+            toolCallsForUI = [...toolCallsForUI, { id: tcId, tool: name, input: args, status: 'running' }];
+            setCurrent({ text: '', toolCalls: toolCallsForUI, thinking: false });
+
+            let toolResult: Record<string, unknown>;
+            try {
+              if (name === 'create_graph') {
+                const graphId = `graph_${Date.now()}`;
+                const kgRes = await fetch(`${KG_BASE}/saveGraphWithHistory`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                  body: JSON.stringify({
+                    id: graphId,
+                    graphData: {
+                      nodes: [],
+                      edges: [],
+                      metadata: { title: args.title as string, description: (args.description as string) || '', metaArea: 'GENERAL' },
+                    },
+                    override: true,
+                  }),
+                });
+                const kgData = await kgRes.json() as Record<string, unknown>;
+                toolResult = { success: true, graphId, ...kgData };
+                lastAgentGraphRef.current = graphId;
+                onGraphChange(graphId);
+              } else if (name === 'create_node') {
+                const nodeId = `node_${Date.now()}`;
+                const kgRes = await fetch(`${KG_BASE}/addNode`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                  body: JSON.stringify({
+                    graphId: args.graphId,
+                    node: { id: nodeId, label: args.label, type: 'fulltext', info: args.content, visible: true, position: { x: 0, y: 0 } },
+                  }),
+                });
+                const kgData = await kgRes.json() as Record<string, unknown>;
+                toolResult = { success: true, nodeId, ...kgData };
+              } else if (name === 'read_graph') {
+                const kgRes = await fetch(`${KG_BASE}/getknowgraph?id=${encodeURIComponent(args.graphId as string)}`);
+                const kgData = await kgRes.json() as { nodes?: unknown[]; edges?: unknown[]; metadata?: Record<string, unknown> };
+                const nodeSummaries = (kgData.nodes || []).map((n: unknown) => {
+                  const node = n as Record<string, unknown>;
+                  return { id: node.id, label: node.label, type: node.type, info: typeof node.info === 'string' ? node.info.slice(0, 500) : '' };
+                });
+                toolResult = { success: true, graphId: args.graphId, metadata: kgData.metadata, nodes: nodeSummaries };
+              } else {
+                toolResult = { error: `Unknown tool: ${name}` };
+              }
+            } catch (toolErr) {
+              toolResult = { error: toolErr instanceof Error ? toolErr.message : String(toolErr) };
+            }
+
+            // Update tool status in UI
+            const tcStatus: 'success' | 'error' = toolResult.error ? 'error' : 'success';
+            const tcSummary = toolResult.error ? String(toolResult.error)
+              : toolResult.graphId && name === 'create_graph' ? `Created graph: ${toolResult.graphId}`
+              : toolResult.nodeId ? `Created node: ${toolResult.nodeId}`
+              : name === 'read_graph' ? `Read graph: ${args.graphId} (${(toolResult.nodes as unknown[])?.length ?? 0} nodes)`
+              : 'Done';
+            toolCallsForUI = toolCallsForUI.map(t => t.id === tcId ? { ...t, status: tcStatus, summary: tcSummary } : t);
+            setCurrent({ text: '', toolCalls: toolCallsForUI, thinking: false });
+
+            // Feed tool result back into the conversation
+            ollamaMessages.push({ role: 'tool', content: JSON.stringify(toolResult) });
+          }
+        }
+
+        setMessages(prev => [...prev, { role: 'assistant', content: assistantText, toolCalls: toolCallsForUI.length > 0 ? toolCallsForUI : undefined }]);
+        if (activeSession) {
+          historyFetch('/messages', userId, {
+            method: 'POST',
+            body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: assistantText, provider: 'ollama' }),
+          }).catch(() => {});
+        }
+
+        abortRef.current = null;
+        setCurrent(null);
+        setStreaming(false);
+        setSubagentProgress(null);
+        return;
+      }
+      // ── End Ollama path ────────────────────────────────────────────────────
+
       const res = mentionedBot ? await fetch(`${AGENT_API}/bot-chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

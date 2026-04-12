@@ -17,6 +17,8 @@ import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, execute
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
+import { routeAgentRequest } from 'agents'
+import { VegvisrAgent } from './agent.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -181,6 +183,25 @@ export default {
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders })
+    }
+
+    // Route WebSocket + agent requests to VegvisrAgent Durable Object
+    const agentResponse = await routeAgentRequest(request, env)
+    if (agentResponse) {
+      // WebSocket upgrade responses (101) must not be modified
+      if (agentResponse.status === 101 || request.headers.get('Upgrade') === 'websocket') {
+        return agentResponse
+      }
+      // Add CORS headers to HTTP responses from agent routes (e.g. /get-messages)
+      const newHeaders = new Headers(agentResponse.headers)
+      newHeaders.set('Access-Control-Allow-Origin', '*')
+      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
+      newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+      return new Response(agentResponse.body, {
+        status: agentResponse.status,
+        statusText: agentResponse.statusText,
+        headers: newHeaders,
+      })
     }
 
     try {
@@ -1777,3 +1798,6 @@ export default {
     }
   }
 }
+
+// Durable Object export — required for Cloudflare Workers to instantiate VegvisrAgent
+export { VegvisrAgent }

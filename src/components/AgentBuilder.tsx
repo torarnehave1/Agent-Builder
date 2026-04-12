@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { AuthBar, LanguageSelector } from 'vegvisr-ui-kit';
 import AgentChat from './AgentChat';
+import VegvisrAgentChat from './VegvisrAgentChat';
 import AgentSettings from './AgentSettings';
 import DataExplorer from './DataExplorer';
 import GraphPortfolioTab from './GraphPortfolioTab';
 import HtmlPreview from './HtmlPreview';
-import ModelSettings, { getStoredModel } from './ModelSettings';
+import ModelSettings, { getStoredModel, isWorkersAIModel } from './ModelSettings';
 import UsageDashboard from './UsageDashboard';
 
 type View = 'chat' | 'graphs' | 'data' | 'agents' | 'settings' | 'usage';
@@ -82,7 +83,12 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         </div>
       </header>
 
-      {view === 'chat' && (
+      {view === 'chat' && isWorkersAIModel(model) && (
+        <div className="flex flex-1 min-h-0">
+          <VegvisrAgentChat userId={userId} model={model} />
+        </div>
+      )}
+      {view === 'chat' && !isWorkersAIModel(model) && (
         <div className={`flex flex-1 min-h-0 ${previewHtml ? '' : ''}`}>
           <div className={previewHtml ? 'w-[40%] min-w-[320px] flex flex-col min-h-0 border-r border-white/10' : 'flex-1 flex flex-col min-h-0'}>
             <AgentChat

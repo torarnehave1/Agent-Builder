@@ -632,7 +632,9 @@ function getSubagentTools() {
 
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
-  const maxTurns = 20
+  const maxTurns = 12
+  const WALL_TIME_LIMIT_MS = 120_000  // 2 minutes max — bail out gracefully
+  const startTime = Date.now()
   const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
   let inputTokens = 0
   let outputTokens = 0
@@ -716,8 +718,25 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   }
 
   while (turn < maxTurns) {
+    const elapsed = Date.now() - startTime
+    if (elapsed > WALL_TIME_LIMIT_MS) {
+      log(`wall-time limit reached (${(elapsed / 1000).toFixed(1)}s) after ${turn} turns | tokens in=${inputTokens} out=${outputTokens}`)
+      progress('Time limit reached — returning partial result.')
+      return {
+        success: actions.some(a => a.success),
+        summary: `HTML Builder stopped after ${turn} turns (${(elapsed / 1000).toFixed(0)}s wall time limit). ${actions.length} actions completed. The task may be partially done — check the result and retry with a more focused task if needed.`,
+        turns: turn,
+        actions,
+        model,
+        graphId,
+        nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
+        wallTimeLimitReached: true,
+        inputTokens,
+        outputTokens,
+      }
+    }
     turn++
-    log(`turn ${turn}/${maxTurns}`)
+    log(`turn ${turn}/${maxTurns} (${(elapsed / 1000).toFixed(1)}s elapsed)`)
     progress(thinkingMessages[turn - 1] || `Still working... (${turn})`)
 
     const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
