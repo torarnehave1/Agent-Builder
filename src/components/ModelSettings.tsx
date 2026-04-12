@@ -1,5 +1,32 @@
 const MODELS = [
   {
+    id: '@cf/meta/llama-4-scout-17b-16e-instruct',
+    name: 'Llama 4 Scout 17B',
+    description: 'Cloudflare Workers AI. Free tier included, then billed per neuron.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Workers AI',
+    badgeColor: 'bg-orange-500/20 text-orange-300',
+  },
+  {
+    id: '@cf/google/gemma-4-26b-a4b-it',
+    name: 'Gemma 4 26B',
+    description: 'Cloudflare Workers AI. Free tier included, then billed per neuron.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Workers AI',
+    badgeColor: 'bg-orange-500/20 text-orange-300',
+  },
+  {
+    id: 'ollama/gemma4:e2b',
+    name: 'Gemma 4 2B (Edge)',
+    description: 'Free, lightweight. Optimized for laptops. Lower resource usage.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Local',
+    badgeColor: 'bg-orange-500/20 text-orange-300',
+  },
+  {
     id: 'claude-haiku-4-5-20251001',
     name: 'Haiku 4.5',
     description: 'Fast and cost-efficient. Best for most tasks.',
@@ -29,12 +56,30 @@ const MODELS = [
 ];
 
 const STORAGE_KEY = 'agent_builder_model';
+const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
+
+export function isLocalDev(): boolean {
+  try {
+    return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+  } catch {
+    return false;
+  }
+}
+
+export function isWorkersAIModel(model: string): boolean {
+  return model.startsWith('@cf/');
+}
 
 export function getStoredModel(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY) || 'claude-haiku-4-5-20251001';
+    const stored = localStorage.getItem(STORAGE_KEY) || DEFAULT_MODEL;
+    // Ollama models only available on localhost — fall back to default on prod
+    if (stored.startsWith('ollama/') && !isLocalDev()) {
+      return DEFAULT_MODEL;
+    }
+    return stored;
   } catch {
-    return 'claude-haiku-4-5-20251001';
+    return DEFAULT_MODEL;
   }
 }
 
@@ -56,11 +101,11 @@ export default function ModelSettings({ model, onChange }: Props) {
       <div className="max-w-xl mx-auto">
         <h2 className="text-base font-semibold text-white mb-1">Model</h2>
         <p className="text-xs text-white/50 mb-5">
-          Select which Claude model to use for your chat sessions. Applies to new conversations.
+          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude models use the SSE chat path.
         </p>
 
         <div className="flex flex-col gap-3">
-          {MODELS.map((m) => {
+          {MODELS.filter((m) => !m.id.startsWith('ollama/') || isLocalDev()).map((m) => {
             const selected = model === m.id;
             return (
               <button
@@ -84,7 +129,7 @@ export default function ModelSettings({ model, onChange }: Props) {
                     </span>
                   </div>
                   <span className="text-[11px] text-white/40 font-mono">
-                    ${m.inputCost.toFixed(2)} / ${m.outputCost.toFixed(2)} per MTok
+                    {m.badge === 'Workers AI' ? 'Free tier / per neuron' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
                   </span>
                 </div>
                 <p className="text-xs text-white/50 ml-5">{m.description}</p>
