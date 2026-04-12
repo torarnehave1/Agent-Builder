@@ -1,7 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useAgent } from 'agents/react';
+
+// Lazy-load GraphPreview to keep initial bundle small
+const GraphPreviewComponent = lazy(() => import('./GraphPreview'));
+function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () => void }) {
+  return (
+    <Suspense fallback={null}>
+      <GraphPreviewComponent {...props} />
+    </Suspense>
+  );
+}
 import { useAgentChat, getToolPartState, getToolCallId, getToolInput, getToolOutput } from '@cloudflare/ai-chat/react';
 import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
 
@@ -92,6 +102,56 @@ interface ListGraphsOutput {
   count?: number;
 }
 
+function GraphCard({ g }: { g: GraphSummary }) {
+  const [previewing, setPreviewing] = useState(false);
+  const categoryTags = g.category ? g.category.split(/\s+/).filter(t => t.startsWith('#')) : [];
+  const metaTags = g.metaArea ? g.metaArea.split(/[\s#]+/).filter(Boolean).map(t => `#${t}`) : [];
+  const viewHref = `https://www.vegvisr.org/gnew-viewer?graphId=${g.id}`;
+  return (
+    <>
+      <div className="p-3 rounded-lg border border-sky-400/20 bg-sky-400/[0.06]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-white font-semibold text-sm">{g.title}</div>
+            {g.description && (
+              <div className="text-white/50 text-xs mt-1 line-clamp-2">{g.description}</div>
+            )}
+            <div className="flex flex-wrap gap-1 mt-2">
+              {metaTags.map(tag => (
+                <span key={tag} className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold">{tag}</span>
+              ))}
+              {categoryTags.map(tag => (
+                <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
+              ))}
+              <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{g.nodeCount} nodes</span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5 flex-shrink-0 mt-1">
+            <button
+              type="button"
+              onClick={() => setPreviewing(true)}
+              className="px-3 py-1.5 rounded-md bg-emerald-600/20 text-emerald-400 text-xs font-medium hover:bg-emerald-600/30 transition-colors"
+            >
+              Preview
+            </button>
+            <a
+              href={viewHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium hover:bg-sky-400/30 transition-colors text-center no-underline"
+            >
+              View →
+            </a>
+          </div>
+        </div>
+      </div>
+      {previewing && (
+        <GraphPreviewLazy graphId={g.id} title={g.title} onClose={() => setPreviewing(false)} />
+      )}
+    </>
+  );
+}
+
 function ListGraphsResultCard({ data }: { data: ListGraphsOutput }) {
   const graphs: GraphSummary[] = data.graphs || data.results || [];
   const total = data.total ?? data.count ?? graphs.length;
@@ -103,44 +163,7 @@ function ListGraphsResultCard({ data }: { data: ListGraphsOutput }) {
         {(data.offset ?? 0) > 0 ? ` (offset ${data.offset})` : ''}
       </div>
       <div className="flex flex-col gap-2">
-        {graphs.map(g => {
-          const categoryTags = g.category
-            ? g.category.split(/\s+/).filter(t => t.startsWith('#'))
-            : [];
-          const metaTags = g.metaArea
-            ? g.metaArea.split(/[\s#]+/).filter(Boolean).map(t => `#${t}`)
-            : [];
-          const viewHref = `https://www.vegvisr.org/gnew-viewer?graphId=${g.id}`;
-          return (
-            <div key={g.id} className="p-3 rounded-lg border border-sky-400/20 bg-sky-400/[0.06]">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="text-white font-semibold text-sm">{g.title}</div>
-                  {g.description && (
-                    <div className="text-white/50 text-xs mt-1 line-clamp-2">{g.description}</div>
-                  )}
-                  <div className="flex flex-wrap gap-1 mt-2">
-                    {metaTags.map(tag => (
-                      <span key={tag} className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-semibold">{tag}</span>
-                    ))}
-                    {categoryTags.map(tag => (
-                      <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
-                    ))}
-                    <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{g.nodeCount} nodes</span>
-                  </div>
-                </div>
-                <a
-                  href={viewHref}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-shrink-0 mt-1 px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium hover:bg-sky-400/30 transition-colors no-underline whitespace-nowrap"
-                >
-                  View →
-                </a>
-              </div>
-            </div>
-          );
-        })}
+        {graphs.map(g => <GraphCard key={g.id} g={g} />)}
       </div>
     </div>
   );
