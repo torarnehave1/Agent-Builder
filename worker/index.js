@@ -1888,8 +1888,10 @@ export default {
       if (pathname === '/generate-image' && request.method === 'POST') {
         const body = await request.json()
         const prompt = body.prompt
+        const userId = body.userId || 'unknown'
         if (!prompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
 
+        const startTime = Date.now()
         const imageResponse = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', { prompt })
         const arrayBuffer = await new Response(imageResponse).arrayBuffer()
         const buffer = new Uint8Array(arrayBuffer)
@@ -1906,6 +1908,21 @@ export default {
 
         const url = uploadData.urls?.[0]
         if (!url) return new Response(JSON.stringify({ error: 'No URL returned from upload' }), { status: 500, headers: corsHeaders })
+
+        // Track usage in STATS_DB
+        if (env.STATS_DB) {
+          const now = new Date().toISOString()
+          env.STATS_DB.prepare(
+            `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms,
+              turns, fast_path, model, input_tokens, output_tokens, tool_calls, success,
+              agent_id, version, version_note, cost_usd)
+             VALUES (?, ?, ?, ?, ?, 1, 1, ?, 0, 0, '[]', 1, 'workers-ai', 'v-wai-1', 'Image generation', 0)`
+          ).bind(
+            crypto.randomUUID(), userId,
+            new Date(startTime).toISOString(), now, Date.now() - startTime,
+            '@cf/bytedance/stable-diffusion-xl-lightning'
+          ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
+        }
 
         return new Response(JSON.stringify({ url, prompt }), { headers: corsHeaders })
       }

@@ -34,6 +34,7 @@ const MODEL_LABELS: Record<string, string> = {
   'fast-path': 'Fast-path',
   '@cf/meta/llama-4-scout-17b-16e-instruct': 'Llama 4 Scout',
   '@cf/google/gemma-4-26b-a4b-it': 'Gemma 4 26B',
+  '@cf/bytedance/stable-diffusion-xl-lightning': 'SDXL Lightning',
   '@cf/meta/llama-3.1-8b-instruct': 'Llama 3.1 8B',
   '@cf/bytedance/stable-diffusion-xl-lightning': 'SDXL Lightning',
   '@cf/nvidia/nemotron-3-120b-a12b': 'Nemotron-3 120B',

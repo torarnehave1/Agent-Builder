@@ -62,6 +62,15 @@ const MODELS = [
     badge: 'Powerful',
     badgeColor: 'bg-violet-500/20 text-violet-300',
   },
+  {
+    id: '@cf/bytedance/stable-diffusion-xl-lightning',
+    name: 'SDXL Lightning',
+    description: 'Stable Diffusion XL Lightning. Every message becomes an image prompt.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Image Gen',
+    badgeColor: 'bg-pink-500/20 text-pink-300',
+  },
 ];
 
 const STORAGE_KEY = 'agent_builder_model';
