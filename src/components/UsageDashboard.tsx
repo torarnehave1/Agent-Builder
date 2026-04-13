@@ -36,6 +36,7 @@ const MODEL_LABELS: Record<string, string> = {
   '@cf/google/gemma-4-26b-a4b-it': 'Gemma 4 26B',
   '@cf/meta/llama-3.1-8b-instruct': 'Llama 3.1 8B',
   '@cf/bytedance/stable-diffusion-xl-lightning': 'SDXL Lightning',
+  '@cf/nvidia/nemotron-3-120b-a12b': 'Nemotron-3 120B',
 };
 
 function fmt(n: number | null | undefined, decimals = 0) {
@@ -66,6 +67,17 @@ function StatCard({ label, value, sub }: { label: string; value: string; sub?: s
   );
 }
 
+interface CfBillingData {
+  period: { days: number; dateFrom: string; dateTo: string };
+  totalNeurons: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  freeNeurons: number;
+  billableNeurons: number;
+  estimatedCostUsd: number;
+  byModel: { modelId: string; neurons: number; inputTokens: number; outputTokens: number; days: { date: string; neurons: number }[] }[];
+}
+
 interface Props {
   userId: string;
 }
@@ -76,6 +88,8 @@ export default function UsageDashboard({ userId }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [cfBilling, setCfBilling] = useState<CfBillingData | null>(null);
+  const [cfLoading, setCfLoading] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -86,6 +100,16 @@ export default function UsageDashboard({ userId }: Props) {
       .then((d: UsageData) => setData(d))
       .catch(e => setError(e.message))
       .finally(() => setLoading(false));
+  }, [userId, days]);
+
+  useEffect(() => {
+    if (!userId) return;
+    setCfLoading(true);
+    fetch(`${AGENT_WORKER_URL}/api/cf-billing?days=${days}`)
+      .then(r => r.json())
+      .then((d: CfBillingData) => setCfBilling(d))
+      .catch(() => setCfBilling(null))
+      .finally(() => setCfLoading(false));
   }, [userId, days]);
 
   // Daily sparkline — simple bar chart using relative heights
@@ -309,6 +333,49 @@ export default function UsageDashboard({ userId }: Props) {
             )}
           </>
         )}
+
+        {/* Cloudflare Actual Billing */}
+        <div className="bg-white/[0.03] border border-white/10 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[11px] text-white/40">Cloudflare Actual Billing</div>
+            <div className="text-[10px] text-orange-300/60">Workers AI neurons — live from CF API</div>
+          </div>
+          {cfLoading && <div className="text-xs text-white/20 py-2">Loading from Cloudflare...</div>}
+          {!cfLoading && cfBilling && (
+            <>
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-white/[0.04] rounded-lg p-3">
+                  <div className="text-[10px] text-white/30 mb-1">Total neurons used</div>
+                  <div className="text-base font-semibold text-white">{cfBilling.totalNeurons.toLocaleString()}</div>
+                  <div className="text-[10px] text-white/20">{cfBilling.freeNeurons.toLocaleString()} free · {cfBilling.billableNeurons.toLocaleString()} billable</div>
+                </div>
+                <div className="bg-white/[0.04] rounded-lg p-3">
+                  <div className="text-[10px] text-white/30 mb-1">Estimated CF cost</div>
+                  <div className="text-base font-semibold text-emerald-300">{fmtCost(cfBilling.estimatedCostUsd)}</div>
+                  <div className="text-[10px] text-white/20">{days}d · $0.011 per 1K billable neurons</div>
+                </div>
+              </div>
+              {cfBilling.byModel.length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-[10px] text-white/30 mb-2">Neurons by model</div>
+                  {cfBilling.byModel.map(m => (
+                    <div key={m.modelId} className="flex items-center gap-3 text-xs">
+                      <span className="text-white/50 truncate flex-1">{MODEL_LABELS[m.modelId] || m.modelId.replace('@cf/', '')}</span>
+                      <span className="text-white/30 flex-shrink-0">{fmt(m.inputTokens + m.outputTokens)} tok</span>
+                      <span className="text-orange-300/70 font-mono flex-shrink-0">{Math.round(m.neurons).toLocaleString()} neurons</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {cfBilling.byModel.length === 0 && (
+                <div className="text-xs text-white/20">No Workers AI usage in this period.</div>
+              )}
+            </>
+          )}
+          {!cfLoading && !cfBilling && (
+            <div className="text-xs text-white/20">Could not load Cloudflare billing data.</div>
+          )}
+        </div>
       </div>
     </div>
   );

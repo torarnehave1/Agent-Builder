@@ -573,6 +573,95 @@ export default {
         }), { headers: corsHeaders })
       }
 
+      // GET /api/cf-billing - Fetch real neuron usage from Cloudflare GraphQL Analytics API
+      if (pathname === '/api/cf-billing' && request.method === 'GET') {
+        const cfToken = env.CF_API_TOKEN
+        const cfAccount = env.CF_ACCOUNT_ID
+        if (!cfToken || !cfAccount) {
+          return new Response(JSON.stringify({ error: 'CF_API_TOKEN or CF_ACCOUNT_ID not configured' }), { status: 503, headers: corsHeaders })
+        }
+        const days = Math.min(parseInt(url.searchParams.get('days') || '7', 10), 30)
+        const dateFrom = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10)
+        const dateTo = new Date().toISOString().slice(0, 10)
+
+        const query = `{
+          viewer {
+            accounts(filter: { accountTag: "${cfAccount}" }) {
+              aiInferenceAdaptiveGroups(
+                filter: { date_geq: "${dateFrom}", date_leq: "${dateTo}" }
+                limit: 1000
+              ) {
+                sum { totalNeurons totalInputTokens totalOutputTokens }
+                dimensions { modelId date }
+              }
+            }
+          }
+        }`
+
+        const cfRes = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${cfToken}`,
+          },
+          body: JSON.stringify({ query }),
+        })
+
+        if (!cfRes.ok) {
+          const errText = await cfRes.text()
+          return new Response(JSON.stringify({ error: `Cloudflare API error: ${cfRes.status}`, detail: errText }), { status: 502, headers: corsHeaders })
+        }
+
+        const cfData = await cfRes.json()
+        if (cfData.errors) {
+          return new Response(JSON.stringify({ error: 'CF GraphQL error', detail: cfData.errors }), { status: 502, headers: corsHeaders })
+        }
+        const groups = cfData?.data?.viewer?.accounts?.[0]?.aiInferenceAdaptiveGroups || []
+
+        // Aggregate by model
+        const byModel = {}
+        let totalNeurons = 0
+        let totalInputTokens = 0
+        let totalOutputTokens = 0
+        for (const g of groups) {
+          const modelId = g.dimensions?.modelId || 'unknown'
+          const neurons = g.sum?.totalNeurons || 0
+          const inTok = g.sum?.totalInputTokens || 0
+          const outTok = g.sum?.totalOutputTokens || 0
+          if (!byModel[modelId]) byModel[modelId] = { modelId, neurons: 0, inputTokens: 0, outputTokens: 0, days: {} }
+          byModel[modelId].neurons += neurons
+          byModel[modelId].inputTokens += inTok
+          byModel[modelId].outputTokens += outTok
+          const day = g.dimensions?.date
+          if (day) byModel[modelId].days[day] = (byModel[modelId].days[day] || 0) + neurons
+          totalNeurons += neurons
+          totalInputTokens += inTok
+          totalOutputTokens += outTok
+        }
+
+        // Neurons pricing: 10,000 free per day, then $0.011 per 1,000 neurons
+        // We can't precisely split free vs paid per model, so show raw neurons + cost estimate
+        const FREE_NEURONS_PER_DAY = 10_000
+        const totalFreeNeurons = FREE_NEURONS_PER_DAY * days
+        const billableNeurons = Math.max(0, totalNeurons - totalFreeNeurons)
+        const estimatedCostUsd = (billableNeurons / 1_000) * 0.011
+
+        const byModelArr = Object.values(byModel)
+          .sort((a, b) => b.neurons - a.neurons)
+          .map(m => ({ ...m, days: Object.entries(m.days).map(([date, neurons]) => ({ date, neurons })).sort((a, b) => a.date.localeCompare(b.date)) }))
+
+        return new Response(JSON.stringify({
+          period: { days, dateFrom, dateTo },
+          totalNeurons,
+          totalInputTokens,
+          totalOutputTokens,
+          freeNeurons: Math.min(totalNeurons, totalFreeNeurons),
+          billableNeurons,
+          estimatedCostUsd,
+          byModel: byModelArr,
+        }), { headers: corsHeaders })
+      }
+
       // POST /upload-image - Upload base64 image to photos API, return imgix URL
       if (pathname === '/upload-image' && request.method === 'POST') {
         const body = await request.json()
