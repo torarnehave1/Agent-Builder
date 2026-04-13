@@ -1886,14 +1886,39 @@ export default {
 
       // POST /generate-image — direct SDXL Lightning call, no AI SDK involved
       if (pathname === '/generate-image' && request.method === 'POST') {
+        // Helper: parse --ar W:H from prompt, compute dimensions at same pixel area as default
+        function parseAspectRatio(rawPrompt, baseSize = 1120) {
+          const match = rawPrompt.match(/--ar\s+(\d+)\s*:\s*(\d+)/i)
+          if (!match) return { cleanPrompt: rawPrompt, width: baseSize, height: baseSize }
+          const ratioW = parseInt(match[1], 10)
+          const ratioH = parseInt(match[2], 10)
+          if (!ratioW || !ratioH) return { cleanPrompt: rawPrompt, width: baseSize, height: baseSize }
+          const baseArea = baseSize * baseSize
+          // width = sqrt(area * ratioW/ratioH), round to nearest multiple of 8
+          const w = Math.round(Math.sqrt(baseArea * ratioW / ratioH) / 8) * 8
+          const h = Math.round(Math.sqrt(baseArea * ratioH / ratioW) / 8) * 8
+          const cleanPrompt = rawPrompt.replace(/--ar\s+\d+\s*:\s*\d+/i, '').trim()
+          return { cleanPrompt, width: w, height: h }
+        }
+
         const body = await request.json()
-        const prompt = body.prompt
+        const rawPrompt = body.prompt
         const userId = body.userId || 'unknown'
-        if (!prompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
+        if (!rawPrompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
 
         const startTime = Date.now()
         const imageModel = body.model || '@cf/bytedance/stable-diffusion-xl-lightning'
-        const imageResponse = await env.AI.run(imageModel, { prompt })
+
+        // Parse --ar from prompt; caller can still override width/height explicitly
+        const { cleanPrompt, width: arWidth, height: arHeight } = parseAspectRatio(rawPrompt)
+        const prompt = cleanPrompt
+
+        const imageInput = { prompt }
+        imageInput.width = body.width || arWidth
+        imageInput.height = body.height || arHeight
+        if (body.guidance) imageInput.guidance = body.guidance
+        if (body.seed) imageInput.seed = body.seed
+        const imageResponse = await env.AI.run(imageModel, imageInput)
 
         // SDXL returns a ReadableStream of raw JPEG bytes
         // Lucid Origin returns { image: '<base64 string>' }
@@ -1938,7 +1963,7 @@ export default {
           ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
         }
 
-        return new Response(JSON.stringify({ url, prompt }), { headers: corsHeaders })
+        return new Response(JSON.stringify({ url, prompt, width: imageInput.width, height: imageInput.height }), { headers: corsHeaders })
       }
 
       return new Response(JSON.stringify({
