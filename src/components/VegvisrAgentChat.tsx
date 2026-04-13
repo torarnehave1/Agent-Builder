@@ -257,7 +257,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const audioInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string }>>([]);
+  const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string; file: File }>>([]); 
   const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
   const lastTranscriptRef = useRef<string | null>(null);
 
@@ -559,7 +559,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     if (!files) return;
     Array.from(files).forEach(file => {
       const url = URL.createObjectURL(file);
-      setPendingImages(prev => [...prev, { url, name: file.name }]);
+      setPendingImages(prev => [...prev, { url, name: file.name, file }]);
     });
   }
 
@@ -573,7 +573,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     textareaRef.current?.focus();
   }
 
-  function doSend() {
+  async function doSend() {
     const text = inputText.trim();
     const hasImages = pendingImages.length > 0;
     if (!text && !hasImages) return;
@@ -581,10 +581,36 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     const transcript = lastTranscriptRef.current;
     lastTranscriptRef.current = null;
     const contextPrefix = transcript ? `[Transcription context]:\n${transcript}\n\n` : '';
-    const fullText = hasImages
-      ? `${contextPrefix}${text}\n${pendingImages.map(i => `[Image: ${i.name}]`).join('\n')}`.trim()
-      : `${contextPrefix}${text}`;
-    sendMessage({ text: fullText });
+    const fullText = `${contextPrefix}${text}`.trim();
+
+    if (hasImages) {
+      // Read each image as a base64 data URL so Workers AI (Gemma vision) can process it.
+      // Workers AI does NOT support plain HTTPS URLs — base64 only.
+      const imageParts = await Promise.all(
+        pendingImages.map(async img => {
+          const base64Url = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => reject(new Error(`Failed to read ${img.name}`));
+            reader.readAsDataURL(img.file);
+          });
+          return {
+            type: 'file' as const,
+            mediaType: img.file.type || 'image/png',
+            filename: img.name,
+            url: base64Url,
+          };
+        })
+      );
+      const parts: Array<{ type: 'file'; mediaType: string; filename: string; url: string } | { type: 'text'; text: string }> = [
+        ...imageParts,
+        ...(fullText ? [{ type: 'text' as const, text: fullText }] : []),
+      ];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sendMessage({ parts } as any);
+    } else {
+      sendMessage({ text: fullText });
+    }
     setInputText('');
     setPendingImages([]);
   }
@@ -834,7 +860,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           if (!files?.length) return;
           const images = Array.from(files).filter(f => f.type.startsWith('image/'));
           if (images.length) {
-            images.forEach(f => setPendingImages(prev => [...prev, { url: URL.createObjectURL(f), name: f.name }]));
+            images.forEach(f => setPendingImages(prev => [...prev, { url: URL.createObjectURL(f), name: f.name, file: f }]));
           }
         }}
       >
@@ -882,7 +908,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   e.preventDefault();
                   imageItems.forEach(it => {
                     const file = it.getAsFile();
-                    if (file) setPendingImages(prev => [...prev, { url: URL.createObjectURL(file), name: file.name || 'pasted-image.png' }]);
+                    if (file) setPendingImages(prev => [...prev, { url: URL.createObjectURL(file), name: file.name || 'pasted-image.png', file }]);
                   });
                 }
               }}
