@@ -602,9 +602,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     const contextPrefix = transcript ? `[Transcription context]:\n${transcript}\n\n` : '';
     const fullText = `${contextPrefix}${text}`.trim();
 
-    // SDXL Lightning model — every message is an image prompt
-    const isSdxl = model === '@cf/bytedance/stable-diffusion-xl-lightning';
-    if (isSdxl && !hasImages) {
+    // Image generation models — every message is an image prompt
+    const isImageModel = model === '@cf/bytedance/stable-diffusion-xl-lightning' || model === '@cf/leonardo/lucid-origin';
+    if (isImageModel && !hasImages) {
       const prompt = fullText;
       setInputText('');
       const userMsgId = Date.now().toString();
@@ -613,7 +613,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, userId }),
+          body: JSON.stringify({ prompt, userId, model }),
         });
         const data = await res.json() as { url?: string; error?: string };
         if (!res.ok || !data.url) throw new Error(data.error || 'Generation failed');

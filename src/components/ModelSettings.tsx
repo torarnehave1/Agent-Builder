@@ -71,6 +71,15 @@ const MODELS = [
     badge: 'Image Gen',
     badgeColor: 'bg-pink-500/20 text-pink-300',
   },
+  {
+    id: '@cf/leonardo/lucid-origin',
+    name: 'Lucid Origin',
+    description: 'Leonardo.AI. Prompt-responsive, renders text, wide style range. $0.007/tile.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Image Gen',
+    badgeColor: 'bg-pink-500/20 text-pink-300',
+  },
 ];
 
 const STORAGE_KEY = 'agent_builder_model';

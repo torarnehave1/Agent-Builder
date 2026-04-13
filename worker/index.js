@@ -1892,7 +1892,8 @@ export default {
         if (!prompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
 
         const startTime = Date.now()
-        const imageResponse = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', { prompt })
+        const imageModel = body.model || '@cf/bytedance/stable-diffusion-xl-lightning'
+        const imageResponse = await env.AI.run(imageModel, { prompt })
         const arrayBuffer = await new Response(imageResponse).arrayBuffer()
         const buffer = new Uint8Array(arrayBuffer)
 
@@ -1920,7 +1921,7 @@ export default {
           ).bind(
             crypto.randomUUID(), userId,
             new Date(startTime).toISOString(), now, Date.now() - startTime,
-            '@cf/bytedance/stable-diffusion-xl-lightning'
+            imageModel
           ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
         }
 
