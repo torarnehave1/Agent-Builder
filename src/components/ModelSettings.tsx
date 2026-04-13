@@ -147,7 +147,7 @@ export default function ModelSettings({ model, onChange }: Props) {
                     </span>
                   </div>
                   <span className="text-[11px] text-white/40 font-mono">
-                    {m.badge === 'Workers AI' ? 'Free tier / per neuron' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
+                    {m.badge === 'Workers AI' || m.badge === 'Image Gen' ? 'Free tier / per neuron' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
                   </span>
                 </div>
                 <p className="text-xs text-white/50 ml-5">{m.description}</p>
