@@ -35,6 +35,7 @@ const MODEL_LABELS: Record<string, string> = {
   '@cf/meta/llama-4-scout-17b-16e-instruct': 'Llama 4 Scout',
   '@cf/google/gemma-4-26b-a4b-it': 'Gemma 4 26B',
   '@cf/meta/llama-3.1-8b-instruct': 'Llama 3.1 8B',
+  '@cf/bytedance/stable-diffusion-xl-lightning': 'SDXL Lightning',
 };
 
 function fmt(n: number | null | undefined, decimals = 0) {

@@ -2754,6 +2754,7 @@ async function executeGenerateImage(input, env) {
   if (!env.AI) throw new Error('Workers AI binding (AI) is not configured')
   if (!env.PHOTOS_WORKER) throw new Error('PHOTOS_WORKER binding is not configured')
 
+  const startTime = Date.now()
   const width = Math.min(Math.max(input.width || 1024, 256), 1024)
   const height = Math.min(Math.max(input.height || 1024, 256), 1024)
 
@@ -2807,6 +2808,24 @@ async function executeGenerateImage(input, env) {
 
   const url = uploadData.url
   if (!url) throw new Error('Upload succeeded but no URL returned')
+
+  // Record stats so image generations appear in the usage dashboard
+  if (env.STATS_DB) {
+    const now = new Date().toISOString()
+    env.STATS_DB.prepare(
+      `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms,
+        turns, fast_path, model, input_tokens, output_tokens, tool_calls, success,
+        agent_id, version, version_note, cost_usd)
+       VALUES (?, ?, ?, ?, ?, 1, 0, ?, 0, 0, '[]', 1, 'workers-ai', 'v-wai-1', 'Image generation', 0)`
+    ).bind(
+      crypto.randomUUID(),
+      input.userId || 'unknown',
+      new Date(startTime).toISOString(),
+      now,
+      Date.now() - startTime,
+      '@cf/bytedance/stable-diffusion-xl-lightning'
+    ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
+  }
 
   return {
     url,
