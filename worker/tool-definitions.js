@@ -1820,6 +1820,36 @@ const PROFF_TOOLS = [
     }
   },
   {
+    name: 'generate_image',
+    description: 'Generate an image from a text prompt using Stable Diffusion XL Lightning (Workers AI). Returns an imgix URL. Use when the user asks to "generate", "create", "draw", or "make" an image. After generation, always display the image URL as a markdown image in your response: ![description](url)',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'Detailed description of the image to generate'
+        },
+        negative_prompt: {
+          type: 'string',
+          description: 'Elements to avoid in the image (e.g., "blurry, low quality, text")'
+        },
+        width: {
+          type: 'integer',
+          description: 'Width in pixels (256–1024, default 1024)'
+        },
+        height: {
+          type: 'integer',
+          description: 'Height in pixels (256–1024, default 1024)'
+        },
+        seed: {
+          type: 'integer',
+          description: 'Random seed for reproducibility'
+        }
+      },
+      required: ['prompt']
+    }
+  },
+  {
     name: 'proff_find_business_network',
     description: 'Find the shortest path/connection between two people in the Norwegian business network. Shows how they are connected through companies and roles. Requires personIds from proff_search_persons.',
     input_schema: {

@@ -212,10 +212,29 @@ function ListMetaAreasResultCard({ data }: { data: ListMetaAreasOutput }) {
   );
 }
 
+function GenerateImageCard({ output }: { output: unknown }) {
+  const data = output as { url?: string; prompt?: string; width?: number; height?: number };
+  if (!data?.url) return null;
+  return (
+    <div className="mt-2">
+      <img
+        src={data.url}
+        alt={data.prompt || 'Generated image'}
+        className="rounded-lg max-w-full max-h-[400px] object-contain border border-white/10"
+      />
+      <div className="mt-1 text-[11px] text-white/30 break-all">
+        <a href={data.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-white/60">Open full size</a>
+        {data.width && data.height && <span className="ml-2">{data.width}×{data.height}px</span>}
+      </div>
+    </div>
+  );
+}
+
 function ToolResultCard({ toolName, output }: { toolName: string; output: unknown }) {
   if (toolName === 'who_am_i') return <WhoAmICard data={output as WhoAmIResult} />;
   if (toolName === 'list_graphs' || toolName === 'search_graphs') return <ListGraphsResultCard data={output as ListGraphsOutput} />;
   if (toolName === 'list_meta_areas') return <ListMetaAreasResultCard data={output as ListMetaAreasOutput} />;
+  if (toolName === 'generate_image') return <GenerateImageCard output={output} />;
   // Fallback: collapsible JSON
   return (
     <details className="mt-2 text-xs text-white/50">
@@ -712,6 +731,25 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             >
               {msg.parts.map((part, i) => {
                 if (isTextUIPart(part)) {
+                  // Render imgix/image URLs as inline images within text
+                  const imgixRe = /(https:\/\/vegvisr\.imgix\.net\/[^\s)"']+)/g;
+                  const segments = part.text.split(imgixRe);
+                  if (segments.length > 1) {
+                    return (
+                      <span key={i} className="whitespace-pre-wrap">
+                        {segments.map((seg, j) =>
+                          seg.startsWith('https://vegvisr.imgix.net/') ? (
+                            <span key={j} className="block my-2">
+                              <img src={seg} alt="generated" className="rounded-lg max-w-full max-h-[400px] object-contain border border-white/10" />
+                              <a href={seg} target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 underline hover:text-white/60 break-all">{seg}</a>
+                            </span>
+                          ) : (
+                            <span key={j}>{seg}</span>
+                          )
+                        )}
+                      </span>
+                    );
+                  }
                   return <span key={i} className="whitespace-pre-wrap">{part.text}</span>;
                 }
 

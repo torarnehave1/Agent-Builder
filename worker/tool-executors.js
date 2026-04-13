@@ -2749,6 +2749,74 @@ async function executeDeactivateAgent(input, env) {
   }
 }
 
+async function executeGenerateImage(input, env) {
+  if (!input.prompt) throw new Error('prompt is required')
+  if (!env.AI) throw new Error('Workers AI binding (AI) is not configured')
+  if (!env.PHOTOS_WORKER) throw new Error('PHOTOS_WORKER binding is not configured')
+
+  const width = Math.min(Math.max(input.width || 1024, 256), 1024)
+  const height = Math.min(Math.max(input.height || 1024, 256), 1024)
+
+  // Run Stable Diffusion XL Lightning — returns a ReadableStream of JPEG bytes
+  const aiInput = {
+    prompt: input.prompt,
+    ...(input.negative_prompt ? { negative_prompt: input.negative_prompt } : {}),
+    width,
+    height,
+    num_steps: 20,
+    ...(input.seed != null ? { seed: input.seed } : {}),
+  }
+
+  const imageStream = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', aiInput)
+
+  // Collect the stream into a buffer, then base64-encode for upload
+  const reader = imageStream.getReader()
+  const chunks = []
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) chunks.push(value)
+  }
+  const totalLength = chunks.reduce((s, c) => s + c.length, 0)
+  const buffer = new Uint8Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    buffer.set(chunk, offset)
+    offset += chunk.length
+  }
+
+  // Convert to base64
+  let binary = ''
+  for (let i = 0; i < buffer.length; i++) binary += String.fromCharCode(buffer[i])
+  const base64 = btoa(binary)
+
+  // Upload to photos worker → get imgix URL
+  const filename = `sdxl-${Date.now()}.jpg`
+  const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'agent-image-gen',
+      base64,
+      mediaType: 'image/jpeg',
+      filename,
+    }),
+  })
+  const uploadData = await uploadRes.json()
+  if (!uploadRes.ok) throw new Error(uploadData.error || 'Failed to upload generated image')
+
+  const url = uploadData.url
+  if (!url) throw new Error('Upload succeeded but no URL returned')
+
+  return {
+    url,
+    prompt: input.prompt,
+    width,
+    height,
+    message: `Generated image: ${url}`,
+  }
+}
+
 async function executeUploadAgentAvatar(input, env) {
   if (!input.agentId) throw new Error('agentId is required')
   if (!input.base64) throw new Error('base64 image data is required')
@@ -4667,6 +4735,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDeactivateAgent(toolInput, env)
     case 'upload_agent_avatar':
       return await executeUploadAgentAvatar(toolInput, env)
+    case 'generate_image':
+      return await executeGenerateImage(toolInput, env)
     case 'delegate_to_agent_builder': {
       const result = await runAgentBuilderSubagent(toolInput, env, progress, executeTool)
       return {

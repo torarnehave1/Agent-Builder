@@ -76,7 +76,7 @@ function jsonSchemaToZod(schema) {
 // Wraps each existing tool definition so executeTool() handles all runtime logic.
 // ---------------------------------------------------------------------------
 
-const WORKERS_AI_TOOLS = new Set(['who_am_i', 'list_graphs', 'list_meta_areas', 'search_graphs'])
+const WORKERS_AI_TOOLS = new Set(['who_am_i', 'list_graphs', 'list_meta_areas', 'search_graphs', 'generate_image'])
 
 function buildTools(env, userId) {
   const tools = {}
