@@ -1894,13 +1894,26 @@ export default {
         const startTime = Date.now()
         const imageModel = body.model || '@cf/bytedance/stable-diffusion-xl-lightning'
         const imageResponse = await env.AI.run(imageModel, { prompt })
-        const arrayBuffer = await new Response(imageResponse).arrayBuffer()
-        const buffer = new Uint8Array(arrayBuffer)
+
+        // SDXL returns a ReadableStream of raw JPEG bytes
+        // Lucid Origin returns { image: '<base64 string>' }
+        let buffer
+        if (imageResponse && typeof imageResponse === 'object' && 'image' in imageResponse) {
+          // Base64 response (Lucid Origin)
+          const base64 = imageResponse.image
+          const binaryStr = atob(base64)
+          buffer = new Uint8Array(binaryStr.length)
+          for (let i = 0; i < binaryStr.length; i++) buffer[i] = binaryStr.charCodeAt(i)
+        } else {
+          // Stream response (SDXL Lightning)
+          const arrayBuffer = await new Response(imageResponse).arrayBuffer()
+          buffer = new Uint8Array(arrayBuffer)
+        }
 
         const filename = `sdxl-${Date.now()}.jpg`
         const formData = new FormData()
         formData.append('file', new File([buffer], filename, { type: 'image/jpeg' }))
-        formData.append('filename', filename)
+        formData.append('filename', `sdxl-${Date.now()}`)
         formData.append('album', 'agent-generated')
 
         const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', { method: 'POST', body: formData })
