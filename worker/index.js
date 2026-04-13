@@ -538,6 +538,15 @@ export default {
            GROUP BY day ORDER BY day ASC`
         ).bind(...(userId ? [since, userId] : [since])).all()
 
+        // Per-day model breakdown (for drill-down)
+        const dailyByModel = await env.STATS_DB.prepare(
+          `SELECT substr(started_at, 1, 10) AS day, model,
+            COUNT(*) AS sessions,
+            SUM(cost_usd) AS cost_usd
+           FROM sessions WHERE started_at >= ? ${userId ? 'AND user_id = ?' : ''}
+           GROUP BY day, model ORDER BY day ASC, cost_usd DESC`
+        ).bind(...(userId ? [since, userId] : [since])).all()
+
         // Top tool calls
         const topTools = await env.STATS_DB.prepare(
           `SELECT tool_name, COUNT(*) AS calls, SUM(CASE WHEN success=1 THEN 1 ELSE 0 END) AS successes
@@ -558,6 +567,7 @@ export default {
           totals,
           byModel: byModel.results || [],
           dailyCost: dailyCost.results || [],
+          dailyByModel: dailyByModel.results || [],
           topTools: topTools.results || [],
           recentSessions: recent.results || [],
         }), { headers: corsHeaders })

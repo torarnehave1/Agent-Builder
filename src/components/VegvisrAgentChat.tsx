@@ -288,6 +288,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
   const { messages, sendMessage, clearHistory, addToolApprovalResponse, status } = useAgentChat({
     agent,
+    body: { model },
     onToolCall: async ({ toolCall, addToolOutput }) => {
       if (toolCall.toolName === 'getUserTimezone') {
         addToolOutput({

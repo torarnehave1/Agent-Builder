@@ -15,6 +15,7 @@ interface UsageData {
   };
   byModel: { model: string; sessions: number; input_tokens: number; output_tokens: number; cost_usd: number }[];
   dailyCost: { day: string; sessions: number; cost_usd: number; input_tokens: number; output_tokens: number }[];
+  dailyByModel: { day: string; model: string; sessions: number; cost_usd: number; input_tokens: number; output_tokens: number }[];
   topTools: { tool_name: string; calls: number; successes: number }[];
   recentSessions: {
     id: string; user_id: string; started_at: string; model: string;
@@ -31,6 +32,9 @@ const MODEL_LABELS: Record<string, string> = {
   'claude-opus-4-6': 'Opus 4.6',
   'claude-opus-4-20250514': 'Opus 4',
   'fast-path': 'Fast-path',
+  '@cf/meta/llama-4-scout-17b-16e-instruct': 'Llama 4 Scout',
+  '@cf/google/gemma-4-26b-a4b-it': 'Gemma 4 26B',
+  '@cf/meta/llama-3.1-8b-instruct': 'Llama 3.1 8B',
 };
 
 function fmt(n: number | null | undefined, decimals = 0) {
@@ -67,9 +71,10 @@ interface Props {
 
 export default function UsageDashboard({ userId }: Props) {
   const [data, setData] = useState<UsageData | null>(null);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(7);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -95,7 +100,7 @@ export default function UsageDashboard({ userId }: Props) {
             <p className="text-xs text-white/40 mt-0.5">Agent Builder API usage tracked in agent-stats-db</p>
           </div>
           <div className="flex items-center gap-2">
-            {([7, 14, 30] as const).map(d => (
+            {([1, 7, 14, 30] as const).map(d => (
               <button
                 key={d}
                 type="button"
@@ -153,16 +158,24 @@ export default function UsageDashboard({ userId }: Props) {
                 <div className="flex items-end gap-1 h-16">
                   {data.dailyCost.map(d => {
                     const h = Math.max(2, Math.round(((d.cost_usd || 0) / maxDailyCost) * 56));
+                    const isSelected = selectedDay === d.day;
                     return (
-                      <div key={d.day} className="flex-1 flex flex-col items-center justify-end group relative">
+                      <div
+                        key={d.day}
+                        className="flex-1 flex flex-col items-center justify-end group relative cursor-pointer"
+                        onClick={() => setSelectedDay(isSelected ? null : d.day)}
+                      >
                         <div
                           style={{ height: `${h}px` }}
-                          className="w-full bg-sky-500/40 group-hover:bg-sky-400/60 rounded-sm transition-colors"
+                          className={`w-full rounded-sm transition-colors ${
+                            isSelected ? 'bg-sky-400/80' : 'bg-sky-500/40 group-hover:bg-sky-400/60'
+                          }`}
                         />
                         {/* Tooltip */}
                         <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 hidden group-hover:block z-10 whitespace-nowrap bg-slate-800 border border-white/10 rounded px-2 py-1 text-[10px] text-white/80">
                           <div>{d.day}</div>
                           <div>{fmtCost(d.cost_usd)} · {fmt(d.sessions)} sessions</div>
+                          <div className="text-white/40">click to drill down</div>
                         </div>
                       </div>
                     );
@@ -172,6 +185,48 @@ export default function UsageDashboard({ userId }: Props) {
                   <span>{data.dailyCost[0]?.day}</span>
                   <span>{data.dailyCost[data.dailyCost.length - 1]?.day}</span>
                 </div>
+              </div>
+            )}
+
+            {/* Day drill-down panel */}
+            {selectedDay && data.dailyByModel && (
+              <div className="bg-white/[0.03] border border-sky-500/30 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[11px] text-sky-400">Breakdown for {selectedDay}</div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDay(null)}
+                    className="text-[11px] text-white/30 hover:text-white/60 transition-colors"
+                  >
+                    ✕ close
+                  </button>
+                </div>
+                {(() => {
+                  const rows = data.dailyByModel.filter(r => r.day === selectedDay);
+                  const dayTotal = data.dailyCost.find(d => d.day === selectedDay);
+                  if (rows.length === 0) return (
+                    <div className="text-xs text-white/30">No session data for this day.</div>
+                  );
+                  return (
+                    <>
+                      {dayTotal && (
+                        <div className="text-xs text-white/50 mb-3">
+                          {fmtCost(dayTotal.cost_usd)} total · {fmt(dayTotal.sessions)} sessions · {fmt(dayTotal.input_tokens + dayTotal.output_tokens)} tokens
+                        </div>
+                      )}
+                      <div className="space-y-1.5">
+                        {rows.map(r => (
+                          <div key={r.model} className="flex items-center justify-between text-xs">
+                            <span className="text-white/70">{MODEL_LABELS[r.model] || r.model}</span>
+                            <span className="text-white/40 font-mono">
+                              {fmtCost(r.cost_usd)} · {fmt(r.sessions)} sessions · {fmt(r.input_tokens + r.output_tokens)} tokens
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
 

@@ -104,8 +104,8 @@ function buildTools(env, userId) {
 // ---------------------------------------------------------------------------
 
 export class VegvisrAgent extends AIChatAgent {
-  async onChatMessage() {
-    const modelId = this.env.DEFAULT_MODEL || '@cf/meta/llama-4-scout-17b-16e-instruct'
+  async onChatMessage(_onFinish, options) {
+    const modelId = options?.body?.model || this.env.DEFAULT_MODEL || '@cf/meta/llama-4-scout-17b-16e-instruct'
     console.log(`[VegvisrAgent] onChatMessage model=${modelId} messages=${this.messages.length}`)
 
     const startTime = Date.now()
