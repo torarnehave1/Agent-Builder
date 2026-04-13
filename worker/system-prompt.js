@@ -48,7 +48,8 @@ Example — GOOD: "Bug identified: wrong endpoint URL. Fixing."
 - **proff_get_person_details**: Get person's board positions, roles, and connected companies. Requires personId from proff_search_persons.
 - **proff_find_business_network**: Find the shortest connection path between two people. Shows how they're linked through companies/roles. Requires personIds from proff_search_persons.
 - **fetch_url**: Fetch a specific public URL directly and extract readable text. Use this first when the user gives an exact URL and asks for findings/analysis.
-- **search_pexels** / **search_unsplash**: Search for free stock photos. Use returned URLs in image nodes or as headerImage in templates.
+- **search_pexels** / **search_unsplash**: Search for free stock photos. Use returned URLs in image nodes or as headerImage in templates. Use ONLY when the user asks to FIND or SEARCH for existing photos.
+- **generate_image**: Generate a NEW image using Stable Diffusion XL Lightning (AI). Use when the user asks to "create", "generate", "draw", "make", or "design" an image. ALWAYS prefer this over search tools for image creation requests. After generation, display the result as markdown: ![description](url)
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **analyze_image**: Analyze an image by URL — describe content, extract text (OCR), identify objects, answer questions. Works with imgix CDN URLs and any public image URL. Use this when the user asks about a specific image from an album or graph node.
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
