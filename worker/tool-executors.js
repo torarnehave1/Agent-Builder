@@ -2755,58 +2755,51 @@ async function executeGenerateImage(input, env) {
   if (!env.PHOTOS_WORKER) throw new Error('PHOTOS_WORKER binding is not configured')
 
   const startTime = Date.now()
-  const width = Math.min(Math.max(input.width || 1024, 256), 1024)
-  const height = Math.min(Math.max(input.height || 1024, 256), 1024)
 
   // Run Stable Diffusion XL Lightning — returns a ReadableStream of JPEG bytes
   const aiInput = {
     prompt: input.prompt,
     ...(input.negative_prompt ? { negative_prompt: input.negative_prompt } : {}),
-    width,
-    height,
-    num_steps: 20,
-    ...(input.seed != null ? { seed: input.seed } : {}),
   }
 
-  const imageStream = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', aiInput)
-
-  // Collect the stream into a buffer, then base64-encode for upload
-  const reader = imageStream.getReader()
-  const chunks = []
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) chunks.push(value)
-  }
-  const totalLength = chunks.reduce((s, c) => s + c.length, 0)
-  const buffer = new Uint8Array(totalLength)
-  let offset = 0
-  for (const chunk of chunks) {
-    buffer.set(chunk, offset)
-    offset += chunk.length
+  // env.AI.run() returns a ReadableStream of JPEG bytes — use Response.arrayBuffer() to buffer it
+  // (matches the official CF example pattern: new Response(response, { headers: { "content-type": "image/jpg" } }))
+  let imageResponse
+  try {
+    imageResponse = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', aiInput)
+  } catch (aiErr) {
+    console.error('[generate_image] env.AI.run() threw:', aiErr?.name, aiErr?.message)
+    throw new Error(`Workers AI error: ${aiErr?.message || String(aiErr)}`)
   }
 
-  // Convert to base64
-  let binary = ''
-  for (let i = 0; i < buffer.length; i++) binary += String.fromCharCode(buffer[i])
-  const base64 = btoa(binary)
+  if (!imageResponse) throw new Error('Workers AI returned null/undefined')
 
-  // Upload to photos worker → get imgix URL
+  const arrayBuffer = await new Response(imageResponse).arrayBuffer()
+  const buffer = new Uint8Array(arrayBuffer)
+
+  // Validate JPEG magic bytes: 0xFF 0xD8
+  console.log(`[generate_image] buffer size=${buffer.length} firstBytes=[${buffer[0]},${buffer[1]},${buffer[2]}]`)
+  if (buffer.length < 100 || buffer[0] !== 0xFF || buffer[1] !== 0xD8) {
+    const preview = new TextDecoder().decode(buffer.slice(0, 200))
+    console.error('[generate_image] Not a JPEG — got:', preview)
+    throw new Error(`Workers AI returned non-image data: ${preview.slice(0, 100)}`)
+  }
+
+  // Upload via FormData — photos-worker /upload expects multipart form with a 'file' field
   const filename = `sdxl-${Date.now()}.jpg`
+  const formData = new FormData()
+  formData.append('file', new File([buffer], filename, { type: 'image/jpeg' }))
+  formData.append('filename', `sdxl-${Date.now()}`)
+  formData.append('album', 'agent-generated')
+
   const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      userId: input.userId || 'agent-image-gen',
-      base64,
-      mediaType: 'image/jpeg',
-      filename,
-    }),
+    body: formData,
   })
   const uploadData = await uploadRes.json()
-  if (!uploadRes.ok) throw new Error(uploadData.error || 'Failed to upload generated image')
+  if (!uploadRes.ok) throw new Error(uploadData.error || `Upload failed (${uploadRes.status})`)
 
-  const url = uploadData.url
+  const url = uploadData.urls?.[0]
   if (!url) throw new Error('Upload succeeded but no URL returned')
 
   // Record stats so image generations appear in the usage dashboard
@@ -2830,8 +2823,6 @@ async function executeGenerateImage(input, env) {
   return {
     url,
     prompt: input.prompt,
-    width,
-    height,
     message: `Generated image: ${url}`,
   }
 }
