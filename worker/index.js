@@ -1884,6 +1884,32 @@ export default {
         }), { headers: corsHeaders })
       }
 
+      // POST /generate-image — direct SDXL Lightning call, no AI SDK involved
+      if (pathname === '/generate-image' && request.method === 'POST') {
+        const body = await request.json()
+        const prompt = body.prompt
+        if (!prompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
+
+        const imageResponse = await env.AI.run('@cf/bytedance/stable-diffusion-xl-lightning', { prompt })
+        const arrayBuffer = await new Response(imageResponse).arrayBuffer()
+        const buffer = new Uint8Array(arrayBuffer)
+
+        const filename = `sdxl-${Date.now()}.jpg`
+        const formData = new FormData()
+        formData.append('file', new File([buffer], filename, { type: 'image/jpeg' }))
+        formData.append('filename', filename)
+        formData.append('album', 'agent-generated')
+
+        const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', { method: 'POST', body: formData })
+        const uploadData = await uploadRes.json()
+        if (!uploadRes.ok) return new Response(JSON.stringify({ error: uploadData.error || 'Upload failed' }), { status: 500, headers: corsHeaders })
+
+        const url = uploadData.urls?.[0]
+        if (!url) return new Response(JSON.stringify({ error: 'No URL returned from upload' }), { status: 500, headers: corsHeaders })
+
+        return new Response(JSON.stringify({ url, prompt }), { headers: corsHeaders })
+      }
+
       return new Response(JSON.stringify({
         error: 'Not found',
         available_endpoints: ['/execute', '/chat', '/agents', '/agent', '/layout', '/build-html-page', '/template-version', '/templates', '/tools', '/upgrade-html-node', '/bot-respond', '/introspect', '/health', '/openapi.json']

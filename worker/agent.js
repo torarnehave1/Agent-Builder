@@ -19,7 +19,7 @@
 
 import { AIChatAgent } from '@cloudflare/ai-chat'
 import { createWorkersAI } from 'workers-ai-provider'
-import { streamText, tool, convertToModelMessages, pruneMessages, stepCountIs } from 'ai'
+import { streamText, tool, jsonSchema, convertToModelMessages, pruneMessages, stepCountIs } from 'ai'
 import { z } from 'zod'
 import { executeTool } from './tool-executors.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
@@ -82,13 +82,20 @@ function buildTools(env, userId) {
   const tools = {}
   for (const def of TOOL_DEFINITIONS) {
     if (!WORKERS_AI_TOOLS.has(def.name)) continue
+    // Use a fully open schema — Workers AI models (Gemma/Llama) send args with wrong types
+    // (e.g. integers as strings). We validate inside execute() instead.
+    const openSchema = jsonSchema({ type: 'object', additionalProperties: true })
     tools[def.name] = tool({
       description: def.description,
-      inputSchema: jsonSchemaToZod(def.input_schema),
+      inputSchema: openSchema,
       execute: async (args) => {
+        console.log(`[buildTools] ENTER ${def.name}`, JSON.stringify(args).slice(0, 200))
         try {
-          return await executeTool(def.name, { ...args, userId }, env)
+          const result = await executeTool(def.name, { ...args, userId }, env)
+          console.log(`[buildTools] ${def.name} SUCCESS:`, JSON.stringify(result).slice(0, 300))
+          return result
         } catch (err) {
+          console.error(`[buildTools] ${def.name} ERROR:`, err.message, err.stack?.slice(0, 300))
           return { error: err.message }
         }
       },
@@ -125,7 +132,7 @@ export class VegvisrAgent extends AIChatAgent {
       }),
       tools: buildTools(this.env, userId),
       stopWhen: stepCountIs(5),
-      maxTokens: 1024,
+      maxTokens: 2048,
       onFinish: async ({ usage, steps }) => {
         if (!env.STATS_DB) return
         const now = new Date().toISOString()

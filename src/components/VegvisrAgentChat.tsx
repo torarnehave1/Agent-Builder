@@ -602,6 +602,36 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     const contextPrefix = transcript ? `[Transcription context]:\n${transcript}\n\n` : '';
     const fullText = `${contextPrefix}${text}`.trim();
 
+    // Intercept image generation requests — call /generate-image directly, bypassing the AI model
+    const imageGenMatch = fullText.match(/(?:generate|create|draw|make|design)\s+(?:an?\s+)?image\s+(?:of\s+)?(.+)/i);
+    if (imageGenMatch && !hasImages) {
+      const prompt = imageGenMatch[1].trim();
+      setInputText('');
+      const userMsgId = Date.now().toString();
+      setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: fullText }]);
+      try {
+        const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt }),
+        });
+        const data = await res.json() as { url?: string; error?: string };
+        if (!res.ok || !data.url) throw new Error(data.error || 'Generation failed');
+        setLocalMessages(prev => [...prev, {
+          id: userMsgId + '-r',
+          role: 'assistant',
+          text: `![${prompt}](${data.url})\n\n[Open full size](${data.url})`,
+        }]);
+      } catch (e) {
+        setLocalMessages(prev => [...prev, {
+          id: userMsgId + '-r',
+          role: 'assistant',
+          text: `Failed to generate image: ${e instanceof Error ? e.message : 'unknown error'}`,
+        }]);
+      }
+      return;
+    }
+
     if (hasImages) {
       // Read each image as a base64 data URL so Workers AI (Gemma vision) can process it.
       // Workers AI does NOT support plain HTTPS URLs — base64 only.
