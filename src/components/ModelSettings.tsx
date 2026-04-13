@@ -18,6 +18,15 @@ const MODELS = [
     badgeColor: 'bg-orange-500/20 text-orange-300',
   },
   {
+    id: '@cf/nvidia/nemotron-3-120b-a12b',
+    name: 'Nemotron-3 120B',
+    description: 'NVIDIA hybrid MoE. Reasoning + function calling. Built for multi-agent apps.',
+    inputCost: 0.50,
+    outputCost: 1.50,
+    badge: 'Reasoning',
+    badgeColor: 'bg-green-600/20 text-green-300',
+  },
+  {
     id: 'ollama/gemma4:e2b',
     name: 'Gemma 4 2B (Edge)',
     description: 'Free, lightweight. Optimized for laptops. Lower resource usage.',
