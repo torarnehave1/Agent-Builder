@@ -130,16 +130,25 @@ export class VegvisrAgent extends AIChatAgent {
         if (!env.STATS_DB) return
         const now = new Date().toISOString()
         const toolCalls = (steps || []).flatMap(s => s.toolCalls || []).map(tc => tc.toolName)
+        const WORKERS_AI_PRICES = {
+          '@cf/nvidia/nemotron-3-120b-a12b': { in: 0.50, out: 1.50 },
+        }
+        const waiPrice = WORKERS_AI_PRICES[modelId]
+        const inputTokens = usage?.promptTokens || 0
+        const outputTokens = usage?.completionTokens || 0
+        const costUsd = waiPrice
+          ? ((inputTokens / 1_000_000) * waiPrice.in) + ((outputTokens / 1_000_000) * waiPrice.out)
+          : 0
         await env.STATS_DB.prepare(
           `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, model,
             input_tokens, output_tokens, tool_calls, success, agent_id, version, version_note, cost_usd)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, 'workers-ai', 'v-wai-1', 'Workers AI AIChatAgent', 0)`
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, 1, 'workers-ai', 'v-wai-1', 'Workers AI AIChatAgent', ?)`
         ).bind(
           sessionId, userId || 'unknown',
           new Date(startTime).toISOString(), now, Date.now() - startTime,
           (steps || []).length, modelId,
-          usage?.promptTokens || 0, usage?.completionTokens || 0,
-          JSON.stringify(toolCalls)
+          inputTokens, outputTokens,
+          JSON.stringify(toolCalls), costUsd
         ).run().catch(e => console.error('[stats] session insert failed:', e.message))
       },
     })
