@@ -610,10 +610,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       const userMsgId = Date.now().toString();
       setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: fullText }]);
       try {
+        // Lucid Origin defaults to 16:9 (1120×630)
+        const extraParams = model === '@cf/leonardo/lucid-origin' ? { width: 1120, height: 630 } : {};
         const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, userId, model }),
+          body: JSON.stringify({ prompt, userId, model, ...extraParams }),
         });
         const data = await res.json() as { url?: string; error?: string };
         if (!res.ok || !data.url) throw new Error(data.error || 'Generation failed');
@@ -862,6 +864,17 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
                 return null;
               })}
+              {msg.role === 'user' && (
+                <button
+                  type="button"
+                  onClick={() => setInputText(msg.parts.filter(isTextUIPart).map(p => p.text).join(''))}
+                  disabled={status === 'streaming'}
+                  className="mt-1 float-right text-white/40 hover:text-white transition-colors disabled:opacity-30 text-base leading-none"
+                  title="Use this prompt again"
+                >
+                  +
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -879,6 +892,17 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
               </div>
+              {m.role === 'user' && (
+                <button
+                  type="button"
+                  onClick={() => setInputText(m.text)}
+                  disabled={status === 'streaming'}
+                  className="mt-1 float-right text-white/40 hover:text-white transition-colors disabled:opacity-30 text-base leading-none"
+                  title="Use this prompt again"
+                >
+                  +
+                </button>
+              )}
             </div>
           </div>
         ))}
