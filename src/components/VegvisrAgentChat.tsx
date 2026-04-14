@@ -278,6 +278,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string; file: File }>>([]); 
   const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
+  const [loadedMessages, setLoadedMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
   const lastTranscriptRef = useRef<string | null>(null);
 
   // Audio transcription state
@@ -328,6 +329,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       clearHistory();
       sessionIdRef.current = null;
       setLocalMessages([]);
+      setLoadedMessages([]);
       lastTranscriptRef.current = null;
     }
   }, [model, clearHistory]);
@@ -414,8 +416,29 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     clearHistory();
     sessionIdRef.current = null;
     setLocalMessages([]);
+    setLoadedMessages([]);
     lastTranscriptRef.current = null;
     setSessionsOpen(false);
+  }
+
+  async function loadSession(sid: string) {
+    try {
+      const res = await historyFetch(`/messages?sessionId=${sid}&decrypt=1&limit=200`, userId);
+      const data = await res.json();
+      const loaded = (data.messages || [])
+        .reverse()
+        .map((m: { role: string; content?: string }, idx: number) => ({
+          id: `loaded-${sid}-${idx}`,
+          role: m.role as 'user' | 'assistant',
+          text: m.content || '',
+        }));
+      clearHistory();
+      setLocalMessages([]);
+      lastTranscriptRef.current = null;
+      sessionIdRef.current = sid;
+      setLoadedMessages(loaded);
+      setSessionsOpen(false);
+    } catch { /* ignore */ }
   }
 
   function clearSelectedAudio() {
@@ -749,7 +772,11 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   <div className="px-3 py-3 text-white/30 text-xs">No saved sessions</div>
                 )}
                 {sessions.map(s => (
-                  <div key={s.id} className="px-3 py-2 text-xs text-white/60 hover:bg-white/[0.06]">
+                  <div
+                    key={s.id}
+                    className="px-3 py-2 text-xs text-white/60 hover:bg-white/[0.06] cursor-pointer"
+                    onClick={() => loadSession(s.id)}
+                  >
                     <div className="truncate">{s.title}</div>
                     {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
                   </div>
@@ -774,9 +801,35 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       </div>
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-        {messages.length === 0 && (
+        {messages.length === 0 && loadedMessages.length === 0 && (
           <div className="text-white/30 text-sm text-center mt-8">
             Start a conversation with the Vegvisr Agent
+          </div>
+        )}
+        {/* Historical messages loaded from a saved session */}
+        {loadedMessages.map(m => (
+          <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm opacity-70 ${m.role === 'user' ? 'bg-purple-600 text-white' : 'bg-white/10 text-white/90'}`}>
+              <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+              </div>
+              {m.role === 'user' && (
+                <button
+                  type="button"
+                  onClick={() => setInputText(m.text)}
+                  disabled={status === 'streaming'}
+                  className="mt-1 float-right text-white/40 hover:text-white transition-colors disabled:opacity-30 text-base leading-none"
+                  title="Use this prompt again"
+                >
+                  +
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+        {loadedMessages.length > 0 && messages.length === 0 && (
+          <div className="text-white/20 text-[11px] text-center border-t border-white/10 pt-3">
+            — end of saved session — continue below —
           </div>
         )}
         {messages.map((msg) => (
