@@ -1603,7 +1603,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             case 'tool_progress': {
               const progressTool = ev.data.tool as string;
               const progressMsg = ev.data.message as string;
-              if (progressTool === 'delegate_to_html_builder' || progressTool === 'delegate_to_kg') {
+              if (
+                progressTool === 'delegate_to_html_builder' ||
+                progressTool === 'delegate_to_kg' ||
+                progressTool === 'delegate_to_youtube_graph'
+              ) {
                 setSubagentProgress(progressMsg);
               }
               for (let i = next.toolCalls.length - 1; i >= 0; i--) {

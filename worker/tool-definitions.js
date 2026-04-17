@@ -1725,6 +1725,24 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'delegate_to_youtube_graph',
+    description: 'Delegate YouTube-to-knowledge-graph creation to the YouTube Graph subagent. Use this when the user provides a YouTube URL (youtu.be/..., youtube.com/watch?v=..., shorts) and asks to create / turn it into / generate a knowledge graph from it. The subagent fetches the transcript via Transcript IO, processes it through the grok-worker, and creates a brand-new graph (never merges into an existing one). Defaults: sourceLanguage=auto, targetLanguage=norwegian.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: {
+          type: 'string',
+          description: 'The YouTube URL (or bare 11-char videoId) the user supplied.'
+        },
+        task: {
+          type: 'string',
+          description: 'What the user asked for, in their own words. Include any language override if they requested one.'
+        }
+      },
+      required: ['url']
+    }
+  },
+  {
     name: 'reorder_nodes',
     description: 'Reorder the nodes in a knowledge graph to a specific sequence. Fetches the full graph, reorders the nodes array to match the provided list of node IDs, and saves it back. Use this when the user asks to reorganise, reorder, or sort nodes. You MUST read_graph first to get the exact node IDs.',
     input_schema: {

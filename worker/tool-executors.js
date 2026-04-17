@@ -17,6 +17,7 @@ import { runBotSubagent } from './bot-subagent.js'
 import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
 import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
+import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -4943,6 +4944,22 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
+      }
+    }
+    case 'delegate_to_youtube_graph': {
+      const result = await runYoutubeGraphSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        graphId: result.graphId,
+        turns: result.turns,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `YouTube graph subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `YouTube graph subagent failed: ${result.error || 'Unknown error'}`,
+        viewUrl: result.viewUrl,
       }
     }
     case 'delegate_to_contact': {

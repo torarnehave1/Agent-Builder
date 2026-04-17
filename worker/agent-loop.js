@@ -337,14 +337,14 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           'create_graph', 'create_node', 'create_html_node', 'add_edge',
           'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
           'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact'
+          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact', 'delegate_to_youtube_graph'
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
 
         const executeAndStream = async (toolUse) => {
           // Auto-inject nodeId into HTML builder delegation (HTML edits always target a specific node)
-          const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video'])
+          const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_youtube_graph'])
           if (DELEGATION_TOOLS.has(toolUse.name)) {
             // NOTE: Do NOT auto-inject graphId into delegations. The LLM must explicitly include graphId
             // when it wants the subagent to work on a specific graph. If omitted, the subagent is free to
@@ -664,7 +664,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         'create_graph', 'create_node', 'create_html_node', 'add_edge',
         'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
         'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder'
+        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_youtube_graph'
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))

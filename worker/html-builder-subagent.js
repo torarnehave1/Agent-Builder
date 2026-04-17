@@ -65,7 +65,11 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
 - When you need API endpoints (Drizzle, Knowledge Graph, etc.), call \`get_system_registry\` to discover them dynamically. Do NOT guess or hardcode URLs.
-- **KG API public endpoint**: The public URL for fetching graphs from browser-side JavaScript is \`https://knowledge.vegvisr.org/getknowgraph\` (ALL LOWERCASE). Do NOT use camelCase like \`getKnowGraph\` — that returns 404. Example: \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\`
+- **KG API public endpoint**: The public URL for fetching a single graph from browser-side JavaScript is \`https://knowledge.vegvisr.org/getknowgraph\` (ALL LOWERCASE). Do NOT use camelCase like \`getKnowGraph\` — that returns 404. Example: \`fetch('https://knowledge.vegvisr.org/getknowgraph?id=GRAPH_ID')\`
+- **KG API — list graphs by metaArea**: \`fetch('https://knowledge.vegvisr.org/getknowgraphsummaries?metaArea=META_AREA_NAME&limit=250')\` — substitute \`META_AREA_NAME\` with the requested **meta area** value only. This is not a category tag. Strip the leading \`#\` — write \`BLOGNIBI\` not \`%23BLOGNIBI\`.
+- **Do not confuse metaArea with category**: \`r.metadata?.metaArea\` is the graph’s grouping field used for the query filter. \`r.metadata?.category\` is a separate descriptive/tag field. If the request says “portfolio for meta area X”, use the \`metaArea\` query parameter and read \`r.metadata?.metaArea\` in the response. Do NOT plug category values into the metaArea filter.
+- **Response shape**: \`data.results\` is the array (NOT \`data.graphs\`, NOT \`data\`). \`r.id\`, \`r.title\`, \`r.nodeCount\` are top-level. \`r.metadata?.description\`, \`r.metadata?.metaArea\`, \`r.metadata?.category\` are nested under \`r.metadata\`. \`r.description\`, \`r.metaArea\`, and \`r.category\` without \`metadata.\` are undefined.
+- **Implementation rule**: Filter is server-side; do NOT hardcode a graph ID, and do NOT fetch all graphs and filter client-side when a meta area is known. View link: \`https://www.vegvisr.org/gnew-viewer?graphId=\` + r.id. Do NOT use \`/searchGraphs\`, \`/kg_search_graphs\`, or \`/kg_get_know_graph_summaries\` — these return 404.
 - When you learn something new (e.g. a correct endpoint URL, a working pattern, a common mistake to avoid), call \`save_learning\` to persist it for future sessions.
 
 ## Communication rules
@@ -739,19 +743,38 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
     log(`turn ${turn}/${maxTurns} (${(elapsed / 1000).toFixed(1)}s elapsed)`)
     progress(thinkingMessages[turn - 1] || `Still working... (${turn})`)
 
-    const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        userId: userId || 'html-builder-subagent',
-        messages,
-        model,
-        max_tokens: 16384,
-        temperature: 0.2,
-        system: dynamicSystemPrompt,
-        tools,
-      }),
-    })
+    const controller = new AbortController()
+    const fetchTimeout = setTimeout(() => controller.abort(), 25000)
+    let response
+    try {
+      response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: userId || 'html-builder-subagent',
+          messages,
+          model,
+          max_tokens: 4096,
+          temperature: 0.2,
+          system: dynamicSystemPrompt,
+          tools,
+        }),
+        signal: controller.signal,
+      })
+    } catch (fetchErr) {
+      clearTimeout(fetchTimeout)
+      const isTimeout = fetchErr.name === 'AbortError'
+      log(`ANTHROPIC fetch ${isTimeout ? 'timed out after 25s' : `failed: ${fetchErr.message}`}`)
+      return {
+        success: false,
+        error: isTimeout ? 'Anthropic API timed out after 25s — try a smaller or more focused task' : `Anthropic fetch error: ${fetchErr.message}`,
+        turns: turn,
+        actions,
+        inputTokens,
+        outputTokens,
+      }
+    }
+    clearTimeout(fetchTimeout)
 
     const data = await response.json()
     if (!response.ok) {
