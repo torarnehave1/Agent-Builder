@@ -235,7 +235,9 @@ async function callSaveGraph(input, env, userId) {
   }
 }
 
-async function executeYoutubeTool(toolName, toolInput, env, userId) {
+async function executeYoutubeTool(toolName, toolInput, env, userId, progress) {
+  const noop = () => {}
+  const emit = typeof progress === 'function' ? progress : noop
   switch (toolName) {
     case 'extract_video_id': {
       const videoId = extractVideoId(toolInput.url)
@@ -246,7 +248,12 @@ async function executeYoutubeTool(toolName, toolInput, env, userId) {
       return await callFetchTranscript(toolInput.videoId, env)
     }
     case 'process_transcript_to_graph': {
-      return await callProcessTranscript(toolInput, env, userId)
+      const result = await callProcessTranscript(toolInput, env, userId)
+      // Stream each node title back so the user can watch the graph taking shape
+      for (const node of result.nodes) {
+        if (node.label) emit(`📝 ${node.label}`)
+      }
+      return result
     }
     case 'save_generated_graph': {
       return await callSaveGraph(toolInput, env, userId)
@@ -395,8 +402,8 @@ async function runYoutubeGraphSubagent(input, env, onProgress, _executeTool) {
         try {
           const result = heartbeatMsgs
             ? await withHeartbeat(progress, heartbeatMsgs, 3000,
-                () => executeYoutubeTool(toolUse.name, toolUse.input, env, userId))
-            : await executeYoutubeTool(toolUse.name, toolUse.input, env, userId)
+                () => executeYoutubeTool(toolUse.name, toolUse.input, env, userId, progress))
+            : await executeYoutubeTool(toolUse.name, toolUse.input, env, userId, progress)
           if (result === null) throw new Error(`Unknown tool: ${toolUse.name}`)
 
           if (toolUse.name === 'save_generated_graph' && result.graphId) {
