@@ -230,11 +230,86 @@ function GenerateImageCard({ output }: { output: unknown }) {
   );
 }
 
+// ---------- Created-graph card (delegate_to_youtube_graph / create_graph) ----------
+
+const KG_API = 'https://knowledge.vegvisr.org';
+
+function CreatedGraphCard({ graphId, fallbackTitle }: { graphId: string; fallbackTitle?: string }) {
+  const [meta, setMeta] = useState<{ title: string; description: string; nodeCount: number; nodeTypes: string[] } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const viewHref = `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`;
+
+  useEffect(() => {
+    if (!graphId) return;
+    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+      .then(r => r.json())
+      .then(data => {
+        const nodes = data.nodes || [];
+        const types = [...new Set(nodes.map((n: { type?: string }) => n.type).filter(Boolean))] as string[];
+        setMeta({
+          title: data.metadata?.title || fallbackTitle || graphId,
+          description: data.metadata?.description || '',
+          nodeCount: nodes.length,
+          nodeTypes: types,
+        });
+      })
+      .catch(() => {});
+  }, [graphId, fallbackTitle]);
+
+  return (
+    <>
+      <div className="mt-2 p-3 rounded-lg border border-sky-400/20 bg-sky-400/[0.06]">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="text-white font-semibold text-sm">{meta?.title || fallbackTitle || 'New graph'}</div>
+            {meta?.description && (
+              <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
+            )}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {meta?.nodeTypes.map(type => (
+                <span key={type} className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px]">{type}</span>
+              ))}
+              {meta && (
+                <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{meta.nodeCount} nodes</span>
+              )}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5 flex-shrink-0 mt-1">
+            <button
+              type="button"
+              onClick={() => setPreviewing(true)}
+              className="px-3 py-1.5 rounded-md bg-emerald-600/20 text-emerald-400 text-xs font-medium hover:bg-emerald-600/30 transition-colors"
+            >
+              Preview
+            </button>
+            <a
+              href={viewHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 rounded-md bg-sky-400/20 text-sky-400 text-xs font-medium hover:bg-sky-400/30 transition-colors text-center no-underline"
+            >
+              View →
+            </a>
+          </div>
+        </div>
+      </div>
+      {previewing && (
+        <GraphPreviewLazy graphId={graphId} title={meta?.title || fallbackTitle || graphId} onClose={() => setPreviewing(false)} />
+      )}
+    </>
+  );
+}
+
 function ToolResultCard({ toolName, output }: { toolName: string; output: unknown }) {
   if (toolName === 'who_am_i') return <WhoAmICard data={output as WhoAmIResult} />;
   if (toolName === 'list_graphs' || toolName === 'search_graphs') return <ListGraphsResultCard data={output as ListGraphsOutput} />;
   if (toolName === 'list_meta_areas') return <ListMetaAreasResultCard data={output as ListMetaAreasOutput} />;
   if (toolName === 'generate_image') return <GenerateImageCard output={output} />;
+  // Graph-creating tools: show a preview card when the result includes a graphId
+  const out = (output && typeof output === 'object') ? output as { graphId?: unknown; viewUrl?: unknown; success?: unknown } : null;
+  if (out && typeof out.graphId === 'string' && out.graphId && out.success !== false) {
+    return <CreatedGraphCard graphId={out.graphId} />;
+  }
   // Fallback: collapsible JSON
   return (
     <details className="mt-2 text-xs text-white/50">

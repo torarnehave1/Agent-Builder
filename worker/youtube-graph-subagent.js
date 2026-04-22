@@ -34,6 +34,7 @@ const YOUTUBE_GRAPH_SYSTEM_PROMPT = `You are a Vegvisr YouTube-to-Graph speciali
 - Always create a NEW graph. Never merge into an existing graphId.
 - Use defaults: sourceLanguage='auto', targetLanguage='norwegian'. Only override if the user explicitly requested a different language.
 - Pass the FULL transcript text to process_transcript_to_graph (the text concatenated across all transcript segments — fetch_youtube_transcript returns this ready-to-use as \`transcriptText\`).
+- When calling save_generated_graph, ALWAYS forward EVERY metadata field returned by fetch_youtube_transcript: \`videoId\`, \`videoTitle\` (= title), \`channelTitle\`, \`lengthSeconds\`, \`publishDate\`, AND \`videoDescription\` (= description). The save step uses them to build the canonical youtube-video node with the rich info block. Do not drop fields.
 - When saving, build a sensible title using the video title returned by fetch_youtube_transcript, e.g. "🎬 {videoTitle} ({nodeCount} deler)". If the title is missing, fall back to "📝 Transkript {date} ({nodeCount} deler)".
 - Description should mention the video title, channel, and node count, in Norwegian if targetLanguage is norwegian, otherwise English.
 - If fetch_youtube_transcript fails, stop and report the error. Do not retry indefinitely.
@@ -97,8 +98,12 @@ const YOUTUBE_GRAPH_TOOLS = [
         description: { type: 'string', description: 'Graph description' },
         nodes: { type: 'array', description: 'Array of nodes from process_transcript_to_graph' },
         edges: { type: 'array', description: 'Array of edges from process_transcript_to_graph (may be empty)' },
-        videoTitle: { type: 'string', description: 'Optional: source video title for metadata' },
-        videoId: { type: 'string', description: 'Optional: source YouTube videoId for metadata' }
+        videoTitle: { type: 'string', description: 'REQUIRED if video source: title returned by fetch_youtube_transcript' },
+        videoId: { type: 'string', description: 'REQUIRED if video source: 11-char videoId returned by fetch_youtube_transcript' },
+        channelTitle: { type: 'string', description: 'Optional: channel name returned by fetch_youtube_transcript (used to enrich the youtube-video node info block)' },
+        lengthSeconds: { type: 'number', description: 'Optional: video duration in seconds returned by fetch_youtube_transcript' },
+        publishDate: { type: 'string', description: 'Optional: publish date returned by fetch_youtube_transcript' },
+        videoDescription: { type: 'string', description: 'Optional but recommended: the `description` string returned by fetch_youtube_transcript. Included in the youtube-video node info block so the saved graph matches the frontend transcript-processor output.' }
       },
       required: ['title', 'nodes']
     }
@@ -141,19 +146,25 @@ async function callFetchTranscript(videoId, env) {
     throw new Error(data.error || `Transcript IO failed (status ${res.status})`)
   }
   // Response shape: { success, videoId, transcript: [ { text, title, microformat, tracks: [...] } ] }
+  // We also prefer building transcriptText from tracks[0].transcript segments
+  // (matches the frontend's fetchYouTubeTranscriptIO at TranscriptProcessorModal.vue:664).
   const outer = Array.isArray(data.transcript) ? (data.transcript[0] || {}) : {}
   const micro = outer.microformat?.playerMicroformatRenderer || {}
-  const transcriptText = String(outer.text || '').trim()
   const tracks = Array.isArray(outer.tracks) ? outer.tracks : []
-  const segmentCount = tracks[0]?.transcript?.length || 0
+  const track0 = tracks[0] || {}
+  const segs = Array.isArray(track0.transcript) ? track0.transcript : []
+  const transcriptText = segs.length
+    ? segs.map((s) => s.text).join(' ').trim()
+    : String(outer.text || '').trim()
   return {
     videoId: data.videoId || videoId,
-    title: outer.title || micro.title?.simpleText || '',
+    title: micro.title?.simpleText || outer.title || '',
+    description: String(micro.description?.simpleText || '').trim(),
     channelTitle: micro.ownerChannelName || '',
     lengthSeconds: micro.lengthSeconds ? Number(micro.lengthSeconds) : undefined,
     publishDate: micro.publishDate || undefined,
     transcriptText,
-    segmentCount,
+    segmentCount: segs.length,
   }
 }
 
@@ -182,22 +193,92 @@ async function callProcessTranscript(input, env, userId) {
 }
 
 async function callSaveGraph(input, env, userId) {
-  const nodes = Array.isArray(input.nodes) ? input.nodes : []
-  const edges = Array.isArray(input.edges) ? input.edges : []
-  if (nodes.length === 0) {
+  const contentNodes = Array.isArray(input.nodes) ? input.nodes : []
+  const inputEdges = Array.isArray(input.edges) ? input.edges : []
+  if (contentNodes.length === 0) {
     throw new Error('Cannot save a graph with zero nodes')
   }
 
   const nowIso = new Date().toISOString()
   const graphId = `graph_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
-  // Lay out nodes in a 3-column grid for the viewer
-  const positioned = nodes.map((n, i) => ({
-    ...n,
-    id: n.id || `fulltext_${Date.now()}_${i}`,
-    visible: n.visible !== false,
-    position: n.position || { x: 100 + (i % 3) * 300, y: 100 + Math.floor(i / 3) * 250 },
-  }))
+  // Lay out content nodes on a 3-column grid (same as frontend importer).
+  const hasVideo = !!input.videoId
+  const positionedContent = contentNodes
+    // Drop any youtube-video nodes the LLM/grok-worker may have emitted — we
+    // always rebuild the video node deterministically below so there can be
+    // no duplicates or format drift.
+    .filter((n) => n.type !== 'youtube-video')
+    .map((n, i) => ({
+      ...n,
+      id: n.id || `fulltext_${Date.now()}_${i}`,
+      visible: n.visible !== false,
+      position: n.position || { x: 100 + (i % 3) * 300, y: 100 + Math.floor(i / 3) * 250 },
+    }))
+
+  // Build the canonical youtube-video node using the EXACT recipe the
+  // frontend uses in createYouTubeNode() at TranscriptProcessorModal.vue:1685.
+  // Ground-truth reference graph: graph_1776861344585.
+  //
+  // Rules (do NOT change without comparing to that graph):
+  //   - path: null                            (renderer reads videoId from the label macro)
+  //   - label: "![YOUTUBE src=<embedUrl>]<title>[END YOUTUBE]"
+  //   - bibl: [watchUrl]
+  //   - info: [SECTION | ...] block with Channel / Duration / Published / Description / Source
+  //   - APPENDED to the end of nodes (not prepended, no synthetic edges)
+  let positioned = positionedContent
+  let edges = inputEdges
+  if (hasVideo) {
+    const vid = input.videoId
+    const vtitle = (input.videoTitle || '').trim() || `YouTube Video ${vid}`
+    const channel = (input.channelTitle || '').trim() || 'Unknown Channel'
+    const lengthSec = Number(input.lengthSeconds) || 0
+    const publish = (input.publishDate || '').trim()
+    const descriptionRaw = String(input.videoDescription || '').trim()
+    const embedUrl = `https://www.youtube.com/embed/${vid}`
+    const watchUrl = `https://www.youtube.com/watch?v=${vid}`
+
+    // Duration mm:ss (formatDuration in the frontend)
+    const mins = Math.floor(lengthSec / 60)
+    const secs = lengthSec % 60
+    const durationText = lengthSec
+      ? `${mins}:${secs.toString().padStart(2, '0')}`
+      : 'Unknown duration'
+
+    // Date M/D/YYYY (matches frontend formatDate en-US output seen in graph_1776861344585)
+    let publishText = 'Unknown date'
+    if (publish) {
+      const d = new Date(publish)
+      if (!Number.isNaN(d.getTime())) {
+        publishText = `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
+      } else {
+        publishText = publish
+      }
+    }
+
+    // Truncate description to 500 chars + "..." (matches frontend)
+    const descriptionBlock = descriptionRaw
+      ? `**Description:**\n${descriptionRaw.length > 500 ? descriptionRaw.substring(0, 500) + '...' : descriptionRaw}`
+      : ''
+
+    const info = `[SECTION | background-color:'#FFF'; color:'#333']\n**${vtitle}**\n\n**Channel:** ${channel}\n**Duration:** ${durationText}\n**Published:** ${publishText}\n\n${descriptionBlock}\n\n**Source:** [Watch on YouTube](${watchUrl})\n[END SECTION]`
+
+    const ytNode = {
+      id: `youtube_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      label: `![YOUTUBE src=${embedUrl}]${vtitle}[END YOUTUBE]`,
+      color: '#FF0000',
+      type: 'youtube-video',
+      info,
+      bibl: [watchUrl],
+      imageWidth: '100%',
+      imageHeight: '100%',
+      visible: true,
+      path: null,
+    }
+
+    positioned = [...positionedContent, ytNode]
+    // No synthetic edges — frontend importer saves with edges: [] too.
+  }
 
   const createdByEmail = (userId && String(userId).includes('@')) ? userId : 'agent@vegvisr.org'
 
