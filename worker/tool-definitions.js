@@ -987,7 +987,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'calendar_check_availability',
-    description: 'Check booked time slots for a specific date. Returns occupied slots from both D1 bookings and Google Calendar events. Use this to find free time before creating a booking.',
+    description: 'Check occupied time slots for a specific date. Returns free/busy blocks from both D1 bookings and Google Calendar events. Use this to find free time or answer availability questions, not to list named appointments.',
     input_schema: {
       type: 'object',
       properties: {
@@ -999,11 +999,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'calendar_list_bookings',
-    description: 'List all bookings for a user with guest details, times, and meeting type info. Use this to see upcoming and past appointments.',
+    description: 'List bookings for a user with guest details, times, sources, and meeting type info. Supports optional date filter in YYYY-MM-DD. Use this for questions like "what bookings do I have today", "do you see my Irene meeting", or when the user expects meeting names/titles rather than just busy slots.',
     input_schema: {
       type: 'object',
       properties: {
-        userEmail: { type: 'string', description: 'The calendar owner\'s email address' }
+        userEmail: { type: 'string', description: 'The calendar owner\'s email address' },
+        date: { type: 'string', description: 'Optional filter for a single day in YYYY-MM-DD format' }
       },
       required: ['userEmail']
     }
@@ -1769,16 +1770,82 @@ const TOOL_DEFINITIONS = [
 const PROFF_TOOLS = [
   {
     name: 'proff_search_companies',
-    description: 'Search for Norwegian companies in Brønnøysundregistrene. Returns company name, org number, address, and other basic info. Use this to find the org.nr (organisasjonsnummer) needed for other Proff tools.',
+    description: 'Search for Norwegian companies in Brønnøysundregistrene using name, industry/NACE code, company type, location, and other register filters. Returns the current page of companies plus totalResults across all pages. Use this for filtered search and count questions.',
     input_schema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
           description: 'Company name to search for (e.g., "Equinor", "Spotify Norway")'
+        },
+        industryCode: {
+          type: 'string',
+          description: 'Industry/NACE code, e.g. "64.312"'
+        },
+        industry: {
+          type: 'string',
+          description: 'Industry text filter'
+        },
+        location: {
+          type: 'string',
+          description: 'Location filter, e.g. "Oslo" or "Vestland"'
+        },
+        companyType: {
+          type: 'array',
+          items: {
+            type: 'string'
+          },
+          description: 'Company type codes like AS, ANS, EP or NUF'
+        },
+        filter: {
+          type: 'string',
+          description: 'Custom Proff filter string, e.g. "status:AKTIVT"'
+        },
+        sort: {
+          type: 'string',
+          description: 'Sort order such as relevance, profitDesc, revenueDesc or companyNameDesc'
+        },
+        pageSize: {
+          type: 'integer',
+          description: 'Results per page'
+        },
+        pageNumber: {
+          type: 'integer',
+          description: 'Page number'
+        },
+        numEmployeesFrom: {
+          type: 'string',
+          description: 'Minimum number of employees'
+        },
+        numEmployeesTo: {
+          type: 'string',
+          description: 'Maximum number of employees'
+        },
+        revenueFrom: {
+          type: 'string',
+          description: 'Minimum revenue'
+        },
+        revenueTo: {
+          type: 'string',
+          description: 'Maximum revenue'
+        },
+        profitFrom: {
+          type: 'string',
+          description: 'Minimum profit'
+        },
+        profitTo: {
+          type: 'string',
+          description: 'Maximum profit'
+        },
+        establishedYearFrom: {
+          type: 'string',
+          description: 'Earliest establishment year'
+        },
+        establishedYearTo: {
+          type: 'string',
+          description: 'Latest establishment year'
         }
-      },
-      required: ['query']
+      }
     }
   },
   {
@@ -1804,6 +1871,20 @@ const PROFF_TOOLS = [
         orgNr: {
           type: 'string',
           description: 'Norwegian organization number (org.nr) from proff_search_companies, e.g., "910298372"'
+        }
+      },
+      required: ['orgNr']
+    }
+  },
+  {
+    name: 'proff_get_public_company_info',
+    description: 'Get public foretaksinformasjon for a Norwegian company: name, org.nr, purpose, company type, NACE, managing director, phone numbers, addresses, registration statuses, share capital, and status. Requires the org.nr from proff_search_companies.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        orgNr: {
+          type: 'string',
+          description: 'Norwegian organization number (org.nr) from proff_search_companies, e.g., "892545642"'
         }
       },
       required: ['orgNr']

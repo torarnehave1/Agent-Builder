@@ -124,6 +124,52 @@ function isGraphWriteIntent(userText) {
   return writeVerb.test(text) && graphTarget.test(text)
 }
 
+function textMentionsCalendar(text) {
+  return /(calendar|calandar|booking|bookings|appointment|appointments|meeting|meetings|schedule|scheduled|availability|available|busy|free time)/.test(String(text || '').toLowerCase())
+}
+
+function textMentionsDateOrRelativeTime(text) {
+  return /(today|tomorrow|tonight|yesterday|this week|next week|this month|next month|monday|tuesday|wednesday|thursday|friday|saturday|sunday|\d{4}-\d{2}-\d{2})/.test(String(text || '').toLowerCase())
+}
+
+function hasRecentCalendarContext(messages) {
+  const recent = messages.slice(-8)
+  for (const message of recent) {
+    if (message.role === 'user' && textMentionsCalendar(getTextContent(message.content))) {
+      return true
+    }
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block?.type === 'tool_use' && typeof block.name === 'string' && block.name.startsWith('calendar_')) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+function isCalendarQueryIntent(messages) {
+  const latest = getLatestUserText(messages)
+  if (!latest) return false
+  if (textMentionsCalendar(latest)) return true
+  if (textMentionsDateOrRelativeTime(latest) && hasRecentCalendarContext(messages.slice(0, -1))) {
+    return true
+  }
+  return false
+}
+
+function hasCalendarToolUseSince(messages, startIndex = 0) {
+  for (const message of messages.slice(startIndex)) {
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (block?.type === 'tool_use' && typeof block.name === 'string' && block.name.startsWith('calendar_')) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 function countGraphWriteCompletions(messages) {
   let count = 0
   for (const m of messages) {
@@ -144,6 +190,45 @@ function countGraphWriteCompletions(messages) {
   return count
 }
 
+function hasGraphWriteVerification(messages, startIndex = 0) {
+  const GRAPH_WRITE_TOOLS = new Set([
+    'delegate_to_kg',
+    'create_graph',
+    'create_node',
+    'patch_node',
+    'add_edge',
+    'remove_node',
+    'patch_graph_metadata',
+    'kg_add_node',
+    'kg_patch_node',
+    'kg_remove_node',
+  ])
+  const GRAPH_VERIFY_TOOLS = new Set(['read_graph', 'read_node', 'read_graph_content', 'kg_get_know_graph'])
+
+  let needsVerification = false
+
+  for (const message of messages.slice(startIndex)) {
+    if (!Array.isArray(message.content)) continue
+    for (const block of message.content) {
+      if (!block || block.type !== 'tool_use') continue
+      const toolName = block.name
+      if (GRAPH_WRITE_TOOLS.has(toolName)) {
+        needsVerification = true
+        continue
+      }
+      if (needsVerification && GRAPH_VERIFY_TOOLS.has(toolName)) {
+        return true
+      }
+    }
+  }
+
+  return !needsVerification
+}
+
+function hasGraphWriteCompletion(messages) {
+  return countGraphWriteCompletions(messages) > 0
+}
+
 /**
  * Streaming agent loop — writes SSE events to a TransformStream writer
  */
@@ -155,7 +240,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const sessionId = crypto.randomUUID()
   const latestUserRequest = getLatestUserText(messages)
   const requiresGraphWrite = isGraphWriteIntent(latestUserRequest)
+  const requiresCalendarQuery = isCalendarQueryIntent(messages)
   const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
+  const graphWriteVerificationStartIndex = messages.length
+  const calendarQueryStartIndex = messages.length
 
   // Stats accumulation — written to STATS_DB in finally block
   const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
@@ -250,6 +338,24 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           messages.push(
             { role: 'assistant', content: data.content },
             { role: 'user', content: 'You have not completed the requested graph write yet. Use delegate_to_kg now to perform the creation/update action before ending your turn.' }
+          )
+          continue
+        }
+
+        if (requiresGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
+          log('end_turn blocked: graph write completed but no verification read detected; forcing continuation')
+          messages.push(
+            { role: 'assistant', content: data.content },
+            { role: 'user', content: 'The graph write is not verified yet. Read the affected graph or node now with read_node, read_graph, or read_graph_content and confirm the exact change before ending your turn.' }
+          )
+          continue
+        }
+
+        if (requiresCalendarQuery && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
+          log('end_turn blocked: calendar/date question answered without fresh calendar tool call; forcing continuation')
+          messages.push(
+            { role: 'assistant', content: data.content },
+            { role: 'user', content: 'This calendar answer is not grounded yet. Call the appropriate calendar_ tool now for the requested date or follow-up date and answer from that result only.' }
           )
           continue
         }
@@ -557,6 +663,9 @@ async function executeAgent(agentConfig, userTask, userId, env) {
 
   const messages = [{ role: 'user', content: taskWithContract }]
   const requiresGraphWrite = isGraphWriteIntent(taskWithContract)
+  const requiresCalendarQuery = isCalendarQueryIntent(messages)
+  const graphWriteVerificationStartIndex = messages.length
+  const calendarQueryStartIndex = messages.length
 
   const { allTools, operationMap } = await loadAllTools(env)
 
@@ -611,6 +720,34 @@ async function executeAgent(agentConfig, userTask, userId, env) {
         messages.push(
           { role: 'assistant', content: data.content },
           { role: 'user', content: 'You have not completed the requested graph write yet. Use delegate_to_kg now before ending your turn.' }
+        )
+        continue
+      }
+
+      if (requiresGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
+        executionLog.push({
+          turn,
+          type: 'forced_continuation',
+          reason: 'Graph write completed but was not verified with a read tool',
+          timestamp: new Date().toISOString(),
+        })
+        messages.push(
+          { role: 'assistant', content: data.content },
+          { role: 'user', content: 'The graph write is not verified yet. Read the affected graph or node now with read_node, read_graph, or read_graph_content and confirm the exact change before ending your turn.' }
+        )
+        continue
+      }
+
+      if (requiresCalendarQuery && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
+        executionLog.push({
+          turn,
+          type: 'forced_continuation',
+          reason: 'Calendar/date question answered without a fresh calendar tool call',
+          timestamp: new Date().toISOString(),
+        })
+        messages.push(
+          { role: 'assistant', content: data.content },
+          { role: 'user', content: 'This calendar answer is not grounded yet. Call the appropriate calendar_ tool now for the requested date or follow-up date and answer from that result only.' }
         )
         continue
       }

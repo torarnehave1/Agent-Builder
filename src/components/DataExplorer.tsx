@@ -144,6 +144,7 @@ export default function DataExplorer() {
   // Table data state (when clicking a table in sidebar)
   const [tableData, setTableData] = useState<QueryResult | null>(null);
   const [tableColumns, setTableColumns] = useState<ColumnMeta[]>([]);
+  const [expandedCell, setExpandedCell] = useState<{row: number, col: string, value: unknown} | null>(null);
 
   // Fetch available databases on mount
   useEffect(() => {
@@ -437,28 +438,91 @@ export default function DataExplorer() {
           )}
 
           {activeResult && activeResult.rows.length > 0 && (
-            <table className="w-full text-xs">
-              <thead className="sticky top-0 bg-slate-900/95">
-                <tr>
-                  {activeResult.columns.map(col => (
-                    <th key={col} className="text-left px-3 py-2 text-gray-500 font-medium border-b border-white/10 whitespace-nowrap">
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {activeResult.rows.map((row, i) => (
-                  <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+            <>
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-900/95">
+                  <tr>
                     {activeResult.columns.map(col => (
-                      <td key={col} className="px-3 py-2 text-gray-300 max-w-xs truncate">
-                        {row[col] === null ? <span className="text-gray-600 italic">null</span> : String(row[col])}
-                      </td>
+                      <th key={col} className="text-left px-3 py-2 text-gray-500 font-medium border-b border-white/10 whitespace-nowrap">
+                        {col}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {activeResult.rows.map((row, i) => (
+                    <tr key={i} className="border-b border-white/5 hover:bg-white/5 transition-colors">
+                      {activeResult.columns.map(col => {
+                        const cellValue = row[col];
+                        const cellDisplay = cellValue === null ? <span className="text-gray-600 italic">null</span> : String(cellValue);
+                        const isTruncated = String(cellValue).length > 100 || String(cellValue).includes('\n') || String(cellValue).includes('{');
+                        return (
+                          <td 
+                            key={col} 
+                            onClick={() => isTruncated && setExpandedCell({row: i, col, value: cellValue})}
+                            className={`px-3 py-2 text-gray-300 max-w-xs truncate ${isTruncated ? 'cursor-pointer hover:bg-white/10 hover:text-amber-300' : ''}`}
+                            title={isTruncated ? 'Click to expand' : ''}
+                          >
+                            {cellDisplay}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Expanded cell modal */}
+              {expandedCell && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setExpandedCell(null)}>
+                  <div className="bg-slate-950 border border-white/20 rounded-lg shadow-xl max-w-2xl w-full max-h-96 flex flex-col overflow-hidden" onClick={e => e.stopPropagation()}>
+                    <div className="px-4 py-3 border-b border-white/10 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-white">
+                        {expandedCell.col} <span className="text-gray-500 font-normal">(row {expandedCell.row})</span>
+                      </h3>
+                      <button 
+                        type="button"
+                        onClick={() => setExpandedCell(null)}
+                        className="text-gray-500 hover:text-gray-300 text-lg"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <textarea 
+                      value={
+                        typeof expandedCell.value === 'object' 
+                          ? JSON.stringify(expandedCell.value, null, 2)
+                          : String(expandedCell.value)
+                      }
+                      readOnly
+                      className="flex-1 bg-slate-900 border-none px-4 py-3 text-xs text-gray-200 font-mono resize-none focus:outline-none"
+                    />
+                    <div className="px-4 py-2 border-t border-white/10 flex gap-2 justify-end">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(
+                            typeof expandedCell.value === 'object' 
+                              ? JSON.stringify(expandedCell.value, null, 2)
+                              : String(expandedCell.value)
+                          );
+                        }}
+                        className="px-3 py-1 text-xs bg-amber-600/30 text-amber-300 rounded hover:bg-amber-600/50 transition-colors"
+                      >
+                        Copy
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedCell(null)}
+                        className="px-3 py-1 text-xs bg-slate-800 text-gray-300 rounded hover:bg-slate-700 transition-colors"
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {activeResult && activeResult.rows.length === 0 && (

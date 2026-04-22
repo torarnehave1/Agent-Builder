@@ -4349,7 +4349,9 @@ async function executeCalendarCheckAvailability(input, env) {
 
 async function executeCalendarListBookings(input, env) {
   const userEmail = (input.userEmail || '').trim()
+  const date = (input.date || '').trim()
   if (!userEmail) throw new Error('userEmail is required')
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('date must be YYYY-MM-DD if provided')
 
   const res = await env.CALENDAR_WORKER.fetch(
     'https://calendar-worker/api/admin/bookings',
@@ -4358,13 +4360,43 @@ async function executeCalendarListBookings(input, env) {
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || 'Failed to list bookings')
 
-  const bookings = data.bookings || []
+  const allBookings = data.bookings || []
+  const toDateKey = (value) => {
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return ''
+    return parsed.toISOString().slice(0, 10)
+  }
+
+  const bookings = date
+    ? allBookings.filter(booking => toDateKey(booking.start_time) === date)
+    : allBookings
+
+  const today = new Date().toISOString().slice(0, 10)
+  const startOfToday = new Date(`${today}T00:00:00.000Z`)
+  const todayBookings = allBookings.filter(booking => toDateKey(booking.start_time) === today)
+  const upcomingBookings = allBookings
+    .filter(booking => {
+      const start = new Date(booking.start_time)
+      return !Number.isNaN(start.getTime()) && start >= startOfToday
+    })
+    .sort((a, b) => new Date(a.start_time) - new Date(b.start_time))
+  const nextBooking = upcomingBookings[0] || null
+
   return {
     bookings,
     count: bookings.length,
-    message: bookings.length === 0
-      ? `No bookings found for ${userEmail}`
-      : `Found ${bookings.length} booking(s) for ${userEmail}`
+    date: date || null,
+    today,
+    todayBookings,
+    todayCount: todayBookings.length,
+    nextBooking,
+    message: date
+      ? (bookings.length === 0
+          ? `No bookings found for ${userEmail} on ${date}`
+          : `Found ${bookings.length} booking(s) for ${userEmail} on ${date}`)
+      : (bookings.length === 0
+          ? `No bookings found for ${userEmail}`
+          : `Found ${bookings.length} booking(s) for ${userEmail}; ${todayBookings.length} on ${today}`)
   }
 }
 
@@ -4986,6 +5018,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeProffTool('financials', toolInput)
     case 'proff_get_company_details':
       return await executeProffTool('company', toolInput)
+    case 'proff_get_public_company_info':
+      return await executeProffTool('public-company', toolInput)
     case 'proff_search_persons':
       return await executeProffTool('persons', toolInput)
     case 'proff_get_person_details':
@@ -5003,13 +5037,66 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
 async function executeProffTool(endpoint, input) {
   const PROFF_API_BASE = 'https://proff-worker.torarnehave.workers.dev'
   const userId = input.userId || 'unknown'
+  const registerSearchKeys = [
+    'query',
+    'industryCode',
+    'industry',
+    'location',
+    'companyType',
+    'filter',
+    'sort',
+    'pageSize',
+    'pageNumber',
+    'numEmployeesFrom',
+    'numEmployeesTo',
+    'revenueFrom',
+    'revenueTo',
+    'profitFrom',
+    'profitTo',
+    'establishedYearFrom',
+    'establishedYearTo'
+  ]
 
   try {
     let url = `${PROFF_API_BASE}/${endpoint}`
 
     // Build URL with query params based on endpoint
-    if (endpoint === 'search' && input.query) {
-      url += `?query=${encodeURIComponent(input.query)}&userId=${encodeURIComponent(userId)}`
+    if (endpoint === 'search') {
+      const params = new URLSearchParams()
+      params.set('userId', userId)
+
+      for (const key of registerSearchKeys) {
+        const value = input[key]
+        if (value === undefined || value === null || value === '') {
+          continue
+        }
+
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null && item !== '') {
+              params.append(key, String(item))
+            }
+          }
+          continue
+        }
+
+        params.set(key, String(value))
+      }
+
+      const hasSearchCriteria = registerSearchKeys.some((key) => {
+        const value = input[key]
+        return Array.isArray(value)
+          ? value.length > 0
+          : value !== undefined && value !== null && value !== ''
+      })
+
+      if (!hasSearchCriteria) {
+        throw new Error('Missing required search criteria for Proff endpoint: search')
+      }
+
+      url += `?${params.toString()}`
+    } else if (endpoint === 'public-company' && input.orgNr) {
+      url += `/${input.orgNr}?userId=${encodeURIComponent(userId)}`
     } else if (endpoint === 'financials' && input.orgNr) {
       url += `/${input.orgNr}?userId=${encodeURIComponent(userId)}`
     } else if (endpoint === 'company' && input.orgNr) {
