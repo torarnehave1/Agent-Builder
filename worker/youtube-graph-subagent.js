@@ -182,7 +182,13 @@ async function callProcessTranscript(input, env, userId) {
   })
   const data = await res.json()
   if (!res.ok) {
-    throw new Error(data.error || `process-transcript failed (status ${res.status})`)
+    // data.error may be a string OR an object — Error(obj) stringifies to
+    // "[object Object]" which hides the real failure. Normalize here.
+    const errMsg = typeof data.error === 'string'
+      ? data.error
+      : (data.error && (data.error.message || JSON.stringify(data.error))) ||
+        `process-transcript failed (status ${res.status})`
+    throw new Error(errMsg)
   }
   const kg = data.knowledgeGraph || {}
   return {
