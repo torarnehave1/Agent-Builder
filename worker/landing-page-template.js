@@ -1687,15 +1687,37 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       statusEl.className = 'section-edit-status';
 
       try {
+        var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
+        if (!versionRes.ok) throw new Error('Could not fetch current graph version');
+        var versionData = await versionRes.json();
+        var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+
         var patchRes = await fetch(KG_API + '/patchNode', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({
             graphId: GRAPH_ID,
             nodeId: node.id,
-            fields: { info: newContent }
+            fields: { info: newContent },
+            expectedVersion: expectedVersion
           })
         });
+        if (patchRes.status === 409) {
+          versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
+          if (!versionRes.ok) throw new Error('Could not refresh graph version');
+          versionData = await versionRes.json();
+          expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+          patchRes = await fetch(KG_API + '/patchNode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+            body: JSON.stringify({
+              graphId: GRAPH_ID,
+              nodeId: node.id,
+              fields: { info: newContent },
+              expectedVersion: expectedVersion
+            })
+          });
+        }
         if (patchRes.ok) {
           statusEl.textContent = 'Saved!';
           statusEl.className = 'section-edit-status saved';
@@ -1781,11 +1803,27 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
           replaced = replaced.replace(/<style data-vegvisr-theme="[^"]*">:root\\s*\\{[^}]*\\}<\\/style>/g, '');
           replaced = replaced.replace('</head>', themeStyle + '\\n</head>');
 
+          var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
+          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
+          var versionData = await versionRes.json();
+          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+
           var patchRes = await fetch(KG_API + '/patchNode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced } })
+            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
           });
+          if (patchRes.status === 409) {
+            versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
+            if (!versionRes.ok) throw new Error('Could not refresh graph version');
+            versionData = await versionRes.json();
+            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+            patchRes = await fetch(KG_API + '/patchNode', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+              body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
+            });
+          }
           if (patchRes.ok) {
             showToast('Theme saved!', true);
             if (window.parent && window.parent !== window) {

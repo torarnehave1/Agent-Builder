@@ -595,13 +595,29 @@ async function executeRollbackHtmlNode(input, env) {
   if (!oldNode) throw new Error(`Node "${nodeId}" not found in version ${targetVersion}`)
   if (!oldNode.info) throw new Error(`Node "${nodeId}" has no info/HTML in version ${targetVersion}`)
 
-  // 4. Patch the current node with the old HTML
-  const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+  // 4. Patch the current node with the old HTML using optimistic concurrency
+  const currentRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  const currentData = await currentRes.json()
+  if (!currentRes.ok) throw new Error(currentData.error || 'Could not fetch current graph')
+
+  let expectedVersion = Number(currentData?.metadata?.version || 0)
+  let patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, nodeId, fields: { info: oldNode.info } })
+    body: JSON.stringify({ graphId, nodeId, fields: { info: oldNode.info }, expectedVersion })
   })
-  const patchData = await patchRes.json()
+  let patchData = await patchRes.json()
+  if (patchRes.status === 409) {
+    expectedVersion = Number(patchData.currentVersion || expectedVersion)
+    patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId, nodeId, fields: { info: oldNode.info }, expectedVersion })
+    })
+    patchData = await patchRes.json()
+  }
   if (!patchRes.ok) throw new Error(patchData.error || 'patchNode failed')
 
   const oldLines = oldNode.info.split('\n').length

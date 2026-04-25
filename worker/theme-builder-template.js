@@ -1,6 +1,6 @@
 /**
  * Theme Builder HTML App Template
- * Version: 1.2.0
+ * Version: 1.2.1
  *
  * Showcase-style theme preview with color palette swatches, component
  * preview cards, and a token editor toggle. Loads css-nodes from a
@@ -16,7 +16,7 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="template-version" content="1.2.0" />
+  <meta name="template-version" content="1.2.1" />
   <meta name="template-id" content="theme-builder" />
   <title>{{TITLE}}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -505,6 +505,7 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
     var cssNodes = [];
     var activeNodeIndex = 0;
     var currentView = 'showcase';
+    var currentGraphVersion = 0;
 
     // ---- Display names ----
     var DISPLAY_NAMES = {
@@ -583,11 +584,48 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
       for (var i = 0; i < keys.length; i++) root.style.setProperty(keys[i], vars[keys[i]]);
     }
 
+    function extractGraphVersion(graphData) {
+      return Number((graphData && graphData.metadata && graphData.metadata.version) || 0);
+    }
+
+    async function patchNodeWithRetry(nodeId, fields) {
+      var expectedVersion = currentGraphVersion;
+
+      for (var attempt = 0; attempt < 2; attempt++) {
+        var res = await fetch(KG_API + '/patchNode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({
+            graphId: GRAPH_ID,
+            nodeId: nodeId,
+            fields: fields,
+            expectedVersion: expectedVersion
+          })
+        });
+
+        var data = {};
+        try { data = await res.json(); } catch (e) {}
+        if (res.ok) {
+          currentGraphVersion = Number(data.newVersion || (expectedVersion + 1));
+          return data;
+        }
+
+        var isConflict = res.status === 409 || String(data.error || '').toLowerCase().includes('version mismatch');
+        if (!isConflict || attempt === 1) {
+          throw new Error(data.error || ('Save failed: ' + res.status));
+        }
+
+        await loadGraph();
+        expectedVersion = currentGraphVersion;
+      }
+    }
+
     // ---- Load graph ----
     async function loadGraph() {
       var res = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
       if (!res.ok) throw new Error('Failed to load graph: ' + res.status);
       var data = await res.json();
+      currentGraphVersion = extractGraphVersion(data);
 
       var graphTitle = (data.metadata && data.metadata.title) || data.title || '';
       if (graphTitle) {
@@ -806,12 +844,7 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
       statusEl.className = 'save-status';
 
       try {
-        var res = await fetch(KG_API + '/patchNode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-          body: JSON.stringify({ graphId: GRAPH_ID, nodeId: nodeId, fields: { info: newCss } })
-        });
-        if (!res.ok) throw new Error(await res.text());
+        await patchNodeWithRetry(nodeId, { info: newCss });
         for (var i = 0; i < cssNodes.length; i++) {
           if (cssNodes[i].id === nodeId) { cssNodes[i].info = newCss; break; }
         }

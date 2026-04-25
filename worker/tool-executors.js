@@ -24,6 +24,64 @@ import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 // Valid UUID v4 pattern
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+async function fetchGraphForVersion(graphId, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `Failed to fetch graph (${res.status})`)
+  return {
+    graph: data,
+    version: Number(data?.metadata?.version || 0),
+  }
+}
+
+async function patchNodeWithVersionRetry(env, graphId, nodeId, fields, options = {}) {
+  let expectedVersion = Number.isInteger(options.expectedVersion)
+    ? options.expectedVersion
+    : (await fetchGraphForVersion(graphId, env)).version
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId, nodeId, fields, expectedVersion }),
+    })
+    const data = await res.json()
+    if (res.ok) return data
+
+    const isConflict = res.status === 409 || String(data?.error || '').toLowerCase().includes('version mismatch')
+    if (!isConflict || attempt === 1) {
+      throw new Error(data.error || `patchNode failed (${res.status})`)
+    }
+
+    expectedVersion = Number(data.currentVersion || (await fetchGraphForVersion(graphId, env)).version)
+  }
+}
+
+async function patchGraphMetadataWithVersionRetry(env, graphId, fields, options = {}) {
+  let expectedVersion = Number.isInteger(options.expectedVersion)
+    ? options.expectedVersion
+    : (await fetchGraphForVersion(graphId, env)).version
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchGraphMetadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId, fields, expectedVersion }),
+    })
+    const data = await res.json()
+    if (res.ok) return data
+
+    const isConflict = res.status === 409 || String(data?.error || '').toLowerCase().includes('version mismatch')
+    if (!isConflict || attempt === 1) {
+      throw new Error(data.error || `patchGraphMetadata failed (${res.status})`)
+    }
+
+    expectedVersion = Number(data.currentVersion || (await fetchGraphForVersion(graphId, env)).version)
+  }
+}
+
 async function executeCreateGraph(input, env) {
   // Resolve email for createdBy — userId may be a UUID, we always want an email
   let createdByEmail = input.userId || 'agent-worker'
@@ -186,18 +244,17 @@ async function executeReadNode(input, env) {
 }
 
 async function executePatchNode(input, env) {
-  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  try {
+    const data = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, input.fields)
+    return {
       graphId: input.graphId,
       nodeId: input.nodeId,
-      fields: input.fields,
-    }),
-  })
-  const data = await res.json()
-  if (!res.ok) {
-    const errMsg = data.error || `patchNode failed (${res.status})`
+      updatedFields: Object.keys(input.fields),
+      version: data.newVersion,
+      message: `Node "${input.nodeId}" updated: ${Object.keys(input.fields).join(', ')}`,
+    }
+  } catch (error) {
+    const errMsg = error.message || 'patchNode failed'
     // If node not found, fetch graph to show valid node IDs for self-correction
     if (errMsg.toLowerCase().includes('not found')) {
       try {
@@ -214,13 +271,6 @@ async function executePatchNode(input, env) {
       }
     }
     throw new Error(errMsg)
-  }
-  return {
-    graphId: input.graphId,
-    nodeId: input.nodeId,
-    updatedFields: Object.keys(input.fields),
-    version: data.newVersion,
-    message: `Node "${input.nodeId}" updated: ${Object.keys(input.fields).join(', ')}`,
   }
 }
 
@@ -298,19 +348,7 @@ async function executeEditHtmlNode(input, env) {
   }
 
   // 5. Patch the node with the edited content
-  const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      graphId: input.graphId,
-      nodeId: input.nodeId,
-      fields: { info: newHtml },
-    }),
-  })
-  const patchData = await patchRes.json()
-  if (!patchRes.ok) {
-    throw new Error(patchData.error || `patchNode failed (${patchRes.status})`)
-  }
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { info: newHtml })
 
   const replacements = input.replace_all ? occurrences : 1
   return {
@@ -326,16 +364,7 @@ async function executeEditHtmlNode(input, env) {
 }
 
 async function executePatchGraphMetadata(input, env) {
-  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchGraphMetadata', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      graphId: input.graphId,
-      fields: input.fields,
-    }),
-  })
-  const data = await res.json()
-  if (!res.ok) throw new Error(data.error || `patchGraphMetadata failed (${res.status})`)
+  const data = await patchGraphMetadataWithVersionRetry(env, input.graphId, input.fields)
   return {
     graphId: input.graphId,
     updatedFields: data.updatedFields || Object.keys(input.fields),
@@ -1438,16 +1467,8 @@ Return ONLY the JSON object, no markdown fences or explanation.`
   // 5. Optionally store in node metadata
   if (store && !analysis.parseError) {
     const existingMeta = node.metadata || {}
-    await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        graphId,
-        nodeId,
-        fields: {
-          metadata: { ...existingMeta, analysis: { ...analysis, analyzedAt: new Date().toISOString() } }
-        }
-      }),
+    await patchNodeWithVersionRetry(env, graphId, nodeId, {
+      metadata: { ...existingMeta, analysis: { ...analysis, analyzedAt: new Date().toISOString() } }
     })
   }
 
@@ -1531,23 +1552,15 @@ Return ONLY the JSON object, no markdown fences or explanation.`
       const node = nodes.find(n => n.id === ranking.nodeId)
       if (!node) continue
       const existingMeta = node.metadata || {}
-      await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          graphId,
-          nodeId: ranking.nodeId,
-          fields: {
-            metadata: {
-              ...existingMeta,
-              analysis: {
-                weight: ranking.weight,
-                reason: ranking.reason,
-                analyzedAt: new Date().toISOString()
-              }
-            }
+      await patchNodeWithVersionRetry(env, graphId, ranking.nodeId, {
+        metadata: {
+          ...existingMeta,
+          analysis: {
+            weight: ranking.weight,
+            reason: ranking.reason,
+            analyzedAt: new Date().toISOString()
           }
-        }),
+        }
       })
     }
   }
@@ -1790,19 +1803,7 @@ async function executeSaveFormData(input, env) {
     if (!Array.isArray(records)) records = []
     records.push(record)
 
-    const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        graphId,
-        nodeId,
-        fields: { info: JSON.stringify(records) }
-      })
-    })
-    if (!patchRes.ok) {
-      const err = await patchRes.json().catch(() => ({}))
-      throw new Error(err.error || 'Failed to update data-node')
-    }
+    await patchNodeWithVersionRetry(env, graphId, nodeId, { info: JSON.stringify(records) })
 
     return {
       success: true,
@@ -4232,21 +4233,10 @@ async function executeUpdateSuggestionStatus(input, env) {
   const oldStatus = meta.status || 'new'
 
   // Patch the node with new status and color
-  const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      graphId,
-      nodeId: suggestionId,
-      fields: {
-        color: STATUS_COLORS[status],
-        metadata: { ...meta, status },
-      },
-    }),
+  await patchNodeWithVersionRetry(env, graphId, suggestionId, {
+    color: STATUS_COLORS[status],
+    metadata: { ...meta, status },
   })
-
-  const data = await patchRes.json()
-  if (!patchRes.ok) throw new Error(data.error || 'Failed to update suggestion status')
 
   return {
     message: `Updated suggestion "${node.label}" status from ${oldStatus} to ${status}`,

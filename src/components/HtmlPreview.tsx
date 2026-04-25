@@ -159,12 +159,32 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const restoreVersion = async () => {
     if (!graphId || !nodeId || !versionHtml) return;
     try {
+      const graphRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      if (!graphRes.ok) return;
+      const graphData = await graphRes.json();
+      const expectedVersion = Number(graphData?.metadata?.version || 0);
+
       const res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml } }),
+        body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion }),
       });
-      if (!res.ok) return;
+
+      if (res.status === 409) {
+        const latestRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+        if (!latestRes.ok) return;
+        const latestGraph = await latestRes.json();
+        const retryVersion = Number(latestGraph?.metadata?.version || 0);
+        const retryRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion: retryVersion }),
+        });
+        if (!retryRes.ok) return;
+      } else if (!res.ok) {
+        return;
+      }
+
       onHtmlChange?.(versionHtml);
       setVersionHtml(null);
       setActiveVersion(null);

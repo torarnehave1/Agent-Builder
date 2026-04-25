@@ -241,6 +241,7 @@ export default {
         if (!node || node.type !== 'data-node') {
           return new Response(JSON.stringify({ error: 'data-node not found' }), { status: 404, headers: corsHeaders })
         }
+        const expectedVersion = Number(graphData?.metadata?.version || 0)
 
         // Parse existing records, append new one
         let records = []
@@ -252,7 +253,7 @@ export default {
         const patchRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ graphId, nodeId, fields: { info: JSON.stringify(records) } })
+          body: JSON.stringify({ graphId, nodeId, fields: { info: JSON.stringify(records) }, expectedVersion })
         })
         if (!patchRes.ok) {
           const err = await patchRes.json().catch(() => ({}))
@@ -901,13 +902,22 @@ export default {
 
           const newVersion = getTemplateVersion(templateId)
 
+          const currentRes = await env.KG_WORKER.fetch(
+            `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+          )
+          const currentData = await currentRes.json()
+          if (!currentRes.ok) {
+            throw new Error(currentData.error || 'Failed to fetch current graph version')
+          }
+
           const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               graphId,
               nodeId,
-              fields: { info: newHtml }
+              fields: { info: newHtml },
+              expectedVersion: Number(currentData?.metadata?.version || 0)
             })
           })
 

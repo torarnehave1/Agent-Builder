@@ -3943,15 +3943,37 @@ export const EDITABLE_HTML_TEMPLATE = `<!DOCTYPE html>
             console.warn('No header image node found or no graph ID; cannot persist.');
             return;
           }
-          await fetch('https://knowledge.vegvisr.org/patchNode', {
+          var versionRes = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
+          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
+          var versionData = await versionRes.json();
+          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+
+          var patchRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               graphId: GRAPH_ID,
               nodeId: headerImageNode.id,
-              fields: { path: newUrl }
+              fields: { path: newUrl },
+              expectedVersion: expectedVersion
             })
           });
+          if (patchRes.status === 409) {
+            versionRes = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
+            if (!versionRes.ok) throw new Error('Could not refresh graph version');
+            versionData = await versionRes.json();
+            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+            patchRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                graphId: GRAPH_ID,
+                nodeId: headerImageNode.id,
+                fields: { path: newUrl },
+                expectedVersion: expectedVersion
+              })
+            });
+          }
           // Update local reference
           headerImageNode.path = newUrl;
         } catch (err) {
@@ -4436,11 +4458,27 @@ export const EDITABLE_HTML_TEMPLATE = `<!DOCTYPE html>
           replaced = replaced.replace('</head>', themeStyle + '\\n</head>');
 
           // Patch the node
+          var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
+          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
+          var versionData = await versionRes.json();
+          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+
           var patchRes = await fetch(KG_API + '/patchNode', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced } })
+            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
           });
+          if (patchRes.status === 409) {
+            versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
+            if (!versionRes.ok) throw new Error('Could not refresh graph version');
+            versionData = await versionRes.json();
+            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
+            patchRes = await fetch(KG_API + '/patchNode', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+              body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
+            });
+          }
           if (patchRes.ok) {
             showToast('Theme saved!', true);
             // Tell parent (GNewViewer) to reload graph so Vue picks up the new HTML
