@@ -354,6 +354,254 @@ function ThinkingIndicator() {
   );
 }
 
+// ---------- Node type palette definition ----------
+
+const NODE_TYPES = [
+  { type: 'fulltext',        icon: '📝', label: 'Article',    description: 'Markdown text content' },
+  { type: 'mermaid-diagram', icon: '📊', label: 'Diagram',    description: 'Mermaid flow/sequence diagram' },
+  { type: 'markdown-image',  icon: '🖼️', label: 'Image',      description: 'Image with caption' },
+  { type: 'youtube-video',   icon: '▶️', label: 'Video',      description: 'YouTube video embed' },
+  { type: 'link',            icon: '🔗', label: 'Link',       description: 'External URL reference' },
+  { type: 'notes',           icon: '🗒️', label: 'Note',       description: 'Short note or annotation' },
+] as const;
+
+type NodeTypeKey = typeof NODE_TYPES[number]['type'];
+
+// ---------- GraphActionBar ----------
+
+interface GraphActionBarProps {
+  userId: string;
+  activeGraphId: string;
+  onGraphCreated: (graphId: string, title: string) => void;
+  onNodeAdded: (graphId: string, nodeId: string, label: string) => void;
+  onMessage: (msg: string) => void;
+  model?: string;
+  disabled?: boolean;
+}
+
+function GraphActionBar({ userId, activeGraphId, onGraphCreated, onNodeAdded, onMessage, model, disabled }: GraphActionBarProps) {
+  const [newGraphTitle, setNewGraphTitle] = useState('');
+  const [showNewGraph, setShowNewGraph] = useState(false);
+  const [creatingGraph, setCreatingGraph] = useState(false);
+
+  const [showNodePalette, setShowNodePalette] = useState(false);
+  const [selectedNodeType, setSelectedNodeType] = useState<NodeTypeKey>('fulltext');
+  const [nodeTopic, setNodeTopic] = useState('');
+  const [addingNode, setAddingNode] = useState(false);
+
+  const createGraph = async () => {
+    const title = newGraphTitle.trim();
+    if (!title) return;
+    setCreatingGraph(true);
+    try {
+      const graphId = crypto.randomUUID();
+      const res = await fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        body: JSON.stringify({
+          id: graphId,
+          graphData: {
+            metadata: {
+              title,
+              description: '',
+              category: '',
+              metaArea: '',
+              createdBy: userId,
+              version: 0,
+              userId,
+              tags: [],
+            },
+            nodes: [],
+            edges: [],
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`KG error ${res.status}`);
+      onGraphCreated(graphId, title);
+      onMessage(`Graph "${title}" created. Graph ID: ${graphId}\nView it at https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`);
+      setNewGraphTitle('');
+      setShowNewGraph(false);
+    } catch (err) {
+      onMessage(`Failed to create graph: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setCreatingGraph(false);
+    }
+  };
+
+  const addNode = async () => {
+    const topic = nodeTopic.trim();
+    if (!topic || !activeGraphId) return;
+    setAddingNode(true);
+    try {
+      // Ask the model to generate the node content only — no tool calls, just JSON
+      const nodeType = selectedNodeType;
+      const prompt = [
+        `Generate content for a knowledge graph node of type "${nodeType}" about: ${topic}.`,
+        nodeType === 'mermaid-diagram'
+          ? 'Return a raw Mermaid diagram (no markdown fences, no explanation), just the diagram syntax starting with graph or sequenceDiagram etc.'
+          : nodeType === 'markdown-image'
+          ? 'Return a valid HTTPS image URL on the first line, and a short caption on the second line.'
+          : nodeType === 'link'
+          ? 'Return a valid URL on the first line and a short description on the second line.'
+          : nodeType === 'youtube-video'
+          ? 'Return a valid YouTube watch URL on the first line and a short description on the second line.'
+          : 'Return only the markdown content for the node. No explanation, no preamble — just the content.',
+      ].join('\n');
+
+      const res = await fetch('https://agent.vegvisr.org/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          messages: [{ role: 'user', content: prompt }],
+          model: model || 'claude-haiku-4-5-20251001',
+          max_tokens: 2048,
+          stream: false,
+        }),
+      });
+
+      let content = topic; // fallback
+      if (res.ok) {
+        const data = await res.json();
+        const text = (data.content || []).find((b: { type: string }) => b.type === 'text')?.text || '';
+        if (text.trim()) content = text.trim();
+      }
+
+      // Build the node object based on type
+      const nodeId = `node-${nodeType}-${crypto.randomUUID().slice(0, 8)}`;
+      const label = topic.slice(0, 80);
+
+      const nodeBody: Record<string, unknown> = {
+        id: nodeId,
+        label,
+        type: nodeType,
+        info: nodeType === 'link' || nodeType === 'youtube-video' ? content.split('\n').slice(1).join('\n').trim() || topic : content,
+        bibl: [],
+        position: { x: 0, y: 0 },
+        visible: true,
+      };
+      if (nodeType === 'markdown-image' || nodeType === 'link' || nodeType === 'youtube-video') {
+        nodeBody.path = content.split('\n')[0].trim();
+      }
+
+      const addRes = await fetch('https://knowledge.vegvisr.org/addNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        body: JSON.stringify({ graphId: activeGraphId, node: nodeBody }),
+      });
+
+      if (!addRes.ok) throw new Error(`addNode error ${addRes.status}`);
+
+      onNodeAdded(activeGraphId, nodeId, label);
+      onMessage(`Node "${label}" (${nodeType}) added to graph.\nView: https://www.vegvisr.org/gnew-viewer?graphId=${activeGraphId}`);
+      setNodeTopic('');
+      setShowNodePalette(false);
+    } catch (err) {
+      onMessage(`Failed to add node: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setAddingNode(false);
+    }
+  };
+
+  return (
+    <div className="max-w-[900px] mx-auto mb-2">
+      {/* Action buttons row */}
+      <div className="flex gap-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => { setShowNewGraph(p => !p); setShowNodePalette(false); }}
+          disabled={disabled}
+          className="px-3 py-1.5 rounded-lg border border-emerald-400/30 bg-emerald-400/[0.08] text-emerald-300 text-xs font-medium hover:bg-emerald-400/[0.16] transition-colors disabled:opacity-40"
+        >
+          + New Graph
+        </button>
+        <button
+          type="button"
+          onClick={() => { setShowNodePalette(p => !p); setShowNewGraph(false); }}
+          disabled={disabled || !activeGraphId}
+          title={!activeGraphId ? 'Select a graph first' : ''}
+          className="px-3 py-1.5 rounded-lg border border-violet-400/30 bg-violet-400/[0.08] text-violet-300 text-xs font-medium hover:bg-violet-400/[0.16] transition-colors disabled:opacity-40"
+        >
+          + Add Node
+        </button>
+      </div>
+
+      {/* New Graph panel */}
+      {showNewGraph && (
+        <div className="mt-2 p-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.04]">
+          <p className="text-xs text-white/50 mb-2">Graph title — created directly, no AI needed.</p>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={newGraphTitle}
+              onChange={e => setNewGraphTitle(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') createGraph(); }}
+              placeholder="e.g. Strawberry Farming Guide"
+              className="flex-1 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-white text-xs placeholder-white/30 focus:outline-none focus:border-emerald-400/50"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={createGraph}
+              disabled={creatingGraph || !newGraphTitle.trim()}
+              className="px-4 py-2 rounded-lg bg-emerald-500/20 text-emerald-300 text-xs font-medium hover:bg-emerald-500/30 disabled:opacity-40 transition-colors"
+            >
+              {creatingGraph ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Node palette panel */}
+      {showNodePalette && (
+        <div className="mt-2 p-3 rounded-xl border border-violet-400/20 bg-violet-400/[0.04]">
+          <p className="text-xs text-white/50 mb-2">Pick a node type, describe the topic — AI generates the content.</p>
+
+          {/* Node type grid */}
+          <div className="grid grid-cols-3 gap-1.5 mb-3">
+            {NODE_TYPES.map(n => (
+              <button
+                key={n.type}
+                type="button"
+                onClick={() => setSelectedNodeType(n.type)}
+                className={`px-2 py-1.5 rounded-lg border text-left transition-colors ${
+                  selectedNodeType === n.type
+                    ? 'border-violet-400/60 bg-violet-400/20 text-violet-200'
+                    : 'border-white/10 bg-white/[0.03] text-white/60 hover:border-violet-400/30 hover:text-white/80'
+                }`}
+              >
+                <span className="text-sm mr-1">{n.icon}</span>
+                <span className="text-xs font-medium">{n.label}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Topic input */}
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={nodeTopic}
+              onChange={e => setNodeTopic(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') addNode(); }}
+              placeholder={`Topic for ${NODE_TYPES.find(n => n.type === selectedNodeType)?.label || 'node'}…`}
+              className="flex-1 px-3 py-2 rounded-lg bg-white/[0.04] border border-white/10 text-white text-xs placeholder-white/30 focus:outline-none focus:border-violet-400/50"
+              autoFocus
+            />
+            <button
+              type="button"
+              onClick={addNode}
+              disabled={addingNode || !nodeTopic.trim()}
+              className="px-4 py-2 rounded-lg bg-violet-500/20 text-violet-300 text-xs font-medium hover:bg-violet-500/30 disabled:opacity-40 transition-colors"
+            >
+              {addingNode ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Main Component ----------
 
 export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed }: Props) {
@@ -1124,6 +1372,20 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   const removeFile = useCallback((index: number) => {
     setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const handleGraphCreated = useCallback((newGraphId: string, title: string) => {
+    onGraphChange(newGraphId);
+    lastAgentGraphRef.current = newGraphId;
+    setGraphs(prev => prev.some(g => g.id === newGraphId) ? prev : [{ id: newGraphId, metadata_title: title }, ...prev]);
+  }, [onGraphChange]);
+
+  const handleNodeAdded = useCallback((_gId: string, _nId: string, _label: string) => {
+    // nothing extra needed — message is shown via onMessage
+  }, []);
+
+  const pushActionMessage = useCallback((msg: string) => {
+    setMessages(prev => [...prev, { role: 'assistant', content: msg }]);
   }, []);
 
   const sendMessage = useCallback(async (overrideText?: string) => {
@@ -2403,6 +2665,16 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             )}
           </>
         )}
+
+        <GraphActionBar
+          userId={userId}
+          activeGraphId={graphId}
+          onGraphCreated={handleGraphCreated}
+          onNodeAdded={handleNodeAdded}
+          onMessage={pushActionMessage}
+          model={model}
+          disabled={streaming}
+        />
 
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           <button
