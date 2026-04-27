@@ -263,6 +263,1333 @@ export default {
         return new Response(JSON.stringify({ success: true, recordId: record._id, recordCount: records.length }), { headers: corsHeaders })
       }
 
+      // POST /test-youtube — Hypothesis B v7 test:
+      // Harvests REAL youtube-video nodes from existing graphs (no fabrication).
+      // Gemma picks the best fit for the topic, then we build ONE graph with
+      // BOTH grammars demonstrated:
+      //   Node A: standalone youtube-video node (path = original URL)
+      //   Node B: fulltext node embedding the same video via [YOUTUBE src=...] grammar
+      // Body: { topic: string, sampleSize?: number (default 12) }
+      if (pathname === '/test-youtube' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        const sampleSize = Math.min(Math.max(parseInt(body.sampleSize, 10) || 12, 3), 25)
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason }
+        }
+
+        // 1. Search graphs for youtube-video nodes.
+        const searchRes = await env.KG_WORKER.fetch(
+          'https://knowledge.vegvisr.org/searchGraphs?q=youtube&nodeType=youtube-video&limit=20',
+        )
+        if (!searchRes.ok) {
+          return new Response(JSON.stringify({ error: 'searchGraphs failed', status: searchRes.status }), { status: 502, headers: corsHeaders })
+        }
+        const searchData = await searchRes.json()
+        const graphIds = (searchData.results || []).map((r) => r.id).filter(Boolean)
+        if (!graphIds.length) {
+          return new Response(JSON.stringify({ error: 'No graphs with youtube-video nodes found' }), { status: 404, headers: corsHeaders })
+        }
+
+        // 2. Harvest real youtube-video nodes from those graphs (parallel fetch).
+        const fetched = await Promise.all(graphIds.slice(0, 8).map(async (gid) => {
+          try {
+            const r = await env.KG_WORKER.fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gid)}`)
+            if (!r.ok) return []
+            const g = await r.json()
+            return (g.nodes || [])
+              .filter((n) => n.type === 'youtube-video' && n.path)
+              .map((n) => ({ graphId: gid, label: (n.label || '').toString().trim(), path: n.path }))
+          } catch { return [] }
+        }))
+        const allVideos = fetched.flat()
+
+        // Extract a videoId from a URL. Returns null if it doesn't look like a YouTube URL.
+        function extractVideoId(url) {
+          if (!url) return null
+          const patterns = [
+            /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/,
+            /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+          ]
+          for (const re of patterns) {
+            const m = url.match(re)
+            if (m) return m[1]
+          }
+          return null
+        }
+
+        // Filter to videos with a clean label and a real videoId.
+        const candidates = allVideos
+          .map((v) => ({ ...v, videoId: extractVideoId(v.path) }))
+          .filter((v) => v.videoId && v.label && v.label.length >= 3 && !/^YouTube Video Node$/i.test(v.label))
+          // De-dupe by videoId.
+          .reduce((acc, v) => {
+            if (!acc.find((x) => x.videoId === v.videoId)) acc.push(v)
+            return acc
+          }, [])
+
+        if (candidates.length < 2) {
+          return new Response(JSON.stringify({
+            error: 'Not enough real videos with extractable IDs',
+            harvested: allVideos.length,
+            usable: candidates.length,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        // Take a sample for Gemma to choose from.
+        const sample = candidates.slice(0, sampleSize)
+
+        // 3. Ask Gemma to pick the best-fitting video by INDEX.
+        const numbered = sample.map((v, i) => `${i + 1}. ${v.label}`).join('\n')
+        const pickPrompt =
+          `Choose the ONE video that best fits the topic. Reply with ONLY the number (1-${sample.length}), nothing else.\n\n` +
+          `Topic: ${topic}\n\nVideos:\n${numbered}`
+        const [pickSlot, descSlot, headSlot] = await Promise.all([
+          askSlot(
+            `You select the most relevant item from a numbered list. Reply with EXACTLY one integer between 1 and ${sample.length}, nothing else.`,
+            pickPrompt,
+          ),
+          askSlot(
+            'You write concise prose. Reply with exactly ONE plain paragraph (3-4 sentences), plain text, no headings, no quotes, no tags.',
+            `Write one paragraph introducing why this topic might interest a viewer: ${topic}`,
+          ),
+          askSlot(
+            'You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for an article about: ${topic}`,
+          ),
+        ])
+
+        // Parse pick. Reasoning model may include extra words; grab the first integer.
+        const pickMatch = pickSlot.value.match(/\b(\d{1,2})\b/)
+        const pickedIndex = pickMatch ? Math.max(1, Math.min(sample.length, parseInt(pickMatch[1], 10))) - 1 : 0
+        const chosen = sample[pickedIndex]
+
+        const slotReport = {
+          pick:    { v: pickSlot.value, f: pickSlot.finishReason, parsed: pickedIndex + 1 },
+          desc:    { v: descSlot.value, f: descSlot.finishReason },
+          heading: { v: headSlot.value, f: headSlot.finishReason },
+        }
+        const missing = []
+        if (!descSlot.value) missing.push('desc')
+        if (!headSlot.value) missing.push('heading')
+        if (missing.length) {
+          return new Response(JSON.stringify({ error: 'Some slots came back empty', missing, slotReport }), { status: 502, headers: corsHeaders })
+        }
+
+        const heading = (headSlot.value || '').replace(/^#+\s*/, '').replace(/^["“”']+|["“”']+$/g, '').split('\n')[0].trim().slice(0, 80)
+
+        // 4. Build BOTH nodes from the SAME real video.
+        const ts = Date.now()
+        const mkId = (kind) => `node-${kind}-${ts}-${Math.random().toString(36).slice(2, 8)}`
+
+        // Node A: standalone youtube-video node (uses node template grammar).
+        const standaloneNode = {
+          id: mkId('yt-standalone'),
+          label: chosen.label,
+          type: 'youtube-video',
+          color: '#FF0000',
+          info: `[SECTION | background-color:'#FFF'; color:'#333']${descSlot.value}[END SECTION]`,
+          path: chosen.path,
+          bibl: [chosen.path],
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 0 },
+        }
+
+        // Node B: fulltext with embedded YOUTUBE element grammar.
+        const embedInfo = [
+          `# ${heading}`,
+          '',
+          descSlot.value,
+          '',
+          `![YOUTUBE src=https://www.youtube.com/embed/${chosen.videoId}]${chosen.label}[END YOUTUBE]`,
+        ].join('\n')
+        const fulltextNode = {
+          id: mkId('yt-embed'),
+          label: `Fulltext + YOUTUBE embed`,
+          type: 'fulltext',
+          color: '#fecaca',
+          info: embedInfo,
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 250 },
+        }
+
+        const graphId = `graph_test_yt_${ts}`
+        const graphData = {
+          nodes: [standaloneNode, fulltextNode],
+          edges: [],
+          metadata: {
+            title: `YouTube test: ${topic}`,
+            description: 'Hypothesis B v7 — youtube-video standalone + fulltext [YOUTUBE] embed grammars on the same real video.',
+            category: '#test #hybrid-llm #youtube',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-youtube endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          chosen: { label: chosen.label, videoId: chosen.videoId, path: chosen.path, sourceGraphId: chosen.graphId },
+          candidatePool: sample.map((v, i) => ({ idx: i + 1, label: v.label, videoId: v.videoId })),
+          nodes: [
+            { id: standaloneNode.id, label: standaloneNode.label, type: standaloneNode.type, path: standaloneNode.path, info: standaloneNode.info },
+            { id: fulltextNode.id,   label: fulltextNode.label,   type: fulltextNode.type,   info: fulltextNode.info },
+          ],
+          slotReport,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-image-elements — Hypothesis B v6 test:
+      // ONE topic → 3 fulltext nodes, each embedding a different image position:
+      //   Node 1: ![Header|...](url) + intro paragraph
+      //   Node 2: ![Leftside-Medium|...](url) + body paragraph (text wraps right of image)
+      //   Node 3: ![Rightside-Medium|...](url) + body paragraph (text wraps left of image)
+      // Images picked at random from the user's album.
+      // Body: { topic: string, userId: string, albumName?: string }
+      if (pathname === '/test-image-elements' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        const userId = (body.userId || '').toString().trim()
+        const albumName = (body.albumName || 'agent-generated').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'userId is required for album access' }), { status: 400, headers: corsHeaders })
+        }
+
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason }
+        }
+        function cleanLine(s, max = 100) {
+          return (s || '').replace(/^#+\s*/, '').replace(/^["“”']+|["“”']+$/g, '').split('\n')[0].trim().slice(0, max)
+        }
+
+        // Pull the 3 image grammars from D1 + fetch album in parallel with Gemma calls.
+        const tplPromise = env.DB.prepare(
+          "SELECT id, ai_instructions FROM graphTemplates WHERE id IN ('elt-image-header','elt-image-leftside-medium','elt-image-rightside-medium')"
+        ).all()
+
+        const albumPromise = (async () => {
+          const userRecord = await env.DB.prepare(
+            'SELECT emailVerificationToken FROM config WHERE user_id = ?'
+          ).bind(userId).first()
+          if (!userRecord?.emailVerificationToken) {
+            throw new Error('No API token found for user')
+          }
+          const res = await env.ALBUMS_WORKER.fetch(
+            `https://vegvisr-albums-worker/photo-album?name=${encodeURIComponent(albumName)}`,
+            { headers: { 'X-API-Token': userRecord.emailVerificationToken } }
+          )
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || `Albums API error (${res.status})`)
+          return data.images || []
+        })()
+
+        // 6 Gemma slot fills in parallel: heading + paragraph for each of 3 nodes.
+        const [
+          headerHeadSlot, headerParaSlot,
+          leftHeadSlot, leftParaSlot,
+          rightHeadSlot, rightParaSlot,
+          tplResult, albumImages,
+        ] = await Promise.all([
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for the hero/intro section of an article about: ${topic}`),
+          askSlot('You write concise prose. Reply with exactly ONE plain paragraph, plain text, no headings, no quotes, no tags.',
+            `Write one short opening paragraph introducing: ${topic}`),
+
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for a section presenting one key aspect of: ${topic}`),
+          askSlot('You write concise prose. Reply with exactly ONE plain paragraph (about 4-5 sentences) suitable for body text that flows beside a left-aligned image. Plain text, no headings, no quotes, no tags.',
+            `Write one body paragraph (4-5 sentences) covering one key aspect of: ${topic}`),
+
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for a section presenting another key aspect of: ${topic}`),
+          askSlot('You write concise prose. Reply with exactly ONE plain paragraph (about 4-5 sentences) suitable for body text that flows beside a right-aligned image. Plain text, no headings, no quotes, no tags.',
+            `Write one body paragraph (4-5 sentences) covering a contrasting key aspect of: ${topic}`),
+
+          tplPromise,
+          albumPromise.catch((e) => { return { __error: e.message } }),
+        ])
+
+        // Validate templates loaded.
+        const tplRows = (tplResult.results || [])
+        const tpl = {}
+        for (const row of tplRows) {
+          try { tpl[row.id] = JSON.parse(row.ai_instructions) } catch { tpl[row.id] = null }
+        }
+        const tplMissing = ['elt-image-header','elt-image-leftside-medium','elt-image-rightside-medium'].filter((id) => !tpl[id])
+        if (tplMissing.length) {
+          return new Response(JSON.stringify({ error: 'Image templates missing from D1', missing: tplMissing }), { status: 500, headers: corsHeaders })
+        }
+
+        // Validate album.
+        if (albumImages?.__error) {
+          return new Response(JSON.stringify({ error: 'Album fetch failed', detail: albumImages.__error }), { status: 502, headers: corsHeaders })
+        }
+        if (!albumImages || albumImages.length < 3) {
+          return new Response(JSON.stringify({ error: 'Album needs at least 3 images', count: albumImages?.length || 0 }), { status: 502, headers: corsHeaders })
+        }
+
+        // Pick 3 distinct random images.
+        const shuffled = [...albumImages].sort(() => Math.random() - 0.5)
+        const [keyHeader, keyLeft, keyRight] = shuffled.slice(0, 3)
+        const urlOf = (key, w, h) => `https://vegvisr.imgix.net/${key}?w=${w}&h=${h}&fit=crop`
+
+        // Slot validation.
+        const slotReport = {
+          headerHeading: { v: headerHeadSlot.value, f: headerHeadSlot.finishReason },
+          headerPara:    { v: headerParaSlot.value, f: headerParaSlot.finishReason },
+          leftHeading:   { v: leftHeadSlot.value,   f: leftHeadSlot.finishReason },
+          leftPara:      { v: leftParaSlot.value,   f: leftParaSlot.finishReason },
+          rightHeading:  { v: rightHeadSlot.value,  f: rightHeadSlot.finishReason },
+          rightPara:     { v: rightParaSlot.value,  f: rightParaSlot.finishReason },
+        }
+        const missing = []
+        for (const [k, s] of Object.entries(slotReport)) if (!s.v) missing.push(k)
+        if (missing.length) {
+          return new Response(JSON.stringify({
+            error: 'Some slots came back empty',
+            missing,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        const headerHead = cleanLine(headerHeadSlot.value, 80)
+        const leftHead   = cleanLine(leftHeadSlot.value, 80)
+        const rightHead  = cleanLine(rightHeadSlot.value, 80)
+
+        // Assemble bodies using the grammars from D1.
+        // Node 1 — Header image at top, then heading + paragraph.
+        const node1Info = [
+          `![Header|height: 200px; object-fit: 'cover'; object-position: 'center'](${urlOf(keyHeader, 1600, 600)})`,
+          '',
+          `# ${headerHead}`,
+          '',
+          headerParaSlot.value,
+        ].join('\n')
+
+        // Node 2 — heading, then Leftside-Medium image inline with paragraph.
+        const node2Info = [
+          `# ${leftHead}`,
+          '',
+          `![Leftside-1|width: 200px; height: 200px; object-fit: 'cover'; object-position: 'center'; margin: '0 20px 15px 0'](${urlOf(keyLeft, 600, 600)}) ${leftParaSlot.value}`,
+        ].join('\n')
+
+        // Node 3 — heading, then Rightside-Medium image inline with paragraph.
+        const node3Info = [
+          `# ${rightHead}`,
+          '',
+          `![Rightside-1|width: 200px; height: 200px; object-fit: 'cover'; object-position: 'center'; margin: '0 0 15px 20px'](${urlOf(keyRight, 600, 600)}) ${rightParaSlot.value}`,
+        ].join('\n')
+
+        const ts = Date.now()
+        const mkId = (kind) => `node-${kind}-${ts}-${Math.random().toString(36).slice(2, 8)}`
+        const nodes = [
+          { id: mkId('header'),    label: `Header — ${headerHead}`,  type: 'fulltext', color: '#dbeafe', info: node1Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0, y: 0 } },
+          { id: mkId('leftside'),  label: `Leftside — ${leftHead}`,  type: 'fulltext', color: '#dcfce7', info: node2Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0, y: 200 } },
+          { id: mkId('rightside'), label: `Rightside — ${rightHead}`,type: 'fulltext', color: '#fce7f3', info: node3Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0, y: 400 } },
+        ]
+
+        const graphId = `graph_test_imgelt_${ts}`
+        const graphData = {
+          nodes,
+          edges: [],
+          metadata: {
+            title: `Image-element test: ${topic}`,
+            description: 'Hypothesis B v6 — Header / Leftside / Rightside image positions inside fulltext nodes.',
+            category: '#test #hybrid-llm #image-elements',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-image-elements endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            slotReport,
+            nodesPreview: nodes.map((n) => ({ id: n.id, label: n.label, info: n.info })),
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodes: nodes.map((n) => ({ id: n.id, label: n.label, info: n.info })),
+          images: { header: keyHeader, leftside: keyLeft, rightside: keyRight, available: albumImages.length },
+          slotReport,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-multi-node — Hypothesis B v5 test:
+      // ONE topic → 4 fulltext nodes + 1 image node from the agent-generated album.
+      // Node 1: [FANCY] hero title  | Node 2: [SECTION] intro
+      // Node 3: [QUOTE] with author | Node 4: [WNOTE] with author
+      // Node 5: markdown-image picked at random from album.
+      // Body: { topic: string, userId: string, albumName?: string }
+      if (pathname === '/test-multi-node' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        const userId = (body.userId || '').toString().trim()
+        const albumName = (body.albumName || 'agent-generated').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'userId is required for album access' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Fetch album images upfront (parallel with Gemma calls below).
+        const albumPromise = (async () => {
+          const userRecord = await env.DB.prepare(
+            'SELECT emailVerificationToken FROM config WHERE user_id = ?'
+          ).bind(userId).first()
+          if (!userRecord?.emailVerificationToken) {
+            throw new Error('No API token found for user — please log in again')
+          }
+          const res = await env.ALBUMS_WORKER.fetch(
+            `https://vegvisr-albums-worker/photo-album?name=${encodeURIComponent(albumName)}`,
+            { headers: { 'X-API-Token': userRecord.emailVerificationToken } }
+          )
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error || `Albums API error (${res.status})`)
+          return (data.images || [])
+        })()
+
+        const FONT_SIZES = ['2.5em', '3em', '3.5em', '4em', '4.5em', '5em']
+        const FANCY_COLORS = ['#2c3e50', '#c0392b', '#16a085', '#d4a017', '#8e44ad', '#d35400']
+        const ALIGNS = ['left', 'center', 'right']
+        const SECTION_BG = [
+          'lightblue', 'lightyellow', 'lavender', 'mistyrose', 'mintcream',
+          'peachpuff', 'beige', 'lightgray', 'thistle', 'palegoldenrod',
+          'honeydew', 'aliceblue',
+        ]
+
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason }
+        }
+        function pickFromAllowlist(text, allowlist) {
+          const lower = (text || '').toLowerCase()
+          const hits = allowlist.filter((w) => lower.includes(w.toLowerCase()))
+          return { match: hits[0] || null, ambiguous: hits.length > 1, hits }
+        }
+        function cleanLine(s, max = 100) {
+          return (s || '')
+            .replace(/^#+\s*/, '')
+            .replace(/^["“”']+|["“”']+$/g, '')
+            .split('\n')[0]
+            .trim()
+            .slice(0, max)
+        }
+        function cleanAuthor(s) {
+          return (s || '')
+            .replace(/^by\s+/i, '')
+            .replace(/^["“”']+|["“”']+$/g, '')
+            .replace(/[.,;]+$/, '')
+            .replace(/'/g, '')
+            .trim()
+            .slice(0, 80)
+        }
+        function cleanQuoteBody(s) {
+          return (s || '').replace(/^["“”']+|["“”']+$/g, '').trim()
+        }
+
+        // Run ALL slot fills in parallel — 11 calls in one burst.
+        const [
+          fancyTitleSlot, fancyHeadingSlot, fontSlot, colorSlot, alignSlot,
+          sectionHeadingSlot, sectionBodySlot, sectionBgSlot,
+          quoteHeadingSlot, quoteBodySlot, quoteAuthorSlot,
+          wnoteHeadingSlot, wnoteBodySlot, wnoteAuthorSlot,
+        ] = await Promise.all([
+          askSlot('You write very short hero titles (max 8 words). Reply with the title text only — no quotes, no markdown, no extra text.',
+            `Hero title for: ${topic}`),
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for the hero block of an article about: ${topic}`),
+          askSlot(`You pick the most fitting font size for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${FONT_SIZES.join(', ')}.`,
+            `Font size for a hero title about: ${topic}`),
+          askSlot(`You pick the most fitting hex color for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${FANCY_COLORS.join(', ')}.`,
+            `Color for a hero title about: ${topic}`),
+          askSlot(`You pick the most fitting text alignment for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${ALIGNS.join(', ')}.`,
+            `Text alignment for a hero title about: ${topic}`),
+
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for the introduction section of an article about: ${topic}`),
+          askSlot('You write concise prose. Reply with exactly ONE plain paragraph, plain text, no headings, no quotes, no tags.',
+            `Write one short introduction paragraph about: ${topic}`),
+          askSlot(`You pick the most fitting background color for an intro section. Reply with EXACTLY ONE value from this list, nothing else: ${SECTION_BG.join(', ')}.`,
+            `Background color for an intro section about: ${topic}`),
+
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for a quote-block section of an article about: ${topic}`),
+          askSlot('You produce one short, evocative quoted sentence relevant to a topic. Reply with the sentence text only — no surrounding quote marks, no attribution, no extra text.',
+            `One quote relevant to: ${topic}`),
+          askSlot('You name a plausible author for a quote. Reply with just the name, no quotes, no titles, no extra text.',
+            `Pick a fitting author name for a quote about: ${topic}`),
+
+          askSlot('You write very short section headings (max 6 words). Reply with heading text only — no #, no quotes, no extra text.',
+            `Section heading for a practical-tip section of an article about: ${topic}`),
+          askSlot('You write short professional work notes — practical observations, not quotes. Reply with exactly ONE paragraph, plain text, no quotes, no headings, no tags.',
+            `Write one short work note (a practical observation) about: ${topic}`),
+          askSlot('You name a plausible professional author for a work note. Reply with just the name, no quotes, no titles, no extra text.',
+            `Pick a fitting author name for a professional work note about: ${topic}`),
+        ])
+
+        const fontPick  = pickFromAllowlist(fontSlot.value, FONT_SIZES)
+        const colorPick = pickFromAllowlist(colorSlot.value, FANCY_COLORS)
+        const alignPick = pickFromAllowlist(alignSlot.value, ALIGNS)
+        const bgPick    = pickFromAllowlist(sectionBgSlot.value, SECTION_BG)
+
+        const slotReport = {
+          fancyTitle:    { v: fancyTitleSlot.value,    f: fancyTitleSlot.finishReason },
+          fancyHeading:  { v: fancyHeadingSlot.value,  f: fancyHeadingSlot.finishReason },
+          font:          { v: fontSlot.value,          f: fontSlot.finishReason,  pick: fontPick },
+          color:         { v: colorSlot.value,         f: colorSlot.finishReason, pick: colorPick },
+          align:         { v: alignSlot.value,         f: alignSlot.finishReason, pick: alignPick },
+          sectionHeading:{ v: sectionHeadingSlot.value,f: sectionHeadingSlot.finishReason },
+          sectionBody:   { v: sectionBodySlot.value,   f: sectionBodySlot.finishReason },
+          sectionBg:     { v: sectionBgSlot.value,     f: sectionBgSlot.finishReason, pick: bgPick },
+          quoteHeading:  { v: quoteHeadingSlot.value,  f: quoteHeadingSlot.finishReason },
+          quoteBody:     { v: quoteBodySlot.value,     f: quoteBodySlot.finishReason },
+          quoteAuthor:   { v: quoteAuthorSlot.value,   f: quoteAuthorSlot.finishReason },
+          wnoteHeading:  { v: wnoteHeadingSlot.value,  f: wnoteHeadingSlot.finishReason },
+          wnoteBody:     { v: wnoteBodySlot.value,     f: wnoteBodySlot.finishReason },
+          wnoteAuthor:   { v: wnoteAuthorSlot.value,   f: wnoteAuthorSlot.finishReason },
+        }
+        const missing = []
+        if (!fancyTitleSlot.value)    missing.push('fancyTitle')
+        if (!fancyHeadingSlot.value)  missing.push('fancyHeading')
+        if (!fontPick.match)          missing.push('font')
+        if (!colorPick.match)         missing.push('color')
+        if (!alignPick.match)         missing.push('align')
+        if (!sectionHeadingSlot.value)missing.push('sectionHeading')
+        if (!sectionBodySlot.value)   missing.push('sectionBody')
+        if (!bgPick.match)            missing.push('sectionBg')
+        if (!quoteHeadingSlot.value)  missing.push('quoteHeading')
+        if (!quoteBodySlot.value)     missing.push('quoteBody')
+        if (!quoteAuthorSlot.value)   missing.push('quoteAuthor')
+        if (!wnoteHeadingSlot.value)  missing.push('wnoteHeading')
+        if (!wnoteBodySlot.value)     missing.push('wnoteBody')
+        if (!wnoteAuthorSlot.value)   missing.push('wnoteAuthor')
+        if (missing.length) {
+          return new Response(JSON.stringify({
+            error: 'Some slots came back empty or unmatched',
+            missing,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        // Sanitize
+        const fancyTitle    = cleanLine(fancyTitleSlot.value)
+        const fancyHeading  = cleanLine(fancyHeadingSlot.value, 80)
+        const sectionHead   = cleanLine(sectionHeadingSlot.value, 80)
+        const quoteHead     = cleanLine(quoteHeadingSlot.value, 80)
+        const wnoteHead     = cleanLine(wnoteHeadingSlot.value, 80)
+        const quoteAuthor   = cleanAuthor(quoteAuthorSlot.value)
+        const wnoteAuthor   = cleanAuthor(wnoteAuthorSlot.value)
+        const quoteBody     = cleanQuoteBody(quoteBodySlot.value)
+
+        // Assemble each node's body
+        const fancyStyle = `font-size: ${fontPick.match}; color: ${colorPick.match}; text-align: ${alignPick.match}`
+        const sectionStyle = `background-color: '${bgPick.match}'; color: 'black'; text-align: 'left'; font-size: '1.05em'`
+
+        const node1Info = [
+          `# ${fancyHeading}`,
+          '',
+          `[FANCY | ${fancyStyle}]`,
+          fancyTitle,
+          '[END FANCY]',
+        ].join('\n')
+
+        const node2Info = [
+          `# ${sectionHead}`,
+          '',
+          `[SECTION | ${sectionStyle}]`,
+          sectionBodySlot.value,
+          '[END SECTION]',
+        ].join('\n')
+
+        const node3Info = [
+          `# ${quoteHead}`,
+          '',
+          `[QUOTE | Cited='${quoteAuthor}']`,
+          quoteBody,
+          '[END QUOTE]',
+        ].join('\n')
+
+        const node4Info = [
+          `# ${wnoteHead}`,
+          '',
+          `[WNOTE | Cited='${wnoteAuthor}']`,
+          wnoteBodySlot.value,
+          '[END WNOTE]',
+        ].join('\n')
+
+        // Pick a random image from the album (resolve in parallel with Gemma).
+        let albumImages = []
+        let albumError = null
+        try { albumImages = await albumPromise } catch (e) { albumError = e.message }
+        const chosenKey = albumImages.length
+          ? albumImages[Math.floor(Math.random() * albumImages.length)]
+          : null
+        const chosenUrl = chosenKey
+          ? `https://vegvisr.imgix.net/${chosenKey}?w=1200&h=800&fit=crop`
+          : null
+
+        const ts = Date.now()
+        const mkId = (kind) => `node-${kind}-${ts}-${Math.random().toString(36).slice(2, 8)}`
+        const nodes = [
+          { id: mkId('fancy'),   label: `Hero — ${fancyHeading}`,    type: 'fulltext', color: '#fef3c7', info: node1Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0,   y: 0 } },
+          { id: mkId('section'), label: `Intro — ${sectionHead}`,    type: 'fulltext', color: '#e0f2fe', info: node2Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0,   y: 200 } },
+          { id: mkId('quote'),   label: `Quote — ${quoteHead}`,      type: 'fulltext', color: '#fce7f3', info: node3Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0,   y: 400 } },
+          { id: mkId('wnote'),   label: `Note — ${wnoteHead}`,       type: 'fulltext', color: '#fef9c3', info: node4Info, imageWidth: '100%', imageHeight: '100%', visible: true, position: { x: 0,   y: 600 } },
+        ]
+        if (chosenUrl) {
+          nodes.push({
+            id: mkId('image'),
+            label: `Image — from ${albumName}`,
+            type: 'markdown-image',
+            color: '#ddd6fe',
+            info: `Image from album "${albumName}"`,
+            path: chosenUrl,
+            imageWidth: '100%',
+            imageHeight: '100%',
+            visible: true,
+            position: { x: 0, y: 800 },
+          })
+        }
+
+        const graphId = `graph_test_multi_${ts}`
+        const graphData = {
+          nodes,
+          edges: [],
+          metadata: {
+            title: `Multi-node test: ${topic}`,
+            description: 'Hypothesis B v5 — 4 standalone fulltext nodes, one element each.',
+            category: '#test #hybrid-llm #multi-node',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-multi-node endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            slotReport,
+            nodesPreview: nodes.map((n) => ({ id: n.id, label: n.label, info: n.info })),
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodes: nodes.map((n) => ({ id: n.id, label: n.label, type: n.type, info: n.info, path: n.path })),
+          slotReport,
+          album: {
+            name: albumName,
+            available: albumImages.length,
+            chosenKey,
+            chosenUrl,
+            error: albumError,
+          },
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-wnote — Hypothesis B v4 test:
+      // Confirms QUOTE pattern works for the structurally identical WNOTE element.
+      // Slots: body paragraph + author. Code wraps with [WNOTE | Cited='...'] grammar.
+      // Body: { topic: string }
+      if (pathname === '/test-wnote' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason, raw: choice }
+        }
+
+        const tplRow = await env.DB.prepare(
+          "SELECT ai_instructions FROM graphTemplates WHERE id = 'elt-wnote'"
+        ).first()
+        if (!tplRow) {
+          return new Response(JSON.stringify({ error: 'WNOTE template missing from D1' }), { status: 500, headers: corsHeaders })
+        }
+
+        const [noteSlot, authorSlot] = await Promise.all([
+          askSlot(
+            'You write short professional work notes — practical observations, not quotes. Reply with exactly ONE paragraph, plain text, no quotes, no headings, no tags.',
+            `Write one short work note (a practical observation or reminder) about: ${topic}`,
+          ),
+          askSlot(
+            'You name a plausible professional author for a work note. Reply with just the name, no quotes, no titles, no extra text.',
+            `Pick a fitting author name for a professional work note about: ${topic}`,
+          ),
+        ])
+
+        const slotReport = {
+          note:   { value: noteSlot.value,   finishReason: noteSlot.finishReason },
+          author: { value: authorSlot.value, finishReason: authorSlot.finishReason },
+        }
+        const missing = []
+        if (!noteSlot.value)   missing.push('note')
+        if (!authorSlot.value) missing.push('author')
+        if (missing.length) {
+          return new Response(JSON.stringify({
+            error: 'Some slots came back empty',
+            missing,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        // Sanitize
+        let author = authorSlot.value
+          .replace(/^by\s+/i, '')
+          .replace(/^["“”']+|["“”']+$/g, '')
+          .replace(/[.,;]+$/, '')
+          .replace(/'/g, '')
+          .trim()
+          .slice(0, 80)
+        let noteBody = noteSlot.value
+          .replace(/^["“”']+|["“”']+$/g, '')
+          .trim()
+
+        // Assemble using WNOTE grammar from D1
+        const fulltextInfo = [
+          `[WNOTE | Cited='${author}']`,
+          noteBody,
+          '[END WNOTE]',
+        ].join('\n')
+
+        const graphId = `graph_test_wnote_${Date.now()}`
+        const node = {
+          id: `node-wnote-${Math.random().toString(36).slice(2, 10)}`,
+          label: `WNote: ${topic.slice(0, 60)}`,
+          type: 'fulltext',
+          color: '#fef9c3',
+          info: fulltextInfo,
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 0 },
+        }
+        const graphData = {
+          nodes: [node],
+          edges: [],
+          metadata: {
+            title: `WNote test: ${topic}`,
+            description: 'Hypothesis B v4 — [WNOTE] block with body + author slots.',
+            category: '#test #hybrid-llm #wnote',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-wnote endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            generatedInfo: fulltextInfo,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodeId: node.id,
+          info: fulltextInfo,
+          slots: { note: noteBody, author },
+          slotReport,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-fancy — Hypothesis B v3 test:
+      // Stress-tests 3-parameter allowlist slots. Gemma fills 5 slots:
+      // title, font-size (allowlist), color (hex allowlist), text-align (allowlist),
+      // body paragraph. Code assembles markdown + [FANCY] block.
+      // Body: { topic: string }
+      if (pathname === '/test-fancy' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Allowlists. Code REJECTS anything Gemma returns outside these.
+        const FONT_SIZES = ['2.5em', '3em', '3.5em', '4em', '4.5em', '5em']
+        const COLORS = ['#2c3e50', '#c0392b', '#16a085', '#d4a017', '#8e44ad', '#d35400']
+        const ALIGNS = ['left', 'center', 'right']
+
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason, raw: choice }
+        }
+
+        // Pick first allowlist token that appears in content.
+        // Returns { match, ambiguous: boolean, hits: string[] }.
+        function pickFromAllowlist(text, allowlist) {
+          const lower = (text || '').toLowerCase()
+          const hits = allowlist.filter((w) => lower.includes(w.toLowerCase()))
+          return { match: hits[0] || null, ambiguous: hits.length > 1, hits }
+        }
+
+        // Pull FANCY template from D1 — verifies it still exists and gives us notes.
+        const tplRow = await env.DB.prepare(
+          "SELECT ai_instructions FROM graphTemplates WHERE id = 'elt-fancy'"
+        ).first()
+        if (!tplRow) {
+          return new Response(JSON.stringify({ error: 'FANCY template missing from D1' }), { status: 500, headers: corsHeaders })
+        }
+
+        // Run all 5 slot fills in parallel.
+        const [titleSlot, fontSlot, colorSlot, alignSlot, paraSlot] = await Promise.all([
+          askSlot(
+            'You write very short article titles. Reply with ONE plain title line (max 8 words), no quotes, no markdown, no extra text.',
+            `Title for an article about: ${topic}`,
+          ),
+          askSlot(
+            `You pick the most fitting font size for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${FONT_SIZES.join(', ')}.`,
+            `Font size for a hero title about: ${topic}`,
+          ),
+          askSlot(
+            `You pick the most fitting hex color for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${COLORS.join(', ')}.`,
+            `Color for a hero title about: ${topic}`,
+          ),
+          askSlot(
+            `You pick the most fitting text alignment for a hero title. Reply with EXACTLY ONE value from this list, nothing else: ${ALIGNS.join(', ')}.`,
+            `Text alignment for a hero title about: ${topic}`,
+          ),
+          askSlot(
+            'You write concise prose. Reply with exactly ONE plain paragraph, plain text, no markdown headings, no quotes, no tags.',
+            `Write one short opening paragraph introducing: ${topic}`,
+          ),
+        ])
+
+        // Resolve allowlist matches.
+        const fontPick  = pickFromAllowlist(fontSlot.value, FONT_SIZES)
+        const colorPick = pickFromAllowlist(colorSlot.value, COLORS)
+        const alignPick = pickFromAllowlist(alignSlot.value, ALIGNS)
+
+        const slotReport = {
+          title:  { value: titleSlot.value,  finishReason: titleSlot.finishReason },
+          font:   { value: fontSlot.value,   finishReason: fontSlot.finishReason,  pick: fontPick },
+          color:  { value: colorSlot.value,  finishReason: colorSlot.finishReason, pick: colorPick },
+          align:  { value: alignSlot.value,  finishReason: alignSlot.finishReason, pick: alignPick },
+          paragraph: { value: paraSlot.value, finishReason: paraSlot.finishReason },
+        }
+        const missing = []
+        if (!titleSlot.value) missing.push('title')
+        if (!paraSlot.value)  missing.push('paragraph')
+        if (!fontPick.match)  missing.push('font')
+        if (!colorPick.match) missing.push('color')
+        if (!alignPick.match) missing.push('align')
+        if (missing.length) {
+          return new Response(JSON.stringify({
+            error: 'Some slots came back empty or unmatched',
+            missing,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        // Sanitize title: strip leading hashes, surrounding quotes.
+        const title = titleSlot.value
+          .replace(/^#+\s*/, '')
+          .replace(/^["“”']+|["“”']+$/g, '')
+          .split('\n')[0]
+          .trim()
+          .slice(0, 100)
+
+        // Deterministic assembly using FANCY grammar from D1.
+        const fancyStyle = `font-size: ${fontPick.match}; color: ${colorPick.match}; text-align: ${alignPick.match}`
+        const fulltextInfo = [
+          `[FANCY | ${fancyStyle}]`,
+          title,
+          '[END FANCY]',
+          '',
+          paraSlot.value,
+        ].join('\n')
+
+        // Build graph
+        const graphId = `graph_test_fancy_${Date.now()}`
+        const node = {
+          id: `node-fancy-${Math.random().toString(36).slice(2, 10)}`,
+          label: `Fancy: ${topic.slice(0, 60)}`,
+          type: 'fulltext',
+          color: '#fef3c7',
+          info: fulltextInfo,
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 0 },
+        }
+        const graphData = {
+          nodes: [node],
+          edges: [],
+          metadata: {
+            title: `Fancy test: ${topic}`,
+            description: 'Hypothesis B v3 — [FANCY] block with 3 allowlist parameter slots.',
+            category: '#test #hybrid-llm #fancy',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-fancy endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            generatedInfo: fulltextInfo,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodeId: node.id,
+          info: fulltextInfo,
+          slots: {
+            title,
+            font: fontPick.match,
+            color: colorPick.match,
+            align: alignPick.match,
+            paragraph: paraSlot.value,
+          },
+          slotReport,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-mixed-section — Hypothesis B v2 test:
+      // Gemma fills MULTIPLE slots independently (title, paragraph, SECTION body,
+      // QUOTE body, QUOTE author). Code assembles the final fulltext body from
+      // pure markdown + [SECTION] + [QUOTE] grammars pulled from D1.
+      // Body: { topic: string }
+      if (pathname === '/test-mixed-section' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        // Helper: ask Gemma for one slot, return clean message.content only.
+        // Returns { value, finishReason, raw } — never reads chain-of-thought text.
+        async function askSlot(systemPrompt, userPrompt, maxTokens = 1500) {
+          const resp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user',   content: userPrompt },
+            ],
+            max_tokens: maxTokens,
+          })
+          const choice = resp?.choices?.[0]?.message || {}
+          const finishReason = resp?.choices?.[0]?.finish_reason || null
+          const value = (choice.content || resp?.response || '').toString().trim()
+          return { value, finishReason, raw: choice }
+        }
+
+        // 1. Pull SECTION + QUOTE templates from D1 (single query).
+        const tplRows = await env.DB.prepare(
+          "SELECT id, ai_instructions FROM graphTemplates WHERE id IN ('elt-section','elt-quote')"
+        ).all()
+        const templates = {}
+        for (const row of (tplRows.results || [])) {
+          try { templates[row.id] = JSON.parse(row.ai_instructions) } catch { templates[row.id] = null }
+        }
+        if (!templates['elt-section'] || !templates['elt-quote']) {
+          return new Response(JSON.stringify({ error: 'SECTION or QUOTE template missing' }), { status: 500, headers: corsHeaders })
+        }
+
+        // 2. Run the four Gemma slot fills in PARALLEL — they're independent.
+        const [titleSlot, paraSlot, sectionSlot, quoteSlot, authorSlot] = await Promise.all([
+          askSlot(
+            'You write very short article titles. Reply with ONE markdown heading line, no quotes, no extra text.',
+            `Title for an article about: ${topic}`,
+          ),
+          askSlot(
+            'You write concise prose. Reply with exactly ONE plain paragraph, plain text, no markdown headings, no quotes, no tags.',
+            `Write one short opening paragraph introducing: ${topic}`,
+          ),
+          askSlot(
+            'You write concise prose. Reply with exactly ONE short paragraph, plain text, no headings, no quotes, no tags.',
+            `Write one paragraph that goes deeper into a key aspect of: ${topic}`,
+          ),
+          askSlot(
+            'You produce one short, evocative quoted sentence relevant to a topic. Reply with the sentence text only — no surrounding quote marks, no attribution, no extra text.',
+            `One quote relevant to: ${topic}`,
+          ),
+          askSlot(
+            'You name a plausible author for a quote. Reply with just the name, no quotes, no titles, no extra text.',
+            `Pick a fitting author name for a quote about: ${topic}`,
+          ),
+        ])
+
+        // 3. Validate slot fills. Bail loudly if any slot is empty so we can see WHY.
+        const slotReport = {
+          title:   { value: titleSlot.value,   finishReason: titleSlot.finishReason },
+          paragraph:{ value: paraSlot.value,   finishReason: paraSlot.finishReason },
+          section: { value: sectionSlot.value, finishReason: sectionSlot.finishReason },
+          quote:   { value: quoteSlot.value,   finishReason: quoteSlot.finishReason },
+          author:  { value: authorSlot.value,  finishReason: authorSlot.finishReason },
+        }
+        const missing = Object.entries(slotReport).filter(([, s]) => !s.value).map(([k]) => k)
+        if (missing.length) {
+          return new Response(JSON.stringify({
+            error: 'Some slots came back empty',
+            missing,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        // 4. Sanitize:
+        //  - Title: ensure it starts with a "# " heading. Strip any leading hashes Gemma added.
+        //  - Author: strip leading "by ", surrounding quotes, trailing periods.
+        //  - Quote body: strip wrapping quotes (single, double, smart).
+        let title = titleSlot.value.replace(/^#+\s*/, '').replace(/^["“”']+|["“”']+$/g, '').trim()
+        let author = authorSlot.value.replace(/^by\s+/i, '').replace(/^["“”']+|["“”']+$/g, '').replace(/[.,;]+$/, '').trim()
+        let quoteBody = quoteSlot.value.replace(/^["“”']+|["“”']+$/g, '').trim()
+        // Author safety: must not contain a single quote (it would break Cited='...').
+        author = author.replace(/'/g, '').slice(0, 80)
+
+        // 5. Deterministic assembly using the grammars from D1.
+        const sectionStyle = "background-color: 'lightblue'; color: 'black'; text-align: 'center'; font-size: '1.1em'"
+        const fulltextInfo = [
+          `# ${title}`,
+          '',
+          paraSlot.value,
+          '',
+          `[SECTION | ${sectionStyle}]`,
+          sectionSlot.value,
+          '[END SECTION]',
+          '',
+          `[QUOTE | Cited='${author}']`,
+          quoteBody,
+          '[END QUOTE]',
+        ].join('\n')
+
+        // 6. Build graph
+        const graphId = `graph_test_mixed_${Date.now()}`
+        const node = {
+          id: `node-mixed-${Math.random().toString(36).slice(2, 10)}`,
+          label: `Mixed: ${topic.slice(0, 60)}`,
+          type: 'fulltext',
+          color: '#e0f2fe',
+          info: fulltextInfo,
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 0 },
+        }
+        const graphData = {
+          nodes: [node],
+          edges: [],
+          metadata: {
+            title: `Mixed test: ${topic}`,
+            description: 'Hypothesis B v2 — markdown + [SECTION] + [QUOTE] from per-slot Gemma calls.',
+            category: '#test #hybrid-llm #mixed',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-mixed-section endpoint',
+          },
+        }
+
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            generatedInfo: fulltextInfo,
+            slotReport,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodeId: node.id,
+          info: fulltextInfo,
+          slots: { title, paragraph: paraSlot.value, sectionBody: sectionSlot.value, quote: quoteBody, author },
+          slotReport,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /test-section — Hypothesis B test:
+      // Gemma writes prose only; we wrap it deterministically with the
+      // [SECTION] grammar from graphTemplates → create fulltext node → save graph.
+      // Body: { topic: string, paragraphs?: number, style?: object, aiStyle?: boolean }
+      if (pathname === '/test-section' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const topic = (body.topic || '').toString().trim()
+        if (!topic) {
+          return new Response(JSON.stringify({ error: 'topic is required' }), { status: 400, headers: corsHeaders })
+        }
+        const paragraphs = Math.min(Math.max(parseInt(body.paragraphs, 10) || 2, 1), 5)
+        const aiStyle = body.aiStyle === true
+
+        // Allowlist of background-colors Gemma may choose from.
+        // Constrains the slot so the model can never produce invalid CSS.
+        const COLOR_ALLOWLIST = [
+          'lightblue', 'lightyellow', 'lavender', 'mistyrose',
+          'mintcream', 'peachpuff', 'beige', 'lightgray', 'thistle',
+          'palegoldenrod', 'honeydew', 'aliceblue',
+        ]
+
+        let chosenBg = body?.style?.['background-color'] || 'lightblue'
+        let colorReason = null
+        let colorRaw = null
+
+        if (aiStyle) {
+          // Gemma 4 is a reasoning model: it always emits chain-of-thought first,
+          // THEN puts the actual answer in message.content. We give enough budget
+          // for CoT to finish (~1500 tokens) and ONLY accept message.content.
+          // We never scrape reasoning text — that biases toward whichever color
+          // appears first in the prompt's allowlist.
+          const colorResp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+            messages: [
+              { role: 'system', content: `Pick the most fitting CSS background color for a topic. Reply with ONE word from this list, exactly as written, nothing else: ${COLOR_ALLOWLIST.join(', ')}.` },
+              { role: 'user',   content: `Topic: ${topic}` },
+            ],
+            max_tokens: 1500,
+          })
+          const cChoice = colorResp?.choices?.[0]?.message || {}
+          // Strict: only accept message.content (the post-reasoning answer).
+          colorRaw = (cChoice.content || colorResp?.response || '').toString().trim()
+          if (colorRaw && colorRaw.length <= 40) {
+            const lc = colorRaw.toLowerCase()
+            const hits = COLOR_ALLOWLIST.filter(c => new RegExp(`\\b${c}\\b`, 'i').test(lc))
+            if (hits.length === 1) {
+              chosenBg = hits[0]
+              colorReason = 'matched allowlist (clean content answer)'
+            } else if (hits.length > 1) {
+              colorReason = `ambiguous (matched ${hits.length}); fell back to default '${chosenBg}'`
+            } else {
+              colorReason = `no allowlist match in content; fell back to default '${chosenBg}'`
+            }
+          } else {
+            colorReason = `content empty or too long (finish_reason=${colorResp?.choices?.[0]?.finish_reason || 'unknown'}); fell back to default '${chosenBg}'`
+          }
+        }
+
+        const style = {
+          'background-color': chosenBg,
+          'color':            body?.style?.color            || 'black',
+          'text-align':       body?.style?.['text-align']   || 'center',
+          'font-size':        body?.style?.['font-size']    || '1.1em',
+        }
+
+        // 1. Gemma — prose only, no markup grammar exposed
+        const aiResp = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+          messages: [
+            { role: 'system', content: 'You are a concise prose writer. Reply with plain markdown only — no HTML, no code fences, no headings, no special tags. Just paragraphs. Do not show your reasoning. Output the final text only.' },
+            { role: 'user',   content: `Write exactly ${paragraphs} short paragraphs about: ${topic}` },
+          ],
+          max_tokens: 2000,
+        })
+        // Gemma's OpenAI-shaped output: prefer message.content; fall back to extracting
+        // the final prose from message.reasoning (chain-of-thought) if content is empty.
+        const choice = aiResp?.choices?.[0]?.message || {}
+        let prose = (aiResp?.response || choice.content || '').toString().trim()
+        if (!prose && choice.reasoning) {
+          // Strip CoT scaffolding: take the LAST run of plain paragraphs (no leading "*" or "-")
+          const blocks = choice.reasoning.split(/\n\s*\n/).map(b => b.trim()).filter(Boolean)
+          const proseBlocks = blocks.filter(b => !/^[*\-\d]/.test(b) && b.length > 60)
+          prose = proseBlocks.slice(-paragraphs).join('\n\n').trim()
+        }
+        if (!prose) {
+          return new Response(JSON.stringify({ error: 'Gemma returned empty response', raw: aiResp }), { status: 502, headers: corsHeaders })
+        }
+
+        // 2. Read SECTION template from D1
+        const tplRow = await env.DB.prepare(
+          'SELECT ai_instructions FROM graphTemplates WHERE id = ?'
+        ).bind('elt-section').first()
+        if (!tplRow) {
+          return new Response(JSON.stringify({ error: 'elt-section template not found' }), { status: 500, headers: corsHeaders })
+        }
+        let tpl
+        try { tpl = JSON.parse(tplRow.ai_instructions) } catch { tpl = null }
+
+        // 3. Wrap deterministically using the documented format
+        const styleStr = Object.entries(style).map(([k, v]) => `${k}: '${v}'`).join('; ')
+        const sectionMarkup = `[SECTION | ${styleStr}]\n${prose}\n[END SECTION]`
+
+        // 4. Build graph with one fulltext node
+        const graphId = `graph_test_section_${Date.now()}`
+        const node = {
+          id: `node-section-${Math.random().toString(36).slice(2, 10)}`,
+          label: `Section: ${topic.slice(0, 60)}`,
+          type: 'fulltext',
+          color: '#e0f2fe',
+          info: sectionMarkup,
+          imageWidth: '100%',
+          imageHeight: '100%',
+          visible: true,
+          position: { x: 0, y: 0 },
+        }
+        const graphData = {
+          nodes: [node],
+          edges: [],
+          metadata: {
+            title: `Test SECTION: ${topic}`,
+            description: `Hypothesis B test — Gemma prose wrapped in [SECTION].`,
+            category: '#test #hybrid-llm',
+            metaArea: 'TEST',
+            version: 1,
+            createdBy: 'test-section endpoint',
+          },
+        }
+
+        // 5. Save via knowledge worker (service binding — avoids public DNS timeout)
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ id: graphId, graphData, override: true }),
+        })
+        const saveText = await saveResp.text()
+        if (!saveResp.ok) {
+          return new Response(JSON.stringify({
+            error: 'saveGraphWithHistory failed',
+            status: saveResp.status,
+            saveResponse: saveText,
+            generatedInfo: sectionMarkup,
+          }), { status: 502, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify({
+          success: true,
+          graphId,
+          nodeId: node.id,
+          info: sectionMarkup,
+          gemmaProse: prose,
+          chosenBackgroundColor: chosenBg,
+          colorPickedByAI: aiStyle,
+          colorReason,
+          colorRaw,
+          templateFormat: tpl?.format || null,
+          viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+        }), { headers: corsHeaders })
+      }
+
       // POST /execute - Execute an agent
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()

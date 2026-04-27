@@ -126,7 +126,8 @@ function buildTools(env, userId) {
 export class VegvisrAgent extends AIChatAgent {
   async onChatMessage(_onFinish, options) {
     const modelId = options?.body?.model || this.env.DEFAULT_MODEL || '@cf/meta/llama-4-scout-17b-16e-instruct'
-    console.log(`[VegvisrAgent] onChatMessage model=${modelId} messages=${this.messages.length}`)
+    const currentGraphId = options?.body?.graphId || null
+    console.log(`[VegvisrAgent] onChatMessage model=${modelId} graphId=${currentGraphId || 'none'} messages=${this.messages.length}`)
 
     const startTime = Date.now()
     const sessionId = crypto.randomUUID()
@@ -136,9 +137,13 @@ export class VegvisrAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI })
     const model = workersai(modelId)
 
+    const systemPrompt = currentGraphId
+      ? `${CHAT_SYSTEM_PROMPT}\n\n## CURRENT GRAPH CONTEXT\nThe user has selected graph \`${currentGraphId}\` as the current/active graph. When they say "this graph", "the current graph", "current graph", or ask graph-scoped questions without naming one, use this graphId. Call \`read_graph\` with this id to inspect it. Do NOT call \`list_graphs\` to answer "what is the current graph" — the answer is \`${currentGraphId}\`.`
+      : CHAT_SYSTEM_PROMPT
+
     const result = streamText({
       model,
-      system: CHAT_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: pruneMessages({
         messages: await convertToModelMessages(this.messages),
         toolCalls: 'before-last-2-messages',

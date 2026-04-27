@@ -550,9 +550,10 @@ interface SessionInfo {
 interface Props {
   userId: string;
   model?: string;
+  graphId?: string;
 }
 
-export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct' }: Props) {
+export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId }: Props) {
   const [copied, setCopied] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -599,7 +600,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
   const { messages, sendMessage, clearHistory, addToolApprovalResponse, status } = useAgentChat({
     agent,
-    body: { model },
+    body: { model, graphId },
     onToolCall: async ({ toolCall, addToolOutput }) => {
       if (toolCall.toolName === 'getUserTimezone') {
         addToolOutput({
