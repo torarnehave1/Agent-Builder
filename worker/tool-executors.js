@@ -83,6 +83,8 @@ async function patchGraphMetadataWithVersionRetry(env, graphId, fields, options 
 }
 
 async function executeCreateGraph(input, env) {
+  const title = input.title || input.name || input.graphTitle || 'Untitled Graph'
+
   // Resolve email for createdBy — userId may be a UUID, we always want an email
   let createdByEmail = input.userId || 'agent-worker'
   if (createdByEmail && !createdByEmail.includes('@')) {
@@ -104,7 +106,7 @@ async function executeCreateGraph(input, env) {
 
   const graphData = {
     metadata: {
-      title: input.title,
+      title,
       description: input.description || '',
       category: input.category || '',
       metaArea: input.metaArea || '',
@@ -130,7 +132,7 @@ async function executeCreateGraph(input, env) {
   return {
     graphId: data.id || graphId,
     version: data.newVersion || 1,
-    message: `Graph "${input.title}" created successfully`,
+    message: `Graph "${title}" created successfully`,
     viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`
   }
 }
@@ -491,25 +493,65 @@ async function executeCreateHtmlNode(input, env) {
 }
 
 async function executeCreateNode(input, env) {
+  const parseMaybeJsonObject = (value) => {
+    if (!value) return null
+    if (typeof value === 'object') return value
+    if (typeof value !== 'string') return null
+    try {
+      return JSON.parse(value)
+    } catch {
+      return null
+    }
+  }
+
+  const toKebab = (value) => String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+
+  const legacyNode = parseMaybeJsonObject(input.node)
+  const graphId = input.graphId || input.graph_id
+  const label = input.label || legacyNode?.label || 'Untitled Node'
+  const generatedNodeId = `node-${toKebab(label || input.content || legacyNode?.info || 'item') || 'item'}-${crypto.randomUUID().slice(0, 8)}`
+  const nodeId = input.nodeId || input.node_id || legacyNode?.id || generatedNodeId
+  const nodeType = input.nodeType || input.type || legacyNode?.type || 'fulltext'
+  const content =
+    input.content ??
+    input.info ??
+    legacyNode?.content ??
+    legacyNode?.info ??
+    ''
+  const references = input.references || input.bibl || legacyNode?.references || legacyNode?.bibl || []
+  const path = input.path || legacyNode?.path
+  const imageWidth = input.imageWidth || legacyNode?.imageWidth
+  const imageHeight = input.imageHeight || legacyNode?.imageHeight
+  const color = input.color || legacyNode?.color
+  const metadata = input.metadata || legacyNode?.metadata
+
+  if (!graphId) {
+    const providedKeys = Object.keys(input || {}).join(', ')
+    throw new Error(`create_node requires graphId. Received keys: [${providedKeys}]`)
+  }
+
   const node = {
-    id: input.nodeId,
-    label: input.label,
-    type: input.nodeType || 'fulltext',
-    info: input.content || '',
-    bibl: input.references || [],
+    id: nodeId,
+    label,
+    type: nodeType,
+    info: content,
+    bibl: references,
     position: { x: input.positionX || 0, y: input.positionY || 0 },
     visible: true
   }
-  if (input.path) node.path = input.path
-  if (input.imageWidth) node.imageWidth = input.imageWidth
-  if (input.imageHeight) node.imageHeight = input.imageHeight
-  if (input.color) node.color = input.color
-  if (input.metadata) node.metadata = input.metadata
+  if (path) node.path = path
+  if (imageWidth) node.imageWidth = imageWidth
+  if (imageHeight) node.imageHeight = imageHeight
+  if (color) node.color = color
+  if (metadata) node.metadata = metadata
 
   const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId: input.graphId, node })
+    body: JSON.stringify({ graphId, node })
   })
 
   const data = await response.json()
@@ -517,11 +559,11 @@ async function executeCreateNode(input, env) {
     throw new Error(data.error || `Failed to add node (status: ${response.status})`)
   }
   return {
-    graphId: input.graphId,
-    nodeId: input.nodeId,
+    graphId,
+    nodeId,
     nodeType: node.type,
     version: data.newVersion,
-    message: `Node "${input.label}" (${node.type}) added successfully`
+    message: `Node "${label}" (${node.type}) added successfully`
   }
 }
 

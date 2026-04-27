@@ -124,6 +124,15 @@ function isGraphWriteIntent(userText) {
   return writeVerb.test(text) && graphTarget.test(text)
 }
 
+function isExplicitCreateGraphIntent(userText) {
+  const text = String(userText || '').toLowerCase()
+  if (!text) return false
+  const createVerb = /(create|build|make|generate)/
+  const graphTarget = /(graph|knowledge graph)/
+  const discoveryOnly = /(find|search|list|show|browse|explore|retrieve)/
+  return createVerb.test(text) && graphTarget.test(text) && !discoveryOnly.test(text)
+}
+
 function textMentionsCalendar(text) {
   return /(calendar|calandar|booking|bookings|appointment|appointments|meeting|meetings|schedule|scheduled|availability|available|busy|free time)/.test(String(text || '').toLowerCase())
 }
@@ -240,6 +249,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const sessionId = crypto.randomUUID()
   const latestUserRequest = getLatestUserText(messages)
   const requiresGraphWrite = isGraphWriteIntent(latestUserRequest)
+  const requiresCreateGraph = isExplicitCreateGraphIntent(latestUserRequest)
   const requiresCalendarQuery = isCalendarQueryIntent(messages)
   const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
   const graphWriteVerificationStartIndex = messages.length
@@ -447,8 +457,39 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         ])
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
+        let inferredGraphId = null
+
+        const GRAPH_ID_AWARE_TOOLS = new Set([
+          'create_node',
+          'create_html_node',
+          'add_edge',
+          'patch_node',
+          'patch_graph_metadata',
+          'read_graph',
+          'read_graph_content',
+          'read_node',
+          'delegate_to_kg',
+        ])
 
         const executeAndStream = async (toolUse) => {
+          const GRAPH_DISCOVERY_TOOLS = new Set(['search_graphs', 'list_graphs'])
+          if (
+            requiresCreateGraph
+            && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline
+            && GRAPH_DISCOVERY_TOOLS.has(toolUse.name)
+          ) {
+            const message = 'This request is to create a new graph. Call create_graph first, then create_node/add_edge as needed. Do not search existing graphs first.'
+            log(`blocked ${toolUse.name} before create_graph for explicit create request`)
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: message })}\n\n`))
+            return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: message }) }
+          }
+
+          if (!toolUse.input) toolUse.input = {}
+          if (!toolUse.input.graphId && inferredGraphId && GRAPH_ID_AWARE_TOOLS.has(toolUse.name)) {
+            toolUse.input.graphId = inferredGraphId
+            log(`auto-injected graphId=${inferredGraphId} into ${toolUse.name} (same-turn carry-over)`)
+          }
+
           // Auto-inject nodeId into HTML builder delegation (HTML edits always target a specific node)
           const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_youtube_graph'])
           if (DELEGATION_TOOLS.has(toolUse.name)) {
@@ -498,6 +539,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           }
           try {
             const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap, onProgress)
+            if (result?.graphId) {
+              inferredGraphId = result.graphId
+            }
             const summary = result.message || `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
             const toolDuration = Date.now() - toolStart
@@ -663,9 +707,11 @@ async function executeAgent(agentConfig, userTask, userId, env) {
 
   const messages = [{ role: 'user', content: taskWithContract }]
   const requiresGraphWrite = isGraphWriteIntent(taskWithContract)
+  const requiresCreateGraph = isExplicitCreateGraphIntent(taskWithContract)
   const requiresCalendarQuery = isCalendarQueryIntent(messages)
   const graphWriteVerificationStartIndex = messages.length
   const calendarQueryStartIndex = messages.length
+  const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
 
   const { allTools, operationMap } = await loadAllTools(env)
 
@@ -805,12 +851,44 @@ async function executeAgent(agentConfig, userTask, userId, env) {
       ])
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
+      let inferredGraphId = null
+
+      const GRAPH_ID_AWARE_TOOLS = new Set([
+        'create_node',
+        'create_html_node',
+        'add_edge',
+        'patch_node',
+        'patch_graph_metadata',
+        'read_graph',
+        'read_graph_content',
+        'read_node',
+        'delegate_to_kg',
+      ])
 
       // Phase 1: Run graph-mutating tools sequentially (one at a time)
       const sequentialResults = []
       for (const toolUse of sequentialTools) {
+        const GRAPH_DISCOVERY_TOOLS = new Set(['search_graphs', 'list_graphs'])
+        if (
+          requiresCreateGraph
+          && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline
+          && GRAPH_DISCOVERY_TOOLS.has(toolUse.name)
+        ) {
+          const message = 'This request is to create a new graph. Call create_graph first, then create_node/add_edge as needed. Do not search existing graphs first.'
+          executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: message, timestamp: new Date().toISOString() })
+          sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: message }) })
+          continue
+        }
+
+        if (!toolUse.input) toolUse.input = {}
+        if (!toolUse.input.graphId && inferredGraphId && GRAPH_ID_AWARE_TOOLS.has(toolUse.name)) {
+          toolUse.input.graphId = inferredGraphId
+        }
         try {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
+          if (result?.graphId) {
+            inferredGraphId = result.graphId
+          }
           executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
           sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) })
         } catch (error) {

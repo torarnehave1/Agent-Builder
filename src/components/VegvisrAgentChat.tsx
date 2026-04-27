@@ -300,6 +300,221 @@ function CreatedGraphCard({ graphId, fallbackTitle }: { graphId: string; fallbac
   );
 }
 
+// ── Direct Graph Action Bar ─────────────────────────────────────
+// Bypasses the LLM for deterministic graph operations.
+// Calls knowledge.vegvisr.org directly so models like Gemma that
+// struggle with tool-call payloads can still create graphs/nodes.
+
+const NODE_TYPES: Array<{ type: string; label: string; color: string; defaultInfo: string }> = [
+  { type: 'fulltext', label: 'Fulltext (markdown)', color: '#4f6d7a', defaultInfo: '# New section\n\nContent…' },
+  { type: 'html-node', label: 'HTML page', color: '#7a4f6d', defaultInfo: '<!DOCTYPE html>\n<html><body><h1>Hello</h1></body></html>' },
+  { type: 'mermaid-diagram', label: 'Mermaid diagram', color: '#0ea5e9', defaultInfo: 'graph TB\n  A[Start] --> B[End]' },
+  { type: 'markdown-image', label: 'Image', color: '#6d7a4f', defaultInfo: 'Image alt text' },
+  { type: 'youtube-video', label: 'YouTube video', color: '#FF0000', defaultInfo: '# Video description' },
+  { type: 'css-node', label: 'CSS styles', color: '#4f7a6d', defaultInfo: '.v-page { background: #fff; }' },
+];
+
+interface GraphActionBarProps {
+  onGraphCreated: (graphId: string, title: string) => void;
+  onNodeAdded: (graphId: string, nodeId: string, label: string, type: string) => void;
+  onError: (message: string) => void;
+  recentGraphId: string | null;
+}
+
+function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }: GraphActionBarProps) {
+  const [showNewGraph, setShowNewGraph] = useState(false);
+  const [showAddNode, setShowAddNode] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  // New graph fields
+  const [graphTitle, setGraphTitle] = useState('');
+  const [graphDescription, setGraphDescription] = useState('');
+  const [graphCategory, setGraphCategory] = useState('');
+  const [graphMetaArea, setGraphMetaArea] = useState('');
+
+  // Add node fields
+  const [nodeGraphId, setNodeGraphId] = useState(recentGraphId || '');
+  const [nodeType, setNodeType] = useState(NODE_TYPES[0].type);
+  const [nodeLabel, setNodeLabel] = useState('');
+  const [nodeInfo, setNodeInfo] = useState(NODE_TYPES[0].defaultInfo);
+  const [nodePath, setNodePath] = useState('');
+
+  useEffect(() => {
+    if (recentGraphId && !nodeGraphId) setNodeGraphId(recentGraphId);
+  }, [recentGraphId, nodeGraphId]);
+
+  function selectType(t: string) {
+    setNodeType(t);
+    const def = NODE_TYPES.find(n => n.type === t);
+    if (def) setNodeInfo(def.defaultInfo);
+  }
+
+  async function createGraph() {
+    const title = graphTitle.trim();
+    if (!title) { onError('Title is required'); return; }
+    setBusy(true);
+    const graphId = `graph_${Date.now()}`;
+    try {
+      const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        body: JSON.stringify({
+          id: graphId,
+          override: true,
+          graphData: {
+            nodes: [],
+            edges: [],
+            metadata: {
+              title,
+              description: graphDescription.trim(),
+              category: graphCategory.trim(),
+              metaArea: graphMetaArea.trim(),
+              version: 1,
+              createdBy: 'VegvisrAgentChat',
+            },
+          },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onGraphCreated(graphId, title);
+      setGraphTitle(''); setGraphDescription(''); setGraphCategory(''); setGraphMetaArea('');
+      setShowNewGraph(false);
+      setNodeGraphId(graphId);
+    } catch (e) {
+      onError(`Failed to create graph: ${e instanceof Error ? e.message : 'unknown'}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addNode() {
+    const gid = nodeGraphId.trim();
+    const label = nodeLabel.trim();
+    if (!gid) { onError('Graph ID is required'); return; }
+    if (!label) { onError('Node label is required'); return; }
+    setBusy(true);
+    const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'node';
+    const nid = `node-${slug}-${Math.random().toString(36).slice(2, 10)}`;
+    const def = NODE_TYPES.find(n => n.type === nodeType);
+    const node: Record<string, unknown> = {
+      id: nid,
+      label,
+      type: nodeType,
+      color: def?.color || '#4f6d7a',
+      info: nodeInfo,
+      visible: true,
+      position: { x: 0, y: 0 },
+    };
+    if (nodeType === 'markdown-image' || nodeType === 'youtube-video') {
+      node.path = nodePath.trim();
+      if (nodeType === 'markdown-image') {
+        node.imageWidth = '100%';
+        node.imageHeight = 'auto';
+      }
+    }
+    if (nodeType === 'mermaid-diagram') {
+      node.path = 'https://vegvisr.imgix.net/mermaid.png';
+      node.imageWidth = '400';
+      node.imageHeight = '300';
+    }
+    try {
+      const res = await fetch(`${KG_API}/addNode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        body: JSON.stringify({ graphId: gid, node }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onNodeAdded(gid, nid, label, nodeType);
+      setNodeLabel(''); setNodePath('');
+      const d = NODE_TYPES.find(n => n.type === nodeType);
+      if (d) setNodeInfo(d.defaultInfo);
+      setShowAddNode(false);
+    } catch (e) {
+      onError(`Failed to add node: ${e instanceof Error ? e.message : 'unknown'}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex-shrink-0 border-t border-white/10 px-4 py-2 bg-slate-950/60">
+      <div className="max-w-[900px] mx-auto flex flex-wrap items-center gap-2">
+        <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wide">Direct graph actions</span>
+        <button
+          type="button"
+          onClick={() => { setShowNewGraph(p => !p); setShowAddNode(false); }}
+          disabled={busy}
+          className="px-3 py-1 rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-xs hover:bg-emerald-400/20 disabled:opacity-40"
+        >+ New Graph</button>
+        <button
+          type="button"
+          onClick={() => { setShowAddNode(p => !p); setShowNewGraph(false); }}
+          disabled={busy}
+          className="px-3 py-1 rounded-md border border-sky-400/30 bg-sky-400/10 text-sky-300 text-xs hover:bg-sky-400/20 disabled:opacity-40"
+        >+ Add Node</button>
+        {recentGraphId && (
+          <span className="text-[10px] text-white/40 font-mono truncate max-w-[260px]">last: {recentGraphId}</span>
+        )}
+      </div>
+
+      {showNewGraph && (
+        <div className="max-w-[900px] mx-auto mt-2 p-3 rounded-lg border border-emerald-400/20 bg-emerald-400/[0.04] space-y-2">
+          <input value={graphTitle} onChange={e => setGraphTitle(e.target.value)} placeholder="Title (required)"
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-emerald-400/40" />
+          <input value={graphDescription} onChange={e => setGraphDescription(e.target.value)} placeholder="Description"
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-emerald-400/40" />
+          <div className="flex gap-2">
+            <input value={graphCategory} onChange={e => setGraphCategory(e.target.value)} placeholder="Category (#tag1 #tag2)"
+              className="flex-1 px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-emerald-400/40" />
+            <input value={graphMetaArea} onChange={e => setGraphMetaArea(e.target.value)} placeholder="Meta area"
+              className="flex-1 px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-emerald-400/40" />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setShowNewGraph(false)} disabled={busy}
+              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08]">Cancel</button>
+            <button type="button" onClick={createGraph} disabled={busy || !graphTitle.trim()}
+              className="px-3 py-1 rounded-md border border-emerald-400/40 bg-emerald-500/20 text-emerald-200 text-xs hover:bg-emerald-500/30 disabled:opacity-40">
+              {busy ? 'Creating…' : 'Create graph'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showAddNode && (
+        <div className="max-w-[900px] mx-auto mt-2 p-3 rounded-lg border border-sky-400/20 bg-sky-400/[0.04] space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {NODE_TYPES.map(n => (
+              <button key={n.type} type="button" onClick={() => selectType(n.type)} disabled={busy}
+                className={`px-2 py-1 rounded-md text-[11px] border transition-colors ${nodeType === n.type ? 'border-sky-400/60 bg-sky-400/20 text-white' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08]'}`}>
+                {n.label}
+              </button>
+            ))}
+          </div>
+          <input value={nodeGraphId} onChange={e => setNodeGraphId(e.target.value)} placeholder="Graph ID (required)"
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm font-mono placeholder-white/30 focus:outline-none focus:border-sky-400/40" />
+          <input value={nodeLabel} onChange={e => setNodeLabel(e.target.value)} placeholder="Node label (required)"
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-sky-400/40" />
+          {(nodeType === 'markdown-image' || nodeType === 'youtube-video') && (
+            <input value={nodePath} onChange={e => setNodePath(e.target.value)} placeholder={nodeType === 'youtube-video' ? 'YouTube URL' : 'Image URL'}
+              className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-sky-400/40" />
+          )}
+          <textarea value={nodeInfo} onChange={e => setNodeInfo(e.target.value)} placeholder="Content / info"
+            rows={4}
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm font-mono placeholder-white/30 resize-y focus:outline-none focus:border-sky-400/40" />
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={() => setShowAddNode(false)} disabled={busy}
+              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08]">Cancel</button>
+            <button type="button" onClick={addNode} disabled={busy || !nodeGraphId.trim() || !nodeLabel.trim()}
+              className="px-3 py-1 rounded-md border border-sky-400/40 bg-sky-500/20 text-sky-200 text-xs hover:bg-sky-500/30 disabled:opacity-40">
+              {busy ? 'Adding…' : 'Add node'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ToolResultCard({ toolName, output }: { toolName: string; output: unknown }) {
   if (toolName === 'who_am_i') return <WhoAmICard data={output as WhoAmIResult} />;
   if (toolName === 'list_graphs' || toolName === 'search_graphs') return <ListGraphsResultCard data={output as ListGraphsOutput} />;
@@ -352,8 +567,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string; file: File }>>([]); 
-  const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
+  const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string; graphId?: string }>>([]);
   const [loadedMessages, setLoadedMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
+  const [recentGraphId, setRecentGraphId] = useState<string | null>(null);
   const lastTranscriptRef = useRef<string | null>(null);
 
   // Audio transcription state
@@ -820,6 +1036,25 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     });
   }
 
+  function pushActionMessage(text: string, graphId?: string) {
+    const id = `action-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setLocalMessages(prev => [...prev, { id, role: 'assistant', text, graphId }]);
+  }
+
+  function handleGraphCreated(graphId: string, title: string) {
+    setRecentGraphId(graphId);
+    pushActionMessage(`✅ Created graph **${title}**\n\nGraph ID: \`${graphId}\``, graphId);
+  }
+
+  function handleNodeAdded(graphId: string, nodeId: string, label: string, type: string) {
+    setRecentGraphId(graphId);
+    pushActionMessage(`➕ Added **${type}** node "${label}" to graph\n\nNode ID: \`${nodeId}\``, graphId);
+  }
+
+  function handleActionError(message: string) {
+    pushActionMessage(`⚠️ ${message}`);
+  }
+
   return (
     <div className="flex flex-col flex-1 min-h-0 bg-slate-950 text-white">
       {/* Top bar — matches AgentChat style */}
@@ -1020,6 +1255,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
               </div>
+              {m.graphId && <CreatedGraphCard graphId={m.graphId} />}
               {m.role === 'user' && (
                 <button
                   type="button"
@@ -1099,6 +1335,14 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           </div>
         </div>
       )}
+
+      {/* Direct graph actions — bypasses the LLM for deterministic operations */}
+      <GraphActionBar
+        recentGraphId={recentGraphId}
+        onGraphCreated={handleGraphCreated}
+        onNodeAdded={handleNodeAdded}
+        onError={handleActionError}
+      />
 
       {/* Input */}
       <div
