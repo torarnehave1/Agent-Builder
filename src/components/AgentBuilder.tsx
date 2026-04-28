@@ -85,7 +85,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
 
       {view === 'chat' && isWorkersAIModel(model) && (
         <div className="flex flex-1 min-h-0">
-          <VegvisrAgentChat userId={userId} model={model} graphId={graphId} />
+          <VegvisrAgentChat userId={userId} model={model} graphId={graphId} onGraphChange={setGraphId} />
         </div>
       )}
       {view === 'chat' && !isWorkersAIModel(model) && (

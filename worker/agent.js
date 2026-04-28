@@ -86,25 +86,106 @@ const WORKERS_AI_TOOLS = new Set([
   'read_node',
   'create_graph',
   'create_node',
+  'patch_node',
+  'patch_graph_metadata',
   'add_edge',
+  'get_formatting_reference',
+  'get_node_types_reference',
+  'search_pexels',
+  'search_unsplash',
+  'get_album_images',
+  'analyze_image',
+  'delegate_to_kg',
   'delegate_to_youtube_graph',
   'generate_image',
 ])
 
-function buildTools(env, userId) {
+const GRAPH_AWARE_TOOLS = new Set([
+  'read_graph',
+  'read_graph_content',
+  'read_node',
+  'create_node',
+  'patch_node',
+  'patch_graph_metadata',
+  'add_edge',
+  'delegate_to_kg',
+])
+
+const GRAPH_ID_RE = /^(graph_[\w-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+
+function relaxJsonSchema(schema) {
+  if (!schema || typeof schema !== 'object') return schema
+  if (Array.isArray(schema)) return schema.map(relaxJsonSchema)
+
+  const next = { ...schema }
+
+  if (next.type === 'number' || next.type === 'integer') {
+    next.type = ['number', 'string']
+  } else if (next.type === 'boolean') {
+    next.type = ['boolean', 'string']
+  }
+
+  if (next.properties && typeof next.properties === 'object') {
+    next.properties = Object.fromEntries(
+      Object.entries(next.properties).map(([key, value]) => [key, relaxJsonSchema(value)])
+    )
+  }
+
+  if (next.items) next.items = relaxJsonSchema(next.items)
+  if (next.type === 'object') next.additionalProperties = true
+
+  return next
+}
+
+function normalizeToolArgs(toolName, args, currentGraphId) {
+  const next = { ...(args || {}) }
+
+  if (next.graph_id && !next.graphId) next.graphId = next.graph_id
+  if (next.node_id && !next.nodeId) next.nodeId = next.node_id
+
+  if (toolName === 'create_node') {
+    if (next.type && !next.nodeType) next.nodeType = next.type
+    if (next.info != null && next.content == null) next.content = next.info
+  }
+
+  if (toolName === 'patch_node') {
+    if (!next.fields || typeof next.fields !== 'object') {
+      const directFields = {}
+      for (const key of ['info', 'label', 'path', 'color', 'type', 'visible', 'metadata', 'bibl', 'position', 'imageWidth', 'imageHeight']) {
+        if (next[key] !== undefined) directFields[key] = next[key]
+      }
+      if (Object.keys(directFields).length > 0) next.fields = directFields
+    }
+  }
+
+  if (currentGraphId && GRAPH_AWARE_TOOLS.has(toolName)) {
+    const candidate = typeof next.graphId === 'string' ? next.graphId.trim() : ''
+    const shouldInject =
+      !candidate ||
+      /^(this|current|active)\s+graph$/i.test(candidate) ||
+      candidate === 'graphId' ||
+      !GRAPH_ID_RE.test(candidate)
+    if (shouldInject) {
+      next.graphId = currentGraphId
+    }
+  }
+
+  return next
+}
+
+function buildTools(env, userId, currentGraphId) {
   const tools = {}
   for (const def of TOOL_DEFINITIONS) {
     if (!WORKERS_AI_TOOLS.has(def.name)) continue
-    // Use a fully open schema — Workers AI models (Gemma/Llama) send args with wrong types
-    // (e.g. integers as strings). We validate inside execute() instead.
-    const openSchema = jsonSchema({ type: 'object', additionalProperties: true })
+    const relaxedSchema = jsonSchema(relaxJsonSchema(def.input_schema || { type: 'object', additionalProperties: true }))
     tools[def.name] = tool({
       description: def.description,
-      inputSchema: openSchema,
+      inputSchema: relaxedSchema,
       execute: async (args) => {
-        console.log(`[buildTools] ENTER ${def.name}`, JSON.stringify(args).slice(0, 200))
+        const normalizedArgs = normalizeToolArgs(def.name, args, currentGraphId)
+        console.log(`[buildTools] ENTER ${def.name}`, JSON.stringify(normalizedArgs).slice(0, 200))
         try {
-          const result = await executeTool(def.name, { ...args, userId }, env)
+          const result = await executeTool(def.name, { ...normalizedArgs, userId }, env)
           console.log(`[buildTools] ${def.name} SUCCESS:`, JSON.stringify(result).slice(0, 300))
           return result
         } catch (err) {
@@ -137,9 +218,18 @@ export class VegvisrAgent extends AIChatAgent {
     const workersai = createWorkersAI({ binding: this.env.AI })
     const model = workersai(modelId)
 
+    const workersAiPrompt = `
+## WORKERS AI TOOLING
+This conversation is running on the Workers AI tool path. Use only the tools that are actually available in this session.
+- For existing graph content edits, use \`patch_node\`.
+- For standalone image nodes, use \`create_node\` with \`nodeType: "markdown-image"\`, \`content\` as alt text, and \`path\` as the image URL.
+- For inline images inside a \`fulltext\` node, read the node first, then patch its \`info\` field with the full markdown. Use \`get_formatting_reference\` if you need the exact \`Header\`, \`Leftside\`, or \`Rightside\` grammar.
+- If the user refers to "this graph", "the current graph", or "current graph", prefer the active UI graph context.
+`
+
     const systemPrompt = currentGraphId
-      ? `${CHAT_SYSTEM_PROMPT}\n\n## CURRENT GRAPH CONTEXT\nThe user has selected graph \`${currentGraphId}\` as the current/active graph. When they say "this graph", "the current graph", "current graph", or ask graph-scoped questions without naming one, use this graphId. Call \`read_graph\` with this id to inspect it. Do NOT call \`list_graphs\` to answer "what is the current graph" — the answer is \`${currentGraphId}\`.`
-      : CHAT_SYSTEM_PROMPT
+      ? `${CHAT_SYSTEM_PROMPT}\n${workersAiPrompt}\n\n## CURRENT GRAPH CONTEXT\nThe user has selected graph \`${currentGraphId}\` as the current/active graph. When they say "this graph", "the current graph", "current graph", or ask graph-scoped questions without naming one, use this graphId. Call \`read_graph\` with this id to inspect it. Do NOT call \`list_graphs\` to answer "what is the current graph" — the answer is \`${currentGraphId}\`.`
+      : `${CHAT_SYSTEM_PROMPT}\n${workersAiPrompt}`
 
     const result = streamText({
       model,
@@ -148,7 +238,7 @@ export class VegvisrAgent extends AIChatAgent {
         messages: await convertToModelMessages(this.messages),
         toolCalls: 'before-last-2-messages',
       }),
-      tools: buildTools(this.env, userId),
+      tools: buildTools(this.env, userId, currentGraphId),
       stopWhen: stepCountIs(5),
       maxTokens: 2048,
       onFinish: async ({ usage, steps }) => {

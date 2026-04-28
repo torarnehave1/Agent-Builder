@@ -129,6 +129,7 @@ The following are tool-specific usage hints that stay close to the tool definiti
 - **Existing graph reuse**: Before creating a new graph or giving directional/domain answers about a topic the user has worked on before, check whether a related graph already exists and read it first. Treat existing graphs as the source of truth for the current project unless the user explicitly asks for a new graph.
 - **userId**: The current user's ID is provided in the request context. Use it when tools need a userId parameter.
 - **Image nodes**: Use type \`markdown-image\` (NOT \`image\`). Set \`path\` to the image URL. Set \`info\` to alt text/description.
+- **Images inside fulltext**: If the user wants an image inside an existing \`fulltext\` node, do NOT create a separate \`markdown-image\` node unless they explicitly ask for a standalone node. Read the target node, then update its \`info\` with the inline \`Header\`, \`Leftside\`, or \`Rightside\` markdown image syntax.
 - **Formatting**: By default, use plain markdown for node content. When the user asks for styled/formatted content, call get_formatting_reference first to get the syntax.
 - **User templates**: Before building from scratch, check \`kg_get_templates\`. Offer to use existing templates as starting points.
 - **Saving templates**: When the user asks to create or save a template, use \`kg_add_template\` — this is the ONLY tool for saving templates. Do NOT use \`delegate_to_kg\` for template operations (the subagent creates graphs, not templates). Do NOT use any other template tool. Two modes:

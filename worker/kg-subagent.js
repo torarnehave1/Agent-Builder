@@ -15,7 +15,7 @@ import { TOOL_DEFINITIONS } from './tool-definitions.js'
 const KG_SUBAGENT_SYSTEM_PROMPT = `You are a Knowledge Graph specialist. You create, read, update, and manage knowledge graphs and their nodes. You have these tools:
 
 ## Core Tools
-1. \`create_graph\` — create a new graph. Graph IDs MUST be UUIDs (e.g. "550e8400-e29b-41d4-a716-446655440000"). NEVER use human-readable names.
+1. \`create_graph\` — create a new graph. Do not depend on a self-invented graph ID; track and reuse the \`graphId\` returned by the tool result.
 2. \`read_graph\` — read graph structure (truncated content). Use first to see what a graph contains.
 3. \`read_graph_content\` — read full content of all nodes (no truncation). Use when you need actual text.
 4. \`read_node\` — read a single node's full content.
@@ -63,7 +63,7 @@ const KG_SUBAGENT_SYSTEM_PROMPT = `You are a Knowledge Graph specialist. You cre
 - **CRITICAL**: If a graphId is provided in Context, you MUST use that graph. Do NOT create a new graph. Add content to the existing graph using create_node.
 - If no graphId is provided and the task sounds like a continuation of existing work, first use \`list_graphs\`, \`read_graph\`, or \`read_graph_content\` to discover relevant prior graphs before creating anything new.
 - If the user references an existing graph, existing nodes, prior work, or asks to split/duplicate/reorganize content from a graph, read the source graph first and work from that source of truth.
-- Graph IDs MUST be UUIDs — NEVER human-readable names. NEVER invent/hallucinate graph IDs.
+- Use the provided graphId exactly when working with an existing graph. When creating a new graph, always switch to the graphId returned by the tool result.
 - Node IDs should be lowercase-kebab-case (e.g. "node-intro", "node-contact-john")
 - ALWAYS read before writing to understand current state
 - Track node IDs and graph IDs from tool results — use exact IDs, never guess or hallucinate
@@ -102,17 +102,10 @@ function getKgSubagentTools() {
 // Inner agent loop
 // ---------------------------------------------------------------------------
 
-const UUID_RE_KG = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 async function runKgSubagent(input, env, onProgress, executeTool) {
   const { task, nodeId, userId } = input
-  // Validate any caller-supplied graphId is a real UUID.
-  // Reject non-UUID strings (human-readable names, hallucinated IDs, empty).
   const rawGraphId = input.graphId || null
-  let graphId = (rawGraphId && UUID_RE_KG.test(rawGraphId)) ? rawGraphId : null
-  if (rawGraphId && !graphId) {
-    console.log(`[kg-subagent] REJECTED non-UUID graphId="${rawGraphId}" — treating as new-graph task`)
-  }
+  let graphId = (typeof rawGraphId === 'string' && rawGraphId.trim()) ? rawGraphId.trim() : null
   const maxTurns = 10
   const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
   let inputTokens = 0

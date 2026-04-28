@@ -43,7 +43,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'create_node',
-    description: 'Add any type of node to a knowledge graph. Use this for fulltext (markdown), image, link, video, audio, or css-node types. For html-node pages, use create_html_from_template instead. The graph must already exist (use create_graph first). Call get_node_types_reference first if creating non-fulltext node types.',
+    description: 'Add any type of node to a knowledge graph. Use this for fulltext (markdown), markdown-image, link, video, audio, or css-node types. For html-node pages, use create_html_from_template instead. The graph must already exist (use create_graph first). For image nodes, use nodeType "markdown-image", put the alt text in content, and set path to the HTTPS image URL. Call get_node_types_reference first if creating non-fulltext node types.',
     input_schema: {
       type: 'object',
       properties: {
@@ -61,16 +61,16 @@ const TOOL_DEFINITIONS = [
         },
         nodeType: {
           type: 'string',
-          enum: ['fulltext', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'cloudflare-video', 'cloudflare-live', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
-          description: 'Node type. Call get_node_types_reference for data format details.'
+          enum: ['fulltext', 'markdown-image', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'cloudflare-video', 'cloudflare-live', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
+          description: 'Node type. Prefer "markdown-image" for normal images. Call get_node_types_reference for data format details.'
         },
         content: {
           type: 'string',
-          description: 'Node content (stored in info field). Format depends on nodeType.'
+          description: 'Node content (stored in info field). Format depends on nodeType. For markdown-image this is the alt text/description. For fulltext this is markdown.'
         },
         path: {
           type: 'string',
-          description: 'File/media URL (used for image, audio node types)'
+          description: 'File/media URL. Required for markdown-image, link, video, and audio node types. For markdown-image use a full HTTPS image URL.'
         },
         color: {
           type: 'string',
@@ -284,7 +284,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'patch_node',
-    description: 'Update specific fields on an existing node. Only the provided fields are changed; others are preserved. Use read_graph or read_node first to see current values.',
+    description: 'Update specific fields on an existing node. Only the provided fields are changed; others are preserved. Use read_graph or read_node first to see current values. Use this to modify an existing fulltext node, including inserting inline Header, Leftside, or Rightside image markdown into the info field.',
     input_schema: {
       type: 'object',
       properties: {

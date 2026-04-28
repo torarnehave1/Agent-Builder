@@ -233,6 +233,81 @@ function GenerateImageCard({ output }: { output: unknown }) {
 // ---------- Created-graph card (delegate_to_youtube_graph / create_graph) ----------
 
 const KG_API = 'https://knowledge.vegvisr.org';
+const GRAPH_CONTEXT_TOOL_NAMES = new Set([
+  'read_graph',
+  'read_graph_content',
+  'read_node',
+  'create_graph',
+  'create_node',
+  'patch_node',
+  'patch_graph_metadata',
+  'delegate_to_kg',
+]);
+
+function buildHeaderImageMarkup(imageUrl: string) {
+  return `![Header|height: 260px; object-fit: 'cover'; object-position: 'center'](${imageUrl})`;
+}
+
+function buildWrappedImageMarkup(mode: 'leftside' | 'rightside', imageUrl: string) {
+  if (mode === 'leftside') {
+    return `![Leftside-1|width: 200px; height: 200px; object-fit: 'cover'; object-position: 'center'; margin: '0 20px 15px 0'](${imageUrl})`;
+  }
+  return `![Rightside-1|width: 200px; height: 200px; object-fit: 'cover'; object-position: 'center'; margin: '0 0 15px 20px'](${imageUrl})`;
+}
+
+function insertWrappedImageIntoMarkdown(markdown: string, mode: 'leftside' | 'rightside', imageUrl: string) {
+  const normalized = String(markdown || '').replace(/\r\n/g, '\n').trim();
+  const imageMarkup = buildWrappedImageMarkup(mode, imageUrl);
+  if (!normalized) return imageMarkup;
+
+  const blocks = normalized.split(/\n{2,}/);
+  const paragraphIndex = blocks.findIndex((block) => {
+    const trimmed = block.trim();
+    if (!trimmed) return false;
+    if (/^!\[/.test(trimmed)) return false;
+    if (/^#+\s/.test(trimmed)) return false;
+    if (/^\[[A-Z-]+/.test(trimmed)) return false;
+    return true;
+  });
+
+  if (paragraphIndex === -1) {
+    return `${normalized}\n\n${imageMarkup}`;
+  }
+
+  const paragraph = blocks[paragraphIndex].trim();
+  blocks[paragraphIndex] = `${imageMarkup} ${paragraph}`.trim();
+  return blocks.join('\n\n');
+}
+
+async function fetchGraphData(graphId: string) {
+  const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`);
+  const data = await res.json();
+  if (!res.ok) throw new Error(data?.error || `Failed to load graph (${res.status})`);
+  return data;
+}
+
+async function patchNodeWithVersionRetry(graphId: string, nodeId: string, fields: Record<string, unknown>) {
+  let graphData = await fetchGraphData(graphId);
+  let expectedVersion = Number(graphData?.metadata?.version || 0);
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const res = await fetch(`${KG_API}/patchNode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+      body: JSON.stringify({ graphId, nodeId, fields, expectedVersion }),
+    });
+    const data = await res.json();
+    if (res.ok) return data;
+
+    const isConflict = res.status === 409 || String(data?.error || '').toLowerCase().includes('version mismatch');
+    if (!isConflict || attempt === 1) {
+      throw new Error(data?.error || `Failed to patch node (${res.status})`);
+    }
+
+    graphData = await fetchGraphData(graphId);
+    expectedVersion = Number(graphData?.metadata?.version || 0);
+  }
+}
 
 function CreatedGraphCard({ graphId, fallbackTitle }: { graphId: string; fallbackTitle?: string }) {
   const [meta, setMeta] = useState<{ title: string; description: string; nodeCount: number; nodeTypes: string[] } | null>(null);
@@ -317,13 +392,27 @@ const NODE_TYPES: Array<{ type: string; label: string; color: string; defaultInf
 interface GraphActionBarProps {
   onGraphCreated: (graphId: string, title: string) => void;
   onNodeAdded: (graphId: string, nodeId: string, label: string, type: string) => void;
+  onNodeUpdated: (graphId: string, nodeId: string, label: string, summary: string) => void;
   onError: (message: string) => void;
   recentGraphId: string | null;
+  activeGraphId?: string;
+  activeGraphTitle?: string;
+  onGraphContextChange?: (graphId: string) => void;
 }
 
-function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }: GraphActionBarProps) {
+function GraphActionBar({
+  onGraphCreated,
+  onNodeAdded,
+  onNodeUpdated,
+  onError,
+  recentGraphId,
+  activeGraphId,
+  activeGraphTitle,
+  onGraphContextChange,
+}: GraphActionBarProps) {
   const [showNewGraph, setShowNewGraph] = useState(false);
   const [showAddNode, setShowAddNode] = useState(false);
+  const [showAddImage, setShowAddImage] = useState(false);
   const [busy, setBusy] = useState(false);
 
   // New graph fields
@@ -338,10 +427,62 @@ function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }:
   const [nodeLabel, setNodeLabel] = useState('');
   const [nodeInfo, setNodeInfo] = useState(NODE_TYPES[0].defaultInfo);
   const [nodePath, setNodePath] = useState('');
+  const [imageGraphId, setImageGraphId] = useState(activeGraphId || recentGraphId || '');
+  const [imageMode, setImageMode] = useState<'standalone' | 'header' | 'leftside' | 'rightside'>('standalone');
+  const [imageNodeLabel, setImageNodeLabel] = useState('Header Image');
+  const [imageAltText, setImageAltText] = useState('Header image');
+  const [imageUrl, setImageUrl] = useState('');
+  const [targetNodeId, setTargetNodeId] = useState('');
+  const [fulltextNodes, setFulltextNodes] = useState<Array<{ id: string; label: string; info: string }>>([]);
+  const [loadingFulltextNodes, setLoadingFulltextNodes] = useState(false);
 
   useEffect(() => {
-    if (recentGraphId && !nodeGraphId) setNodeGraphId(recentGraphId);
-  }, [recentGraphId, nodeGraphId]);
+    if (activeGraphId) setNodeGraphId(activeGraphId);
+    else if (recentGraphId && !nodeGraphId) setNodeGraphId(recentGraphId);
+  }, [activeGraphId, recentGraphId, nodeGraphId]);
+
+  useEffect(() => {
+    if (activeGraphId) setImageGraphId(activeGraphId);
+    else if (recentGraphId && !imageGraphId) setImageGraphId(recentGraphId);
+  }, [activeGraphId, recentGraphId, imageGraphId]);
+
+  useEffect(() => {
+    if (!showAddImage || imageMode === 'standalone') return;
+    const gid = imageGraphId.trim();
+    if (!gid) {
+      setFulltextNodes([]);
+      setTargetNodeId('');
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingFulltextNodes(true);
+    fetchGraphData(gid)
+      .then((graphData) => {
+        if (cancelled) return;
+        const nodes = (graphData.nodes || [])
+          .filter((node: { type?: string }) => node.type === 'fulltext')
+          .map((node: { id: string; label?: string; info?: string }) => ({
+            id: node.id,
+            label: node.label || node.id,
+            info: node.info || '',
+          }));
+        setFulltextNodes(nodes);
+        setTargetNodeId((prev) => (prev && nodes.some((node: { id: string }) => node.id === prev) ? prev : (nodes[0]?.id || '')));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setFulltextNodes([]);
+        setTargetNodeId('');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFulltextNodes(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showAddImage, imageMode, imageGraphId]);
 
   function selectType(t: string) {
     setNodeType(t);
@@ -377,9 +518,11 @@ function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }:
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onGraphCreated(graphId, title);
+      onGraphContextChange?.(graphId);
       setGraphTitle(''); setGraphDescription(''); setGraphCategory(''); setGraphMetaArea('');
       setShowNewGraph(false);
       setNodeGraphId(graphId);
+      setImageGraphId(graphId);
     } catch (e) {
       onError(`Failed to create graph: ${e instanceof Error ? e.message : 'unknown'}`);
     } finally {
@@ -425,6 +568,7 @@ function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }:
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       onNodeAdded(gid, nid, label, nodeType);
+      onGraphContextChange?.(gid);
       setNodeLabel(''); setNodePath('');
       const d = NODE_TYPES.find(n => n.type === nodeType);
       if (d) setNodeInfo(d.defaultInfo);
@@ -436,22 +580,104 @@ function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }:
     }
   }
 
+  async function addImageAction() {
+    const gid = imageGraphId.trim();
+    const url = imageUrl.trim();
+    if (!gid) { onError('Graph ID is required'); return; }
+    if (!url) { onError('Image URL is required'); return; }
+
+    setBusy(true);
+    try {
+      if (imageMode === 'standalone') {
+        const label = imageNodeLabel.trim() || 'Image';
+        const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image';
+        const nodeId = `node-${slug}-${Math.random().toString(36).slice(2, 10)}`;
+        const node = {
+          id: nodeId,
+          label,
+          type: 'markdown-image',
+          color: '#6d7a4f',
+          info: imageAltText.trim() || label,
+          path: url,
+          imageWidth: '100%',
+          imageHeight: 'auto',
+          visible: true,
+          position: { x: 0, y: 0 },
+        };
+        const res = await fetch(`${KG_API}/addNode`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          body: JSON.stringify({ graphId: gid, node }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        onNodeAdded(gid, nodeId, label, 'markdown-image');
+        onGraphContextChange?.(gid);
+      } else {
+        const nodeId = targetNodeId.trim();
+        if (!nodeId) throw new Error('Select a target fulltext node');
+        const graphData = await fetchGraphData(gid);
+        const targetNode = (graphData.nodes || []).find((node: { id?: string }) => node.id === nodeId);
+        if (!targetNode) throw new Error(`Node "${nodeId}" not found`);
+        if (targetNode.type !== 'fulltext') throw new Error('Target node must be a fulltext node');
+
+        const currentInfo = String(targetNode.info || '');
+        let nextInfo = currentInfo;
+        if (imageMode === 'header') {
+          nextInfo = `${buildHeaderImageMarkup(url)}\n\n${currentInfo.trimStart()}`.trim();
+        } else {
+          nextInfo = insertWrappedImageIntoMarkdown(currentInfo, imageMode, url);
+        }
+
+        await patchNodeWithVersionRetry(gid, nodeId, { info: nextInfo });
+        onNodeUpdated(
+          gid,
+          nodeId,
+          targetNode.label || nodeId,
+          imageMode === 'header'
+            ? 'Inserted Header image into fulltext node'
+            : `Inserted ${imageMode === 'leftside' ? 'Leftside' : 'Rightside'} image into fulltext node`
+        );
+        onGraphContextChange?.(gid);
+      }
+
+      setImageUrl('');
+      setImageAltText('Header image');
+      setImageNodeLabel('Header Image');
+      setShowAddImage(false);
+    } catch (e) {
+      onError(`Failed to add image: ${e instanceof Error ? e.message : 'unknown'}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="flex-shrink-0 border-t border-white/10 px-4 py-2 bg-slate-950/60">
       <div className="max-w-[900px] mx-auto flex flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold text-white/40 uppercase tracking-wide">Direct graph actions</span>
+        {activeGraphId && (
+          <span className="px-2 py-1 rounded-md border border-purple-400/20 bg-purple-500/10 text-[10px] text-purple-200 max-w-[260px] truncate">
+            Active: {activeGraphTitle || activeGraphId}
+          </span>
+        )}
         <button
           type="button"
-          onClick={() => { setShowNewGraph(p => !p); setShowAddNode(false); }}
+          onClick={() => { setShowNewGraph(p => !p); setShowAddNode(false); setShowAddImage(false); }}
           disabled={busy}
           className="px-3 py-1 rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-xs hover:bg-emerald-400/20 disabled:opacity-40"
         >+ New Graph</button>
         <button
           type="button"
-          onClick={() => { setShowAddNode(p => !p); setShowNewGraph(false); }}
+          onClick={() => { setShowAddNode(p => !p); setShowNewGraph(false); setShowAddImage(false); }}
           disabled={busy}
           className="px-3 py-1 rounded-md border border-sky-400/30 bg-sky-400/10 text-sky-300 text-xs hover:bg-sky-400/20 disabled:opacity-40"
         >+ Add Node</button>
+        <button
+          type="button"
+          onClick={() => { setShowAddImage(p => !p); setShowNewGraph(false); setShowAddNode(false); }}
+          disabled={busy}
+          className="px-3 py-1 rounded-md border border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-300 text-xs hover:bg-fuchsia-400/20 disabled:opacity-40"
+        >+ Add Image</button>
         {recentGraphId && (
           <span className="text-[10px] text-white/40 font-mono truncate max-w-[260px]">last: {recentGraphId}</span>
         )}
@@ -511,6 +737,97 @@ function GraphActionBar({ onGraphCreated, onNodeAdded, onError, recentGraphId }:
           </div>
         </div>
       )}
+
+      {showAddImage && (
+        <div className="max-w-[900px] mx-auto mt-2 p-3 rounded-lg border border-fuchsia-400/20 bg-fuchsia-400/[0.04] space-y-2">
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              { id: 'standalone', label: 'Standalone node' },
+              { id: 'header', label: 'Header in fulltext' },
+              { id: 'leftside', label: 'Leftside in fulltext' },
+              { id: 'rightside', label: 'Rightside in fulltext' },
+            ].map((mode) => (
+              <button
+                key={mode.id}
+                type="button"
+                onClick={() => setImageMode(mode.id as 'standalone' | 'header' | 'leftside' | 'rightside')}
+                disabled={busy}
+                className={`px-2 py-1 rounded-md text-[11px] border transition-colors ${imageMode === mode.id ? 'border-fuchsia-400/60 bg-fuchsia-400/20 text-white' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08]'}`}
+              >
+                {mode.label}
+              </button>
+            ))}
+          </div>
+          <input
+            value={imageGraphId}
+            onChange={e => setImageGraphId(e.target.value)}
+            placeholder="Graph ID (required)"
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm font-mono placeholder-white/30 focus:outline-none focus:border-fuchsia-400/40"
+          />
+          {imageMode === 'standalone' ? (
+            <input
+              value={imageNodeLabel}
+              onChange={e => setImageNodeLabel(e.target.value)}
+              placeholder="Node label"
+              className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-fuchsia-400/40"
+            />
+          ) : (
+            <div className="space-y-1">
+              <div className="text-[11px] text-white/40">Target fulltext node</div>
+              <select
+                value={targetNodeId}
+                onChange={e => setTargetNodeId(e.target.value)}
+                disabled={busy || loadingFulltextNodes || fulltextNodes.length === 0}
+                className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm focus:outline-none focus:border-fuchsia-400/40"
+              >
+                {loadingFulltextNodes && <option value="">Loading fulltext nodes…</option>}
+                {!loadingFulltextNodes && fulltextNodes.length === 0 && <option value="">No fulltext nodes found</option>}
+                {!loadingFulltextNodes && fulltextNodes.map((node) => (
+                  <option key={node.id} value={node.id} className="bg-slate-900 text-white">
+                    {node.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <input
+            value={imageUrl}
+            onChange={e => setImageUrl(e.target.value)}
+            placeholder="https://vegvisr.imgix.net/..."
+            className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-fuchsia-400/40"
+          />
+          {imageMode === 'standalone' ? (
+            <input
+              value={imageAltText}
+              onChange={e => setImageAltText(e.target.value)}
+              placeholder="Alt text / description"
+              className="w-full px-2 py-1.5 bg-white/5 border border-white/10 rounded text-white text-sm placeholder-white/30 focus:outline-none focus:border-fuchsia-400/40"
+            />
+          ) : (
+            <div className="text-[11px] text-white/45">
+              The image markup is inserted directly into the selected fulltext node. Leftside and Rightside wrap the first paragraph beside the image.
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowAddImage(false)}
+              disabled={busy}
+              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={addImageAction}
+              disabled={busy || !imageGraphId.trim() || !imageUrl.trim() || (imageMode !== 'standalone' && !targetNodeId)}
+              className="px-3 py-1 rounded-md border border-fuchsia-400/40 bg-fuchsia-500/20 text-fuchsia-200 text-xs hover:bg-fuchsia-500/30 disabled:opacity-40"
+            >
+              {busy ? 'Saving…' : 'Save image'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -551,9 +868,10 @@ interface Props {
   userId: string;
   model?: string;
   graphId?: string;
+  onGraphChange?: (graphId: string) => void;
 }
 
-export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId }: Props) {
+export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId, onGraphChange }: Props) {
   const [copied, setCopied] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -571,7 +889,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string; graphId?: string }>>([]);
   const [loadedMessages, setLoadedMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
   const [recentGraphId, setRecentGraphId] = useState<string | null>(null);
+  const [activeGraphTitle, setActiveGraphTitle] = useState('');
   const lastTranscriptRef = useRef<string | null>(null);
+  const lastTrackedGraphRef = useRef<string | null>(null);
 
   // Audio transcription state
   interface AudioFileInfo { file: File; name: string; size: number; type: string; duration: number | null; }
@@ -625,6 +945,55 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       lastTranscriptRef.current = null;
     }
   }, [model, clearHistory]);
+
+  useEffect(() => {
+    if (!graphId) {
+      setActiveGraphTitle('');
+      return;
+    }
+    setRecentGraphId(graphId);
+    fetchGraphData(graphId)
+      .then((data) => {
+        setActiveGraphTitle(data?.metadata?.title || graphId);
+      })
+      .catch(() => {
+        setActiveGraphTitle(graphId);
+      });
+  }, [graphId]);
+
+  useEffect(() => {
+    let nextGraphId: string | null = null;
+
+    for (const msg of [...messages].reverse()) {
+      for (const part of [...msg.parts].reverse()) {
+        if (!isToolUIPart(part)) continue;
+        const toolName = getToolName(part);
+        const state = getToolPartState(part);
+        if (state !== 'complete') continue;
+
+        const output = getToolOutput(part);
+        if (output && typeof output === 'object' && typeof (output as { graphId?: unknown }).graphId === 'string') {
+          nextGraphId = (output as { graphId: string }).graphId;
+          break;
+        }
+
+        if (GRAPH_CONTEXT_TOOL_NAMES.has(toolName)) {
+          const input = getToolInput(part);
+          if (input && typeof input === 'object' && typeof (input as { graphId?: unknown }).graphId === 'string') {
+            nextGraphId = (input as { graphId: string }).graphId;
+            break;
+          }
+        }
+      }
+      if (nextGraphId) break;
+    }
+
+    if (nextGraphId && nextGraphId !== lastTrackedGraphRef.current) {
+      lastTrackedGraphRef.current = nextGraphId;
+      setRecentGraphId(nextGraphId);
+      onGraphChange?.(nextGraphId);
+    }
+  }, [messages, onGraphChange]);
 
   // Load sessions list on mount
   useEffect(() => {
@@ -681,7 +1050,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       try {
         const sRes = await historyFetch('/sessions', userId, {
           method: 'POST',
-          body: JSON.stringify({ graphId: null, provider: 'workers-ai', title }),
+          body: JSON.stringify({ graphId: graphId || recentGraphId || null, provider: 'workers-ai', title }),
         });
         const sData = await sRes.json();
         activeSession = sData.session?.id || null;
@@ -1044,12 +1413,21 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
   function handleGraphCreated(graphId: string, title: string) {
     setRecentGraphId(graphId);
+    setActiveGraphTitle(title);
+    onGraphChange?.(graphId);
     pushActionMessage(`✅ Created graph **${title}**\n\nGraph ID: \`${graphId}\``, graphId);
   }
 
   function handleNodeAdded(graphId: string, nodeId: string, label: string, type: string) {
     setRecentGraphId(graphId);
+    onGraphChange?.(graphId);
     pushActionMessage(`➕ Added **${type}** node "${label}" to graph\n\nNode ID: \`${nodeId}\``, graphId);
+  }
+
+  function handleNodeUpdated(graphId: string, nodeId: string, label: string, summary: string) {
+    setRecentGraphId(graphId);
+    onGraphChange?.(graphId);
+    pushActionMessage(`📝 ${summary}\n\nNode: **${label}**\n\nNode ID: \`${nodeId}\``, graphId);
   }
 
   function handleActionError(message: string) {
@@ -1110,6 +1488,23 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           )}
         </div>
       </div>
+      {graphId && (
+        <div className="flex items-center gap-2 px-4 py-1.5 bg-purple-600/10 border-b border-purple-500/20 text-purple-300 text-xs flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0 animate-pulse" />
+          <span className="font-medium text-purple-200">Active context:</span>
+          <span className="truncate text-purple-300/90">{activeGraphTitle || graphId}</span>
+          {onGraphChange && (
+            <button
+              type="button"
+              onClick={() => onGraphChange('')}
+              className="ml-auto text-purple-400/40 hover:text-purple-300 transition-colors flex-shrink-0 leading-none"
+              title="Clear graph context"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 && loadedMessages.length === 0 && (
@@ -1340,9 +1735,13 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       {/* Direct graph actions — bypasses the LLM for deterministic operations */}
       <GraphActionBar
         recentGraphId={recentGraphId}
+        activeGraphId={graphId}
+        activeGraphTitle={activeGraphTitle}
         onGraphCreated={handleGraphCreated}
         onNodeAdded={handleNodeAdded}
+        onNodeUpdated={handleNodeUpdated}
         onError={handleActionError}
+        onGraphContextChange={onGraphChange}
       />
 
       {/* Input */}
