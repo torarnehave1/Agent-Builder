@@ -1294,8 +1294,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       const userMsgId = Date.now().toString();
       setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: fullText }]);
       try {
-        // Lucid Origin defaults to 16:9 (1120×630)
-        const extraParams = model === '@cf/leonardo/lucid-origin' ? { width: 1120, height: 630 } : {};
+        // Preserve prompt-level --ar handling; only apply Lucid's 16:9 default
+        // when the user did not ask for a specific aspect ratio.
+        const hasAspectRatioInPrompt = /--ar\s+\d+\s*:\s*\d+/i.test(prompt);
+        const extraParams = model === '@cf/leonardo/lucid-origin' && !hasAspectRatioInPrompt
+          ? { width: 1120, height: 630 }
+          : {};
         const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
