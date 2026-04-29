@@ -230,6 +230,152 @@ function GenerateImageCard({ output }: { output: unknown }) {
   );
 }
 
+const IMAGE_FORMAT_PRESETS = [
+  { id: '16:9', label: 'Landscape 16:9', width: 1120, height: 630 },
+  { id: '4:2', label: 'Cinematic 4:2', width: 1200, height: 600 },
+  { id: '1:1', label: 'Square 1:1', width: 1024, height: 1024 },
+  { id: '4:5', label: 'Portrait 4:5', width: 896, height: 1120 },
+  { id: '9:16', label: 'Story 9:16', width: 630, height: 1120 },
+] as const;
+
+const IMAGE_STYLE_PRESETS = [
+  { id: 'none', label: 'No style preset', token: '' },
+  { id: 'photoreal', label: 'Photoreal', token: 'photorealistic rendering, professional clarity, rich textures' },
+  { id: 'cinematic', label: 'Cinematic', token: 'cinematic precision, dramatic composition, widescreen film still' },
+  { id: 'editorial', label: 'Editorial', token: 'editorial photography, magazine-quality composition, clean subject separation' },
+  { id: 'poster', label: 'Poster', token: 'poster design, strong composition, striking visual hierarchy' },
+  { id: 'illustration', label: 'Illustration', token: 'illustrated style, crafted visual storytelling, clean shapes' },
+  { id: 'pixar', label: 'Pixar / 3D', token: 'internal test render, Pixar style, polished 3D animated look' },
+  { id: 'concept-art', label: 'Concept Art', token: 'concept art, artstation quality, atmospheric visual development' },
+] as const;
+
+const IMAGE_LIGHTING_PRESETS = [
+  { id: 'none', label: 'No lighting preset', token: '' },
+  { id: 'golden-hour', label: 'Golden Hour', token: 'golden hour, warm diffused natural light' },
+  { id: 'soft-studio', label: 'Soft Studio', token: 'softbox lighting, clean studio illumination' },
+  { id: 'low-key', label: 'Low Key', token: 'low key lighting, moody high contrast shadows' },
+  { id: 'overcast', label: 'Overcast', token: 'diffused overcast light, matte editorial tone' },
+  { id: 'candlelight', label: 'Candlelight', token: 'candlelight glow, warm amber practical lighting' },
+  { id: 'nordic-twilight', label: 'Nordic Twilight', token: 'Nordic twilight, cool blue hour atmosphere' },
+] as const;
+
+const IMAGE_TEXT_TREATMENTS = [
+  { id: 'poster-title', label: 'Poster Title', token: 'bold poster title, clean edges' },
+  { id: 'logo', label: 'Logo', token: 'logo design, crisp letterforms, balanced mark composition' },
+  { id: 'neon', label: 'Neon', token: 'neon glowing outline, illuminated signage' },
+  { id: 'gold-serif', label: 'Gold Serif', token: 'elegant serif lettering, gold foil embossed look' },
+  { id: 'carved-stone', label: 'Carved Stone', token: 'chiseled stone inscription, carved letterforms' },
+] as const;
+
+interface ImagePromptPreset {
+  id: string;
+  label: string;
+  prompt: string;
+  format: (typeof IMAGE_FORMAT_PRESETS)[number]['id'];
+  style: (typeof IMAGE_STYLE_PRESETS)[number]['id'];
+  lighting: (typeof IMAGE_LIGHTING_PRESETS)[number]['id'];
+  renderTraits: string[];
+  includeText: boolean;
+  textTreatment?: (typeof IMAGE_TEXT_TREATMENTS)[number]['id'];
+}
+
+const IMAGE_PROMPT_PRESETS: ImagePromptPreset[] = [
+  {
+    id: 'photo-real',
+    label: 'Photo Real',
+    prompt: '',
+    format: '16:9',
+    style: 'photoreal',
+    lighting: 'golden-hour',
+    renderTraits: [] as string[],
+    includeText: false,
+  },
+  {
+    id: 'poster-with-text',
+    label: 'Poster With Text',
+    prompt: '',
+    format: '4:5',
+    style: 'poster',
+    lighting: 'soft-studio',
+    renderTraits: [] as string[],
+    includeText: true,
+    textTreatment: 'poster-title',
+  },
+  {
+    id: 'cinematic-wide',
+    label: 'Cinematic Wide',
+    prompt: '',
+    format: '4:2',
+    style: 'cinematic',
+    lighting: 'golden-hour',
+    renderTraits: ['Anamorphic Lens Flare'],
+    includeText: false,
+  },
+  {
+    id: 'long-exposure',
+    label: 'Long Exposure',
+    prompt: '',
+    format: '16:9',
+    style: 'photoreal',
+    lighting: 'low-key',
+    renderTraits: ['Long Exposure', 'Film Grain'],
+    includeText: false,
+  },
+  ];
+
+const IMAGE_RENDER_TRAITS = ['Long Exposure', '35mm Lens', '85mm Portrait', 'Shallow Depth of Field', 'Film Grain', 'Anamorphic Lens Flare'] as const;
+
+function isImageGenerationModel(model: string) {
+  return model === '@cf/bytedance/stable-diffusion-xl-lightning' || model === '@cf/leonardo/lucid-origin';
+}
+
+function getFormatPresetById(formatId: string) {
+  return IMAGE_FORMAT_PRESETS.find((preset) => preset.id === formatId) || IMAGE_FORMAT_PRESETS[0];
+}
+
+function composeImagePrompt({
+  basePrompt,
+  stylePreset,
+  lightingPreset,
+  renderTraits,
+  includeText,
+  imageText,
+  textTreatment,
+}: {
+  basePrompt: string;
+  stylePreset: string;
+  lightingPreset: string;
+  renderTraits: string[];
+  includeText: boolean;
+  imageText: string;
+  textTreatment: string;
+}) {
+  const parts: string[] = [];
+  const trimmedPrompt = basePrompt.trim();
+  if (trimmedPrompt) parts.push(trimmedPrompt);
+
+  const styleToken = IMAGE_STYLE_PRESETS.find((preset) => preset.id === stylePreset)?.token;
+  if (styleToken) parts.push(styleToken);
+
+  const lightingToken = IMAGE_LIGHTING_PRESETS.find((preset) => preset.id === lightingPreset)?.token;
+  if (lightingToken) parts.push(lightingToken);
+
+  if (renderTraits.includes('Long Exposure')) parts.push('long exposure photograph');
+  if (renderTraits.includes('35mm Lens')) parts.push('35mm lens');
+  if (renderTraits.includes('85mm Portrait')) parts.push('85mm portrait lens');
+  if (renderTraits.includes('Shallow Depth of Field')) parts.push('shallow depth of field');
+  if (renderTraits.includes('Film Grain')) parts.push('film grain');
+  if (renderTraits.includes('Anamorphic Lens Flare')) parts.push('anamorphic lens flare');
+
+  if (includeText && imageText.trim()) {
+    parts.push(`the text "${imageText.trim()}"`);
+    const treatmentToken = IMAGE_TEXT_TREATMENTS.find((treatment) => treatment.id === textTreatment)?.token;
+    if (treatmentToken) parts.push(treatmentToken);
+  }
+
+  return parts.filter(Boolean).join(', ').replace(/\s+,/g, ',').trim();
+}
+
 // ---------- Created-graph card (delegate_to_youtube_graph / create_graph) ----------
 
 const KG_API = 'https://knowledge.vegvisr.org';
@@ -307,6 +453,48 @@ async function patchNodeWithVersionRetry(graphId: string, nodeId: string, fields
     graphData = await fetchGraphData(graphId);
     expectedVersion = Number(graphData?.metadata?.version || 0);
   }
+}
+
+async function addStandaloneImageNodeToGraph(graphId: string, imageUrl: string, label = 'Generated Image', altText = 'Generated image') {
+  const slug = label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image';
+  const nodeId = `node-${slug}-${Math.random().toString(36).slice(2, 10)}`;
+  const node = {
+    id: nodeId,
+    label,
+    type: 'markdown-image',
+    color: '#6d7a4f',
+    info: altText,
+    path: imageUrl,
+    imageWidth: '100%',
+    imageHeight: 'auto',
+    visible: true,
+    position: { x: 0, y: 0 },
+  };
+  const res = await fetch(`${KG_API}/addNode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+    body: JSON.stringify({ graphId, node }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Failed to add image node (${res.status})`);
+  return { nodeId, label };
+}
+
+async function insertGeneratedImageIntoFulltextNode(graphId: string, imageUrl: string, mode: 'header' | 'leftside' | 'rightside') {
+  const graphData = await fetchGraphData(graphId);
+  const targetNode = (graphData.nodes || []).find((node: { type?: string }) => node.type === 'fulltext');
+  if (!targetNode) throw new Error('No fulltext node found in the active graph');
+
+  const currentInfo = String(targetNode.info || '');
+  let nextInfo = currentInfo;
+  if (mode === 'header') {
+    nextInfo = `${buildHeaderImageMarkup(imageUrl)}\n\n${currentInfo.trimStart()}`.trim();
+  } else {
+    nextInfo = insertWrappedImageIntoMarkdown(currentInfo, mode, imageUrl);
+  }
+
+  await patchNodeWithVersionRetry(graphId, targetNode.id, { info: nextInfo });
+  return { nodeId: targetNode.id, label: targetNode.label || targetNode.id };
 }
 
 function CreatedGraphCard({ graphId, fallbackTitle }: { graphId: string; fallbackTitle?: string }) {
@@ -871,6 +1059,21 @@ interface Props {
   onGraphChange?: (graphId: string) => void;
 }
 
+interface GeneratedImageResult {
+  url: string;
+  prompt: string;
+  width?: number;
+  height?: number;
+}
+
+interface LocalMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  graphId?: string;
+  generatedImage?: GeneratedImageResult;
+}
+
 export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId, onGraphChange }: Props) {
   const [copied, setCopied] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
@@ -885,13 +1088,21 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const audioInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string; file: File }>>([]); 
-  const [localMessages, setLocalMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string; graphId?: string }>>([]);
+  const [pendingImages, setPendingImages] = useState<Array<{ url: string; name: string; file: File }>>([]);
+  const [localMessages, setLocalMessages] = useState<LocalMessage[]>([]);
   const [loadedMessages, setLoadedMessages] = useState<Array<{ id: string; role: 'user' | 'assistant'; text: string }>>([]);
   const [recentGraphId, setRecentGraphId] = useState<string | null>(null);
   const [activeGraphTitle, setActiveGraphTitle] = useState('');
   const lastTranscriptRef = useRef<string | null>(null);
   const lastTrackedGraphRef = useRef<string | null>(null);
+  const [imageFormatPreset, setImageFormatPreset] = useState<(typeof IMAGE_FORMAT_PRESETS)[number]['id']>('16:9');
+  const [imageStylePreset, setImageStylePreset] = useState<(typeof IMAGE_STYLE_PRESETS)[number]['id']>('none');
+  const [imageLightingPreset, setImageLightingPreset] = useState<(typeof IMAGE_LIGHTING_PRESETS)[number]['id']>('none');
+  const [imageRenderTraits, setImageRenderTraits] = useState<string[]>([]);
+  const [includeImageText, setIncludeImageText] = useState(false);
+  const [imageTextValue, setImageTextValue] = useState('');
+  const [imageTextTreatment, setImageTextTreatment] = useState<(typeof IMAGE_TEXT_TREATMENTS)[number]['id']>('poster-title');
+  const [showImageAdvanced, setShowImageAdvanced] = useState(false);
 
   // Audio transcription state
   interface AudioFileInfo { file: File; name: string; size: number; type: string; duration: number | null; }
@@ -945,6 +1156,33 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       lastTranscriptRef.current = null;
     }
   }, [model, clearHistory]);
+
+  const isImageModel = isImageGenerationModel(model);
+  const hasAspectRatioInPrompt = /--ar\s+\d+\s*:\s*\d+/i.test(inputText);
+  const composedImagePrompt = composeImagePrompt({
+    basePrompt: inputText,
+    stylePreset: imageStylePreset,
+    lightingPreset: imageLightingPreset,
+    renderTraits: imageRenderTraits,
+    includeText: includeImageText,
+    imageText: imageTextValue,
+    textTreatment: imageTextTreatment,
+  });
+
+  function applyImagePromptPreset(presetId: (typeof IMAGE_PROMPT_PRESETS)[number]['id']) {
+    const preset = IMAGE_PROMPT_PRESETS.find((entry) => entry.id === presetId);
+    if (!preset) return;
+    setImageFormatPreset(preset.format as (typeof IMAGE_FORMAT_PRESETS)[number]['id']);
+    setImageStylePreset(preset.style as (typeof IMAGE_STYLE_PRESETS)[number]['id']);
+    setImageLightingPreset(preset.lighting as (typeof IMAGE_LIGHTING_PRESETS)[number]['id']);
+    setImageRenderTraits([...preset.renderTraits]);
+    setIncludeImageText(Boolean(preset.includeText));
+    setImageTextTreatment((preset.textTreatment || 'poster-title') as (typeof IMAGE_TEXT_TREATMENTS)[number]['id']);
+  }
+
+  function toggleRenderTrait(trait: string) {
+    setImageRenderTraits((prev) => prev.includes(trait) ? prev.filter((entry) => entry !== trait) : [...prev, trait]);
+  }
 
   useEffect(() => {
     if (!graphId) {
@@ -1276,49 +1514,132 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     textareaRef.current?.focus();
   }
 
+  async function runDirectImageGeneration({
+    prompt,
+    userMessageId,
+    originalUserText,
+    explicitWidth,
+    explicitHeight,
+  }: {
+    prompt: string;
+    userMessageId: string;
+    originalUserText: string;
+    explicitWidth?: number;
+    explicitHeight?: number;
+  }) {
+    try {
+      const requestBody: Record<string, unknown> = { prompt, userId, model };
+      if (explicitWidth) requestBody.width = explicitWidth;
+      if (explicitHeight) requestBody.height = explicitHeight;
+
+      const res = await fetch('https://agent.vegvisr.org/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      });
+      const data = await res.json() as { url?: string; error?: string; width?: number; height?: number; prompt?: string };
+      if (!res.ok || !data.url) throw new Error(data.error || 'Generation failed');
+      const imageUrl = data.url;
+
+      setLocalMessages(prev => [...prev, {
+        id: `${userMessageId}-r`,
+        role: 'assistant',
+        text: originalUserText,
+        generatedImage: {
+          url: imageUrl,
+          prompt: data.prompt || prompt,
+          width: data.width,
+          height: data.height,
+        },
+      }]);
+    } catch (e) {
+      setLocalMessages(prev => [...prev, {
+        id: `${userMessageId}-r`,
+        role: 'assistant',
+        text: `Failed to generate image: ${e instanceof Error ? e.message : 'unknown error'}`,
+      }]);
+    }
+  }
+
+  async function handleGeneratedImageAction(action: 'image-node' | 'header' | 'leftside' | 'regenerate', image: GeneratedImageResult) {
+    try {
+      if (action === 'regenerate') {
+        const hasManualAspectRatio = /--ar\s+\d+\s*:\s*\d+/i.test(image.prompt);
+        const formatPreset = getFormatPresetById(imageFormatPreset);
+        const userMsgId = `${Date.now()}-regen`;
+        setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: image.prompt }]);
+        await runDirectImageGeneration({
+          prompt: image.prompt,
+          userMessageId: userMsgId,
+          originalUserText: image.prompt,
+          explicitWidth: hasManualAspectRatio ? undefined : formatPreset.width,
+          explicitHeight: hasManualAspectRatio ? undefined : formatPreset.height,
+        });
+        return;
+      }
+
+      const targetGraphId = graphId || recentGraphId;
+      if (!targetGraphId) throw new Error('Select or create a graph first');
+
+      if (action === 'image-node') {
+        await addStandaloneImageNodeToGraph(targetGraphId, image.url, 'Generated Image', image.prompt);
+      } else {
+        await insertGeneratedImageIntoFulltextNode(targetGraphId, image.url, action);
+      }
+
+      setRecentGraphId(targetGraphId);
+      onGraphChange?.(targetGraphId);
+      setActiveGraphTitle((prev) => prev || targetGraphId);
+      setLocalMessages(prev => [...prev, {
+        id: `${Date.now()}-${action}`,
+        role: 'assistant',
+        text: action === 'image-node'
+          ? `Saved generated image to graph \`${targetGraphId}\` as a markdown-image node.`
+          : `Inserted generated image into graph \`${targetGraphId}\` as ${action === 'header' ? 'a Header image' : 'a Leftside image'}.`,
+      }]);
+    } catch (e) {
+      setLocalMessages(prev => [...prev, {
+        id: `${Date.now()}-${action}-error`,
+        role: 'assistant',
+        text: `Failed to apply generated image: ${e instanceof Error ? e.message : 'unknown error'}`,
+      }]);
+    }
+  }
+
   async function doSend() {
     const text = inputText.trim();
     const hasImages = pendingImages.length > 0;
     if (!text && !hasImages) return;
-    // If there's a pending transcript, prepend it as context for the model
+    const imageModelSelected = isImageGenerationModel(model);
+    // If there's a pending transcript, prepend it as context for text/chat models only.
     const transcript = lastTranscriptRef.current;
     lastTranscriptRef.current = null;
-    const contextPrefix = transcript ? `[Transcription context]:\n${transcript}\n\n` : '';
+    const contextPrefix = transcript && !imageModelSelected ? `[Transcription context]:\n${transcript}\n\n` : '';
     const fullText = `${contextPrefix}${text}`.trim();
 
     // Image generation models — every message is an image prompt
-    const isImageModel = model === '@cf/bytedance/stable-diffusion-xl-lightning' || model === '@cf/leonardo/lucid-origin';
-    if (isImageModel && !hasImages) {
-      const prompt = fullText;
+    if (imageModelSelected && !hasImages) {
+      const prompt = composeImagePrompt({
+        basePrompt: text,
+        stylePreset: imageStylePreset,
+        lightingPreset: imageLightingPreset,
+        renderTraits: imageRenderTraits,
+        includeText: includeImageText,
+        imageText: imageTextValue,
+        textTreatment: imageTextTreatment,
+      });
+      if (!prompt) return;
       setInputText('');
       const userMsgId = Date.now().toString();
-      setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: fullText }]);
-      try {
-        // Preserve prompt-level --ar handling; only apply Lucid's 16:9 default
-        // when the user did not ask for a specific aspect ratio.
-        const hasAspectRatioInPrompt = /--ar\s+\d+\s*:\s*\d+/i.test(prompt);
-        const extraParams = model === '@cf/leonardo/lucid-origin' && !hasAspectRatioInPrompt
-          ? { width: 1120, height: 630 }
-          : {};
-        const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, userId, model, ...extraParams }),
-        });
-        const data = await res.json() as { url?: string; error?: string };
-        if (!res.ok || !data.url) throw new Error(data.error || 'Generation failed');
-        setLocalMessages(prev => [...prev, {
-          id: userMsgId + '-r',
-          role: 'assistant',
-          text: `![${prompt}](${data.url})\n\n[Open full size](${data.url})`,
-        }]);
-      } catch (e) {
-        setLocalMessages(prev => [...prev, {
-          id: userMsgId + '-r',
-          role: 'assistant',
-          text: `Failed to generate image: ${e instanceof Error ? e.message : 'unknown error'}`,
-        }]);
-      }
+      setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: prompt }]);
+      const formatPreset = getFormatPresetById(imageFormatPreset);
+      await runDirectImageGeneration({
+        prompt,
+        userMessageId: userMsgId,
+        originalUserText: prompt,
+        explicitWidth: /--ar\s+\d+\s*:\s*\d+/i.test(prompt) ? undefined : formatPreset.width,
+        explicitHeight: /--ar\s+\d+\s*:\s*\d+/i.test(prompt) ? undefined : formatPreset.height,
+      });
       return;
     }
 
@@ -1509,6 +1830,17 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           )}
         </div>
       )}
+      {isImageModel && (
+        <div className="flex items-start gap-2 px-4 py-2 bg-pink-500/10 border-b border-pink-400/20 text-pink-200 text-xs flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-pink-400 flex-shrink-0 mt-1" />
+          <div>
+            <div className="font-medium">Image generation mode</div>
+            <div className="text-pink-200/70">
+              Every message becomes an image prompt. Use the controls below for format, style, and text rendering. Power users can still write <span className="font-mono">--ar</span> directly in the prompt.
+            </div>
+          </div>
+        </div>
+      )}
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 && loadedMessages.length === 0 && (
@@ -1652,9 +1984,62 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         {localMessages.map(m => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${m.role === 'user' ? 'bg-purple-600 text-white' : 'bg-white/10 text-white/90'}`}>
-              <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-              </div>
+              {m.generatedImage ? (
+                <div>
+                  <div className="text-xs text-white/50 mb-2 break-words">{m.generatedImage.prompt}</div>
+                  <img
+                    src={m.generatedImage.url}
+                    alt={m.generatedImage.prompt}
+                    className="rounded-lg max-w-full max-h-[400px] object-contain border border-white/10"
+                  />
+                  <div className="mt-1 text-[11px] text-white/30 break-all">
+                    <a href={m.generatedImage.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-white/60">Open full size</a>
+                    {m.generatedImage.width && m.generatedImage.height && <span className="ml-2">{m.generatedImage.width}×{m.generatedImage.height}px</span>}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleGeneratedImageAction('regenerate', m.generatedImage!)}
+                      className="px-3 py-1 rounded-md border border-sky-400/30 bg-sky-400/10 text-sky-300 text-xs hover:bg-sky-400/20 transition-colors"
+                    >
+                      Regenerate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleGeneratedImageAction('image-node', m.generatedImage!)}
+                      disabled={!graphId && !recentGraphId}
+                      className="px-3 py-1 rounded-md border border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-xs hover:bg-emerald-400/20 transition-colors disabled:opacity-40"
+                    >
+                      Add as Image Node
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleGeneratedImageAction('header', m.generatedImage!)}
+                      disabled={!graphId && !recentGraphId}
+                      className="px-3 py-1 rounded-md border border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-300 text-xs hover:bg-fuchsia-400/20 transition-colors disabled:opacity-40"
+                    >
+                      Insert as Header
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleGeneratedImageAction('leftside', m.generatedImage!)}
+                      disabled={!graphId && !recentGraphId}
+                      className="px-3 py-1 rounded-md border border-amber-400/30 bg-amber-400/10 text-amber-300 text-xs hover:bg-amber-400/20 transition-colors disabled:opacity-40"
+                    >
+                      Insert as Leftside
+                    </button>
+                  </div>
+                  {!graphId && !recentGraphId && (
+                    <div className="mt-2 text-[11px] text-white/35">
+                      Select or create a graph to enable graph insertion actions.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                </div>
+              )}
               {m.graphId && <CreatedGraphCard graphId={m.graphId} />}
               {m.role === 'user' && (
                 <button
@@ -1762,6 +2147,151 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           }
         }}
       >
+        {isImageModel && (
+          <div className="max-w-[900px] mx-auto mb-3 rounded-xl border border-pink-400/15 bg-pink-400/[0.05] p-3 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-pink-200/70">Prompt presets</span>
+              {IMAGE_PROMPT_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => applyImagePromptPreset(preset.id)}
+                  className="px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-white/70 text-xs hover:bg-white/[0.08] hover:text-white transition-colors"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <label className="text-xs text-white/70">
+                <span className="block mb-1 text-white/50">Format</span>
+                <select
+                  value={imageFormatPreset}
+                  onChange={(e) => setImageFormatPreset(e.target.value as (typeof IMAGE_FORMAT_PRESETS)[number]['id'])}
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                >
+                  {IMAGE_FORMAT_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-xs text-white/70">
+                <span className="block mb-1 text-white/50">Style</span>
+                <select
+                  value={imageStylePreset}
+                  onChange={(e) => setImageStylePreset(e.target.value as (typeof IMAGE_STYLE_PRESETS)[number]['id'])}
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                >
+                  {IMAGE_STYLE_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-xs text-white/70">
+                <span className="block mb-1 text-white/50">Lighting</span>
+                <select
+                  value={imageLightingPreset}
+                  onChange={(e) => setImageLightingPreset(e.target.value as (typeof IMAGE_LIGHTING_PRESETS)[number]['id'])}
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                >
+                  {IMAGE_LIGHTING_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-xs text-white/70">
+                <input
+                  type="checkbox"
+                  checked={includeImageText}
+                  onChange={(e) => setIncludeImageText(e.target.checked)}
+                  className="h-4 w-4 rounded border-white/30 bg-white/10"
+                />
+                Text in image
+              </label>
+              {includeImageText && (
+                <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3">
+                  <input
+                    value={imageTextValue}
+                    onChange={(e) => setImageTextValue(e.target.value)}
+                    placeholder='Short phrase, e.g. "SLOW IS SACRED"'
+                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white text-sm placeholder-white/30"
+                  />
+                  <select
+                    value={imageTextTreatment}
+                    onChange={(e) => setImageTextTreatment(e.target.value as (typeof IMAGE_TEXT_TREATMENTS)[number]['id'])}
+                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                  >
+                    {IMAGE_TEXT_TREATMENTS.map((treatment) => (
+                      <option key={treatment.id} value={treatment.id} className="bg-slate-900 text-white">
+                        {treatment.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              {includeImageText && (
+                <div className="text-[11px] text-white/40">Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowImageAdvanced((prev) => !prev)}
+                className="px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-white/70 text-xs hover:bg-white/[0.08] hover:text-white transition-colors"
+              >
+                {showImageAdvanced ? 'Hide advanced' : 'Show advanced'}
+              </button>
+              {hasAspectRatioInPrompt && (
+                <span className="text-[11px] text-amber-300/80">
+                  Prompt contains <span className="font-mono">--ar</span>; prompt aspect ratio overrides the format selector.
+                </span>
+              )}
+            </div>
+
+            {showImageAdvanced && (
+              <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                <div>
+                  <div className="text-[11px] text-white/50 mb-2">Camera / Render</div>
+                  <div className="flex flex-wrap gap-2">
+                    {IMAGE_RENDER_TRAITS.map((trait) => {
+                      const active = imageRenderTraits.includes(trait);
+                      return (
+                        <button
+                          key={trait}
+                          type="button"
+                          onClick={() => toggleRenderTrait(trait)}
+                          className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${active ? 'border-sky-400/40 bg-sky-400/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+                        >
+                          {trait}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {(inputText.trim() || imageStylePreset !== 'none' || imageLightingPreset !== 'none' || imageRenderTraits.length > 0 || (includeImageText && imageTextValue.trim())) && (
+              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                <div className="text-[11px] uppercase tracking-wide text-white/40 mb-1">Prompt preview</div>
+                <div className="text-sm text-white/85 break-words">{composedImagePrompt || 'Start typing to build a prompt preview.'}</div>
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           {/* Audio upload */}
           <button
@@ -1810,7 +2340,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   });
                 }
               }}
-              placeholder={pendingImages.length > 0 ? 'Ask about the image…' : 'Type your message or @bot…'}
+              placeholder={pendingImages.length > 0 ? 'Ask about the image…' : isImageModel ? 'Describe the image you want to create…' : 'Type your message or @bot…'}
               rows={1}
               className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15 placeholder-white/30"
             />
