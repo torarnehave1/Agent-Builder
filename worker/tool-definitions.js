@@ -1308,8 +1308,101 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_secure_worker_template',
+    description: 'Return the canonical Vegvisr server-side auth pattern and worker template for new Cloudflare Workers. ALWAYS call this before deploy_worker when creating or modifying a privileged worker that updates data, deletes data, reads private user data, or deploys infrastructure. Includes secure admin and user-scoped templates plus mandatory rules.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        templateType: {
+          type: 'string',
+          enum: ['admin', 'user-scoped', 'public-readonly', 'all'],
+          description: 'Which secure worker template to return. Use "admin" for privileged mutations, "user-scoped" for logged-in user actions, "public-readonly" for public data. Default: "all".'
+        }
+      }
+    }
+  },
+  {
+    name: 'create_capability_blueprint',
+    description: 'Classify a natural-language capability request and return the governed implementation plan. Use this FIRST when the user asks to add/create/build a new capability for the agent. It determines whether the capability is public-readonly, user-scoped, or privileged/admin; recommends the implementation path; and tells you which secure template flow to use.',
+    input_schema: {
+      type: 'object',
+      required: ['request'],
+      properties: {
+        request: {
+          type: 'string',
+          description: 'The user\'s natural-language capability request.'
+        },
+        preferredImplementation: {
+          type: 'string',
+          enum: ['worker', 'tool', 'html-app', 'graph-template', 'auto'],
+          description: 'Optional implementation hint. Default: auto.'
+        }
+      }
+    }
+  },
+  {
+    name: 'build_capability_worker_scaffold',
+    description: 'Generate a governed Worker scaffold from a capability blueprint. Use this after create_capability_blueprint when the recommended implementation is a worker. It applies the canonical secure worker template and produces scaffold code for a specific endpoint and D1 action, reducing freeform worker generation.',
+    input_schema: {
+      type: 'object',
+      required: ['workerName', 'templateType', 'endpointPath', 'actionType'],
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'Worker script name, e.g. "user-bio-admin".'
+        },
+        templateType: {
+          type: 'string',
+          enum: ['admin', 'user-scoped', 'public-readonly'],
+          description: 'Template chosen from the capability blueprint.'
+        },
+        endpointPath: {
+          type: 'string',
+          description: 'Endpoint path such as "/update-bio".'
+        },
+        method: {
+          type: 'string',
+          enum: ['GET', 'POST', 'PUT', 'DELETE'],
+          description: 'HTTP method. Default: POST.'
+        },
+        actionType: {
+          type: 'string',
+          enum: ['update', 'insert', 'delete', 'select'],
+          description: 'CRUD action to scaffold.'
+        },
+        tableName: {
+          type: 'string',
+          description: 'D1 table name if the worker uses D1.'
+        },
+        identifierField: {
+          type: 'string',
+          description: 'Primary lookup field, e.g. "email".'
+        },
+        mutableFields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Fields the endpoint may update or insert.'
+        },
+        responseFields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Fields to return in the success response.'
+        },
+        capabilitySummary: {
+          type: 'string',
+          description: 'Short human description of what the capability does.'
+        },
+        allowEmptyFields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Fields that may legally be empty string, e.g. ["bio"].'
+        }
+      }
+    }
+  },
+  {
     name: 'deploy_worker',
-    description: 'Deploy or modify a Cloudflare Worker via the API. Can create new workers or update existing ones. The worker code (ES module JavaScript) is uploaded and deployed instantly — no wrangler or git needed. Use when the user asks to create a new worker, modify an existing endpoint, add functionality to a worker, or fix a bug in a deployed worker. Requires Superadmin role.',
+    description: 'Deploy or modify a Cloudflare Worker via the API. Can create new workers or update existing ones. The worker code (ES module JavaScript) is uploaded and deployed instantly — no wrangler or git needed. Use when the user asks to create a new worker, modify an existing endpoint, add functionality to a worker, or fix a bug in a deployed worker. Requires Superadmin role. For new capabilities, first call create_capability_blueprint, then build_capability_worker_scaffold or get_secure_worker_template before deploy_worker. Never trust x-user-role or other client-supplied identity headers.',
     input_schema: {
       type: 'object',
       required: ['workerName', 'code'],
@@ -1339,7 +1432,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'read_worker',
-    description: 'List all deployed Cloudflare Workers or get details about a specific worker. Use to inspect the current state before modifying.',
+    description: 'List all deployed Cloudflare Workers or get details about a specific worker. Use to inspect current state before modifying. Superadmin only.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1352,7 +1445,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delete_worker',
-    description: 'Delete a Cloudflare Worker. Requires Superadmin role. Use with caution — this removes the worker from Cloudflare entirely.',
+    description: 'Delete a Cloudflare Worker. Requires Superadmin role. Use with caution — this removes the worker from Cloudflare entirely. For privileged workers, confirm the replacement path before deleting.',
     input_schema: {
       type: 'object',
       required: ['workerName'],

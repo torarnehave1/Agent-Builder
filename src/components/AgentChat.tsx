@@ -1450,6 +1450,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       const res = mentionedBot ? await fetch(`${AGENT_API}/bot-chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
@@ -1460,6 +1461,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         signal: abort.signal,
       }) : await fetch(`${AGENT_API}/chat`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,

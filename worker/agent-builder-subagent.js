@@ -191,7 +191,7 @@ async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
         const msgs = toolMessages[toolUse.name] || [`Working on ${toolUse.name}...`]
         progress(msgs[Math.floor(Math.random() * msgs.length)])
         try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, {})
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext: input.authContext || null }, env, {})
 
           const resultStr = JSON.stringify(result)
           actions.push({

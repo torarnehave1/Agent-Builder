@@ -1104,6 +1104,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [includeImageText, setIncludeImageText] = useState(false);
   const [imageTextValue, setImageTextValue] = useState('');
   const [imageTextTreatment, setImageTextTreatment] = useState<(typeof IMAGE_TEXT_TREATMENTS)[number]['id']>('poster-title');
+  const [showImageSettings, setShowImageSettings] = useState(true);
   const [showImageAdvanced, setShowImageAdvanced] = useState(false);
 
   // Audio transcription state
@@ -1161,6 +1162,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
   const isImageModel = isImageGenerationModel(model);
   const hasAspectRatioInPrompt = /--ar\s+\d+\s*:\s*\d+/i.test(inputText);
+  const activeFormatLabel = getFormatPresetById(imageFormatPreset).label;
+  const activeStyleLabel = IMAGE_STYLE_PRESETS.find((preset) => preset.id === imageStylePreset)?.label || 'No style preset';
+  const activeLightingLabel = IMAGE_LIGHTING_PRESETS.find((preset) => preset.id === imageLightingPreset)?.label || 'No lighting preset';
   const composedImagePrompt = composeImagePrompt({
     basePrompt: inputText,
     stylePreset: imageStylePreset,
@@ -2151,102 +2155,127 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       >
         {isImageModel && (
           <div className={`max-w-[900px] mx-auto mb-3 rounded-xl border p-3 space-y-3 ${isLight ? 'border-pink-200 bg-pink-50' : 'border-pink-400/15 bg-pink-400/[0.05]'}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className={`text-[11px] font-semibold uppercase tracking-wide ${isLight ? 'text-pink-700' : 'text-pink-200/70'}`}>Prompt presets</span>
-              {IMAGE_PROMPT_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => applyImagePromptPreset(preset.id)}
-                  className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
-                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Format</span>
-                <select
-                  value={imageFormatPreset}
-                  onChange={(e) => setImageFormatPreset(e.target.value as (typeof IMAGE_FORMAT_PRESETS)[number]['id'])}
-                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
-                >
-                  {IMAGE_FORMAT_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-2 min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`text-[11px] font-semibold uppercase tracking-wide ${isLight ? 'text-pink-700' : 'text-pink-200/70'}`}>Prompt presets</span>
+                  {IMAGE_PROMPT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => applyImagePromptPreset(preset.id)}
+                      className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
+                    >
                       {preset.label}
-                    </option>
+                    </button>
                   ))}
-                </select>
-              </label>
-
-              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
-                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Style</span>
-                <select
-                  value={imageStylePreset}
-                  onChange={(e) => setImageStylePreset(e.target.value as (typeof IMAGE_STYLE_PRESETS)[number]['id'])}
-                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
-                >
-                  {IMAGE_STYLE_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
-                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Lighting</span>
-                <select
-                  value={imageLightingPreset}
-                  onChange={(e) => setImageLightingPreset(e.target.value as (typeof IMAGE_LIGHTING_PRESETS)[number]['id'])}
-                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
-                >
-                  {IMAGE_LIGHTING_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-
-            <div className="space-y-2">
-              <label className={`flex items-center gap-2 text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
-                <input
-                  type="checkbox"
-                  checked={includeImageText}
-                  onChange={(e) => setIncludeImageText(e.target.checked)}
-                  className="h-4 w-4 rounded border-white/30 bg-white/10"
-                />
-                Text in image
-              </label>
-              {includeImageText && (
-                <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3">
-                  <input
-                    value={imageTextValue}
-                    onChange={(e) => setImageTextValue(e.target.value)}
-                    placeholder='Short phrase, e.g. "SLOW IS SACRED"'
-                    className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
-                  />
-                  <select
-                    value={imageTextTreatment}
-                    onChange={(e) => setImageTextTreatment(e.target.value as (typeof IMAGE_TEXT_TREATMENTS)[number]['id'])}
-                    className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
-                  >
-                    {IMAGE_TEXT_TREATMENTS.map((treatment) => (
-                      <option key={treatment.id} value={treatment.id} className="bg-slate-900 text-white">
-                        {treatment.label}
-                      </option>
-                    ))}
-                  </select>
                 </div>
-              )}
-              {includeImageText && (
-                <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
-              )}
+                {!showImageSettings && (
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`px-2 py-1 rounded-full text-[11px] border ${isLight ? 'border-slate-300 bg-white text-slate-600' : 'border-white/10 bg-white/[0.04] text-white/60'}`}>Format: {activeFormatLabel}</span>
+                    <span className={`px-2 py-1 rounded-full text-[11px] border ${isLight ? 'border-slate-300 bg-white text-slate-600' : 'border-white/10 bg-white/[0.04] text-white/60'}`}>Style: {activeStyleLabel}</span>
+                    <span className={`px-2 py-1 rounded-full text-[11px] border ${isLight ? 'border-slate-300 bg-white text-slate-600' : 'border-white/10 bg-white/[0.04] text-white/60'}`}>Lighting: {activeLightingLabel}</span>
+                    {includeImageText && (
+                      <span className={`px-2 py-1 rounded-full text-[11px] border ${isLight ? 'border-slate-300 bg-white text-slate-600' : 'border-white/10 bg-white/[0.04] text-white/60'}`}>Text enabled</span>
+                    )}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowImageSettings((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-full border text-xs transition-colors flex-shrink-0 ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
+              >
+                {showImageSettings ? 'Minimize settings' : 'Show settings'}
+              </button>
             </div>
+
+            {showImageSettings && (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Format</span>
+                    <select
+                      value={imageFormatPreset}
+                      onChange={(e) => setImageFormatPreset(e.target.value as (typeof IMAGE_FORMAT_PRESETS)[number]['id'])}
+                      className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
+                    >
+                      {IMAGE_FORMAT_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Style</span>
+                    <select
+                      value={imageStylePreset}
+                      onChange={(e) => setImageStylePreset(e.target.value as (typeof IMAGE_STYLE_PRESETS)[number]['id'])}
+                      className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
+                    >
+                      {IMAGE_STYLE_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Lighting</span>
+                    <select
+                      value={imageLightingPreset}
+                      onChange={(e) => setImageLightingPreset(e.target.value as (typeof IMAGE_LIGHTING_PRESETS)[number]['id'])}
+                      className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
+                    >
+                      {IMAGE_LIGHTING_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                          {preset.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="space-y-2">
+                  <label className={`flex items-center gap-2 text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <input
+                      type="checkbox"
+                      checked={includeImageText}
+                      onChange={(e) => setIncludeImageText(e.target.checked)}
+                      className="h-4 w-4 rounded border-white/30 bg-white/10"
+                    />
+                    Text in image
+                  </label>
+                  {includeImageText && (
+                    <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-3">
+                      <input
+                        value={imageTextValue}
+                        onChange={(e) => setImageTextValue(e.target.value)}
+                        placeholder='Short phrase, e.g. "SLOW IS SACRED"'
+                        className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
+                      />
+                      <select
+                        value={imageTextTreatment}
+                        onChange={(e) => setImageTextTreatment(e.target.value as (typeof IMAGE_TEXT_TREATMENTS)[number]['id'])}
+                        className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
+                      >
+                        {IMAGE_TEXT_TREATMENTS.map((treatment) => (
+                          <option key={treatment.id} value={treatment.id} className="bg-slate-900 text-white">
+                            {treatment.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  {includeImageText && (
+                    <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
+                  )}
+                </div>
+              </>
+            )}
 
             <div className="flex flex-wrap items-center gap-2">
               <button
@@ -2263,7 +2292,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               )}
             </div>
 
-            {showImageAdvanced && (
+            {showImageSettings && showImageAdvanced && (
               <div className={`space-y-3 rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-white/[0.03]'}`}>
                 <div>
                   <div className={`text-[11px] mb-2 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Camera / Render</div>

@@ -3763,7 +3763,26 @@ function getCfApiBase(env) {
   return `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers`
 }
 
+function getVerifiedWorkerAdmin(toolInput) {
+  const authContext = toolInput?.authContext
+  if (!authContext?.authenticated) {
+    throw new Error('Worker management requires a verified logged-in session. Sign in again and retry.')
+  }
+
+  const role = String(authContext.role || authContext.profile?.role || authContext.session?.role || '').trim().toLowerCase()
+  if (role !== 'superadmin') {
+    throw new Error('Worker management requires Superadmin role.')
+  }
+
+  return {
+    userId: authContext.userId || toolInput?.userId || null,
+    email: authContext.email || authContext.profile?.email || authContext.session?.email || null,
+    role: authContext.role || authContext.profile?.role || authContext.session?.role || null,
+  }
+}
+
 async function executeDeployWorker(input, env) {
+  const caller = getVerifiedWorkerAdmin(input)
   const token = env.CLOUDFLARE_API_TOKEN
   if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured. Add it as a secret: wrangler secret put CLOUDFLARE_API_TOKEN' }
 
@@ -3820,6 +3839,7 @@ async function executeDeployWorker(input, env) {
             domain: `${workerName}.torarnehave.workers.dev`,
             deployedVia: 'cloudflare-api',
             deployedAt: new Date().toISOString(),
+            deployedBy: caller.email || caller.userId || 'unknown',
           },
         },
       }
@@ -3843,11 +3863,13 @@ async function executeDeployWorker(input, env) {
     modifiedOn: deployData.result?.modified_on,
     subdomainEnabled: subdomainResult?.success || false,
     registeredInGraph: graphResult?.ok || false,
+    deployedBy: caller.email || caller.userId || null,
     message: `Worker "${workerName}" deployed successfully. Live at https://${workerName}.torarnehave.workers.dev`,
   }
 }
 
 async function executeReadWorker(input, env) {
+  getVerifiedWorkerAdmin(input)
   const token = env.CLOUDFLARE_API_TOKEN
   if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
 
@@ -3892,6 +3914,7 @@ async function executeReadWorker(input, env) {
 }
 
 async function executeDeleteWorker(input, env) {
+  const caller = getVerifiedWorkerAdmin(input)
   const token = env.CLOUDFLARE_API_TOKEN
   if (!token) return { error: 'CLOUDFLARE_API_TOKEN not configured' }
 
@@ -3929,7 +3952,409 @@ async function executeDeleteWorker(input, env) {
     workerName,
     deleted: true,
     removedFromGraph: graphResult?.ok || false,
+    deletedBy: caller.email || caller.userId || null,
     message: `Worker "${workerName}" deleted.`,
+  }
+}
+
+async function executeGetSecureWorkerTemplate(input) {
+  const templateType = input?.templateType || 'all'
+
+  const sharedRules = [
+    'Never trust x-user-role, x-user-email, or any other client-supplied role/identity header.',
+    'Validate the incoming session server-side via https://auth.vegvisr.org/auth/openauth/session.',
+    'After session validation, resolve the real user from vegvisr_org.config and read Role from D1.',
+    'Use parameterized D1 queries and await all run()/first()/all() calls.',
+    'For browser calls from vegvisr.org, use credentialed CORS: reflect trusted origin and set Access-Control-Allow-Credentials: true.',
+    'Do not expose phone or other unnecessary private fields in public responses.',
+  ]
+
+  const sharedAuthHelper = `const TRUSTED_ORIGIN_RE = /^https?:\\/\\/(?:(?:localhost|127\\\\.0\\\\.0\\\\.1)(?::\\\\d+)?|(?:[\\\\w-]+\\\\.)*vegvisr\\\\.org)$/i;
+
+function buildCorsHeaders(request) {
+  const origin = request.headers.get('origin') || '';
+  const headers = {
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Content-Type': 'application/json',
+    'Vary': 'Origin',
+  };
+  if (origin && TRUSTED_ORIGIN_RE.test(origin)) {
+    headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Allow-Credentials'] = 'true';
+  } else {
+    headers['Access-Control-Allow-Origin'] = '*';
+  }
+  return headers;
+}
+
+async function resolveSession(request) {
+  const cookie = request.headers.get('cookie') || '';
+  const authorization = request.headers.get('authorization') || '';
+  if (!cookie && !authorization) return null;
+  const headers = {};
+  if (cookie) headers.cookie = cookie;
+  if (authorization) headers.authorization = authorization;
+  const res = await fetch('https://auth.vegvisr.org/auth/openauth/session', { method: 'GET', headers });
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data?.success || !data?.subject) return null;
+  return data.subject;
+}
+
+async function resolveCallerProfile(subject, env) {
+  if (!subject) return null;
+  let profile = null;
+  if (subject.email) {
+    profile = await env.DB.prepare(
+      'SELECT email, user_id, Role AS role, bio FROM config WHERE email = ?'
+    ).bind(subject.email).first();
+  }
+  if (!profile && subject.id) {
+    profile = await env.DB.prepare(
+      'SELECT email, user_id, Role AS role, bio FROM config WHERE user_id = ?'
+    ).bind(subject.id).first();
+  }
+  return profile;
+}
+
+async function requireSuperadmin(request, env) {
+  const subject = await resolveSession(request);
+  if (!subject) return { ok: false, status: 401, error: 'Authentication required' };
+  const profile = await resolveCallerProfile(subject, env);
+  const role = String(profile?.role || subject.role || '').toLowerCase();
+  if (role !== 'superadmin') return { ok: false, status: 403, error: 'Superadmin required' };
+  return { ok: true, subject, profile };
+}`
+
+  const adminTemplate = `export default {
+  async fetch(request, env) {
+    const corsHeaders = buildCorsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    const auth = await requireSuperadmin(request, env);
+    if (!auth.ok) {
+      return new Response(JSON.stringify({ success: false, error: auth.error }), {
+        status: auth.status,
+        headers: corsHeaders,
+      });
+    }
+
+    if (request.method === 'POST' && new URL(request.url).pathname === '/update-bio') {
+      const { email, bio } = await request.json();
+      if (!email || bio === undefined) {
+        return new Response(JSON.stringify({ success: false, error: 'Missing email or bio' }), { status: 400, headers: corsHeaders });
+      }
+
+      const update = await env.DB.prepare(
+        'UPDATE config SET bio = ? WHERE email = ?'
+      ).bind(bio, email).run();
+
+      if (!update.meta?.changes) {
+        return new Response(JSON.stringify({ success: false, error: 'User not found' }), { status: 404, headers: corsHeaders });
+      }
+
+      const user = await env.DB.prepare(
+        'SELECT email, bio, Role AS role FROM config WHERE email = ?'
+      ).bind(email).first();
+
+      return new Response(JSON.stringify({ success: true, user }), { headers: corsHeaders });
+    }
+
+    return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404, headers: corsHeaders });
+  }
+};`
+
+  const userScopedTemplate = `export default {
+  async fetch(request, env) {
+    const corsHeaders = buildCorsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    const subject = await resolveSession(request);
+    if (!subject) {
+      return new Response(JSON.stringify({ success: false, error: 'Authentication required' }), { status: 401, headers: corsHeaders });
+    }
+
+    const profile = await resolveCallerProfile(subject, env);
+    if (!profile?.email) {
+      return new Response(JSON.stringify({ success: false, error: 'User profile not found' }), { status: 404, headers: corsHeaders });
+    }
+
+    // Add user-scoped logic here. Never accept target email from the client for self-service actions.
+    return new Response(JSON.stringify({
+      success: true,
+      user: { email: profile.email, role: profile.role || 'user' }
+    }), { headers: corsHeaders });
+  }
+};`
+
+  const publicReadonlyTemplate = `export default {
+  async fetch(request) {
+    const corsHeaders = buildCorsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    // Public-readonly worker: no session required, no mutations, no private data.
+    return new Response(JSON.stringify({ success: true, message: 'Public readonly worker starter' }), {
+      headers: corsHeaders,
+    });
+  }
+};`
+
+  const templates = {
+    sharedAuthHelper,
+    admin: adminTemplate,
+    'user-scoped': userScopedTemplate,
+    'public-readonly': publicReadonlyTemplate,
+  }
+
+  if (templateType !== 'all') {
+    return {
+      templateType,
+      mandatoryRules: sharedRules,
+      sharedAuthHelper,
+      template: templates[templateType],
+      message: `Returned canonical secure worker template: ${templateType}`,
+    }
+  }
+
+  return {
+    templateType: 'all',
+    mandatoryRules: sharedRules,
+    sharedAuthHelper,
+    templates,
+    message: 'Returned canonical secure worker templates for admin, user-scoped, and public-readonly workers.',
+  }
+}
+
+function slugifyCapabilityName(text) {
+  return String(text || 'new-capability')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'new-capability'
+}
+
+async function executeCreateCapabilityBlueprint(input) {
+  const request = String(input?.request || '').trim()
+  if (!request) throw new Error('request is required')
+
+  const text = request.toLowerCase()
+  const preferred = input?.preferredImplementation || 'auto'
+
+  const privilegedPatterns = [
+    /update .*bio/,
+    /update .*profile/,
+    /\buser\b/,
+    /\bconfig\b/,
+    /\bprivate\b/,
+    /\badmin\b/,
+    /\bsuperadmin\b/,
+    /\bdelete\b/,
+    /\brole\b/,
+    /\bapi key\b/,
+    /\bcredential\b/,
+    /\bdeploy\b/,
+    /\bworker\b/,
+  ]
+  const userScopedPatterns = [
+    /\bmy\b/,
+    /\bcurrent user\b/,
+    /\bown\b/,
+    /\bself\b/,
+    /\bprofile\b/,
+    /\bpreferences\b/,
+    /\bsettings\b/,
+  ]
+  const publicReadonlyPatterns = [
+    /\blist\b/,
+    /\bshow\b/,
+    /\bview\b/,
+    /\bread\b/,
+    /\bsearch\b/,
+    /\blookup\b/,
+    /\bstatus\b/,
+  ]
+
+  let capabilityType = 'public-readonly'
+  if (privilegedPatterns.some((pattern) => pattern.test(text))) {
+    capabilityType = 'privileged/admin'
+  } else if (userScopedPatterns.some((pattern) => pattern.test(text))) {
+    capabilityType = 'user-scoped'
+  } else if (publicReadonlyPatterns.some((pattern) => pattern.test(text))) {
+    capabilityType = 'public-readonly'
+  }
+
+  let implementation = preferred === 'auto' ? 'worker' : preferred
+  if (preferred === 'auto') {
+    if (/dashboard|ui|screen|page|form|html/.test(text)) implementation = 'html-app'
+    else if (/template|graph node|fulltext|section/.test(text)) implementation = 'graph-template'
+    else implementation = 'worker'
+  }
+
+  const templateType = capabilityType === 'privileged/admin'
+    ? 'admin'
+    : capabilityType === 'user-scoped'
+      ? 'user-scoped'
+      : 'public-readonly'
+
+  const workerNameSuggestion = slugifyCapabilityName(
+    request
+      .replace(/\b(add|create|build|make|capability|to|for|a|an|the)\b/gi, ' ')
+      .trim()
+  )
+
+  const endpointSuggestion = `/${workerNameSuggestion.replace(/^user-/, '').replace(/-admin$/, '')}`.slice(0, 64)
+  const nextTools = implementation === 'worker'
+    ? ['create_capability_blueprint', 'build_capability_worker_scaffold', 'deploy_worker']
+    : ['create_capability_blueprint']
+
+  return {
+    request,
+    capabilityType,
+    templateType,
+    implementation,
+    workerNameSuggestion,
+    endpointSuggestion,
+    requiresSecureTemplate: templateType !== 'public-readonly',
+    safetyChecks: capabilityType === 'privileged/admin'
+      ? [
+          'Validate session server-side via auth.vegvisr.org',
+          'Resolve role from vegvisr_org.config',
+          'Require Superadmin',
+          'Do not trust client role headers',
+          'Keep deploy credentials server-side only',
+        ]
+      : capabilityType === 'user-scoped'
+        ? [
+            'Validate session server-side via auth.vegvisr.org',
+            'Resolve caller profile from vegvisr_org.config',
+            'Do not let the client choose another user identity',
+          ]
+        : [
+            'No private data exposure',
+            'No mutation endpoints unless reclassified',
+          ],
+    nextTools,
+    message: `Capability classified as ${capabilityType} with ${implementation} implementation. Use template type "${templateType}".`,
+  }
+}
+
+function sqlColumnList(columns) {
+  return (columns || []).filter(Boolean).map((col) => String(col).trim()).filter(Boolean)
+}
+
+function buildMutationValidation(fields, allowEmptyFields) {
+  const allowEmpty = new Set((allowEmptyFields || []).map((v) => String(v)))
+  return fields.map((field) => {
+    const check = allowEmpty.has(field)
+      ? `if (${field} === undefined) missing.push('${field}');`
+      : `if (!${field} && ${field} !== 0) missing.push('${field}');`
+    return `      ${check}`
+  }).join('\n')
+}
+
+async function executeBuildCapabilityWorkerScaffold(input) {
+  const workerName = String(input?.workerName || '').trim()
+  const templateType = String(input?.templateType || '').trim()
+  const endpointPath = String(input?.endpointPath || '').trim()
+  const method = String(input?.method || 'POST').toUpperCase()
+  const actionType = String(input?.actionType || '').trim()
+  const tableName = String(input?.tableName || '').trim()
+  const identifierField = String(input?.identifierField || '').trim()
+  const mutableFields = sqlColumnList(input?.mutableFields || [])
+  const responseFields = sqlColumnList(input?.responseFields || [])
+  const capabilitySummary = String(input?.capabilitySummary || '').trim()
+  const allowEmptyFields = sqlColumnList(input?.allowEmptyFields || [])
+
+  if (!workerName || !templateType || !endpointPath || !actionType) {
+    throw new Error('workerName, templateType, endpointPath, and actionType are required')
+  }
+
+  const secureTemplate = await executeGetSecureWorkerTemplate({ templateType })
+  const sharedAuthHelper = secureTemplate.sharedAuthHelper
+  const pathLiteral = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`
+
+  let body = ''
+  if (actionType === 'update') {
+    if (!tableName || !identifierField || mutableFields.length === 0) {
+      throw new Error('update scaffold requires tableName, identifierField, and mutableFields')
+    }
+    const allInputs = [identifierField, ...mutableFields]
+    const validation = buildMutationValidation(allInputs, allowEmptyFields)
+    const setClause = mutableFields.map((field) => `${field} = ?`).join(', ')
+    const bindArgs = [...mutableFields, identifierField].join(', ')
+    const responseCols = responseFields.length > 0 ? responseFields.join(', ') : [identifierField, ...mutableFields].join(', ')
+    body = `export default {
+  async fetch(request, env) {
+    ${sharedAuthHelper}
+    const corsHeaders = buildCorsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    ${templateType === 'admin'
+      ? `const auth = await requireSuperadmin(request, env);
+    if (!auth.ok) {
+      return new Response(JSON.stringify({ success: false, error: auth.error }), { status: auth.status, headers: corsHeaders });
+    }`
+      : `const subject = await resolveSession(request);
+    if (!subject) {
+      return new Response(JSON.stringify({ success: false, error: 'Authentication required' }), { status: 401, headers: corsHeaders });
+    }
+    const profile = await resolveCallerProfile(subject, env);
+    if (!profile) {
+      return new Response(JSON.stringify({ success: false, error: 'User profile not found' }), { status: 404, headers: corsHeaders });
+    }`}
+
+    const url = new URL(request.url);
+    if (request.method === '${method}' && url.pathname === '${pathLiteral}') {
+      const { ${allInputs.join(', ')} } = await request.json();
+      const missing = [];
+${validation}
+      if (missing.length > 0) {
+        return new Response(JSON.stringify({ success: false, error: 'Missing required fields', missing }), { status: 400, headers: corsHeaders });
+      }
+
+      const update = await env.DB.prepare(
+        'UPDATE ${tableName} SET ${setClause} WHERE ${identifierField} = ?'
+      ).bind(${bindArgs}).run();
+
+      if (!update.meta?.changes) {
+        return new Response(JSON.stringify({ success: false, error: 'Record not found' }), { status: 404, headers: corsHeaders });
+      }
+
+      const row = await env.DB.prepare(
+        'SELECT ${responseCols} FROM ${tableName} WHERE ${identifierField} = ?'
+      ).bind(${identifierField}).first();
+
+      return new Response(JSON.stringify({ success: true, ${tableName.slice(0, -1) || 'record'}: row }), { headers: corsHeaders });
+    }
+
+    return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404, headers: corsHeaders });
+  }
+};`
+  } else {
+    body = `${sharedAuthHelper}
+
+export default {
+  async fetch(request, env) {
+    const corsHeaders = buildCorsHeaders(request);
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    return new Response(JSON.stringify({
+      success: false,
+      error: 'Scaffold created, but ${actionType} handler still needs to be filled in.'
+    }), { status: 501, headers: corsHeaders });
+  }
+};`
+  }
+
+  return {
+    workerName,
+    templateType,
+    endpointPath: pathLiteral,
+    actionType,
+    capabilitySummary: capabilitySummary || null,
+    code: body,
+    message: `Generated ${templateType} worker scaffold for ${method} ${pathLiteral}.`,
   }
 }
 
@@ -4858,6 +5283,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDescribeCapabilities(toolInput, env)
     case 'get_system_registry':
       return await executeGetSystemRegistry(toolInput, env)
+    case 'get_secure_worker_template':
+      return await executeGetSecureWorkerTemplate(toolInput, env)
+    case 'create_capability_blueprint':
+      return await executeCreateCapabilityBlueprint(toolInput, env)
+    case 'build_capability_worker_scaffold':
+      return await executeBuildCapabilityWorkerScaffold(toolInput, env)
     case 'deploy_worker':
       return await executeDeployWorker(toolInput, env)
     case 'read_worker':

@@ -160,6 +160,7 @@ export default function AgentExecutor({ userId, contractId, contractName, graphI
 
       const response = await fetch(`${AGENT_API}/execute`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           agentId: 'agent_kg_html_builder',

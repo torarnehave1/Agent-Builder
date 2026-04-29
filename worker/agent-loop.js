@@ -244,6 +244,7 @@ function hasGraphWriteCompletion(messages) {
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
   const model = options.model || 'claude-haiku-4-5-20251001'
+  const authContext = options?.authContext || null
   let turn = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
@@ -538,7 +539,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ tool: toolUse.name, message: msg })}\n\n`))
           }
           try {
-            const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap, onProgress)
+            const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap, onProgress)
             if (result?.graphId) {
               inferredGraphId = result.graphId
             }
@@ -699,7 +700,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
 /**
  * Execute agent with task (non-streaming, returns execution log)
  */
-async function executeAgent(agentConfig, userTask, userId, env) {
+async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
   let taskWithContract = userTask
   if (agentConfig.default_contract_id) {
     taskWithContract = `${userTask}\n\n[Default contract: ${agentConfig.default_contract_id}]`
@@ -714,6 +715,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
   const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
 
   const { allTools, operationMap } = await loadAllTools(env)
+  const authContext = options?.authContext || null
 
   const executionLog = []
   let turn = 0
@@ -885,7 +887,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
           toolUse.input.graphId = inferredGraphId
         }
         try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
           if (result?.graphId) {
             inferredGraphId = result.graphId
           }
@@ -900,7 +902,7 @@ async function executeAgent(agentConfig, userTask, userId, env) {
       // Phase 2: Run non-mutating tools in parallel
       const parallelResults = await Promise.all(parallelTools.map(async (toolUse) => {
         try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, operationMap)
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
           executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
           return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) }
         } catch (error) {

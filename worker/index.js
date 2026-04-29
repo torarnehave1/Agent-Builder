@@ -20,6 +20,7 @@ import { runChatbotSubagent } from './chatbot-subagent.js'
 import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
+import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller } from './auth.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -175,12 +176,7 @@ export default {
     const url = new URL(request.url)
     const pathname = url.pathname
 
-    const corsHeaders = {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-      'Content-Type': 'application/json'
-    }
+    const corsHeaders = buildCorsHeaders(request)
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders })
@@ -193,16 +189,7 @@ export default {
       if (agentResponse.status === 101 || request.headers.get('Upgrade') === 'websocket') {
         return agentResponse
       }
-      // Add CORS headers to HTTP responses from agent routes (e.g. /get-messages)
-      const newHeaders = new Headers(agentResponse.headers)
-      newHeaders.set('Access-Control-Allow-Origin', '*')
-      newHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS')
-      newHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-      return new Response(agentResponse.body, {
-        status: agentResponse.status,
-        statusText: agentResponse.statusText,
-        headers: newHeaders,
-      })
+      return applyCorsHeaders(request, agentResponse)
     }
 
     try {
@@ -1171,8 +1158,10 @@ export default {
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()
         const { agentId, task, userId, contractId, graphId } = body
+        const authContext = await resolveAuthorizedCaller(request, env)
+        const effectiveUserId = authContext.userId || userId
 
-        if (!agentId || !task || !userId) {
+        if (!agentId || !task || !effectiveUserId) {
           return new Response(JSON.stringify({
             error: 'agentId, task, and userId are required'
           }), { status: 400, headers: corsHeaders })
@@ -1198,7 +1187,7 @@ export default {
         const targetGraphId = graphId || crypto.randomUUID()
         let enrichedTask = `${task}\n\n[Target graph ID: ${targetGraphId}] — Use this exact graphId when calling create_graph and create_html_from_template.`
 
-        const result = await executeAgent(config, enrichedTask, userId, env)
+        const result = await executeAgent(config, enrichedTask, effectiveUserId, env, { authContext })
 
         return new Response(JSON.stringify(result), { headers: corsHeaders })
       }
@@ -1281,9 +1270,11 @@ export default {
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
         const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId } = body
+        const authContext = await resolveAuthorizedCaller(request, env)
+        const effectiveUserId = authContext.userId || userId
         console.log(`[/chat] graphId=${graphId} activeHtmlNodeId=${activeHtmlNodeId} agentId=${agentId}`)
 
-        if (!userId || !userMessages || !Array.isArray(userMessages)) {
+        if (!effectiveUserId || !userMessages || !Array.isArray(userMessages)) {
           return new Response(JSON.stringify({
             error: 'userId and messages[] are required'
           }), { status: 400, headers: corsHeaders })
@@ -1350,7 +1341,7 @@ export default {
           const encoder = new TextEncoder()
           ctx.waitUntil((async () => {
             try {
-              await executeKgFastPath(fastPath, writer, encoder, env, userId)
+              await executeKgFastPath(fastPath, writer, encoder, env, effectiveUserId)
             } finally {
               await writer.close()
             }
@@ -1371,7 +1362,7 @@ export default {
         const encoder = new TextEncoder()
 
         ctx.waitUntil(
-          streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, userId, env, {
+          streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, effectiveUserId, env, {
             model: agentModel,
             maxTurns: maxTurns || 8,
             toolFilter,
@@ -1379,6 +1370,7 @@ export default {
             graphId: graphId || null,
             activeHtmlNodeId: activeHtmlNodeId || null,
             agentId: agentId || null,
+            authContext,
             version: AGENT_VERSION,
             versionNote: AGENT_VERSION_NOTE,
           })
