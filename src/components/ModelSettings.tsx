@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 const MODELS = [
   {
     id: '@cf/meta/llama-4-scout-17b-16e-instruct',
@@ -113,9 +114,11 @@ export function getStoredModel(): string {
 interface Props {
   model: string;
   onChange: (model: string) => void;
+  resolvedTheme?: 'light' | 'dark';
 }
 
-export default function ModelSettings({ model, onChange }: Props) {
+export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' }: Props) {
+  const isLight = resolvedTheme === 'light';
   const handleChange = (id: string) => {
     try {
       localStorage.setItem(STORAGE_KEY, id);
@@ -126,8 +129,8 @@ export default function ModelSettings({ model, onChange }: Props) {
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-xl mx-auto">
-        <h2 className="text-base font-semibold text-white mb-1">Model</h2>
-        <p className="text-xs text-white/50 mb-5">
+        <h2 className={`text-base font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>Model</h2>
+        <p className={`text-xs mb-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
           Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude models use the SSE chat path.
         </p>
 
@@ -141,31 +144,31 @@ export default function ModelSettings({ model, onChange }: Props) {
                 onClick={() => handleChange(m.id)}
                 className={`w-full text-left rounded-xl border px-4 py-4 transition-colors ${
                   selected
-                    ? 'border-sky-500/60 bg-sky-500/10'
-                    : 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]'
+                    ? isLight ? 'border-sky-500/60 bg-sky-50' : 'border-sky-500/60 bg-sky-500/10'
+                    : isLight ? 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50' : 'border-white/10 bg-white/[0.03] hover:border-white/20 hover:bg-white/[0.06]'
                 }`}
               >
                 <div className="flex items-center justify-between mb-1">
                   <div className="flex items-center gap-2">
                     <span className={`h-3 w-3 rounded-full border-2 flex-shrink-0 ${
-                      selected ? 'border-sky-400 bg-sky-400' : 'border-white/30'
+                      selected ? 'border-sky-400 bg-sky-400' : isLight ? 'border-slate-300' : 'border-white/30'
                     }`} />
-                    <span className="text-sm font-semibold text-white">{m.name}</span>
+                    <span className={`text-sm font-semibold ${isLight ? 'text-slate-900' : 'text-white'}`}>{m.name}</span>
                     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${m.badgeColor}`}>
                       {m.badge}
                     </span>
                   </div>
-                  <span className="text-[11px] text-white/40 font-mono">
+                  <span className={`text-[11px] font-mono ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
                     {m.badge === 'Workers AI' || m.badge === 'Image Gen' ? 'Free tier / per neuron' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
                   </span>
                 </div>
-                <p className="text-xs text-white/50 ml-5">{m.description}</p>
+                <p className={`text-xs ml-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>{m.description}</p>
               </button>
             );
           })}
         </div>
 
-        <p className="mt-6 text-[11px] text-white/30">
+        <p className={`mt-6 text-[11px] ${isLight ? 'text-slate-400' : 'text-white/30'}`}>
           Pricing shown as input / output per million tokens.
           Haiku is ~4× cheaper than Sonnet, Sonnet is ~5× cheaper than Opus.
         </p>

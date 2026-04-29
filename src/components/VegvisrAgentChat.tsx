@@ -1057,6 +1057,7 @@ interface Props {
   model?: string;
   graphId?: string;
   onGraphChange?: (graphId: string) => void;
+  resolvedTheme?: 'light' | 'dark';
 }
 
 interface GeneratedImageResult {
@@ -1074,7 +1075,8 @@ interface LocalMessage {
   generatedImage?: GeneratedImageResult;
 }
 
-export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId, onGraphChange }: Props) {
+export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-scout-17b-16e-instruct', graphId, onGraphChange, resolvedTheme = 'dark' }: Props) {
+  const isLight = resolvedTheme === 'light';
   const [copied, setCopied] = useState(false);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
@@ -1760,21 +1762,21 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   }
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-slate-950 text-white">
+    <div className={`flex flex-col flex-1 min-h-0 ${isLight ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-white'}`}>
       {/* Top bar — matches AgentChat style */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-slate-950/80 flex-wrap gap-2">
+      <div className={`flex items-center justify-between px-3 py-2 border-b flex-wrap gap-2 ${isLight ? 'border-slate-200 bg-white/90' : 'border-white/10 bg-slate-950/80'}`}>
         <div className="flex items-center gap-2">
           {/* Sessions picker */}
           <div className="relative">
             <button
               type="button"
               onClick={() => setSessionsOpen(p => !p)}
-              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+              className={`px-3 py-1 rounded-md border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
             >
               Sessions ({sessions.length})
             </button>
             {sessionsOpen && (
-              <div className="absolute top-full mt-1 left-0 w-64 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+              <div className={`absolute top-full mt-1 left-0 w-64 max-h-64 overflow-y-auto border rounded-lg z-50 shadow-xl ${isLight ? 'bg-white border-slate-200' : 'bg-slate-900 border-white/10'}`}>
                 <button
                   type="button"
                   onClick={startNewSession}
@@ -1783,30 +1785,30 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   + New Session
                 </button>
                 {sessions.length === 0 && (
-                  <div className="px-3 py-3 text-white/30 text-xs">No saved sessions</div>
+                  <div className={`px-3 py-3 text-xs ${isLight ? 'text-slate-400' : 'text-white/30'}`}>No saved sessions</div>
                 )}
                 {sessions.map(s => (
                   <div
                     key={s.id}
-                    className="px-3 py-2 text-xs text-white/60 hover:bg-white/[0.06] cursor-pointer"
+                    className={`px-3 py-2 text-xs cursor-pointer ${isLight ? 'text-slate-600 hover:bg-slate-100' : 'text-white/60 hover:bg-white/[0.06]'}`}
                     onClick={() => loadSession(s.id)}
                   >
                     <div className="truncate">{s.title}</div>
-                    {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
+                    {s.updatedAt && <div className={`text-[10px] ${isLight ? 'text-slate-400' : 'text-white/30'}`}>{new Date(s.updatedAt).toLocaleDateString()}</div>}
                   </div>
                 ))}
               </div>
             )}
           </div>
           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300">Workers AI</span>
-          <span className="text-xs text-white/40 font-mono">{model}</span>
+          <span className={`text-xs font-mono ${isLight ? 'text-slate-500' : 'text-white/40'}`}>{model}</span>
         </div>
         <div className="flex items-center gap-2">
           {messages.length > 0 && (
             <button
               type="button"
               onClick={copyLog}
-              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+              className={`px-3 py-1 rounded-md border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
             >
               {copied ? 'Copied!' : 'Copy Log'}
             </button>
@@ -1844,15 +1846,15 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 && loadedMessages.length === 0 && (
-          <div className="text-white/30 text-sm text-center mt-8">
+          <div className={`text-sm text-center mt-8 ${isLight ? 'text-slate-400' : 'text-white/30'}`}>
             Start a conversation with the Vegvisr Agent
           </div>
         )}
         {/* Historical messages loaded from a saved session */}
         {loadedMessages.map(m => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm opacity-70 ${m.role === 'user' ? 'bg-purple-600 text-white' : 'bg-white/10 text-white/90'}`}>
-              <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
+            <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm opacity-90 ${m.role === 'user' ? 'bg-purple-600 text-white' : isLight ? 'bg-white border border-slate-200 text-slate-800' : 'bg-white/10 text-white/90'}`}>
+              <div className={`prose prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed ${isLight ? 'prose-slate' : 'prose-invert'}`}>
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
               </div>
               {m.role === 'user' && (
@@ -1870,7 +1872,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           </div>
         ))}
         {loadedMessages.length > 0 && messages.length === 0 && (
-          <div className="text-white/20 text-[11px] text-center border-t border-white/10 pt-3">
+          <div className={`text-[11px] text-center border-t pt-3 ${isLight ? 'text-slate-300 border-slate-200' : 'text-white/20 border-white/10'}`}>
             — end of saved session — continue below —
           </div>
         )}
@@ -1883,7 +1885,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${
                 msg.role === 'user'
                   ? 'bg-purple-600 text-white'
-                  : 'bg-white/10 text-white/90'
+                  : isLight ? 'bg-white border border-slate-200 text-slate-800' : 'bg-white/10 text-white/90'
               }`}
             >
               {msg.parts.map((part, i) => {
@@ -1898,7 +1900,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                           seg.startsWith('https://vegvisr.imgix.net/') ? (
                             <span key={j} className="block my-2">
                               <img src={seg} alt="generated" className="rounded-lg max-w-full max-h-[400px] object-contain border border-white/10" />
-                              <a href={seg} target="_blank" rel="noopener noreferrer" className="text-[11px] text-white/30 underline hover:text-white/60 break-all">{seg}</a>
+                              <a href={seg} target="_blank" rel="noopener noreferrer" className={`text-[11px] underline break-all ${isLight ? 'text-slate-500 hover:text-slate-700' : 'text-white/30 hover:text-white/60'}`}>{seg}</a>
                             </span>
                           ) : (
                             <span key={j}>{seg}</span>
@@ -1922,7 +1924,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                         <p className="text-yellow-300 text-xs font-medium mb-1">
                           Approve <strong>{toolName}</strong>?
                         </p>
-                        <pre className="text-xs text-white/70 mb-2 overflow-auto">{JSON.stringify(input, null, 2)}</pre>
+                        <pre className={`text-xs mb-2 overflow-auto ${isLight ? 'text-slate-700' : 'text-white/70'}`}>{JSON.stringify(input, null, 2)}</pre>
                         <div className="flex gap-2">
                           <button
                             type="button"
@@ -1950,7 +1952,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
                   if (state === 'loading' || state === 'streaming') {
                     return (
-                      <div key={toolCallId} className="mt-1 text-xs text-white/30 italic">
+                      <div key={toolCallId} className={`mt-1 text-xs italic ${isLight ? 'text-slate-400' : 'text-white/30'}`}>
                         Running {toolName}…
                       </div>
                     );
@@ -1975,7 +1977,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         ))}
         {status === 'streaming' && (
           <div className="flex justify-start">
-            <div className="bg-white/10 rounded-xl px-4 py-2 text-sm text-white/50 animate-pulse">
+            <div className={`rounded-xl px-4 py-2 text-sm animate-pulse ${isLight ? 'bg-slate-200 text-slate-500' : 'bg-white/10 text-white/50'}`}>
               Thinking…
             </div>
           </div>
@@ -1983,17 +1985,17 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         {/* Local-only transcription messages */}
         {localMessages.map(m => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${m.role === 'user' ? 'bg-purple-600 text-white' : 'bg-white/10 text-white/90'}`}>
+            <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm ${m.role === 'user' ? 'bg-purple-600 text-white' : isLight ? 'bg-white border border-slate-200 text-slate-800' : 'bg-white/10 text-white/90'}`}>
               {m.generatedImage ? (
                 <div>
-                  <div className="text-xs text-white/50 mb-2 break-words">{m.generatedImage.prompt}</div>
+                  <div className={`text-xs mb-2 break-words ${isLight ? 'text-slate-500' : 'text-white/50'}`}>{m.generatedImage.prompt}</div>
                   <img
                     src={m.generatedImage.url}
                     alt={m.generatedImage.prompt}
                     className="rounded-lg max-w-full max-h-[400px] object-contain border border-white/10"
                   />
-                  <div className="mt-1 text-[11px] text-white/30 break-all">
-                    <a href={m.generatedImage.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-white/60">Open full size</a>
+                  <div className={`mt-1 text-[11px] break-all ${isLight ? 'text-slate-500' : 'text-white/30'}`}>
+                    <a href={m.generatedImage.url} target="_blank" rel="noopener noreferrer" className={`underline ${isLight ? 'hover:text-slate-700' : 'hover:text-white/60'}`}>Open full size</a>
                     {m.generatedImage.width && m.generatedImage.height && <span className="ml-2">{m.generatedImage.width}×{m.generatedImage.height}px</span>}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -2030,13 +2032,13 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                     </button>
                   </div>
                   {!graphId && !recentGraphId && (
-                    <div className="mt-2 text-[11px] text-white/35">
+                    <div className={`mt-2 text-[11px] ${isLight ? 'text-slate-400' : 'text-white/35'}`}>
                       Select or create a graph to enable graph insertion actions.
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="prose prose-invert prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed">
+                <div className={`prose prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed ${isLight ? 'prose-slate' : 'prose-invert'}`}>
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
                 </div>
               )}
@@ -2059,8 +2061,8 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
       {/* Audio file panel */}
       {selectedAudioFile && (
-        <div className="flex-shrink-0 px-4 py-3 border-t border-white/10 bg-slate-950/80">
-          <div className="max-w-[900px] mx-auto rounded-xl border border-white/10 bg-white/[0.04] p-4 text-xs text-white/70">
+        <div className={`flex-shrink-0 px-4 py-3 border-t ${isLight ? 'border-slate-200 bg-slate-100/90' : 'border-white/10 bg-slate-950/80'}`}>
+          <div className={`max-w-[900px] mx-auto rounded-xl border p-4 text-xs ${isLight ? 'border-slate-200 bg-white text-slate-700' : 'border-white/10 bg-white/[0.04] text-white/70'}`}>
             <div className="flex items-start justify-between gap-4">
               <div>
                 <div className="text-sm font-semibold text-white">{selectedAudioFile.name}</div>
@@ -2104,7 +2106,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
       {/* Pending image previews */}
       {pendingImages.length > 0 && (
-        <div className="flex-shrink-0 px-4 py-2 border-t border-white/10 bg-slate-950/60">
+        <div className={`flex-shrink-0 px-4 py-2 border-t ${isLight ? 'border-slate-200 bg-slate-100/90' : 'border-white/10 bg-slate-950/60'}`}>
           <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
             {pendingImages.map((img, i) => (
               <div key={i} className="relative group">
@@ -2135,7 +2137,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
       {/* Input */}
       <div
-        className="flex-shrink-0 border-t border-white/10 px-3 py-3 bg-slate-950"
+        className={`flex-shrink-0 border-t px-3 py-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-slate-950'}`}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
         onDrop={(e) => {
           e.preventDefault();
@@ -2148,15 +2150,15 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         }}
       >
         {isImageModel && (
-          <div className="max-w-[900px] mx-auto mb-3 rounded-xl border border-pink-400/15 bg-pink-400/[0.05] p-3 space-y-3">
+          <div className={`max-w-[900px] mx-auto mb-3 rounded-xl border p-3 space-y-3 ${isLight ? 'border-pink-200 bg-pink-50' : 'border-pink-400/15 bg-pink-400/[0.05]'}`}>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-pink-200/70">Prompt presets</span>
+              <span className={`text-[11px] font-semibold uppercase tracking-wide ${isLight ? 'text-pink-700' : 'text-pink-200/70'}`}>Prompt presets</span>
               {IMAGE_PROMPT_PRESETS.map((preset) => (
                 <button
                   key={preset.id}
                   type="button"
                   onClick={() => applyImagePromptPreset(preset.id)}
-                  className="px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-white/70 text-xs hover:bg-white/[0.08] hover:text-white transition-colors"
+                  className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
                 >
                   {preset.label}
                 </button>
@@ -2164,12 +2166,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              <label className="text-xs text-white/70">
-                <span className="block mb-1 text-white/50">Format</span>
+              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Format</span>
                 <select
                   value={imageFormatPreset}
                   onChange={(e) => setImageFormatPreset(e.target.value as (typeof IMAGE_FORMAT_PRESETS)[number]['id'])}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
                 >
                   {IMAGE_FORMAT_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
@@ -2179,12 +2181,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                 </select>
               </label>
 
-              <label className="text-xs text-white/70">
-                <span className="block mb-1 text-white/50">Style</span>
+              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Style</span>
                 <select
                   value={imageStylePreset}
                   onChange={(e) => setImageStylePreset(e.target.value as (typeof IMAGE_STYLE_PRESETS)[number]['id'])}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
                 >
                   {IMAGE_STYLE_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
@@ -2194,12 +2196,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                 </select>
               </label>
 
-              <label className="text-xs text-white/70">
-                <span className="block mb-1 text-white/50">Lighting</span>
+              <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Lighting</span>
                 <select
                   value={imageLightingPreset}
                   onChange={(e) => setImageLightingPreset(e.target.value as (typeof IMAGE_LIGHTING_PRESETS)[number]['id'])}
-                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                  className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
                 >
                   {IMAGE_LIGHTING_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
@@ -2211,7 +2213,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             </div>
 
             <div className="space-y-2">
-              <label className="flex items-center gap-2 text-xs text-white/70">
+              <label className={`flex items-center gap-2 text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
                 <input
                   type="checkbox"
                   checked={includeImageText}
@@ -2226,12 +2228,12 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                     value={imageTextValue}
                     onChange={(e) => setImageTextValue(e.target.value)}
                     placeholder='Short phrase, e.g. "SLOW IS SACRED"'
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white text-sm placeholder-white/30"
+                    className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
                   />
                   <select
                     value={imageTextTreatment}
                     onChange={(e) => setImageTextTreatment(e.target.value as (typeof IMAGE_TEXT_TREATMENTS)[number]['id'])}
-                    className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-white"
+                    className={`w-full rounded-lg border px-3 py-2 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
                   >
                     {IMAGE_TEXT_TREATMENTS.map((treatment) => (
                       <option key={treatment.id} value={treatment.id} className="bg-slate-900 text-white">
@@ -2242,7 +2244,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                 </div>
               )}
               {includeImageText && (
-                <div className="text-[11px] text-white/40">Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
+                <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
               )}
             </div>
 
@@ -2250,7 +2252,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               <button
                 type="button"
                 onClick={() => setShowImageAdvanced((prev) => !prev)}
-                className="px-2.5 py-1 rounded-full border border-white/10 bg-white/[0.04] text-white/70 text-xs hover:bg-white/[0.08] hover:text-white transition-colors"
+                className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
               >
                 {showImageAdvanced ? 'Hide advanced' : 'Show advanced'}
               </button>
@@ -2262,9 +2264,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             </div>
 
             {showImageAdvanced && (
-              <div className="space-y-3 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <div className={`space-y-3 rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-white/[0.03]'}`}>
                 <div>
-                  <div className="text-[11px] text-white/50 mb-2">Camera / Render</div>
+                  <div className={`text-[11px] mb-2 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Camera / Render</div>
                   <div className="flex flex-wrap gap-2">
                     {IMAGE_RENDER_TRAITS.map((trait) => {
                       const active = imageRenderTraits.includes(trait);
@@ -2273,7 +2275,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                           key={trait}
                           type="button"
                           onClick={() => toggleRenderTrait(trait)}
-                          className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${active ? 'border-sky-400/40 bg-sky-400/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+                          className={`px-2.5 py-1 rounded-full border text-xs transition-colors ${active ? 'border-sky-400/40 bg-sky-400/15 text-sky-200' : isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
                         >
                           {trait}
                         </button>
@@ -2285,9 +2287,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             )}
 
             {(inputText.trim() || imageStylePreset !== 'none' || imageLightingPreset !== 'none' || imageRenderTraits.length > 0 || (includeImageText && imageTextValue.trim())) && (
-              <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-                <div className="text-[11px] uppercase tracking-wide text-white/40 mb-1">Prompt preview</div>
-                <div className="text-sm text-white/85 break-words">{composedImagePrompt || 'Start typing to build a prompt preview.'}</div>
+              <div className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/20'}`}>
+                <div className={`text-[11px] uppercase tracking-wide mb-1 ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Prompt preview</div>
+                <div className={`text-sm break-words ${isLight ? 'text-slate-800' : 'text-white/85'}`}>{composedImagePrompt || 'Start typing to build a prompt preview.'}</div>
               </div>
             )}
           </div>
@@ -2298,7 +2300,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             type="button"
             onClick={() => audioInputRef.current?.click()}
             disabled={audioProcessing}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors disabled:opacity-40 flex-shrink-0"
+            className={`px-3 py-2.5 rounded-xl border transition-colors disabled:opacity-40 flex-shrink-0 ${isLight ? 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
             title="Upload audio for transcription"
           >
             {audioProcessing ? (
@@ -2309,14 +2311,14 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           <button
             type="button"
             onClick={() => imageInputRef.current?.click()}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors flex-shrink-0"
+            className={`px-3 py-2.5 rounded-xl border transition-colors flex-shrink-0 ${isLight ? 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
             title="Attach image"
           >🖼</button>
           {/* File attach */}
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors flex-shrink-0"
+            className={`px-3 py-2.5 rounded-xl border transition-colors flex-shrink-0 ${isLight ? 'border-slate-300 bg-white text-slate-600 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
             title="Attach PDF or text file"
           >📎</button>
 
@@ -2342,7 +2344,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               }}
               placeholder={pendingImages.length > 0 ? 'Ask about the image…' : isImageModel ? 'Describe the image you want to create…' : 'Type your message or @bot…'}
               rows={1}
-              className="w-full px-3 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15 placeholder-white/30"
+              className={`w-full px-3 py-2.5 border rounded-xl text-[0.9rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15 ${isLight ? 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400' : 'bg-white/[0.04] border-white/10 text-white placeholder-white/30'}`}
             />
           </div>
 

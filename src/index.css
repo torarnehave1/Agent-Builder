@@ -2,10 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+html[data-theme='dark'] {
+  color-scheme: dark;
+}
+
+html[data-theme='light'] {
+  color-scheme: light;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
+  background: var(--app-bg, #020617);
+  color: var(--app-text, #f8fafc);
+}
+
+html[data-theme='dark'] body {
+  --app-bg: #020617;
+  --app-surface: #0f172a;
+  --app-surface-2: rgba(255,255,255,0.04);
+  --app-border: rgba(255,255,255,0.10);
+  --app-text: #f8fafc;
+  --app-text-muted: rgba(248,250,252,0.70);
+  --app-text-soft: rgba(248,250,252,0.45);
+}
+
+html[data-theme='light'] body {
+  --app-bg: #f8fafc;
+  --app-surface: #ffffff;
+  --app-surface-2: rgba(15,23,42,0.04);
+  --app-border: rgba(15,23,42,0.12);
+  --app-text: #0f172a;
+  --app-text-muted: rgba(15,23,42,0.72);
+  --app-text-soft: rgba(15,23,42,0.5);
 }
 
 @keyframes fade-in {

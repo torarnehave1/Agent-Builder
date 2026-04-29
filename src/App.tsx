@@ -4,6 +4,7 @@ import appLogo from './assets/app-logo.png';
 import { LanguageContext } from './lib/LanguageContext';
 import { readStoredUser, type AuthUser } from './lib/auth';
 import { getStoredLanguage, setStoredLanguage } from './lib/storage';
+import { getStoredThemeMode, resolveTheme, setStoredThemeMode, type ThemeMode } from './lib/theme';
 import { useTranslation } from './lib/useTranslation';
 import AgentBuilder from './components/AgentBuilder';
 
@@ -19,6 +20,8 @@ function App() {
   const [loginStatus, setLoginStatus] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(getStoredThemeMode());
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() => resolveTheme(getStoredThemeMode()));
 
   const setLanguage = (value: typeof language) => {
     setLanguageState(value);
@@ -30,6 +33,12 @@ function App() {
     [language]
   );
   const t = useTranslation(language);
+
+  const setThemeMode = (mode: ThemeMode) => {
+    setThemeModeState(mode);
+    setStoredThemeMode(mode);
+    setResolvedTheme(resolveTheme(mode));
+  };
 
   const setAuthCookie = (token: string) => {
     if (!token) return;
@@ -191,6 +200,19 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const apply = () => setResolvedTheme(resolveTheme(themeMode));
+    apply();
+    if (themeMode !== 'system') return;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    media.addEventListener('change', apply);
+    return () => media.removeEventListener('change', apply);
+  }, [themeMode]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = resolvedTheme;
+  }, [resolvedTheme]);
+
+  useEffect(() => {
     let isMounted = true;
     const bootstrap = async () => {
       const stored = readStoredUser();
@@ -211,9 +233,11 @@ function App() {
 
   return (
     <LanguageContext.Provider value={contextValue}>
-      <div className={`bg-slate-950 text-white ${authStatus === 'authed' ? '' : 'min-h-screen'}`}>
+      <div className={`${resolvedTheme === 'light' ? 'bg-slate-50 text-slate-900' : 'bg-slate-950 text-white'} ${authStatus === 'authed' ? '' : 'min-h-screen'}`}>
         {authStatus !== 'authed' && (
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.25),_transparent_55%)]" />
+          <div className={`absolute inset-0 ${resolvedTheme === 'light'
+            ? 'bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.14),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.10),_transparent_55%)]'
+            : 'bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.25),_transparent_55%),radial-gradient(circle_at_bottom,_rgba(139,92,246,0.25),_transparent_55%)]'}`} />
         )}
         <div className={`relative flex flex-col ${authStatus === 'authed' ? '' : 'min-h-screen px-8 py-6'}`}>
           {authStatus !== 'authed' && (
@@ -225,6 +249,22 @@ function App() {
                   className="h-12 w-auto"
                 />
                 <div className="flex items-center gap-3">
+                  <div className={`inline-flex rounded-full border ${resolvedTheme === 'light' ? 'border-slate-300 bg-white/80' : 'border-white/10 bg-white/[0.04]'}`}>
+                    {(['light', 'dark', 'system'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setThemeMode(mode)}
+                        className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                          themeMode === mode
+                            ? resolvedTheme === 'light' ? 'bg-slate-900 text-white' : 'bg-white/15 text-white'
+                            : resolvedTheme === 'light' ? 'text-slate-500 hover:text-slate-900' : 'text-white/50 hover:text-white'
+                        }`}
+                      >
+                        {mode === 'system' ? 'Auto' : mode[0].toUpperCase() + mode.slice(1)}
+                      </button>
+                    ))}
+                  </div>
                   <LanguageSelector value={language} onChange={setLanguage} />
                   <AuthBar
                     userEmail={undefined}
@@ -242,8 +282,8 @@ function App() {
           )}
 
           {authStatus === 'anonymous' && loginOpen && (
-            <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 px-6 py-4 text-sm text-white/80">
-              <div className="text-xs font-semibold uppercase tracking-[0.3em] text-white/60">
+            <div className={`mt-6 rounded-2xl border px-6 py-4 text-sm ${resolvedTheme === 'light' ? 'border-slate-300 bg-white/90 text-slate-700 shadow-sm' : 'border-white/10 bg-white/5 text-white/80'}`}>
+              <div className={`text-xs font-semibold uppercase tracking-[0.3em] ${resolvedTheme === 'light' ? 'text-slate-500' : 'text-white/60'}`}>
                 Magic Link Sign In
               </div>
               <div className="mt-4 flex flex-col gap-3 sm:flex-row">
@@ -252,7 +292,11 @@ function App() {
                   value={loginEmail}
                   onChange={(event) => setLoginEmail(event.target.value)}
                   placeholder="you@email.com"
-                  className="flex-1 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-sky-500/60"
+                  className={`flex-1 rounded-2xl border px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500/60 ${
+                    resolvedTheme === 'light'
+                      ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400'
+                      : 'border-white/10 bg-slate-900/60 text-white placeholder:text-white/40'
+                  }`}
                 />
                 <button
                   type="button"
@@ -265,14 +309,14 @@ function App() {
               </div>
               {loginStatus && <p className="mt-3 text-xs text-emerald-300">{loginStatus}</p>}
               {loginError && <p className="mt-3 text-xs text-rose-300">{loginError}</p>}
-              <p className="mt-3 text-xs text-white/50">
+              <p className={`mt-3 text-xs ${resolvedTheme === 'light' ? 'text-slate-500' : 'text-white/50'}`}>
                 We will send a secure link that logs you into this app.
               </p>
             </div>
           )}
 
           {authStatus === 'checking' && (
-            <div className="mt-10 rounded-2xl border border-white/10 bg-white/5 px-6 py-4 text-sm text-white/70">
+            <div className={`mt-10 rounded-2xl border px-6 py-4 text-sm ${resolvedTheme === 'light' ? 'border-slate-300 bg-white/90 text-slate-700' : 'border-white/10 bg-white/5 text-white/70'}`}>
               Checking session...
             </div>
           )}
@@ -288,7 +332,7 @@ function App() {
       {/* Agent Builder — full screen when authenticated */}
       {authStatus === 'authed' && authUser && (
         <div className="flex flex-col h-screen">
-          <EcosystemNav className="flex-shrink-0 px-4 py-2 border-b border-white/10 bg-slate-950" />
+          <EcosystemNav className={`flex-shrink-0 px-4 py-2 border-b ${resolvedTheme === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950'}`} />
           <AgentBuilder
             userId={authUser.userId}
             userEmail={authUser.email}
@@ -296,6 +340,9 @@ function App() {
             language={language}
             onLanguageChange={setLanguage}
             onLogout={handleLogout}
+            themeMode={themeMode}
+            resolvedTheme={resolvedTheme}
+            onThemeChange={setThemeMode}
           />
         </div>
       )}
