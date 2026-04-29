@@ -1104,6 +1104,8 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [includeImageText, setIncludeImageText] = useState(false);
   const [imageTextValue, setImageTextValue] = useState('');
   const [imageTextTreatment, setImageTextTreatment] = useState<(typeof IMAGE_TEXT_TREATMENTS)[number]['id']>('poster-title');
+  const [imagePromptDraft, setImagePromptDraft] = useState('');
+  const [hasCustomImagePrompt, setHasCustomImagePrompt] = useState(false);
   const [showImageSettings, setShowImageSettings] = useState(true);
   const [showImageAdvanced, setShowImageAdvanced] = useState(false);
 
@@ -1171,6 +1173,13 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
     imageText: imageTextValue,
     textTreatment: imageTextTreatment,
   });
+  const finalImagePrompt = (hasCustomImagePrompt ? imagePromptDraft : composedImagePrompt).trim();
+
+  useEffect(() => {
+    if (!hasCustomImagePrompt) {
+      setImagePromptDraft(composedImagePrompt);
+    }
+  }, [composedImagePrompt, hasCustomImagePrompt]);
 
   function applyImagePromptPreset(presetId: (typeof IMAGE_PROMPT_PRESETS)[number]['id']) {
     const preset = IMAGE_PROMPT_PRESETS.find((entry) => entry.id === presetId);
@@ -1612,8 +1621,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   async function doSend() {
     const text = inputText.trim();
     const hasImages = pendingImages.length > 0;
-    if (!text && !hasImages) return;
     const imageModelSelected = isImageGenerationModel(model);
+    const imagePromptReady = imageModelSelected && !hasImages && finalImagePrompt.length > 0;
+    if (!text && !hasImages && !imagePromptReady) return;
     // If there's a pending transcript, prepend it as context for text/chat models only.
     const transcript = lastTranscriptRef.current;
     lastTranscriptRef.current = null;
@@ -1622,17 +1632,11 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
     // Image generation models — every message is an image prompt
     if (imageModelSelected && !hasImages) {
-      const prompt = composeImagePrompt({
-        basePrompt: text,
-        stylePreset: imageStylePreset,
-        lightingPreset: imageLightingPreset,
-        renderTraits: imageRenderTraits,
-        includeText: includeImageText,
-        imageText: imageTextValue,
-        textTreatment: imageTextTreatment,
-      });
+      const prompt = finalImagePrompt;
       if (!prompt) return;
       setInputText('');
+      setHasCustomImagePrompt(false);
+      setImagePromptDraft('');
       const userMsgId = Date.now().toString();
       setLocalMessages(prev => [...prev, { id: userMsgId, role: 'user', text: prompt }]);
       const formatPreset = getFormatPresetById(imageFormatPreset);
@@ -2310,10 +2314,36 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               </div>
             )}
 
-            {(inputText.trim() || imageStylePreset !== 'none' || imageLightingPreset !== 'none' || imageRenderTraits.length > 0 || (includeImageText && imageTextValue.trim())) && (
+            {(inputText.trim() || imageStylePreset !== 'none' || imageLightingPreset !== 'none' || imageRenderTraits.length > 0 || (includeImageText && imageTextValue.trim()) || imagePromptDraft.trim()) && (
               <div className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/20'}`}>
-                <div className={`text-[11px] uppercase tracking-wide mb-1 ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Prompt preview</div>
-                <div className={`text-sm break-words ${isLight ? 'text-slate-800' : 'text-white/85'}`}>{composedImagePrompt || 'Start typing to build a prompt preview.'}</div>
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className={`text-[11px] uppercase tracking-wide ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Final prompt sent to Lucid</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setHasCustomImagePrompt(false);
+                      setImagePromptDraft(composedImagePrompt);
+                    }}
+                    disabled={!hasCustomImagePrompt}
+                    className={`px-2 py-1 rounded-full border text-[11px] transition-colors disabled:opacity-40 ${isLight ? 'border-slate-300 bg-white text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'border-white/10 bg-white/[0.04] text-white/70 hover:bg-white/[0.08] hover:text-white'}`}
+                  >
+                    Reset to generated
+                  </button>
+                </div>
+                <textarea
+                  value={imagePromptDraft}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setImagePromptDraft(nextValue);
+                    setHasCustomImagePrompt(nextValue.trim() !== composedImagePrompt.trim());
+                  }}
+                  rows={3}
+                  placeholder="Start typing to build the final prompt."
+                  className={`w-full resize-y rounded-lg border px-3 py-2 text-sm leading-6 ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
+                />
+                <div className={`mt-2 text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+                  This box is the exact prompt sent to Lucid. Edit it directly if the generated wording is not right.
+                </div>
               </div>
             )}
           </div>
@@ -2383,7 +2413,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
             <button
               type="button"
               onClick={doSend}
-              disabled={!inputText.trim() && pendingImages.length === 0}
+              disabled={!inputText.trim() && pendingImages.length === 0 && !(isImageModel && finalImagePrompt.length > 0)}
               className="px-4 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-sm font-medium hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed transition-all flex-shrink-0"
             >Send</button>
           )}
