@@ -23,6 +23,25 @@ import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 
 // Valid UUID v4 pattern
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const NETWORK_TIMEOUT_MS = 45000
+
+async function fetchJsonWithTimeout(url, options = {}, timeoutMs = NETWORK_TIMEOUT_MS, fetchImpl = fetch) {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs)
+  try {
+    const res = await fetchImpl(url, { ...options, signal: controller.signal })
+    const text = await res.text()
+    let data = null
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      data = text
+    }
+    return { res, data, text }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
 
 async function fetchGraphForVersion(graphId, env) {
   const res = await env.KG_WORKER.fetch(
@@ -1107,7 +1126,10 @@ async function resolveUserProfile(userId, env) {
 // ── User profile operations ───────────────────────────────────────
 
 async function executeWhoAmI(input, env) {
-  const userId = input.userId
+  const verifiedUserId = input?.authContext?.authenticated
+    ? (input.authContext.userId || input.authContext.email || null)
+    : null
+  const userId = verifiedUserId || input.userId
   if (!userId) throw new Error('No user context available')
 
   // 1. Query D1 config table — userId may be an email or a UUID
@@ -1145,7 +1167,7 @@ async function executeWhoAmI(input, env) {
     // Table may not exist yet — continue without keys
   }
 
-  const email = profile?.email || (userId.includes('@') ? userId : null)
+  const email = profile?.email || (typeof userId === 'string' && userId.includes('@') ? userId : null)
 
   return {
     email,
@@ -1160,6 +1182,7 @@ async function executeWhoAmI(input, env) {
       myLogo: extraData?.branding?.myLogo || null,
     },
     apiKeys,
+    verifiedSession: !!input?.authContext?.authenticated,
     message: `User: ${email || userId}, Role: ${profile?.role || 'user'}, API keys: ${apiKeys.length} configured${profile?.bio ? ', Bio: included (output it verbatim when the user asks)' : ''}`,
   }
 }
@@ -3800,12 +3823,11 @@ async function executeDeployWorker(input, env) {
   formData.append('metadata', new Blob([metadata], { type: 'application/json' }))
   formData.append('index.js', new Blob([code], { type: 'application/javascript+module' }), 'index.js')
 
-  const deployRes = await fetch(`${CF_API_BASE}/scripts/${workerName}`, {
+  const { data: deployData } = await fetchJsonWithTimeout(`${CF_API_BASE}/scripts/${workerName}`, {
     method: 'PUT',
     headers: { 'Authorization': `Bearer ${token}` },
     body: formData,
   })
-  const deployData = await deployRes.json()
   if (!deployData.success) {
     return { error: 'Deploy failed', details: deployData.errors }
   }
@@ -3813,12 +3835,12 @@ async function executeDeployWorker(input, env) {
   // Step 2: Enable workers.dev subdomain
   let subdomainResult = null
   if (enableSubdomain) {
-    const subRes = await fetch(`${CF_API_BASE}/scripts/${workerName}/subdomain`, {
+    const { data: subData } = await fetchJsonWithTimeout(`${CF_API_BASE}/scripts/${workerName}/subdomain`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: true }),
     })
-    subdomainResult = await subRes.json()
+    subdomainResult = subData
   }
 
   // Step 3: Register in graph_system_registry
@@ -3843,12 +3865,12 @@ async function executeDeployWorker(input, env) {
           },
         },
       }
-      const gRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      const { data: gData } = await fetchJsonWithTimeout('https://knowledge-graph-worker/addNode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(nodePayload),
-      })
-      graphResult = await gRes.json()
+      }, NETWORK_TIMEOUT_MS, env.KG_WORKER.fetch.bind(env.KG_WORKER))
+      graphResult = gData
     } catch (e) {
       graphResult = { error: e.message }
     }
@@ -4195,7 +4217,7 @@ async function executeCreateCapabilityBlueprint(input) {
   }
 
   const inferredFields = []
-  if (/\bbio\b/.test(text)) inferredFields.push('bio')
+  if (/\bbios?\b/.test(text)) inferredFields.push('bio')
   if (/\btitle\b/.test(text)) inferredFields.push('title')
   if (/\bphone\b/.test(text)) inferredFields.push('phone')
   if (/\bbranding\b/.test(text) || /\blogo\b/.test(text) || /\bsite\b/.test(text)) inferredFields.push('branding')
@@ -4204,13 +4226,15 @@ async function executeCreateCapabilityBlueprint(input) {
     ? answers.mutableFields.map((value) => String(value).trim()).filter(Boolean)
     : inferredFields
 
+  const selfScopePattern = /\bown\b|\bmy own\b|\blogged-?in user\b|\bhimself\b|\bherself\b|\bthemselves\b|\bmyself\b/
+  const selectedScopePattern = /\banother user\b|\bother users?\b|\bany user\b|\bselected user\b/
   const targetScope = answers.targetScope
     ? String(answers.targetScope)
-    : /\bown\b|\bmy own\b|\blogged-?in user\b/.test(text) && /\banother user\b|\bother users?\b|\bany user\b/.test(text)
+    : selfScopePattern.test(text) && selectedScopePattern.test(text)
       ? 'both'
-      : /\banother user\b|\bother users?\b|\bany user\b/.test(text)
+      : selectedScopePattern.test(text)
         ? 'selected-user'
-        : /\bown\b|\bmy own\b|\blogged-?in user\b/.test(text)
+        : selfScopePattern.test(text)
           ? 'self'
           : 'both'
 

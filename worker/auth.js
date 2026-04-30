@@ -34,6 +34,23 @@ export function applyCorsHeaders(request, response) {
   })
 }
 
+function buildCredentialHeaders({ cookie = '', authorization = '', authToken = '' } = {}) {
+  const headers = {}
+  const normalizedCookie = typeof cookie === 'string' ? cookie.trim() : ''
+  const normalizedAuthorization = typeof authorization === 'string' ? authorization.trim() : ''
+  const normalizedToken = typeof authToken === 'string' ? authToken.trim() : ''
+
+  if (normalizedCookie) headers.cookie = normalizedCookie
+  if (normalizedAuthorization) headers.authorization = normalizedAuthorization
+
+  if (normalizedToken) {
+    if (!headers.authorization) headers.authorization = `Bearer ${normalizedToken}`
+    if (!headers.cookie) headers.cookie = `vegvisr_token=${encodeURIComponent(normalizedToken)}`
+  }
+
+  return headers
+}
+
 async function resolveUserProfileByIdentity(identity, env) {
   if (!identity) return null
 
@@ -54,14 +71,9 @@ async function resolveUserProfileByIdentity(identity, env) {
   return null
 }
 
-export async function resolveAuthenticatedSession(request, env) {
-  const cookie = request.headers.get('cookie') || ''
-  const authorization = request.headers.get('authorization') || request.headers.get('Authorization') || ''
-  if (!cookie && !authorization) return null
-
-  const headers = {}
-  if (cookie) headers.cookie = cookie
-  if (authorization) headers.authorization = authorization
+export async function resolveAuthenticatedSessionWithCredentials(credentials, env) {
+  const headers = buildCredentialHeaders(credentials)
+  if (!headers.cookie && !headers.authorization) return null
 
   try {
     const res = await fetch('https://auth.vegvisr.org/auth/openauth/session', {
@@ -81,8 +93,15 @@ export async function resolveAuthenticatedSession(request, env) {
   }
 }
 
-export async function resolveAuthorizedCaller(request, env) {
-  const session = await resolveAuthenticatedSession(request, env)
+export async function resolveAuthenticatedSession(request, env) {
+  return resolveAuthenticatedSessionWithCredentials({
+    cookie: request.headers.get('cookie') || '',
+    authorization: request.headers.get('authorization') || request.headers.get('Authorization') || '',
+  }, env)
+}
+
+export async function resolveAuthorizedCallerWithCredentials(credentials, env) {
+  const session = await resolveAuthenticatedSessionWithCredentials(credentials, env)
   if (!session) {
     return {
       authenticated: false,
@@ -103,4 +122,11 @@ export async function resolveAuthorizedCaller(request, env) {
     email: profile?.email || session.email || null,
     role: profile?.role || session.role || null,
   }
+}
+
+export async function resolveAuthorizedCaller(request, env) {
+  return resolveAuthorizedCallerWithCredentials({
+    cookie: request.headers.get('cookie') || '',
+    authorization: request.headers.get('authorization') || request.headers.get('Authorization') || '',
+  }, env)
 }

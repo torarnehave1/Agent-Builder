@@ -54,6 +54,43 @@ interface CapabilityWorkflowState {
 type AgentUIPart = Parameters<typeof isToolUIPart>[0];
 type ToolUIPart = Parameters<typeof getToolName>[0];
 
+function readVegvisrAuthToken(): string | null {
+  if (typeof document !== 'undefined') {
+    const cookieMatch = document.cookie.match(/(?:^|;\s*)vegvisr_token=([^;]+)/);
+    if (cookieMatch?.[1]) {
+      try {
+        return decodeURIComponent(cookieMatch[1]);
+      } catch {
+        return cookieMatch[1];
+      }
+    }
+  }
+
+  if (typeof window === 'undefined') return null;
+
+  try {
+    const rawUser = window.localStorage.getItem('user');
+    if (rawUser) {
+      const parsed = JSON.parse(rawUser);
+      const userToken = parsed?.emailVerificationToken;
+      if (typeof userToken === 'string' && userToken.trim()) return userToken.trim();
+    }
+  } catch {
+    // ignore storage parsing errors
+  }
+
+  for (const key of ['token', 'authToken']) {
+    try {
+      const value = window.localStorage.getItem(key);
+      if (value?.trim()) return value.trim();
+    } catch {
+      // ignore storage access errors
+    }
+  }
+
+  return null;
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }
@@ -1350,7 +1387,11 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
   const { messages, sendMessage, clearHistory, addToolApprovalResponse, status } = useAgentChat({
     agent,
-    body: { model, graphId },
+    body: () => ({
+      model,
+      graphId,
+      authToken: readVegvisrAuthToken(),
+    }),
     onToolCall: async ({ toolCall, addToolOutput }) => {
       if (toolCall.toolName === 'getUserTimezone') {
         addToolOutput({

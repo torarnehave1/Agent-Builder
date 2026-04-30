@@ -25,7 +25,7 @@ import { z } from 'zod'
 import { executeTool } from './tool-executors.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
-import { resolveAuthorizedCaller } from './auth.js'
+import { resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 
 // ---------------------------------------------------------------------------
 // JSON Schema → Zod converter
@@ -241,9 +241,13 @@ export class VegvisrAgent extends AIChatAgent {
     const env = this.env
     const userId = this.name
     const request = getCurrentAgent()?.request
-    const authContext = request
+    const requestAuthContext = request
       ? await resolveAuthorizedCaller(request, env).catch(() => this.authContext || EMPTY_AUTH_CONTEXT)
       : (this.authContext || EMPTY_AUTH_CONTEXT)
+    const bodyAuthToken = typeof options?.body?.authToken === 'string' ? options.body.authToken.trim() : ''
+    const authContext = requestAuthContext.authenticated || !bodyAuthToken
+      ? requestAuthContext
+      : await resolveAuthorizedCallerWithCredentials({ authToken: bodyAuthToken }, env).catch(() => requestAuthContext)
 
     const workersai = createWorkersAI({ binding: this.env.AI })
     const model = workersai(modelId)
