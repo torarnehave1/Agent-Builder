@@ -98,12 +98,26 @@ const WORKERS_AI_TOOLS = new Set([
   'get_album_images',
   'analyze_image',
   'get_system_registry',
+  'save_learning',
   'get_secure_worker_template',
   'create_capability_blueprint',
   'build_capability_worker_scaffold',
   'deploy_worker',
   'read_worker',
   'delete_worker',
+  'invoke_registry_worker',
+  'db_list_tables',
+  'db_query',
+  'calendar_list_tables',
+  'calendar_query',
+  'chat_db_list_tables',
+  'chat_db_query',
+  'create_app_table',
+  'insert_app_record',
+  'query_app_table',
+  'add_app_table_column',
+  'get_app_table_schema',
+  'delete_app_records',
   'delegate_to_kg',
   'delegate_to_youtube_graph',
   'generate_image',
@@ -190,7 +204,7 @@ function normalizeToolArgs(toolName, args, currentGraphId) {
   return next
 }
 
-function buildTools(env, userId, currentGraphId, authContext) {
+function buildTools(env, userId, currentGraphId, authContext, authToken = '') {
   const tools = {}
   for (const def of TOOL_DEFINITIONS) {
     if (!WORKERS_AI_TOOLS.has(def.name)) continue
@@ -202,7 +216,7 @@ function buildTools(env, userId, currentGraphId, authContext) {
         const normalizedArgs = normalizeToolArgs(def.name, args, currentGraphId)
         console.log(`[buildTools] ENTER ${def.name}`, JSON.stringify(normalizedArgs).slice(0, 200))
         try {
-          const result = await executeTool(def.name, { ...normalizedArgs, userId, authContext }, env)
+          const result = await executeTool(def.name, { ...normalizedArgs, userId, authContext, authToken }, env)
           console.log(`[buildTools] ${def.name} SUCCESS:`, JSON.stringify(result).slice(0, 300))
           return result
         } catch (err) {
@@ -272,7 +286,7 @@ This conversation is running on the Workers AI tool path. Use only the tools tha
         messages: await convertToModelMessages(this.messages),
         toolCalls: 'before-last-2-messages',
       }),
-      tools: buildTools(this.env, userId, currentGraphId, authContext),
+      tools: buildTools(this.env, userId, currentGraphId, authContext, bodyAuthToken),
       stopWhen: stepCountIs(5),
       maxTokens: 2048,
       onFinish: async ({ usage, steps }) => {

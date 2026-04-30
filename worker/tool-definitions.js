@@ -1491,6 +1491,37 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'invoke_registry_worker',
+    description: 'Call a deployed worker that exists in graph_system_registry, even when it is not available as a first-class tool in the current model path. Use this for deployed capability workers such as admin-bio-updater. Pass the worker name, endpoint path, HTTP method, and JSON body. For update-style workers, read the current value first and send the full merged replacement value unless the worker explicitly supports patch semantics.',
+    input_schema: {
+      type: 'object',
+      required: ['workerName'],
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'Registered worker name, id, or label (for example "admin-bio-updater").'
+        },
+        endpointPath: {
+          type: 'string',
+          description: 'Worker endpoint path. Default: "/". Example: "/update-bio".'
+        },
+        method: {
+          type: 'string',
+          enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+          description: 'HTTP method to use. Default: POST.'
+        },
+        query: {
+          type: 'object',
+          description: 'Optional query parameters as key-value pairs.'
+        },
+        body: {
+          type: 'object',
+          description: 'Optional JSON body to send to the worker.'
+        }
+      }
+    }
+  },
+  {
     name: 'delegate_to_html_builder',
     description: 'Delegate an HTML building or editing task to the specialized HTML Builder subagent. Use this when the user asks to create, edit, debug, fix, or redesign an HTML app. The subagent has focused HTML expertise and tools for reading specific sections of large HTML files. Use this instead of calling edit_html_node directly.',
     input_schema: {

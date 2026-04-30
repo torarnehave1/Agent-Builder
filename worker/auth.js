@@ -71,6 +71,16 @@ async function resolveUserProfileByIdentity(identity, env) {
   return null
 }
 
+async function resolveUserProfileByToken(token, env) {
+  if (!token) return null
+  const normalizedToken = String(token).trim()
+  if (!normalizedToken) return null
+
+  return await env.DB.prepare(
+    'SELECT email, user_id, Role AS role, phone, bio, emailVerificationToken FROM config WHERE emailVerificationToken = ?'
+  ).bind(normalizedToken).first()
+}
+
 export async function resolveAuthenticatedSessionWithCredentials(credentials, env) {
   const headers = buildCredentialHeaders(credentials)
   if (!headers.cookie && !headers.authorization) return null
@@ -101,26 +111,53 @@ export async function resolveAuthenticatedSession(request, env) {
 }
 
 export async function resolveAuthorizedCallerWithCredentials(credentials, env) {
+  const directToken = typeof credentials?.authToken === 'string' && credentials.authToken.trim()
+    ? credentials.authToken.trim()
+    : (
+      typeof credentials?.authorization === 'string' && credentials.authorization.trim().toLowerCase().startsWith('bearer ')
+        ? credentials.authorization.trim().slice(7).trim()
+        : ''
+    )
+
   const session = await resolveAuthenticatedSessionWithCredentials(credentials, env)
-  if (!session) {
+  if (session) {
+    const profile = await resolveUserProfileByIdentity(session, env).catch(() => null)
     return {
-      authenticated: false,
-      session: null,
-      profile: null,
-      userId: null,
-      email: null,
-      role: null,
+      authenticated: true,
+      authToken: directToken,
+      session,
+      profile,
+      userId: profile?.user_id || session.id || session.email || null,
+      email: profile?.email || session.email || null,
+      role: profile?.role || session.role || null,
     }
   }
 
-  const profile = await resolveUserProfileByIdentity(session, env).catch(() => null)
+  const tokenProfile = await resolveUserProfileByToken(directToken, env).catch(() => null)
+  if (tokenProfile) {
+    return {
+      authenticated: true,
+      authToken: directToken,
+      session: {
+        id: tokenProfile.user_id || null,
+        email: tokenProfile.email || null,
+        role: tokenProfile.role || null,
+      },
+      profile: tokenProfile,
+      userId: tokenProfile.user_id || tokenProfile.email || null,
+      email: tokenProfile.email || null,
+      role: tokenProfile.role || null,
+    }
+  }
+
   return {
-    authenticated: true,
-    session,
-    profile,
-    userId: profile?.user_id || session.id || session.email || null,
-    email: profile?.email || session.email || null,
-    role: profile?.role || session.role || null,
+    authenticated: false,
+    authToken: '',
+    session: null,
+    profile: null,
+    userId: null,
+    email: null,
+    role: null,
   }
 }
 

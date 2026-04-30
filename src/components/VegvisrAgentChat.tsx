@@ -220,6 +220,7 @@ interface WhoAmIResult {
   profileImage: string | null;
   branding: { mySite: string | null; myLogo: string | null };
   apiKeys: Array<{ provider: string; enabled: boolean; lastUsed: string | null }>;
+  verifiedSession?: boolean;
   message: string;
 }
 
@@ -239,6 +240,11 @@ function WhoAmICard({ data }: { data: WhoAmIResult }) {
           <div className="text-xs text-white/50 capitalize">{data.role}</div>
         </div>
       </div>
+      {data.verifiedSession === false && (
+        <div className="px-4 py-2 text-xs border-t border-amber-400/20 bg-amber-400/10 text-amber-200">
+          Logged in user found, but the session is not verified for privileged worker management yet.
+        </div>
+      )}
       {data.bio && (
         <div className="px-4 py-3 text-white/80 border-t border-white/10 leading-relaxed prose prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{data.bio}</ReactMarkdown>
@@ -1236,6 +1242,12 @@ function CapabilityWorkflowCard({ workflow, isLight }: { workflow: CapabilityWor
     error: isLight ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-rose-400/30 bg-rose-400/[0.10] text-rose-300',
   };
 
+  const visiblePhases = workflow.phases.filter((phase) => phase.id !== 'clarify' || workflow.requiredQuestions.length > 0);
+  const showOptionalDecision = workflow.optionalQuestions.length > 0
+    && workflow.requiredQuestions.length === 0
+    && workflow.phases[4].status !== 'success'
+    && !workflow.readyToScaffold;
+
   return (
     <div className={`max-w-[900px] mx-auto rounded-xl border px-4 py-3 ${isLight ? 'border-amber-200 bg-amber-50' : 'border-amber-400/20 bg-amber-400/[0.06]'}`}>
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -1254,7 +1266,7 @@ function CapabilityWorkflowCard({ workflow, isLight }: { workflow: CapabilityWor
       </div>
 
       <div className="flex flex-wrap gap-2 mt-3">
-        {workflow.phases.map((phase) => (
+        {visiblePhases.map((phase) => (
           <div key={phase.id} className={`px-2.5 py-1 rounded-full border text-[11px] font-medium ${statusClasses[phase.status]}`}>
             {phase.label}
           </div>
@@ -1275,7 +1287,7 @@ function CapabilityWorkflowCard({ workflow, isLight }: { workflow: CapabilityWor
         </div>
       )}
 
-      {workflow.optionalQuestions.length > 0 && workflow.requiredQuestions.length === 0 && workflow.phases[4].status !== 'success' && (
+      {showOptionalDecision && (
         <div className={`mt-3 text-xs ${isLight ? 'text-slate-500' : 'text-white/60'}`}>
           Optional decision: {workflow.optionalQuestions[0].question}
         </div>

@@ -3979,6 +3979,94 @@ async function executeDeleteWorker(input, env) {
   }
 }
 
+function normalizeRegistryWorkerUrl(domainOrUrl, workerName) {
+  const raw = String(domainOrUrl || '').trim()
+  if (raw) {
+    if (/^https?:\/\//i.test(raw)) return raw
+    return `https://${raw}`
+  }
+  return `https://${workerName}.torarnehave.workers.dev`
+}
+
+async function executeInvokeRegistryWorker(input, env) {
+  const authContext = input?.authContext
+  if (!authContext?.authenticated) {
+    throw new Error('invoke_registry_worker requires a verified logged-in session.')
+  }
+
+  const workerName = String(input?.workerName || '').trim()
+  if (!workerName) throw new Error('workerName is required')
+
+  const registry = await fetchRegistryGraph(env)
+  const workers = registryNodesByType(registry, 'system-worker')
+  const match = workers.find((node) => {
+    const meta = node.metadata || {}
+    const candidates = [
+      node.id,
+      node.label,
+      meta.name,
+      meta.domain,
+    ].filter(Boolean).map((value) => String(value).toLowerCase())
+    const needle = workerName.toLowerCase()
+    return candidates.includes(needle) || candidates.includes(`worker-${needle}`)
+  })
+
+  if (!match) {
+    throw new Error(`Worker "${workerName}" was not found in graph_system_registry.`)
+  }
+
+  const meta = match.metadata || {}
+  const resolvedName = String(meta.name || match.label || workerName).trim()
+  const baseUrl = normalizeRegistryWorkerUrl(meta.domain || meta.url, resolvedName)
+  const endpointPath = String(input?.endpointPath || '/').trim() || '/'
+  const normalizedPath = endpointPath.startsWith('/') ? endpointPath : `/${endpointPath}`
+  const method = String(input?.method || 'POST').trim().toUpperCase()
+  const query = input?.query && typeof input.query === 'object' ? input.query : null
+  const body = input?.body && typeof input.body === 'object' ? input.body : null
+  const url = new URL(`${baseUrl}${normalizedPath}`)
+
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      if (value === undefined || value === null) continue
+      url.searchParams.set(key, String(value))
+    }
+  }
+
+  const headers = { 'Content-Type': 'application/json' }
+  const authToken = typeof input?.authToken === 'string' && input.authToken.trim()
+    ? input.authToken.trim()
+    : (typeof authContext?.authToken === 'string' && authContext.authToken.trim()
+      ? authContext.authToken.trim()
+      : '')
+  if (authToken) {
+    headers.authorization = `Bearer ${authToken}`
+    headers.cookie = `vegvisr_token=${encodeURIComponent(authToken)}`
+  }
+
+  const fetchOptions = { method, headers }
+  if (body && method !== 'GET') fetchOptions.body = JSON.stringify(body)
+
+  const response = await fetch(url.toString(), fetchOptions)
+  const contentType = response.headers.get('content-type') || ''
+  const payload = contentType.includes('application/json')
+    ? await response.json().catch(() => null)
+    : await response.text().catch(() => '')
+
+  if (!response.ok) {
+    const detail = typeof payload === 'string' ? payload : (payload?.error || JSON.stringify(payload))
+    throw new Error(`Worker "${resolvedName}" call failed (${response.status}): ${detail}`)
+  }
+
+  return {
+    workerName: resolvedName,
+    endpointPath: normalizedPath,
+    method,
+    status: response.status,
+    response: payload,
+    message: `Worker "${resolvedName}" responded successfully from ${normalizedPath}.`,
+  }
+}
+
 async function executeGetSecureWorkerTemplate(input) {
   const templateType = input?.templateType || 'all'
 
@@ -4227,7 +4315,7 @@ async function executeCreateCapabilityBlueprint(input) {
     : inferredFields
 
   const selfScopePattern = /\bown\b|\bmy own\b|\blogged-?in user\b|\bhimself\b|\bherself\b|\bthemselves\b|\bmyself\b/
-  const selectedScopePattern = /\banother user\b|\bother users?\b|\bany user\b|\bselected user\b/
+  const selectedScopePattern = /\banother user\b|\bother users?\b|\bothers\b|\bany user\b|\bselected user\b/
   const targetScope = answers.targetScope
     ? String(answers.targetScope)
     : selfScopePattern.test(text) && selectedScopePattern.test(text)
@@ -4302,7 +4390,10 @@ async function executeCreateCapabilityBlueprint(input) {
   }
 
   const optionalQuestions = []
-  if (implementation === 'worker' && !answers.deliveryMode) {
+  const needsDeliveryChoice = implementation === 'worker'
+    && !answers.deliveryMode
+    && (uiSurfaceRequested || explicitCompositeRequest)
+  if (needsDeliveryChoice) {
     optionalQuestions.push({
       id: 'delivery_mode',
       question: 'Do you want backend only, a simple admin form, or a reusable template?',
@@ -5513,6 +5604,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReadWorker(toolInput, env)
     case 'delete_worker':
       return await executeDeleteWorker(toolInput, env)
+    case 'invoke_registry_worker':
+      return await executeInvokeRegistryWorker(toolInput, env)
     case 'db_list_tables':
       return await executeDbListTables(env)
     case 'db_query':
