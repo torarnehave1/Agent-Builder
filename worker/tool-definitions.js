@@ -1323,7 +1323,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'create_capability_blueprint',
-    description: 'Classify a natural-language capability request and return the governed implementation plan. Use this FIRST when the user asks to add/create/build a new capability for the agent. It determines whether the capability is public-readonly, user-scoped, or privileged/admin; recommends the implementation path; and tells you which secure template flow to use.',
+    description: 'Classify a natural-language capability request and return the governed implementation plan. Use this FIRST when the user asks to add/create/build a new capability for the agent. It determines whether the capability is public-readonly, user-scoped, or privileged/admin; recommends the implementation path; tells you which secure template flow to use; and indicates when the capability should be treated as a worker-plus-template package with ordered phases.',
     input_schema: {
       type: 'object',
       required: ['request'],
@@ -1336,6 +1336,35 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           enum: ['worker', 'tool', 'html-app', 'graph-template', 'auto'],
           description: 'Optional implementation hint. Default: auto.'
+        },
+        answers: {
+          type: 'object',
+          description: 'Optional structured answers from a prior clarification step. Use this when the user has already answered follow-up questions.',
+          properties: {
+            deliveryMode: {
+              type: 'string',
+              enum: ['backend-only', 'simple-admin-form', 'reusable-template'],
+              description: 'How the capability should be delivered.'
+            },
+            targetScope: {
+              type: 'string',
+              enum: ['self', 'selected-user', 'both'],
+              description: 'Whether the action affects only the current user, another selected user, or both.'
+            },
+            mutableFields: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Editable fields such as ["bio"].'
+            },
+            identifierField: {
+              type: 'string',
+              description: 'Primary lookup field, e.g. "email".'
+            },
+            tableName: {
+              type: 'string',
+              description: 'Target D1 table if already known, e.g. "config".'
+            }
+          }
         }
       }
     }

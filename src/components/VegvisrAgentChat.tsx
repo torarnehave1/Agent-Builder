@@ -18,6 +18,158 @@ import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
 const AGENT_HOST = 'agent.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
 const AUDIO_ENDPOINT = 'https://openai.vegvisr.org/audio';
+const CAPABILITY_TOOL_NAMES = new Set([
+  'create_capability_blueprint',
+  'build_capability_worker_scaffold',
+  'deploy_worker',
+]);
+
+interface CapabilityQuestion {
+  id?: string;
+  question?: string;
+  kind?: string;
+  options?: string[];
+  recommended?: string;
+  reason?: string;
+}
+
+interface CapabilityWorkflowState {
+  request: string;
+  capabilityType?: string;
+  templateType?: string;
+  deliveryMode?: string;
+  targetScope?: string;
+  readyToScaffold: boolean;
+  requiredQuestions: CapabilityQuestion[];
+  optionalQuestions: CapabilityQuestion[];
+  workerName?: string;
+  endpointPath?: string;
+  actionType?: string;
+  deploymentUrl?: string;
+  deploymentError?: string;
+  phases: Array<{ id: string; label: string; status: 'pending' | 'running' | 'success' | 'error' }>;
+  currentLabel: string;
+}
+
+type AgentUIPart = Parameters<typeof isToolUIPart>[0];
+type ToolUIPart = Parameters<typeof getToolName>[0];
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function normalizeQuestions(value: unknown): CapabilityQuestion[] {
+  return Array.isArray(value)
+    ? value.map((item) => asRecord(item) as CapabilityQuestion)
+    : [];
+}
+
+function deriveCapabilityWorkflowFromMessages(messages: Array<{ parts: AgentUIPart[] }>) {
+  const parts: AgentUIPart[] = messages.flatMap((msg) => msg.parts || []);
+  const capabilityParts = parts.reduce<ToolUIPart[]>((acc, part) => {
+    if (isToolUIPart(part) && CAPABILITY_TOOL_NAMES.has(getToolName(part))) {
+      acc.push(part);
+    }
+    return acc;
+  }, []);
+  if (capabilityParts.length === 0) return null;
+
+  const phases: CapabilityWorkflowState['phases'] = [
+    { id: 'design', label: 'Design', status: 'pending' },
+    { id: 'clarify', label: 'Clarify', status: 'pending' },
+    { id: 'scaffold', label: 'Scaffold', status: 'pending' },
+    { id: 'deploy', label: 'Deploy', status: 'pending' },
+    { id: 'complete', label: 'Complete', status: 'pending' },
+  ];
+
+  let workflow: CapabilityWorkflowState | null = null;
+
+  for (const part of capabilityParts) {
+    const toolName = getToolName(part);
+    const state = getToolPartState(part);
+    const output = state === 'complete' ? asRecord(getToolOutput(part)) : {};
+
+    if (toolName === 'create_capability_blueprint') {
+      if (state === 'loading' || state === 'streaming') {
+        workflow = {
+          request: 'New capability',
+          readyToScaffold: false,
+          requiredQuestions: [],
+          optionalQuestions: [],
+          phases: phases.map((phase) => ({ ...phase })),
+          currentLabel: 'Designing capability.',
+        };
+        workflow.phases[0].status = 'running';
+        continue;
+      }
+      if (state === 'complete') {
+        const requiredQuestions = normalizeQuestions(output.requiredQuestions);
+        const optionalQuestions = normalizeQuestions(output.optionalQuestions);
+        const readyToScaffold = output.readyToScaffold === true;
+        workflow = {
+          request: typeof output.request === 'string' ? output.request : 'New capability',
+          capabilityType: typeof output.capabilityType === 'string' ? output.capabilityType : undefined,
+          templateType: typeof output.templateType === 'string' ? output.templateType : undefined,
+          deliveryMode: typeof output.deliveryMode === 'string' ? output.deliveryMode : undefined,
+          targetScope: typeof output.targetScope === 'string' ? output.targetScope : undefined,
+          readyToScaffold,
+          requiredQuestions,
+          optionalQuestions,
+          phases: phases.map((phase) => ({ ...phase })),
+          currentLabel: readyToScaffold ? 'Design complete. Ready to scaffold.' : 'Waiting for clarification.',
+        };
+        workflow.phases[0].status = 'success';
+        workflow.phases[1].status = requiredQuestions.length > 0 ? 'running' : 'success';
+        workflow.phases[2].status = readyToScaffold ? 'running' : 'pending';
+      }
+      continue;
+    }
+
+    if (!workflow) continue;
+
+    if (toolName === 'build_capability_worker_scaffold') {
+      if (state === 'loading' || state === 'streaming') {
+        workflow.phases[2].status = 'running';
+        workflow.currentLabel = 'Generating worker scaffold.';
+        continue;
+      }
+      if (state === 'complete') {
+        workflow.workerName = typeof output.workerName === 'string' ? output.workerName : workflow.workerName;
+        workflow.endpointPath = typeof output.endpointPath === 'string' ? output.endpointPath : workflow.endpointPath;
+        workflow.actionType = typeof output.actionType === 'string' ? output.actionType : workflow.actionType;
+        workflow.phases[1].status = 'success';
+        workflow.phases[2].status = 'success';
+        workflow.phases[3].status = 'running';
+        workflow.currentLabel = 'Scaffold complete. Ready to deploy.';
+      }
+      continue;
+    }
+
+    if (toolName === 'deploy_worker') {
+      if (state === 'loading' || state === 'streaming') {
+        workflow.phases[3].status = 'running';
+        workflow.currentLabel = 'Deploying worker.';
+        continue;
+      }
+      if (state === 'complete') {
+        const succeeded = output.success !== false && !output.error;
+        if (succeeded) {
+          workflow.workerName = typeof output.workerName === 'string' ? output.workerName : workflow.workerName;
+          workflow.deploymentUrl = typeof output.url === 'string' ? output.url : undefined;
+          workflow.phases[3].status = 'success';
+          workflow.phases[4].status = 'success';
+          workflow.currentLabel = 'Capability deployed.';
+        } else {
+          workflow.deploymentError = typeof output.error === 'string' ? output.error : 'Deployment failed.';
+          workflow.phases[3].status = 'error';
+          workflow.currentLabel = workflow.deploymentError;
+        }
+      }
+    }
+  }
+
+  return workflow;
+}
 
 // ── Tool result renderers ────────────────────────────────────────
 
@@ -1039,6 +1191,68 @@ function ToolResultCard({ toolName, output }: { toolName: string; output: unknow
   );
 }
 
+function CapabilityWorkflowCard({ workflow, isLight }: { workflow: CapabilityWorkflowState; isLight: boolean }) {
+  const statusClasses: Record<'pending' | 'running' | 'success' | 'error', string> = {
+    pending: isLight ? 'border-slate-200 bg-slate-100 text-slate-400' : 'border-white/10 bg-white/[0.04] text-white/40',
+    running: isLight ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-sky-400/30 bg-sky-400/[0.10] text-sky-300',
+    success: isLight ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-emerald-400/30 bg-emerald-400/[0.10] text-emerald-300',
+    error: isLight ? 'border-rose-200 bg-rose-50 text-rose-700' : 'border-rose-400/30 bg-rose-400/[0.10] text-rose-300',
+  };
+
+  return (
+    <div className={`max-w-[900px] mx-auto rounded-xl border px-4 py-3 ${isLight ? 'border-amber-200 bg-amber-50' : 'border-amber-400/20 bg-amber-400/[0.06]'}`}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className={`text-[11px] uppercase tracking-[0.18em] font-semibold ${isLight ? 'text-amber-700/80' : 'text-amber-300/80'}`}>Capability Workflow</div>
+          <div className={`text-sm font-medium mt-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>{workflow.request}</div>
+          <div className={`text-xs mt-1 ${isLight ? 'text-slate-500' : 'text-white/60'}`}>
+            {workflow.capabilityType || 'capability'}
+            {workflow.deliveryMode ? ` • ${workflow.deliveryMode}` : ''}
+            {workflow.targetScope ? ` • scope: ${workflow.targetScope}` : ''}
+            {workflow.workerName ? ` • ${workflow.workerName}` : ''}
+            {workflow.endpointPath ? ` • ${workflow.endpointPath}` : ''}
+          </div>
+        </div>
+        <div className={`text-xs max-w-[280px] ${isLight ? 'text-slate-600' : 'text-white/70'}`}>{workflow.currentLabel}</div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mt-3">
+        {workflow.phases.map((phase) => (
+          <div key={phase.id} className={`px-2.5 py-1 rounded-full border text-[11px] font-medium ${statusClasses[phase.status]}`}>
+            {phase.label}
+          </div>
+        ))}
+      </div>
+
+      {workflow.requiredQuestions.length > 0 && (
+        <div className={`mt-3 text-xs ${isLight ? 'text-slate-600' : 'text-white/70'}`}>
+          <div className={`font-medium mb-1 ${isLight ? 'text-slate-800' : 'text-white/85'}`}>Missing details</div>
+          {workflow.requiredQuestions.map((question, index) => (
+            <div key={`${question.id || question.question || index}`} className="mb-1">
+              {index + 1}. {question.question}
+              {question.options && question.options.length > 0 && (
+                <span className={isLight ? 'text-slate-400' : 'text-white/45'}> ({question.options.join(', ')})</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {workflow.optionalQuestions.length > 0 && workflow.requiredQuestions.length === 0 && workflow.phases[4].status !== 'success' && (
+        <div className={`mt-3 text-xs ${isLight ? 'text-slate-500' : 'text-white/60'}`}>
+          Optional decision: {workflow.optionalQuestions[0].question}
+        </div>
+      )}
+
+      {workflow.deploymentUrl && (
+        <div className={`mt-3 text-xs ${isLight ? 'text-emerald-700' : 'text-emerald-300'}`}>
+          Live: <a className="underline" href={workflow.deploymentUrl} target="_blank" rel="noopener noreferrer">{workflow.deploymentUrl}</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function historyFetch(path: string, userId: string, options: RequestInit = {}) {
   const headers = new Headers((options.headers as HeadersInit) || {});
   headers.set('x-user-id', userId);
@@ -1149,6 +1363,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       }
     },
   });
+  const capabilityWorkflow = deriveCapabilityWorkflowFromMessages(messages);
 
   // Auto-clear DO history when model changes
   useEffect(() => {
@@ -1835,6 +2050,11 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
               ✕
             </button>
           )}
+        </div>
+      )}
+      {capabilityWorkflow && (
+        <div className={`px-4 py-3 border-b flex-shrink-0 ${isLight ? 'border-slate-200 bg-slate-100/70' : 'border-white/10 bg-slate-950/50'}`}>
+          <CapabilityWorkflowCard workflow={capabilityWorkflow} isLight={isLight} />
         </div>
       )}
       {isImageModel && (

@@ -20,10 +20,12 @@
 import { AIChatAgent } from '@cloudflare/ai-chat'
 import { createWorkersAI } from 'workers-ai-provider'
 import { streamText, tool, jsonSchema, convertToModelMessages, pruneMessages, stepCountIs } from 'ai'
+import { getCurrentAgent } from 'agents'
 import { z } from 'zod'
 import { executeTool } from './tool-executors.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
+import { resolveAuthorizedCaller } from './auth.js'
 
 // ---------------------------------------------------------------------------
 // JSON Schema → Zod converter
@@ -95,6 +97,13 @@ const WORKERS_AI_TOOLS = new Set([
   'search_unsplash',
   'get_album_images',
   'analyze_image',
+  'get_system_registry',
+  'get_secure_worker_template',
+  'create_capability_blueprint',
+  'build_capability_worker_scaffold',
+  'deploy_worker',
+  'read_worker',
+  'delete_worker',
   'delegate_to_kg',
   'delegate_to_youtube_graph',
   'generate_image',
@@ -112,6 +121,14 @@ const GRAPH_AWARE_TOOLS = new Set([
 ])
 
 const GRAPH_ID_RE = /^(graph_[\w-]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
+const EMPTY_AUTH_CONTEXT = {
+  authenticated: false,
+  session: null,
+  profile: null,
+  userId: null,
+  email: null,
+  role: null,
+}
 
 function relaxJsonSchema(schema) {
   if (!schema || typeof schema !== 'object') return schema
@@ -173,7 +190,7 @@ function normalizeToolArgs(toolName, args, currentGraphId) {
   return next
 }
 
-function buildTools(env, userId, currentGraphId) {
+function buildTools(env, userId, currentGraphId, authContext) {
   const tools = {}
   for (const def of TOOL_DEFINITIONS) {
     if (!WORKERS_AI_TOOLS.has(def.name)) continue
@@ -185,7 +202,7 @@ function buildTools(env, userId, currentGraphId) {
         const normalizedArgs = normalizeToolArgs(def.name, args, currentGraphId)
         console.log(`[buildTools] ENTER ${def.name}`, JSON.stringify(normalizedArgs).slice(0, 200))
         try {
-          const result = await executeTool(def.name, { ...normalizedArgs, userId }, env)
+          const result = await executeTool(def.name, { ...normalizedArgs, userId, authContext }, env)
           console.log(`[buildTools] ${def.name} SUCCESS:`, JSON.stringify(result).slice(0, 300))
           return result
         } catch (err) {
@@ -205,6 +222,15 @@ function buildTools(env, userId, currentGraphId) {
 // ---------------------------------------------------------------------------
 
 export class VegvisrAgent extends AIChatAgent {
+  authContext = EMPTY_AUTH_CONTEXT
+
+  async onConnect(_connection, ctx) {
+    const request = ctx?.request
+    this.authContext = request
+      ? await resolveAuthorizedCaller(request, this.env).catch(() => EMPTY_AUTH_CONTEXT)
+      : EMPTY_AUTH_CONTEXT
+  }
+
   async onChatMessage(_onFinish, options) {
     const modelId = options?.body?.model || this.env.DEFAULT_MODEL || '@cf/meta/llama-4-scout-17b-16e-instruct'
     const currentGraphId = options?.body?.graphId || null
@@ -214,6 +240,10 @@ export class VegvisrAgent extends AIChatAgent {
     const sessionId = crypto.randomUUID()
     const env = this.env
     const userId = this.name
+    const request = getCurrentAgent()?.request
+    const authContext = request
+      ? await resolveAuthorizedCaller(request, env).catch(() => this.authContext || EMPTY_AUTH_CONTEXT)
+      : (this.authContext || EMPTY_AUTH_CONTEXT)
 
     const workersai = createWorkersAI({ binding: this.env.AI })
     const model = workersai(modelId)
@@ -238,7 +268,7 @@ This conversation is running on the Workers AI tool path. Use only the tools tha
         messages: await convertToModelMessages(this.messages),
         toolCalls: 'before-last-2-messages',
       }),
-      tools: buildTools(this.env, userId, currentGraphId),
+      tools: buildTools(this.env, userId, currentGraphId, authContext),
       stopWhen: stepCountIs(5),
       maxTokens: 2048,
       onFinish: async ({ usage, steps }) => {

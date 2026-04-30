@@ -1348,10 +1348,10 @@ export default {
           })())
           return new Response(readable, {
             headers: {
+              ...corsHeaders,
               'Content-Type': 'text/event-stream',
               'Cache-Control': 'no-cache',
               'Connection': 'keep-alive',
-              'Access-Control-Allow-Origin': '*',
             },
           })
         }
@@ -1378,12 +1378,10 @@ export default {
 
         return new Response(readable, {
           headers: {
+            ...corsHeaders,
             'Content-Type': 'text/event-stream',
             'Cache-Control': 'no-cache',
             'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
           },
         })
       }

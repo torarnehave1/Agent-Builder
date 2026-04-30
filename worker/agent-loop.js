@@ -96,6 +96,45 @@ function truncateResult(result) {
   return resultStr
 }
 
+function buildCapabilityToolPayload(toolName, result) {
+  if (!result || typeof result !== 'object') return null
+
+  if (toolName === 'create_capability_blueprint') {
+    return {
+      request: result.request || null,
+      capabilityType: result.capabilityType || null,
+      templateType: result.templateType || null,
+      deliveryMode: result.deliveryMode || null,
+      targetScope: result.targetScope || null,
+      readyToScaffold: result.readyToScaffold === true,
+      requiredQuestions: Array.isArray(result.requiredQuestions) ? result.requiredQuestions : [],
+      optionalQuestions: Array.isArray(result.optionalQuestions) ? result.optionalQuestions : [],
+      scaffoldDefaults: result.scaffoldDefaults || null,
+    }
+  }
+
+  if (toolName === 'build_capability_worker_scaffold') {
+    return {
+      workerName: result.workerName || null,
+      templateType: result.templateType || null,
+      endpointPath: result.endpointPath || null,
+      actionType: result.actionType || null,
+      capabilitySummary: result.capabilitySummary || null,
+    }
+  }
+
+  if (toolName === 'deploy_worker') {
+    return {
+      workerName: result.workerName || null,
+      url: result.url || null,
+      deploymentId: result.deploymentId || null,
+      modifiedOn: result.modifiedOn || null,
+    }
+  }
+
+  return null
+}
+
 function getTextContent(content) {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -571,6 +610,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             }
 
             const ssePayload = { tool: toolUse.name, success: true, summary }
+            const capabilityPayload = buildCapabilityToolPayload(toolUse.name, result)
+            if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
             // Pass nodeId and graphId for tools that create or edit HTML nodes
             if (result.nodeId) ssePayload.nodeId = result.nodeId
             if (result.graphId) ssePayload.graphId = result.graphId

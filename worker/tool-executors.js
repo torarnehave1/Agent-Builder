@@ -4140,6 +4140,9 @@ async function executeCreateCapabilityBlueprint(input) {
 
   const text = request.toLowerCase()
   const preferred = input?.preferredImplementation || 'auto'
+  const answers = input?.answers && typeof input.answers === 'object' ? input.answers : {}
+  const uiSurfaceRequested = /(app|viewer|generator|template|ui|page|dashboard|portal|studio|form)/.test(text)
+  const explicitCompositeRequest = /(worker.+template|template.+worker|both.+template.+worker|both.+worker.+template)/.test(text)
 
   const privilegedPatterns = [
     /update .*bio/,
@@ -4191,11 +4194,46 @@ async function executeCreateCapabilityBlueprint(input) {
     else implementation = 'worker'
   }
 
+  const inferredFields = []
+  if (/\bbio\b/.test(text)) inferredFields.push('bio')
+  if (/\btitle\b/.test(text)) inferredFields.push('title')
+  if (/\bphone\b/.test(text)) inferredFields.push('phone')
+  if (/\bbranding\b/.test(text) || /\blogo\b/.test(text) || /\bsite\b/.test(text)) inferredFields.push('branding')
+
+  const requestedFields = Array.isArray(answers.mutableFields)
+    ? answers.mutableFields.map((value) => String(value).trim()).filter(Boolean)
+    : inferredFields
+
+  const targetScope = answers.targetScope
+    ? String(answers.targetScope)
+    : /\bown\b|\bmy own\b|\blogged-?in user\b/.test(text) && /\banother user\b|\bother users?\b|\bany user\b/.test(text)
+      ? 'both'
+      : /\banother user\b|\bother users?\b|\bany user\b/.test(text)
+        ? 'selected-user'
+        : /\bown\b|\bmy own\b|\blogged-?in user\b/.test(text)
+          ? 'self'
+          : 'both'
+
+  const deliveryMode = answers.deliveryMode
+    ? String(answers.deliveryMode)
+    : implementation === 'worker'
+      ? uiSurfaceRequested
+        ? 'reusable-template'
+        : 'backend-only'
+      : implementation === 'html-app'
+        ? 'simple-admin-form'
+        : 'backend-only'
+
   const templateType = capabilityType === 'privileged/admin'
     ? 'admin'
     : capabilityType === 'user-scoped'
       ? 'user-scoped'
       : 'public-readonly'
+
+  const companionTemplateRecommended =
+    implementation === 'worker' && (deliveryMode === 'simple-admin-form' || deliveryMode === 'reusable-template' || uiSurfaceRequested || explicitCompositeRequest)
+  const companionTemplateCategory = companionTemplateRecommended ? 'My Apps' : null
+  const companionTemplateNodeType = companionTemplateRecommended ? 'app-viewer' : null
 
   const workerNameSuggestion = slugifyCapabilityName(
     request
@@ -4204,18 +4242,123 @@ async function executeCreateCapabilityBlueprint(input) {
   )
 
   const endpointSuggestion = `/${workerNameSuggestion.replace(/^user-/, '').replace(/-admin$/, '')}`.slice(0, 64)
+
+  const tableName = answers.tableName
+    ? String(answers.tableName).trim()
+    : /\bconfig table\b|\bconfig\b/.test(text) || requestedFields.includes('bio')
+      ? 'config'
+      : ''
+  const identifierField = answers.identifierField
+    ? String(answers.identifierField).trim()
+    : tableName === 'config'
+      ? 'email'
+      : ''
+  const responseFields = tableName === 'config'
+    ? ['email', ...requestedFields, 'role'].filter((value, index, arr) => arr.indexOf(value) === index)
+    : requestedFields
+  const allowEmptyFields = requestedFields.includes('bio') ? ['bio'] : []
+
+  const requiredQuestions = []
+  if (implementation === 'worker' && !tableName) {
+    requiredQuestions.push({
+      id: 'table_name',
+      question: 'Which table should this capability update?',
+      kind: 'short-text',
+      reason: 'The worker scaffold needs a concrete D1 table target.',
+    })
+  }
+  if (implementation === 'worker' && requestedFields.length === 0) {
+    requiredQuestions.push({
+      id: 'mutable_fields',
+      question: 'Which profile fields should be editable?',
+      kind: 'choices',
+      options: ['bio', 'title', 'phone', 'branding'],
+      reason: 'The worker scaffold needs the editable fields before it can generate code.',
+    })
+  }
+
+  const optionalQuestions = []
+  if (implementation === 'worker' && !answers.deliveryMode) {
+    optionalQuestions.push({
+      id: 'delivery_mode',
+      question: 'Do you want backend only, a simple admin form, or a reusable template?',
+      kind: 'choices',
+      options: ['backend-only', 'simple-admin-form', 'reusable-template'],
+      recommended: 'backend-only',
+      reason: 'This changes whether the capability should also create a UI surface.',
+    })
+  }
+
+  const scaffoldDefaults = implementation === 'worker' && tableName && identifierField && requestedFields.length > 0
+    ? {
+        workerName: requestedFields.length === 1 && requestedFields[0] === 'bio' && capabilityType === 'privileged/admin'
+          ? 'admin-bio-updater'
+          : workerNameSuggestion.slice(0, 64),
+        templateType,
+        endpointPath: requestedFields.length === 1 && requestedFields[0] === 'bio'
+          ? '/update-bio'
+          : endpointSuggestion,
+        actionType: 'update',
+        tableName,
+        identifierField,
+        mutableFields: requestedFields,
+        responseFields,
+        allowEmptyFields,
+        capabilitySummary: request,
+      }
+    : null
+
   const nextTools = implementation === 'worker'
-    ? ['create_capability_blueprint', 'build_capability_worker_scaffold', 'deploy_worker']
+    ? [
+        'create_capability_blueprint',
+        'build_capability_worker_scaffold',
+        'deploy_worker',
+        ...(companionTemplateRecommended ? ['kg_add_template'] : []),
+      ]
     : ['create_capability_blueprint']
+  const deliveryPhases = implementation === 'worker'
+    ? [
+        'Design the capability package and classify its security level.',
+        'Generate the worker scaffold.',
+        'Deploy the worker and confirm deployment success.',
+        ...(companionTemplateRecommended
+          ? ['Only after deployment succeeds, create the dependent graph template/app that points to the deployed worker URL.']
+          : []),
+        'Report exact success or failure for each completed phase.',
+      ]
+    : [
+        'Design the capability package and classify its implementation.',
+        'Create the requested non-worker artifact.',
+        'Report exact success or failure for each completed phase.',
+      ]
 
   return {
     request,
     capabilityType,
     templateType,
     implementation,
+    deliveryMode,
+    targetScope,
     workerNameSuggestion,
     endpointSuggestion,
+    companionTemplateRecommended,
+    companionTemplateCategory,
+    companionTemplateNodeType,
     requiresSecureTemplate: templateType !== 'public-readonly',
+    readyToScaffold: Boolean(scaffoldDefaults && requiredQuestions.length === 0),
+    inferredAnswers: {
+      tableName: tableName || null,
+      identifierField: identifierField || null,
+      mutableFields: requestedFields,
+      responseFields,
+      allowEmptyFields,
+      targetScope,
+      deliveryMode,
+    },
+    requiredQuestions,
+    optionalQuestions,
+    scaffoldDefaults,
+    deliveryPhases,
     safetyChecks: capabilityType === 'privileged/admin'
       ? [
           'Validate session server-side via auth.vegvisr.org',
@@ -4235,12 +4378,53 @@ async function executeCreateCapabilityBlueprint(input) {
             'No mutation endpoints unless reclassified',
           ],
     nextTools,
-    message: `Capability classified as ${capabilityType} with ${implementation} implementation. Use template type "${templateType}".`,
+    message: `Capability classified as ${capabilityType} with ${implementation} implementation. Use template type "${templateType}"${companionTemplateRecommended ? ' and treat this as a worker-plus-template package.' : '.'}`,
   }
 }
 
 function sqlColumnList(columns) {
   return (columns || []).filter(Boolean).map((col) => String(col).trim()).filter(Boolean)
+}
+
+function normalizePotentialIdentifier(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(raw)) return raw
+
+  const tokens = raw.match(/[A-Za-z_][A-Za-z0-9_]*/g) || []
+  const uniqueTokens = [...new Set(tokens)]
+  if (uniqueTokens.length !== 1) return raw
+
+  const punctuationOnly = raw.replace(/[A-Za-z_][A-Za-z0-9_]*/g, '')
+  if (/^[\s<>{}\[\]\(\)\|"'`,.:;!?\\/-]*$/.test(punctuationOnly)) {
+    return uniqueTokens[0]
+  }
+
+  return raw
+}
+
+function assertSafeSqlIdentifier(value, fieldName) {
+  const identifier = normalizePotentialIdentifier(value)
+  if (!identifier) throw new Error(`${fieldName} is required`)
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+    throw new Error(`${fieldName} contains invalid identifier: "${identifier}"`)
+  }
+  return identifier
+}
+
+function assertSafeSqlIdentifierList(values, fieldName) {
+  if (!Array.isArray(values) || values.length === 0) {
+    throw new Error(`${fieldName} is required`)
+  }
+  return values.map((value, index) => assertSafeSqlIdentifier(value, `${fieldName}[${index}]`))
+}
+
+function inferScaffoldResponseKey(tableName) {
+  if (!tableName) return 'record'
+  if (tableName === 'config') return 'user'
+  if (tableName.endsWith('ies')) return `${tableName.slice(0, -3)}y`
+  if (tableName.endsWith('s') && tableName.length > 1) return tableName.slice(0, -1)
+  return 'record'
 }
 
 function buildMutationValidation(fields, allowEmptyFields) {
@@ -4259,12 +4443,12 @@ async function executeBuildCapabilityWorkerScaffold(input) {
   const endpointPath = String(input?.endpointPath || '').trim()
   const method = String(input?.method || 'POST').toUpperCase()
   const actionType = String(input?.actionType || '').trim()
-  const tableName = String(input?.tableName || '').trim()
-  const identifierField = String(input?.identifierField || '').trim()
-  const mutableFields = sqlColumnList(input?.mutableFields || [])
-  const responseFields = sqlColumnList(input?.responseFields || [])
+  const tableNameRaw = String(input?.tableName || '').trim()
+  const identifierFieldRaw = String(input?.identifierField || '').trim()
+  const mutableFieldsRaw = sqlColumnList(input?.mutableFields || [])
+  const responseFieldsRaw = sqlColumnList(input?.responseFields || [])
   const capabilitySummary = String(input?.capabilitySummary || '').trim()
-  const allowEmptyFields = sqlColumnList(input?.allowEmptyFields || [])
+  const allowEmptyFieldsRaw = sqlColumnList(input?.allowEmptyFields || [])
 
   if (!workerName || !templateType || !endpointPath || !actionType) {
     throw new Error('workerName, templateType, endpointPath, and actionType are required')
@@ -4276,14 +4460,24 @@ async function executeBuildCapabilityWorkerScaffold(input) {
 
   let body = ''
   if (actionType === 'update') {
-    if (!tableName || !identifierField || mutableFields.length === 0) {
+    if (!tableNameRaw || !identifierFieldRaw || mutableFieldsRaw.length === 0) {
       throw new Error('update scaffold requires tableName, identifierField, and mutableFields')
     }
+    const tableName = assertSafeSqlIdentifier(tableNameRaw, 'tableName')
+    const identifierField = assertSafeSqlIdentifier(identifierFieldRaw, 'identifierField')
+    const mutableFields = assertSafeSqlIdentifierList(mutableFieldsRaw, 'mutableFields')
+    const responseFields = responseFieldsRaw.length > 0
+      ? assertSafeSqlIdentifierList(responseFieldsRaw, 'responseFields')
+      : [identifierField, ...mutableFields]
+    const allowEmptyFields = allowEmptyFieldsRaw.length > 0
+      ? assertSafeSqlIdentifierList(allowEmptyFieldsRaw, 'allowEmptyFields')
+      : []
     const allInputs = [identifierField, ...mutableFields]
     const validation = buildMutationValidation(allInputs, allowEmptyFields)
     const setClause = mutableFields.map((field) => `${field} = ?`).join(', ')
     const bindArgs = [...mutableFields, identifierField].join(', ')
-    const responseCols = responseFields.length > 0 ? responseFields.join(', ') : [identifierField, ...mutableFields].join(', ')
+    const responseCols = responseFields.join(', ')
+    const responseKey = inferScaffoldResponseKey(tableName)
     body = `export default {
   async fetch(request, env) {
     ${sharedAuthHelper}
@@ -4325,7 +4519,7 @@ ${validation}
         'SELECT ${responseCols} FROM ${tableName} WHERE ${identifierField} = ?'
       ).bind(${identifierField}).first();
 
-      return new Response(JSON.stringify({ success: true, ${tableName.slice(0, -1) || 'record'}: row }), { headers: corsHeaders });
+      return new Response(JSON.stringify({ success: true, ${responseKey}: row }), { headers: corsHeaders });
     }
 
     return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404, headers: corsHeaders });

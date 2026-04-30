@@ -98,6 +98,264 @@ interface GraphInfo {
   metadata_title?: string;
 }
 
+interface CapabilityQuestion {
+  id?: string;
+  question?: string;
+  kind?: string;
+  options?: string[];
+  recommended?: string;
+  reason?: string;
+}
+
+interface CapabilityWorkflowState {
+  request: string;
+  capabilityType?: string;
+  templateType?: string;
+  deliveryMode?: string;
+  targetScope?: string;
+  readyToScaffold: boolean;
+  requiredQuestions: CapabilityQuestion[];
+  optionalQuestions: CapabilityQuestion[];
+  workerName?: string;
+  endpointPath?: string;
+  actionType?: string;
+  deploymentUrl?: string;
+  deploymentError?: string;
+  phases: Array<{ id: string; label: string; status: 'pending' | 'running' | 'success' | 'error' }>;
+  currentLabel: string;
+}
+
+const CAPABILITY_TOOLS = new Set([
+  'create_capability_blueprint',
+  'build_capability_worker_scaffold',
+  'deploy_worker',
+]);
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function normalizeQuestions(value: unknown): CapabilityQuestion[] {
+  return Array.isArray(value)
+    ? value.map((item) => asRecord(item) as CapabilityQuestion)
+    : [];
+}
+
+function getCapabilityToolContext(tc: ToolCall): string | null {
+  if (!CAPABILITY_TOOLS.has(tc.tool)) return null;
+  const result = asRecord(tc.result);
+
+  if (tc.tool === 'create_capability_blueprint') {
+    const request = typeof result.request === 'string' ? result.request : '';
+    const capabilityType = typeof result.capabilityType === 'string' ? result.capabilityType : '';
+    const templateType = typeof result.templateType === 'string' ? result.templateType : '';
+    const deliveryMode = typeof result.deliveryMode === 'string' ? result.deliveryMode : '';
+    const targetScope = typeof result.targetScope === 'string' ? result.targetScope : '';
+    const readyToScaffold = result.readyToScaffold === true ? 'true' : 'false';
+    const requiredQuestions = normalizeQuestions(result.requiredQuestions).map((q) => q.id || q.question || '').filter(Boolean);
+    const optionalQuestions = normalizeQuestions(result.optionalQuestions).map((q) => q.id || q.question || '').filter(Boolean);
+    return [
+      '[CAPABILITY_BLUEPRINT]',
+      `status=${tc.status}`,
+      request ? `request=${request}` : null,
+      capabilityType ? `capabilityType=${capabilityType}` : null,
+      templateType ? `templateType=${templateType}` : null,
+      deliveryMode ? `deliveryMode=${deliveryMode}` : null,
+      targetScope ? `targetScope=${targetScope}` : null,
+      `readyToScaffold=${readyToScaffold}`,
+      requiredQuestions.length > 0 ? `requiredQuestions=${requiredQuestions.join(',')}` : null,
+      optionalQuestions.length > 0 ? `optionalQuestions=${optionalQuestions.join(',')}` : null,
+      tc.summary ? `summary=${tc.summary}` : null,
+      '[/CAPABILITY_BLUEPRINT]',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (tc.tool === 'build_capability_worker_scaffold') {
+    const workerName = typeof result.workerName === 'string' ? result.workerName : '';
+    const endpointPath = typeof result.endpointPath === 'string' ? result.endpointPath : '';
+    const actionType = typeof result.actionType === 'string' ? result.actionType : '';
+    return [
+      '[CAPABILITY_SCAFFOLD]',
+      `status=${tc.status}`,
+      workerName ? `workerName=${workerName}` : null,
+      endpointPath ? `endpointPath=${endpointPath}` : null,
+      actionType ? `actionType=${actionType}` : null,
+      tc.summary ? `summary=${tc.summary}` : null,
+      '[/CAPABILITY_SCAFFOLD]',
+    ].filter(Boolean).join('\n');
+  }
+
+  if (tc.tool === 'deploy_worker') {
+    const workerName = typeof result.workerName === 'string' ? result.workerName : '';
+    const url = typeof result.url === 'string' ? result.url : '';
+    const error = typeof result.error === 'string' ? result.error : '';
+    return [
+      '[CAPABILITY_DEPLOY]',
+      `status=${tc.status}`,
+      workerName ? `workerName=${workerName}` : null,
+      url ? `url=${url}` : null,
+      error ? `error=${error}` : null,
+      tc.summary ? `summary=${tc.summary}` : null,
+      '[/CAPABILITY_DEPLOY]',
+    ].filter(Boolean).join('\n');
+  }
+
+  return null;
+}
+
+function deriveCapabilityWorkflow(messages: ChatMessage[], current: AssistantState | null): CapabilityWorkflowState | null {
+  const allToolCalls: ToolCall[] = [];
+  for (const msg of messages) {
+    if (msg.toolCalls?.length) allToolCalls.push(...msg.toolCalls);
+  }
+  if (current?.toolCalls?.length) allToolCalls.push(...current.toolCalls);
+
+  const relevant = allToolCalls.filter((tc) => CAPABILITY_TOOLS.has(tc.tool));
+  if (relevant.length === 0) return null;
+
+  const phases: CapabilityWorkflowState['phases'] = [
+    { id: 'design', label: 'Design', status: 'pending' },
+    { id: 'clarify', label: 'Clarify', status: 'pending' },
+    { id: 'scaffold', label: 'Scaffold', status: 'pending' },
+    { id: 'deploy', label: 'Deploy', status: 'pending' },
+    { id: 'complete', label: 'Complete', status: 'pending' },
+  ];
+
+  let workflow: CapabilityWorkflowState | null = null;
+
+  for (const tc of relevant) {
+    const result = asRecord(tc.result);
+
+    if (tc.tool === 'create_capability_blueprint' && tc.status === 'success') {
+      const requiredQuestions = normalizeQuestions(result.requiredQuestions);
+      const optionalQuestions = normalizeQuestions(result.optionalQuestions);
+      const readyToScaffold = result.readyToScaffold === true;
+      workflow = {
+        request: typeof result.request === 'string' ? result.request : 'New capability',
+        capabilityType: typeof result.capabilityType === 'string' ? result.capabilityType : undefined,
+        templateType: typeof result.templateType === 'string' ? result.templateType : undefined,
+        deliveryMode: typeof result.deliveryMode === 'string' ? result.deliveryMode : undefined,
+        targetScope: typeof result.targetScope === 'string' ? result.targetScope : undefined,
+        readyToScaffold,
+        requiredQuestions,
+        optionalQuestions,
+        phases: phases.map((phase) => ({ ...phase })),
+        currentLabel: readyToScaffold ? 'Design complete. Ready to scaffold.' : 'Waiting for clarification.',
+      };
+      workflow.phases[0].status = 'success';
+      workflow.phases[1].status = requiredQuestions.length > 0 ? 'running' : 'success';
+      workflow.phases[2].status = readyToScaffold ? 'running' : 'pending';
+      continue;
+    }
+
+    if (!workflow) continue;
+
+    if (tc.tool === 'build_capability_worker_scaffold') {
+      if (tc.status === 'running') {
+        workflow.phases[2].status = 'running';
+        workflow.currentLabel = 'Generating worker scaffold.';
+      } else if (tc.status === 'success') {
+        workflow.workerName = typeof result.workerName === 'string' ? result.workerName : workflow.workerName;
+        workflow.endpointPath = typeof result.endpointPath === 'string' ? result.endpointPath : workflow.endpointPath;
+        workflow.actionType = typeof result.actionType === 'string' ? result.actionType : workflow.actionType;
+        workflow.phases[1].status = 'success';
+        workflow.phases[2].status = 'success';
+        workflow.phases[3].status = 'running';
+        workflow.currentLabel = 'Scaffold complete. Ready to deploy.';
+      } else if (tc.status === 'error') {
+        workflow.phases[2].status = 'error';
+        workflow.currentLabel = tc.summary || 'Scaffold failed.';
+      }
+    }
+
+    if (tc.tool === 'deploy_worker') {
+      if (tc.status === 'running') {
+        workflow.phases[3].status = 'running';
+        workflow.currentLabel = 'Deploying worker.';
+      } else if (tc.status === 'success') {
+        workflow.deploymentUrl = typeof result.url === 'string' ? result.url : undefined;
+        workflow.workerName = typeof result.workerName === 'string' ? result.workerName : workflow.workerName;
+        workflow.phases[3].status = 'success';
+        workflow.phases[4].status = 'success';
+        workflow.currentLabel = 'Capability deployed.';
+      } else if (tc.status === 'error') {
+        workflow.deploymentError = typeof result.error === 'string'
+          ? result.error
+          : (tc.summary || 'Deployment failed.');
+        workflow.phases[3].status = 'error';
+        workflow.currentLabel = workflow.deploymentError;
+      }
+    }
+  }
+
+  return workflow;
+}
+
+function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowState }) {
+  const statusClasses: Record<'pending' | 'running' | 'success' | 'error', string> = {
+    pending: 'border-white/10 bg-white/[0.04] text-white/40',
+    running: 'border-sky-400/30 bg-sky-400/[0.10] text-sky-300',
+    success: 'border-emerald-400/30 bg-emerald-400/[0.10] text-emerald-300',
+    error: 'border-rose-400/30 bg-rose-400/[0.10] text-rose-300',
+  };
+
+  return (
+    <div className="max-w-[900px] mx-auto rounded-xl border border-amber-400/20 bg-amber-400/[0.06] px-4 py-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-[0.18em] text-amber-300/80 font-semibold">Capability Workflow</div>
+          <div className="text-sm text-white font-medium mt-1">{workflow.request}</div>
+          <div className="text-xs text-white/60 mt-1">
+            {workflow.capabilityType || 'capability'}
+            {workflow.deliveryMode ? ` • ${workflow.deliveryMode}` : ''}
+            {workflow.targetScope ? ` • scope: ${workflow.targetScope}` : ''}
+            {workflow.workerName ? ` • ${workflow.workerName}` : ''}
+            {workflow.endpointPath ? ` • ${workflow.endpointPath}` : ''}
+          </div>
+        </div>
+        <div className="text-xs text-white/70 max-w-[280px]">{workflow.currentLabel}</div>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mt-3">
+        {workflow.phases.map((phase) => (
+          <div
+            key={phase.id}
+            className={`px-2.5 py-1 rounded-full border text-[11px] font-medium ${statusClasses[phase.status]}`}
+          >
+            {phase.label}
+          </div>
+        ))}
+      </div>
+
+      {workflow.requiredQuestions.length > 0 && (
+        <div className="mt-3 text-xs text-white/70">
+          <div className="text-white/85 font-medium mb-1">Missing details</div>
+          {workflow.requiredQuestions.map((question, index) => (
+            <div key={`${question.id || question.question || index}`} className="mb-1">
+              {index + 1}. {question.question}
+              {question.options && question.options.length > 0 && (
+                <span className="text-white/45"> ({question.options.join(', ')})</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {workflow.optionalQuestions.length > 0 && workflow.requiredQuestions.length === 0 && workflow.phases[4].status !== 'success' && (
+        <div className="mt-3 text-xs text-white/60">
+          Optional decision: {workflow.optionalQuestions[0].question}
+        </div>
+      )}
+
+      {workflow.deploymentUrl && (
+        <div className="mt-3 text-xs text-emerald-300">
+          Live: <a className="underline" href={workflow.deploymentUrl} target="_blank" rel="noopener noreferrer">{workflow.deploymentUrl}</a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------- Tool Call Card ----------
 
 function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void }) {
@@ -414,6 +672,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   const [audioChunkProgress, setAudioChunkProgress] = useState({ current: 0, total: 0 });
   const [audioAutoDetect, setAudioAutoDetect] = useState(true);
   const [audioLanguage, setAudioLanguage] = useState('no');
+  const capabilityWorkflow = deriveCapabilityWorkflow(messages, current);
 
   const audioLanguageOptions = [
     { code: 'no', label: 'Norwegian' },
@@ -1174,6 +1433,16 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         const firstNewline = m.content.indexOf('\n\n');
         const summary = firstNewline > 0 ? m.content.slice(0, firstNewline) : m.content.slice(0, 120);
         return { role: m.role, content: summary + '\n\n(Full transcription text available locally — use the "Save to Graph" button to save directly.)' };
+      }
+      if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        const capabilityToolContext = m.toolCalls
+          .map(getCapabilityToolContext)
+          .filter((value): value is string => Boolean(value))
+          .join('\n');
+        const contentWithToolContext = capabilityToolContext
+          ? `${m.content || 'Tool-assisted assistant turn.'}\n\n${capabilityToolContext}`
+          : m.content;
+        return { role: m.role, content: contentWithToolContext };
       }
       const hasImages = m.images && m.images.length > 0;
       const hasFiles = m.files && m.files.length > 0;
@@ -2007,6 +2276,12 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {capabilityWorkflow && (
+        <div className="px-3 sm:px-4 py-3 border-b border-white/10 bg-slate-950/50 flex-shrink-0">
+          <CapabilityWorkflowCard workflow={capabilityWorkflow} />
         </div>
       )}
 
