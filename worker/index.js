@@ -20,7 +20,7 @@ import { runChatbotSubagent } from './chatbot-subagent.js'
 import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
-import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller } from './auth.js'
+import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -1157,8 +1157,10 @@ export default {
       // POST /execute - Execute an agent
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()
-        const { agentId, task, userId, contractId, graphId } = body
-        const authContext = await resolveAuthorizedCaller(request, env)
+        const { agentId, task, userId, contractId, graphId, authToken } = body
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
         const effectiveUserId = authContext.userId || userId
 
         if (!agentId || !task || !effectiveUserId) {
@@ -1269,8 +1271,11 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId } = body
-        const authContext = await resolveAuthorizedCaller(request, env)
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken } = body
+        // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
         const effectiveUserId = authContext.userId || userId
         console.log(`[/chat] graphId=${graphId} activeHtmlNodeId=${activeHtmlNodeId} agentId=${agentId}`)
 

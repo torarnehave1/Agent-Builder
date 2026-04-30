@@ -1456,6 +1456,54 @@ const TOOL_DEFINITIONS = [
           type: 'boolean',
           description: 'Register the worker as a system-worker node in graph_system_registry. Default: true'
         },
+        description: {
+          type: 'string',
+          description: 'Human-readable description of what this worker does. Stored in graph_system_registry info field so other agents can understand when to invoke it.'
+        },
+        domain: {
+          type: 'string',
+          description: 'Custom domain for this worker (e.g. "admin-bio-updater.vegvisr.org"). Defaults to workerName.torarnehave.workers.dev'
+        },
+        binding: {
+          type: 'string',
+          description: 'Cloudflare service binding name if this worker is wired as a binding (e.g. "KG_WORKER"). Leave blank for API-only workers.'
+        },
+        endpoints: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of endpoint paths this worker exposes (e.g. ["/update-bio", "/get-bio"]). Helps agents know what to call.'
+        },
+      }
+    }
+  },
+  {
+    name: 'register_deployed_worker',
+    description: 'Register or update a worker in graph_system_registry without deploying it. Use this to register workers that were deployed outside this agent, fix stale registry entries, or add missing registry nodes after a deploy. Requires Superadmin role.',
+    input_schema: {
+      type: 'object',
+      required: ['workerName'],
+      properties: {
+        workerName: {
+          type: 'string',
+          description: 'The worker script name (e.g. "admin-bio-updater")'
+        },
+        description: {
+          type: 'string',
+          description: 'Human-readable description of what this worker does'
+        },
+        domain: {
+          type: 'string',
+          description: 'Domain for this worker. Defaults to workerName.torarnehave.workers.dev'
+        },
+        binding: {
+          type: 'string',
+          description: 'Cloudflare service binding name if applicable'
+        },
+        endpoints: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of endpoint paths this worker exposes'
+        },
       }
     }
   },

@@ -1739,6 +1739,15 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           agentId: agentId || undefined,
           activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
           model: model || undefined,
+          // Pass auth token explicitly so agent can call authenticated tools
+          authToken: (() => {
+            try {
+              const user = JSON.parse(localStorage.getItem('user') || '{}');
+              return user.emailVerificationToken || '';
+            } catch {
+              return '';
+            }
+          })(),
         }),
         signal: abort.signal,
       });

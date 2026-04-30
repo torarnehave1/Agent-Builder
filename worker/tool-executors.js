@@ -3843,37 +3843,34 @@ async function executeDeployWorker(input, env) {
     subdomainResult = subData
   }
 
-  // Step 3: Register in graph_system_registry
+  // Step 3: Register in graph_system_registry (non-blocking)
   let graphResult = null
   if (registerInGraph && env.KG_WORKER) {
-    try {
-      const nodePayload = {
-        graphId: 'graph_system_registry',
-        node: {
-          id: `worker-${workerName}`,
-          label: workerName,
-          type: 'system-worker',
-          color: '#f59e0b',
-          info: `Deployed via Cloudflare API. Last deployed: ${new Date().toISOString()}`,
-          metadata: {
-            binding: null,
-            name: workerName,
-            domain: `${workerName}.torarnehave.workers.dev`,
-            deployedVia: 'cloudflare-api',
-            deployedAt: new Date().toISOString(),
-            deployedBy: caller.email || caller.userId || 'unknown',
-          },
+    const nodePayload = {
+      graphId: 'graph_system_registry',
+      node: {
+        id: `worker-${workerName}`,
+        label: workerName,
+        type: 'system-worker',
+        color: '#f59e0b',
+        info: input.description || `Deployed via Cloudflare API. Last deployed: ${new Date().toISOString()}`,
+        metadata: {
+          binding: input.binding || null,
+          name: workerName,
+          domain: input.domain || `${workerName}.torarnehave.workers.dev`,
+          endpoints: Array.isArray(input.endpoints) ? input.endpoints : [],
+          deployedVia: 'cloudflare-api',
+          deployedAt: new Date().toISOString(),
+          deployedBy: caller.email || caller.userId || 'unknown',
         },
-      }
-      const { data: gData } = await fetchJsonWithTimeout('https://knowledge-graph-worker/addNode', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(nodePayload),
-      }, NETWORK_TIMEOUT_MS, env.KG_WORKER.fetch.bind(env.KG_WORKER))
-      graphResult = gData
-    } catch (e) {
-      graphResult = { error: e.message }
+      },
     }
+    env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nodePayload),
+    }).then(res => res.json()).then(data => { graphResult = data }).catch(e => { graphResult = { error: e.message } })
+    graphResult = { pending: true }
   }
 
   return {
@@ -3887,6 +3884,58 @@ async function executeDeployWorker(input, env) {
     registeredInGraph: graphResult?.ok || false,
     deployedBy: caller.email || caller.userId || null,
     message: `Worker "${workerName}" deployed successfully. Live at https://${workerName}.torarnehave.workers.dev`,
+  }
+}
+
+async function executeRegisterDeployedWorker(input, env) {
+  const caller = getVerifiedWorkerAdmin(input)
+  const { workerName } = input
+  if (!workerName) return { error: 'workerName is required' }
+
+  if (!env.KG_WORKER) return { error: 'KG_WORKER binding not available' }
+
+  const node = {
+    id: `worker-${workerName}`,
+    label: workerName,
+    type: 'system-worker',
+    color: '#f59e0b',
+    info: input.description || `Worker registered manually. Updated: ${new Date().toISOString()}`,
+    metadata: {
+      binding: input.binding || null,
+      name: workerName,
+      domain: input.domain || `${workerName}.torarnehave.workers.dev`,
+      endpoints: input.endpoints || [],
+      deployedVia: 'manual-registration',
+      deployedAt: new Date().toISOString(),
+      deployedBy: caller.email || caller.userId || 'unknown',
+    },
+  }
+
+  try {
+    const { data: result } = await fetchJsonWithTimeout('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId: 'graph_system_registry', node }),
+    }, NETWORK_TIMEOUT_MS, env.KG_WORKER.fetch.bind(env.KG_WORKER))
+
+    return {
+      success: result?.ok || false,
+      workerName,
+      nodeId: `worker-${workerName}`,
+      domain: node.metadata.domain,
+      registeredBy: caller.email || caller.userId || null,
+      message: result?.ok
+        ? `Worker "${workerName}" registered in system registry.`
+        : `Registration may have failed: ${JSON.stringify(result)}`,
+    }
+  } catch (e) {
+    return {
+      success: false,
+      workerName,
+      nodeId: `worker-${workerName}`,
+      error: e.message,
+      registeredBy: caller.email || caller.userId || null,
+    }
   }
 }
 
@@ -4638,6 +4687,28 @@ ${validation}
     }
 
     return new Response(JSON.stringify({ success: false, error: 'Not found' }), { status: 404, headers: corsHeaders });
+  }
+};`
+  } else if (actionType === 'select' && !tableNameRaw) {
+    body = `export default {
+  async fetch(request, env) {
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Content-Type': 'application/json',
+    };
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    const url = new URL(request.url);
+    if (url.pathname === '${pathLiteral}') {
+      return new Response(JSON.stringify({ success: true, message: 'HELLO TEST' }), { headers: corsHeaders });
+    }
+    if (url.pathname === '/health') {
+      return new Response(JSON.stringify({ status: 'ok' }), { headers: corsHeaders });
+    }
+
+    return new Response(JSON.stringify({ error: 'Not found' }), { status: 404, headers: corsHeaders });
   }
 };`
   } else {
@@ -5600,6 +5671,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeBuildCapabilityWorkerScaffold(toolInput, env)
     case 'deploy_worker':
       return await executeDeployWorker(toolInput, env)
+    case 'register_deployed_worker':
+      return await executeRegisterDeployedWorker(toolInput, env)
     case 'read_worker':
       return await executeReadWorker(toolInput, env)
     case 'delete_worker':
