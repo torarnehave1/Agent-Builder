@@ -356,11 +356,26 @@ function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowStat
   );
 }
 
+// ---------- Helpers ----------
+
+function extractSvgFromResult(tc: ToolCall): string | null {
+  if (!tc.result || tc.status !== 'success') return null;
+  const r = asRecord(tc.result);
+  const body = typeof r.response === 'string' ? r.response
+             : typeof r.body === 'string' ? r.body
+             : null;
+  if (!body) return null;
+  const trimmed = body.trim();
+  if (trimmed.startsWith('<svg') || trimmed.startsWith('<?xml')) return trimmed;
+  return null;
+}
+
 // ---------- Tool Call Card ----------
 
 function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
+  const [svgOpen, setSvgOpen] = useState(false);
   let inputStr = '';
   try { inputStr = JSON.stringify(tc.input, null, 2); } catch { inputStr = String(tc.input); }
   let resultStr = '';
@@ -376,6 +391,8 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
     || tc.tool === 'create_html_from_template'
     || isPatchWithHtml;
   const canPreview = isHtmlNode && tc.status === 'success';
+  const svgContent = extractSvgFromResult(tc);
+  const canSvgPreview = !!svgContent;
 
   const saveAsTemplate = async () => {
     // Get the HTML content from whichever tool was used
@@ -445,6 +462,22 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
           )}
           {savedAsTemplate && (
             <span className="inline-block text-xs text-emerald-400">Saved as template</span>
+          )}
+        </div>
+      )}
+      {canSvgPreview && (
+        <div className="mx-3 my-2">
+          <button
+            type="button"
+            onClick={() => setSvgOpen(v => !v)}
+            className="px-2 py-1 text-xs rounded bg-violet-600 text-white hover:bg-violet-500"
+          >
+            {svgOpen ? 'Hide SVG' : 'Preview SVG'}
+          </button>
+          {svgOpen && (
+            <div className="mt-2 rounded overflow-hidden border border-white/10 bg-white/5 p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
+              <div dangerouslySetInnerHTML={{ __html: svgContent! }} />
+            </div>
           )}
         </div>
       )}
@@ -597,6 +630,20 @@ const markdownComponents = {
       } catch { /* not a valid URL, render normally */ }
     }
     return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+  },
+  code: ({ className, children, ...props }: React.HTMLAttributes<HTMLElement> & { children?: React.ReactNode }) => {
+    const raw = typeof children === 'string' ? children.trim() : '';
+    const isSvg = raw.startsWith('<svg') || raw.startsWith('<?xml');
+    return (
+      <span>
+        <code className={className} {...props}>{children}</code>
+        {isSvg && (
+          <span className="block mt-2 rounded overflow-hidden border border-white/10 bg-white/5 p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
+            <span dangerouslySetInnerHTML={{ __html: raw }} />
+          </span>
+        )}
+      </span>
+    );
   },
 };
 
