@@ -1360,6 +1360,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [activeGraphTitle, setActiveGraphTitle] = useState('');
   const lastTranscriptRef = useRef<string | null>(null);
   const lastTrackedGraphRef = useRef<string | null>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [imageFormatPreset, setImageFormatPreset] = useState<(typeof IMAGE_FORMAT_PRESETS)[number]['id']>('16:9');
   const [imageStylePreset, setImageStylePreset] = useState<(typeof IMAGE_STYLE_PRESETS)[number]['id']>('none');
   const [imageLightingPreset, setImageLightingPreset] = useState<(typeof IMAGE_LIGHTING_PRESETS)[number]['id']>('none');
@@ -1512,6 +1513,16 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       onGraphChange?.(nextGraphId);
     }
   }, [messages, onGraphChange]);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      const container = messagesContainerRef.current;
+      setTimeout(() => {
+        container.scrollTop = container.scrollHeight;
+      }, 0);
+    }
+  }, [messages, loadedMessages]);
 
   // Load sessions list on mount
   useEffect(() => {
@@ -2122,7 +2133,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
         </div>
       )}
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+      <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
         {messages.length === 0 && loadedMessages.length === 0 && (
           <div className={`text-sm text-center mt-8 ${isLight ? 'text-slate-400' : 'text-white/30'}`}>
             Start a conversation with the Vegvisr Agent
