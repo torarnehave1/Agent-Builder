@@ -570,6 +570,16 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'list_realtime_videos',
+    description: 'List the current user\'s realtime video recordings (MP4 files from RealtimeKit video sessions). Use this when the user asks about their "realtime recording", "realtime video", or "video recording". DIFFERENT from list_recordings (which is for audio voice memos). Each user\'s videos are stored in their own R2 bucket — this tool automatically resolves the correct location based on the logged-in user.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Max videos to return (default 20, sorted newest first)' }
+      }
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {

@@ -18,6 +18,37 @@ import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
 const AGENT_HOST = 'agent.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
 const AUDIO_ENDPOINT = 'https://openai.vegvisr.org/audio';
+
+// Inline media renderer for ReactMarkdown links: video/audio file URLs become players
+const VIDEO_EXT_RE = /\.(mp4|webm|mov|m4v)(\?.*)?$/i;
+const AUDIO_EXT_RE = /\.(mp3|wav|m4a|ogg|flac)(\?.*)?$/i;
+const mediaMarkdownComponents = {
+  a: ({ href, children, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children?: React.ReactNode }) => {
+    if (href) {
+      try {
+        const url = new URL(href);
+        if (VIDEO_EXT_RE.test(url.pathname)) {
+          return (
+            <span className="block my-2">
+              <video controls preload="metadata" className="w-full max-w-2xl rounded border border-white/10" src={href} />
+              <span className="block text-[11px] opacity-60 mt-0.5 truncate">{url.pathname.split('/').pop()}</span>
+            </span>
+          );
+        }
+        if (url.hostname === 'audio.vegvisr.org' || AUDIO_EXT_RE.test(url.pathname)) {
+          return (
+            <span className="block my-2">
+              <audio controls preload="none" className="w-full max-w-md" src={href} />
+              <span className="block text-[11px] opacity-60 mt-0.5 truncate">{url.pathname.split('/').pop()}</span>
+            </span>
+          );
+        }
+      } catch { /* not a valid URL — fall through */ }
+    }
+    return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+  },
+};
+
 const CAPABILITY_TOOL_NAMES = new Set([
   'create_capability_blueprint',
   'build_capability_worker_scaffold',
@@ -2144,7 +2175,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] rounded-xl px-4 py-2 text-sm opacity-90 ${m.role === 'user' ? 'bg-purple-600 text-white' : isLight ? 'bg-white border border-slate-200 text-slate-800' : 'bg-white/10 text-white/90'}`}>
               <div className={`prose prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed ${isLight ? 'prose-slate' : 'prose-invert'}`}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={mediaMarkdownComponents}>{m.text}</ReactMarkdown>
               </div>
               {m.role === 'user' && (
                 <button
@@ -2328,7 +2359,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                 </div>
               ) : (
                 <div className={`prose prose-sm max-w-none prose-p:my-2 prose-p:leading-relaxed ${isLight ? 'prose-slate' : 'prose-invert'}`}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mediaMarkdownComponents}>{m.text}</ReactMarkdown>
                 </div>
               )}
               {m.graphId && <CreatedGraphCard graphId={m.graphId} />}

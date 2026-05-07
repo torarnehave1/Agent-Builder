@@ -594,9 +594,18 @@ function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () =
 // Pre-process markdown: convert any link containing a UUID into a proper viewer URL
 // so rehype-sanitize won't strip it and the custom component can detect it
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+const MEDIA_EXT_RE = /\.(mp4|webm|mov|m4v|avi|mkv|mp3|wav|m4a|ogg|flac|jpg|jpeg|png|gif|webp|svg|pdf)(\?.*)?$/i;
+const MEDIA_HOST_RE = /(realtimevideos|videos|video|recordings|audio|images|imgix|cdn)\.vegvisr\.org$/i;
 
 function preprocessGraphLinks(text: string): string {
   return text.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, title, url) => {
+    // Skip media/file URLs — UUIDs in filenames are not graph IDs
+    try {
+      const u = new URL(url);
+      if (MEDIA_HOST_RE.test(u.hostname) || MEDIA_EXT_RE.test(u.pathname)) {
+        return match;
+      }
+    } catch { /* not a parseable URL — fall through */ }
     const uuidMatch = url.match(UUID_RE);
     if (uuidMatch) {
       return `[${title}](https://www.vegvisr.org/gnew-viewer?graphId=${uuidMatch[0]})`;
@@ -610,6 +619,15 @@ const markdownComponents = {
     if (href) {
       try {
         const url = new URL(href);
+        // Video URLs → inline player
+        if (/\.(mp4|webm|mov|m4v)$/i.test(url.pathname)) {
+          return (
+            <span className="block my-2">
+              <video controls preload="metadata" className="w-full max-w-2xl rounded border border-white/10" src={href} />
+              <span className="block text-[11px] text-white/40 mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
+            </span>
+          );
+        }
         // Audio URLs → inline player
         if (url.hostname === 'audio.vegvisr.org' || (url.hostname.includes('vegvisr') && /\.(webm|wav|mp3|m4a|ogg|flac)$/i.test(url.pathname))) {
           return (
@@ -620,6 +638,10 @@ const markdownComponents = {
           );
         }
         if (url.hostname.includes('vegvisr.org')) {
+          // Skip GraphCard for media subdomains and file paths
+          if (MEDIA_HOST_RE.test(url.hostname) || MEDIA_EXT_RE.test(url.pathname)) {
+            return <a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>;
+          }
           const graphId = url.searchParams.get('graphId') || url.searchParams.get('id');
           if (graphId) {
             const viewerHref = `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`;

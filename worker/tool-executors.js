@@ -1397,6 +1397,71 @@ async function executeListRecordings(input, env) {
   }
 }
 
+// ── Realtime video recordings (RealtimeKit MP4 sessions) ──────────────────
+async function executeListRealtimeVideos(input, env) {
+  const limit = typeof input?.limit === 'number' && input.limit > 0 ? input.limit : 20
+
+  // Pull authToken (the user's emailVerificationToken from localStorage,
+  // forwarded by AgentChat / VegvisrAgentChat in the chat body).
+  const authToken = (typeof input?.authToken === 'string' && input.authToken.trim())
+    ? input.authToken.trim()
+    : (typeof input?.authContext?.authToken === 'string' && input.authContext.authToken.trim()
+      ? input.authContext.authToken.trim()
+      : '')
+
+  if (!authToken) {
+    throw new Error('You must be logged in to list realtime videos. Please refresh the page and try again.')
+  }
+
+  if (!env.REALTIME_WORKER) {
+    throw new Error('REALTIME_WORKER service binding is not configured')
+  }
+
+  const res = await env.REALTIME_WORKER.fetch('https://realtime-worker/realtime/recordings', {
+    headers: { 'X-API-Token': authToken },
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Failed to list realtime videos (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  const all = Array.isArray(data?.recordings) ? data.recordings : []
+
+  // Sort newest-first by uploaded timestamp when present, otherwise leave order from worker
+  const sorted = [...all].sort((a, b) => {
+    const ta = a.uploaded ? new Date(a.uploaded).getTime() : 0
+    const tb = b.uploaded ? new Date(b.uploaded).getTime() : 0
+    return tb - ta
+  })
+
+  const REALTIME_VIDEO_BASE = 'https://realtimevideos.vegvisr.org'
+  const buildPlayUrl = (key, source) => {
+    if (!key) return null
+    // Per-user R2 ('r2-own') is not served by the public realtimevideos.vegvisr.org host.
+    if (source === 'r2-own') return null
+    const normalized = String(key).replace(/^\/+/, '')
+    const path = normalized.startsWith('recordings/') ? normalized : `recordings/${normalized}`
+    return `${REALTIME_VIDEO_BASE}/${path}`
+  }
+
+  const videos = sorted.slice(0, limit).map((r) => ({
+    name: r.name,
+    key: r.key,
+    size: r.size || 0,
+    uploaded: r.uploaded || null,
+    source: r.source || null,
+    playUrl: buildPlayUrl(r.key, r.source),
+  }))
+
+  return {
+    message: `Found ${videos.length} realtime video(s). Use the exact playUrl field as the playback link — do not invent or modify URLs.`,
+    total: videos.length,
+    videos,
+  }
+}
+
 async function executeTranscribeAudio(input, env) {
   const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
@@ -5529,6 +5594,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':
       return await executeListRecordings(toolInput, env)
+    case 'list_realtime_videos':
+      return await executeListRealtimeVideos(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':
