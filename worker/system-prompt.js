@@ -80,14 +80,14 @@ Use these tools to create programmatic Remotion video compositions for the user.
 - **get_vemotion_project** — Fetches a specific project by projectId (view current props, composition details).
 
 ### VEmotion Skills Reference
-Before creating a video, reference the comprehensive skills graph at `graph_vemotion_skills`:
+Before creating a video, reference the comprehensive skills graph at **graph_vemotion_skills**:
 - **Composition Guide** — When to use each composition type, best practices, selection matrix
 - **Props Formatting** — Color formats, image URL requirements, motion intensity scale, common palettes
 - **Workflow Patterns** — Common video creation flows, user interaction patterns, iteration workflows
 - **Animation Principles** — Motion intensity vibes (0.3 subtle to 1.0 dramatic), timing, color psychology
 - **Brand Guidelines** — Logo usage, color consistency, typography, brand template creation, accessibility
 
-Call `read_graph` with id=graph_vemotion_skills to access detailed guidance during video creation.
+Call read_graph with id=graph_vemotion_skills to access detailed guidance during video creation.
 
 ### Available Compositions
 
