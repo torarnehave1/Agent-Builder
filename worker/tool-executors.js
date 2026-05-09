@@ -1452,7 +1452,9 @@ async function executeListRealtimeVideos(input, env) {
     size: r.size || 0,
     uploaded: r.uploaded || null,
     source: r.source || null,
-    playUrl: buildPlayUrl(r.key, r.source),
+    // Prefer the playUrl the worker computed (presigned for r2-own, public for shared);
+    // fall back to legacy public-host construction for older worker versions.
+    playUrl: r.playUrl || buildPlayUrl(r.key, r.source),
   }))
 
   return {
