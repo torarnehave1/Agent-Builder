@@ -1576,6 +1576,50 @@ async function executeListVemotionProjects(input, env) {
   }
 }
 
+async function executeUpdateVemotionProject(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to update a VEmotion project. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+  const projectId = typeof input?.projectId === 'string' ? input.projectId.trim() : ''
+  if (!projectId) {
+    throw new Error('projectId is required')
+  }
+
+  const payload = { projectId }
+  if (typeof input.title === 'string') payload.title = input.title
+  if (typeof input.description === 'string') payload.description = input.description
+  if (typeof input.compositionId === 'string') payload.compositionId = input.compositionId
+  if (input.props && typeof input.props === 'object') payload.props = input.props
+  if (typeof input.notes === 'string') payload.notes = input.notes
+  if (typeof input.status === 'string') payload.status = input.status
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/project/update', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Token': authToken,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Failed to update VEmotion project (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  return {
+    message: data?.message || 'VEmotion project updated',
+    projectId,
+    project: data?.project || null,
+    summary: data?.summary || null,
+  }
+}
+
 async function executeTranscribeAudio(input, env) {
   const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
@@ -5716,6 +5760,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetVemotionProject(toolInput, env)
     case 'list_vemotion_projects':
       return await executeListVemotionProjects(toolInput, env)
+    case 'update_vemotion_project':
+      return await executeUpdateVemotionProject(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':

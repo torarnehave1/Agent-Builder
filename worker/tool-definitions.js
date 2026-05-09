@@ -641,6 +641,24 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'update_vemotion_project',
+    description: 'Update an existing VEmotion project owned by the currently authenticated user. Can change title, description, compositionId, props, notes, or status.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'VEmotion project ID to update (required)' },
+        title: { type: 'string', description: 'New project title' },
+        description: { type: 'string', description: 'New project description' },
+        compositionId: { type: 'string', description: 'New composition ID (e.g. "VEmotionIntro", "VEmotionYellowSquare")' },
+        props: { type: 'object', description: 'Updated Remotion/VEmotion props for the project preview' },
+        notes: { type: 'string', description: 'Updated agent or user notes' },
+        status: { type: 'string', description: 'Updated project status (e.g. "draft", "published", "archived")' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['projectId']
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {

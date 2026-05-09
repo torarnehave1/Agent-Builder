@@ -78,6 +78,7 @@ Use these tools to create programmatic Remotion video compositions for the user.
 - **create_vemotion_project** — Creates a new VEmotion project. Pass compositionId + props. Returns projectId. Preview at: https://vemotion.vegvisr.org?projectId=<projectId>
 - **list_vemotion_projects** — Lists the user's existing VEmotion projects with metadata.
 - **get_vemotion_project** — Fetches a specific project by projectId (view current props, composition details).
+- **update_vemotion_project** — Updates an existing project's title, compositionId, props, or notes. Pass projectId + any fields to change.
 
 ### VEmotion Skills Reference
 Before creating a video, reference the comprehensive skills graph at **graph_vemotion_skills**:
