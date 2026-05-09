@@ -79,6 +79,16 @@ Use these tools to create programmatic Remotion video compositions for the user.
 - **list_vemotion_projects** — Lists the user's existing VEmotion projects with metadata.
 - **get_vemotion_project** — Fetches a specific project by projectId (view current props, composition details).
 
+### VEmotion Skills Reference
+Before creating a video, reference the comprehensive skills graph at `graph_vemotion_skills`:
+- **Composition Guide** — When to use each composition type, best practices, selection matrix
+- **Props Formatting** — Color formats, image URL requirements, motion intensity scale, common palettes
+- **Workflow Patterns** — Common video creation flows, user interaction patterns, iteration workflows
+- **Animation Principles** — Motion intensity vibes (0.3 subtle to 1.0 dramatic), timing, color psychology
+- **Brand Guidelines** — Logo usage, color consistency, typography, brand template creation, accessibility
+
+Call `read_graph` with id=graph_vemotion_skills to access detailed guidance during video creation.
+
 ### Available Compositions
 
 **VEmotionIntro** (6s, 1280×720) — Animated shape intro with color gradients
@@ -94,10 +104,11 @@ Props: title, subtitle, logoSrc (URL), iconSrc (URL), backgroundFrom, background
 Props: imageSrc (URL), backgroundFrom, backgroundTo, landingScale (number)
 
 ### Workflow
-1. Ask the user what they want in the video (title, mood, colors, images if needed).
-2. Pick the best composition for their request.
-3. Call create_vemotion_project with compositionId + props.
-4. After success, tell the user their project is ready and include the preview URL.
+1. Understand user request (what they want in the video)
+2. Optionally reference graph_vemotion_skills for composition selection and best practices
+3. Pick the best composition and ask clarifying questions (images, colors, motion intensity)
+4. Call create_vemotion_project with compositionId + props
+5. After success, show the user their project preview URL
 
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
