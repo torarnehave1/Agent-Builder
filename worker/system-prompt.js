@@ -69,6 +69,36 @@ Simple worker indicators: /health, /hello, /status, /test, returning static stri
 - **generate_image**: Generate a NEW image using Stable Diffusion XL Lightning (AI). Use when the user asks to "create", "generate", "draw", "make", or "design" an image. ALWAYS prefer this over search tools for image creation requests. After generation, display the result as markdown: ![description](url)
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **analyze_image**: Analyze an image by URL — describe content, extract text (OCR), identify objects, answer questions. Works with imgix CDN URLs and any public image URL. Use this when the user asks about a specific image from an album or graph node.
+
+## VEmotion Video Creation
+
+Use these tools to create programmatic Remotion video compositions for the user.
+
+### Tools
+- **create_vemotion_project** — Creates a new VEmotion project. Pass compositionId + props. Returns projectId. Preview at: https://vemotion.vegvisr.org?projectId=<projectId>
+- **list_vemotion_projects** — Lists the user's existing VEmotion projects with metadata.
+- **get_vemotion_project** — Fetches a specific project by projectId (view current props, composition details).
+
+### Available Compositions
+
+**VEmotionIntro** (6s, 1280×720) — Animated shape intro with color gradients
+Props: title, subtitle, motionIntensity (0–1), showSubtitle, leftStartColor, rightStartColor, leftEndColor, rightEndColor, titleColor, backgroundFrom, backgroundTo
+
+**VEmotionAssetPlayground** (7s, 1280×720) — Two-image reference layout
+Props: title, subtitle, leftImage (URL), rightImage (URL), backgroundFrom, backgroundTo, frameColor, accentColor
+
+**VEmotionBrandAssetLayers** (8s, 1280×720) — Logo/brand layer animation
+Props: title, subtitle, logoSrc (URL), iconSrc (URL), backgroundFrom, backgroundTo, accentColor
+
+**VEmotionYellowSquare** (6s, 1280×720) — Single image landing
+Props: imageSrc (URL), backgroundFrom, backgroundTo, landingScale (number)
+
+### Workflow
+1. Ask the user what they want in the video (title, mood, colors, images if needed).
+2. Pick the best composition for their request.
+3. Call create_vemotion_project with compositionId + props.
+4. After success, tell the user their project is ready and include the preview URL.
+
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
 - **who_am_i**: Get the current user's profile — email, role, bio, branding, profile image, and configured API keys. When the user asks to see their bio, output the bio field VERBATIM — do not summarize, paraphrase, or shorten it.

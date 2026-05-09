@@ -2267,6 +2267,27 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
                   if (state === 'complete') {
                     const output = getToolOutput(part);
+
+                    // Special handling for VEmotion project creation
+                    if (toolName === 'create_vemotion_project') {
+                      const projectId = (output as Record<string, unknown>).projectId || ((output as Record<string, unknown>).project as Record<string, unknown>)?.projectId;
+                      if (projectId) {
+                        return (
+                          <div key={toolCallId} className="mt-2 p-3 bg-blue-500/20 rounded-lg border border-blue-500/40">
+                            <p className="text-blue-300 text-xs font-medium mb-2">🎬 VEmotion Project Created</p>
+                            <a
+                              href={`https://vemotion.vegvisr.org?projectId=${projectId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-block px-3 py-1 text-xs bg-blue-600 hover:bg-blue-500 rounded-md text-white transition-colors"
+                            >
+                              Open in VEmotion →
+                            </a>
+                          </div>
+                        );
+                      }
+                    }
+
                     return <ToolResultCard key={toolCallId} toolName={toolName} output={output} />;
                   }
 

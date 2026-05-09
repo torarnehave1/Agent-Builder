@@ -1909,6 +1909,18 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             const resultData = ev.data as Record<string, unknown>;
             const subGraphId = resultData.graphId as string;
             if (subGraphId) { lastAgentGraphRef.current = subGraphId; onGraphChange(subGraphId); }
+          } else if (toolName === 'create_vemotion_project') {
+            // Inject a preview card when a VEmotion project is created
+            const resultData = ev.data as Record<string, unknown>;
+            const projectId = (resultData.projectId || (resultData.project as Record<string, unknown>)?.projectId) as string | undefined;
+            if (projectId) {
+              setTimeout(() => {
+                setMessages(prev => [...prev, {
+                  role: 'assistant',
+                  content: `🎬 **Preview your VEmotion project:**\n\n[Open in VEmotion](https://vemotion.vegvisr.org?projectId=${projectId})`,
+                }]);
+              }, 0);
+            }
           }
         }
 
