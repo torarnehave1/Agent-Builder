@@ -580,6 +580,67 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'create_vemotion_project',
+    description: 'Create a new VEmotion project for the currently authenticated user. Stores an editable project record that can later be previewed in VEmotion and updated over time.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Project title' },
+        description: { type: 'string', description: 'Optional project description' },
+        templateId: { type: 'string', description: 'Template/composition identifier such as "VEmotionYellowSquare" or "custom"' },
+        status: { type: 'string', description: 'Project status, defaults to draft' },
+        assets: {
+          type: 'array',
+          description: 'Optional asset list. Each item can be a URL string or an object with src, label, role, and tags.',
+          items: {
+            oneOf: [
+              { type: 'string' },
+              {
+                type: 'object',
+                properties: {
+                  src: { type: 'string' },
+                  label: { type: 'string' },
+                  role: { type: 'string' },
+                  type: { type: 'string' },
+                  tags: { type: 'array', items: { type: 'string' } }
+                },
+                required: ['src']
+              }
+            ]
+          }
+        },
+        props: { type: 'object', description: 'Structured Remotion/VEmotion props for the project preview' },
+        scenes: { type: 'array', description: 'Optional scene descriptors for the project', items: { type: 'object' } },
+        notes: { type: 'string', description: 'Optional agent or user notes' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['title']
+    }
+  },
+  {
+    name: 'get_vemotion_project',
+    description: 'Get a single VEmotion project owned by the currently authenticated user.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        projectId: { type: 'string', description: 'VEmotion project ID to fetch' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['projectId']
+    }
+  },
+  {
+    name: 'list_vemotion_projects',
+    description: 'List the current user\'s VEmotion projects stored by the VEmotion worker.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'number', description: 'Maximum number of projects to return. Default 20.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
+      }
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {

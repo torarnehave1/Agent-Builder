@@ -1464,6 +1464,118 @@ async function executeListRealtimeVideos(input, env) {
   }
 }
 
+function getAuthTokenFromToolInput(input) {
+  return (typeof input?.authToken === 'string' && input.authToken.trim())
+    ? input.authToken.trim()
+    : (typeof input?.authContext?.authToken === 'string' && input.authContext.authToken.trim()
+      ? input.authContext.authToken.trim()
+      : '')
+}
+
+async function executeCreateVemotionProject(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to create a VEmotion project. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+
+  const payload = {
+    title: input.title,
+    description: input.description || '',
+    templateId: input.templateId || 'custom',
+    status: input.status || 'draft',
+    assets: Array.isArray(input.assets) ? input.assets : [],
+    props: input.props && typeof input.props === 'object' ? input.props : {},
+    scenes: Array.isArray(input.scenes) ? input.scenes : [],
+    notes: typeof input.notes === 'string' ? input.notes : '',
+  }
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/project/create', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Token': authToken,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Failed to create VEmotion project (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  return {
+    message: data?.message || 'VEmotion project created',
+    projectId: data?.project?.projectId || data?.summary?.projectId,
+    title: data?.project?.title || input.title,
+    templateId: data?.project?.templateId || payload.templateId,
+    status: data?.project?.status || payload.status,
+    summary: data?.summary || null,
+    project: data?.project || null,
+  }
+}
+
+async function executeGetVemotionProject(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to read a VEmotion project. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+  const projectId = typeof input?.projectId === 'string' ? input.projectId.trim() : ''
+  if (!projectId) {
+    throw new Error('projectId is required')
+  }
+
+  const res = await env.VEMOTION_WORKER.fetch(`https://vemotion-worker/vemotion/project?id=${encodeURIComponent(projectId)}`, {
+    headers: { 'X-API-Token': authToken },
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Failed to get VEmotion project (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  return {
+    message: 'VEmotion project loaded',
+    summary: data?.summary || null,
+    project: data?.project || null,
+  }
+}
+
+async function executeListVemotionProjects(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to list VEmotion projects. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+  const limit = typeof input?.limit === 'number' && input.limit > 0 ? input.limit : 20
+
+  const res = await env.VEMOTION_WORKER.fetch(`https://vemotion-worker/vemotion/projects?limit=${encodeURIComponent(limit)}`, {
+    headers: { 'X-API-Token': authToken },
+  })
+
+  if (!res.ok) {
+    const errText = await res.text()
+    throw new Error(`Failed to list VEmotion projects (${res.status}): ${errText}`)
+  }
+
+  const data = await res.json()
+  return {
+    message: `Found ${data?.count || 0} VEmotion project(s)`,
+    total: data?.count || 0,
+    projects: Array.isArray(data?.projects) ? data.projects : [],
+    cursor: data?.cursor || null,
+  }
+}
+
 async function executeTranscribeAudio(input, env) {
   const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
@@ -5598,6 +5710,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListRecordings(toolInput, env)
     case 'list_realtime_videos':
       return await executeListRealtimeVideos(toolInput, env)
+    case 'create_vemotion_project':
+      return await executeCreateVemotionProject(toolInput, env)
+    case 'get_vemotion_project':
+      return await executeGetVemotionProject(toolInput, env)
+    case 'list_vemotion_projects':
+      return await executeListVemotionProjects(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':
