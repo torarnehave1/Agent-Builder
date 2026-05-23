@@ -1472,6 +1472,82 @@ function getAuthTokenFromToolInput(input) {
       : '')
 }
 
+// ---------------------------------------------------------------------------
+// Vemotion — save a composition to the user's cloud library.
+// MVP: one tool. No render, no project endpoints, no list/get/delete.
+// The user opens editorUrl in the Vemotion app to view/edit/render.
+// ---------------------------------------------------------------------------
+async function executeVemotionSaveComposition(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to save a Vemotion composition. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+
+  const name = typeof input?.name === 'string' && input.name.trim()
+    ? input.name.trim()
+    : 'Untitled composition'
+
+  const inputComp = (input?.composition && typeof input.composition === 'object') ? input.composition : {}
+  const layers = Array.isArray(inputComp.layers) ? inputComp.layers : []
+  if (layers.length === 0) {
+    throw new Error('composition.layers must be a non-empty array')
+  }
+
+  // Derive duration from layers (max of startTime + layerDuration) if not provided.
+  let derivedDuration = 5
+  for (const layer of layers) {
+    const start = typeof layer?.startTime === 'number' ? layer.startTime : 0
+    const dur = typeof layer?.layerDuration === 'number' ? layer.layerDuration : null
+    if (dur !== null) {
+      const candidate = start + dur
+      if (candidate > derivedDuration) derivedDuration = candidate
+    }
+  }
+
+  const composition = {
+    duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
+    fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
+    width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
+    height: typeof inputComp.height === 'number' ? inputComp.height : 720,
+    layers,
+  }
+  if (typeof inputComp.fontFamily === 'string') composition.fontFamily = inputComp.fontFamily
+  if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/composition/save', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Token': authToken,
+    },
+    body: JSON.stringify({ name, composition }),
+  })
+
+  // /composition/save returns 201 on create, 200 on update; both are success.
+  if (res.status !== 200 && res.status !== 201) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`Failed to save Vemotion composition (${res.status}): ${errText.slice(0, 300)}`)
+  }
+
+  const data = await res.json().catch(() => ({}))
+  const compositionId = data?.id || data?.summary?.id
+  if (!compositionId) {
+    throw new Error(`Vemotion save returned no id: ${JSON.stringify(data).slice(0, 200)}`)
+  }
+
+  return {
+    message: 'Vemotion composition saved',
+    compositionId,
+    name: data?.summary?.name || name,
+    duration: data?.summary?.duration,
+    layerCount: data?.summary?.layerCount,
+    editorUrl: `https://vemotion.vegvisr.org/?compositionId=${compositionId}`,
+  }
+}
+
 async function executeTranscribeAudio(input, env) {
   const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
@@ -5606,6 +5682,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListRecordings(toolInput, env)
     case 'list_realtime_videos':
       return await executeListRealtimeVideos(toolInput, env)
+    case 'vemotion_save_composition':
+      return await executeVemotionSaveComposition(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':

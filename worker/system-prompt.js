@@ -70,6 +70,46 @@ Simple worker indicators: /health, /hello, /status, /test, returning static stri
 - **get_album_images**: Get images from a user's Vegvisr photo album (imgix CDN URLs).
 - **analyze_image**: Analyze an image by URL — describe content, extract text (OCR), identify objects, answer questions. Works with imgix CDN URLs and any public image URL. Use this when the user asks about a specific image from an album or graph node.
 
+## Vemotion Video Composition
+
+Vemotion is a layer-based programmatic video composer at https://vemotion.vegvisr.org. Build compositions by composing layers and animating them, then save with **vemotion_save_composition**. The tool returns an editorUrl the user opens to view, refine, or render. This agent does NOT render to MP4 — the user renders from the editor.
+
+Use when the user asks to "create / make / build" a video, intro, animation, or composition.
+
+### Composition shape
+\`{ duration, fps, width, height, layers[], fontFamily? }\`. Defaults if omitted: fps 30, width 1280, height 720, duration derived from the maximum (layer.startTime + layer.layerDuration) or 5s.
+
+### Layer shape
+Every layer: \`{ id, type, position: {x, y}, size: {width, height}, properties }\`. Optional: \`startTime\` (s), \`layerDuration\` (s), \`animation: { property, keyframes: [{time, value}] }\`. Z-order is the array order — first layer is back, last is front. Animation \`time\` is **relative to the layer's startTime**, not the composition timeline.
+
+### Layer types (pick one per layer)
+- **text** — \`properties: { text, fontSize, color, align: "left"|"center"|"right", fontWeight }\`
+- **shape** — \`properties: { shape: "rect"|"circle", color, opacity? }\`
+- **math-shape** — \`properties: { mathKind: "parametric", stroke, strokeWidth, fill, samples, tStart, tEnd, xFormula, yFormula, closePath }\` — draws a parametric curve; pair with animation property \`drawProgress\` to animate the draw
+- **image** — \`properties: { src (HTTPS URL), fit: "cover" }\`
+- **kg-shape** — \`properties: { svgPath, viewBox, color, filled, kgNodeId, kgGraphId }\`
+- **card** — \`properties: { title, body, backgroundColor, padding, borderRadius, titleFontSize, titleColor, titleFontWeight, bodyFontSize, bodyColor, gap, kgNodeId, kgGraphId }\`
+
+### Animation properties supported
+\`opacity\`, \`offsetX\`, \`offsetY\`, \`drawProgress\` (math-shape only).
+
+### Workflow
+1. Understand what the user wants — duration, key visuals, mood.
+2. Build a layer array. Typical intro: shape background → optional accent (math-shape or kg-shape) → text title with opacity keyframes for fade-in.
+3. Call **vemotion_save_composition** with \`name\` and \`composition\`.
+4. Show the user the \`editorUrl\` returned by the tool.
+
+### Minimal example
+\`\`\`json
+{
+  "duration": 5, "fps": 30, "width": 1280, "height": 720,
+  "layers": [
+    { "id": "bg", "type": "shape", "position": {"x":0,"y":0}, "size": {"width":1280,"height":720}, "properties": {"shape":"rect","color":"#020617"} },
+    { "id": "title", "type": "text", "position": {"x":80,"y":320}, "size": {"width":1120,"height":80}, "properties": {"text":"Hello World","fontSize":64,"color":"#ffffff","align":"center","fontWeight":"700"}, "animation": {"property":"opacity","keyframes":[{"time":0,"value":0},{"time":1,"value":1}]} }
+  ]
+}
+\`\`\`
+
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
 - **who_am_i**: Get the current user's profile — email, role, bio, branding, profile image, and configured API keys. When the user asks to see their bio, output the bio field VERBATIM — do not summarize, paraphrase, or shorten it.

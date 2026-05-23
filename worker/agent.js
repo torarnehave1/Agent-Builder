@@ -121,6 +121,7 @@ const WORKERS_AI_TOOLS = new Set([
   'delegate_to_kg',
   'delegate_to_youtube_graph',
   'generate_image',
+  'vemotion_save_composition',
 ])
 
 const GRAPH_AWARE_TOOLS = new Set([

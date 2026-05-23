@@ -580,6 +580,35 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'vemotion_save_composition',
+    description: 'Save a Vemotion video composition to the user\'s cloud library. Vemotion is the layer-based video composer at vemotion.vegvisr.org — you build a CompositionData object with a `layers` array (text / shape / math-shape / image / kg-shape / card) and optional per-layer animations, then call this tool. Returns the new compositionId and a URL the user can open to view and edit the composition in the Vemotion app. Use this for any user request to create / build / make a video, intro, animation, or composition. Does NOT render the video to MP4 — the user renders themselves from the editor.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Short title shown in the user\'s Vemotion composition list (e.g. "Hello World intro").' },
+        composition: {
+          type: 'object',
+          description: 'The full Vemotion CompositionData. Must include a non-empty layers array. duration / fps / width / height fall back to 5s / 30fps / 1280x720 if omitted.',
+          properties: {
+            duration: { type: 'number', description: 'Total duration in seconds. If omitted, derived from the maximum layer.startTime + layer.layerDuration, or 5.' },
+            fps: { type: 'number', description: 'Frames per second. Default 30.' },
+            width: { type: 'number', description: 'Canvas width in pixels. Default 1280.' },
+            height: { type: 'number', description: 'Canvas height in pixels. Default 720.' },
+            fontFamily: { type: 'string', description: 'Composition-level default font (e.g. "Inter", "Poppins", "Caveat"). Optional.' },
+            layers: {
+              type: 'array',
+              description: 'Ordered list of layers, back-to-front. Each layer needs id (string), type ("text"|"shape"|"math-shape"|"image"|"kg-shape"|"card"), position {x, y}, size {width, height}, properties (type-specific). Optional: startTime (s), layerDuration (s), animation { property: "opacity"|"offsetX"|"offsetY"|"drawProgress", keyframes: [{time, value}] }.',
+              items: { type: 'object' }
+            }
+          },
+          required: ['layers']
+        },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['name', 'composition']
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
