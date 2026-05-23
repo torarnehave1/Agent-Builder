@@ -823,11 +823,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // Load agent chat sessions
   useEffect(() => {
     if (!userId) return;
-    historyFetch('/sessions', userId)
+    historyFetch('/agent-sessions', userId)
       .then(r => r.json())
       .then(data => {
         const agentSessions = (data.sessions || [])
-          .filter((s: { provider?: string }) => s.provider === 'agent')
           .map((s: { id: string; title?: string; updated_at?: string }) => ({
             id: s.id,
             title: s.title || 'Untitled',
@@ -835,7 +834,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           }));
         setSessions(agentSessions);
       })
-      .catch(() => {});
+      .catch((err) => console.error('[AgentChat] Failed to load sessions:', err));
   }, [userId]);
 
   // Load a saved session's messages
