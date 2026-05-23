@@ -32,3 +32,5 @@ dist-ssr
 
 # Cloudflare
 worker/wrangler.toml
+/_project/
+.claude/settings.local.json

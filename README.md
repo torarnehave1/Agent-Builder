@@ -13,6 +13,15 @@ It is not just a chat UI. It combines:
 
 The current implementation is broader than the original foundation roadmap. This README reflects the system as it exists now.
 
+## Project Documentation
+
+- [CLAUDE.md](./CLAUDE.md) — Project-specific Claude Code instructions
+- [_project/lessons_learned.md](./_project/lessons_learned.md) — Engineering discipline & failure patterns (read first per response)
+- [_project/STATUS.md](./_project/STATUS.md) — Current state & progress log
+- [_project/TODO.md](./_project/TODO.md) — Remaining slices
+- [_project/PLAN.md](./_project/PLAN.md) — Implementation plan
+- [_project/TEST_PLAN.md](./_project/TEST_PLAN.md) — Test regime
+
 ## What the system does
 
 Agent Builder lets a user:
