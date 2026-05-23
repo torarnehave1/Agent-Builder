@@ -15,6 +15,7 @@ import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
+import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { routeAgentRequest } from 'agents'
@@ -1389,6 +1390,49 @@ export default {
             'Connection': 'keep-alive',
           },
         })
+      }
+
+      // POST /analyze-session — produce a broad overview of one stored agent chat session.
+      // Body: { sessionId, userId? }. userId resolved from auth headers if not in body.
+      // No tools — analyzer is text-in / text-out via ANTHROPIC binding.
+      if (pathname === '/analyze-session' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { sessionId, userId: bodyUserId, authToken } = body
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const effectiveUserId = authContext.userId || bodyUserId
+        if (!effectiveUserId || !sessionId) {
+          return new Response(JSON.stringify({ error: 'sessionId and userId are required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await analyzeSession({ sessionId, userId: effectiveUserId, env })
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/analyze-session] error', err)
+          return new Response(JSON.stringify({ error: err?.message || 'analysis failed' }), { status: 500, headers: corsHeaders })
+        }
+      }
+
+      // POST /analyze-session/chat — follow-up dialog about the previously analyzed session.
+      // Body: { sessionId, history: [{role,content}], message, userId? }
+      if (pathname === '/analyze-session/chat' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { sessionId, history, message, userId: bodyUserId, authToken } = body
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const effectiveUserId = authContext.userId || bodyUserId
+        if (!effectiveUserId || !sessionId || !message) {
+          return new Response(JSON.stringify({ error: 'sessionId, userId, and message are required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await analyzeSessionDialog({ sessionId, userId: effectiveUserId, history, message, env })
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/analyze-session/chat] error', err)
+          return new Response(JSON.stringify({ error: err?.message || 'analysis dialog failed' }), { status: 500, headers: corsHeaders })
+        }
       }
 
       // GET /api/usage - Usage & cost dashboard data
