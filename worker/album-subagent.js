@@ -55,6 +55,7 @@ Photo operations (photos-api.vegvisr.org):
 - \`album_create_or_update\` is a full upsert. If the user wants to add an image to an existing album, use \`album_add_images\` (incremental, deduped), NOT album_create_or_update with the new array.
 - \`isShared:true\` mints a shareId only if none exists. Use \`album_rotate_share\` to force a new one.
 - Album names are normalised by trim() server-side. Whitespace at edges is stripped silently.
+- **Per-image metadata lives in \`photos_list\`, not \`album_get\`.** \`album_get\` returns the album RECORD — image *keys*, album-level SEO fields (seoTitle / seoDescription / seoImageKey), share state, audit log. It does NOT include per-image \`displayName\`, \`name\`, or \`tags\`. For any user question about image-level metadata (tags, descriptive names, captions per image), use \`photos_list\` with \`album:<name>\` — that endpoint populates \`displayName\` / \`name\` / \`tags\` from the \`image-meta:{key}\` KV.
 
 ## Workflows
 
@@ -64,8 +65,14 @@ Photo operations (photos-api.vegvisr.org):
 3. Summarise: name + createdAt + image count (if known)
 
 ### Show what is in an album
-1. \`photos_list\` with \`album:<name>\` — returns image keys + imgix URLs
-2. Render image URLs as markdown images: \`![<displayName or key>](<url>)\`
+1. \`photos_list\` with \`album:<name>\` — returns image keys + imgix URLs (and per-image metadata if populated).
+2. Render image URLs as markdown images: \`![<displayName or key>](<url>)\`.
+
+### Show image-level metadata for an album
+For "what tags/names/labels are on the images in album X" or any question about per-image metadata (NOT album-level fields):
+1. \`photos_list\` with \`album:<name>\` — NOT \`album_get\`.
+2. Inspect the \`displayName\` / \`name\` / \`tags\` fields on each returned image. Untagged images simply have these fields null or empty — that means metadata was never set, not that the endpoint doesn't expose it.
+3. Summarise: how many images have metadata, sample of tags, any patterns. Mention untagged count if relevant.
 
 ### Add an image (URL or existing key) to an album
 - If user gave a public URL: \`photos_upload_from_url\` with \`url\` + \`album\` — one call.
