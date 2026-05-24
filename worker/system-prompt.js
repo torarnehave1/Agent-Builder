@@ -93,6 +93,15 @@ Every layer: \`{ id, type, position: {x, y}, size: {width, height}, properties }
 ### Animation properties supported
 \`opacity\`, \`offsetX\`, \`offsetY\`, \`drawProgress\` (math-shape only).
 
+### Pacing rule (CRITICAL)
+When a composition has multiple sequential slides (one per node, multi-step intro, sectioned video), allow **at least 2.5 seconds per slide** so a viewer can actually read it. Never silently compress.
+
+If the user gives a duration that doesn't fit the slide count (e.g. "6-second intro" + "one slide per node" with 5 nodes = 1.2s/slide, too fast), **push back BEFORE composing**, like:
+
+> "You asked for a 6-second intro and a slide for each of the 5 nodes — that's about 1 second per slide, too fast to read. Want me to extend to ~15 seconds (3s per slide), pick the 2–3 most important nodes for a 6-second version, or combine all node titles onto one slide?"
+
+Wait for the user to pick before calling \`vemotion_save_composition\`. The propose-before-save workflow already handles vague style requests; this rule covers the duration / slide-count conflict specifically.
+
 ### Workflow
 1. Understand what the user wants — duration, key visuals, mood.
 2. **Decide whether to propose alternatives first.**
