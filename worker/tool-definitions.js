@@ -516,6 +516,155 @@ const TOOL_DEFINITIONS = [
       required: ['albumName']
     }
   },
+  // -------------------------------------------------------------------------
+  // Album & Photo subagent tools (delegate_to_albums calls these via the
+  // album-subagent). Each wraps an endpoint on albums-worker (albums.vegvisr.org)
+  // or photos-worker (photos-api.vegvisr.org). Auth: X-API-Token = the user's
+  // emailVerificationToken, plumbed via authContext.authToken.
+  // -------------------------------------------------------------------------
+  {
+    name: 'album_list',
+    description: 'List all photo albums. Returns just names by default; pass includeMeta:true to get an array of {name, createdBy, createdAt, updatedAt}. NOT owner-filtered server-side — every authenticated user sees every album. Filter client-side by createdBy if you only want the current user\'s albums.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        includeMeta: { type: 'boolean', description: 'If true, return metadata per album instead of just names.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      }
+    }
+  },
+  {
+    name: 'album_get',
+    description: 'Get one photo album by name. Returns the full album record: images (R2 keys), createdBy, createdAt, updatedAt, isShared, shareId, seoTitle, seoDescription, seoImageKey, auditLog.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_create_or_update',
+    description: 'Create a new photo album or fully upsert an existing one. The images array, if provided, REPLACES the existing list — use album_add_images for incremental adds. Setting isShared:true mints a shareId UUID if none exists.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name (required).' },
+        images: { type: 'array', items: { type: 'string' }, description: 'R2 image keys to set as the album\'s image list. REPLACES existing array if provided.' },
+        seoTitle: { type: 'string', description: 'Optional SEO title (nullable).' },
+        seoDescription: { type: 'string', description: 'Optional SEO description (nullable).' },
+        seoImageKey: { type: 'string', description: 'Optional R2 key of the cover image (nullable).' },
+        isShared: { type: 'boolean', description: 'If true, publishes the album and mints a shareId UUID if none exists.' },
+        regenerateShareId: { type: 'boolean', description: 'If true, rotates the shareId to a new UUID (invalidates old share URLs).' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_delete',
+    description: 'Delete a photo album entirely. Writes one final audit entry before removal. Does NOT delete the underlying R2 images — those remain in the bucket and may be referenced by other albums.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name to delete.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_add_images',
+    description: 'Add one or more R2 image keys to an existing album. Deduped (re-adding the same key is a no-op, not an error).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name.' },
+        images: { type: 'array', items: { type: 'string' }, description: 'R2 image keys to add. Use this for multiple.' },
+        image: { type: 'string', description: 'Single R2 image key to add. Use this for a single image instead of the images array.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_remove_images',
+    description: 'Remove one or more R2 image keys from an album. If a removed image was the seoImageKey (cover), the worker auto-rewrites seoImageKey to the first remaining image (or null if none).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name.' },
+        images: { type: 'array', items: { type: 'string' }, description: 'R2 image keys to remove. Use this for multiple.' },
+        image: { type: 'string', description: 'Single R2 image key to remove. Use this for a single image.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_publish',
+    description: 'Publish an album for public sharing. Sets isShared:true and mints a shareId UUID if none exists. The shared album is then readable without auth via photos_list with the shareId, or in a browser at https://seo.vegvisr.org/album/{shareId}.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name to publish.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'album_rotate_share',
+    description: 'Rotate the shareId of a shared album to a fresh UUID. Invalidates any previously-distributed share URL. Use when a share link needs to be revoked.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name whose shareId should be rotated.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name']
+    }
+  },
+  {
+    name: 'photos_list',
+    description: 'List images from the photos R2 bucket. No params → all images in the bucket (auth not required for that mode). With ?album=<name> → images in that album (auth required unless album.isShared). With ?share=<shareId> → public read of a shared album (no auth). Returns image keys + imgix CDN URLs + optional metadata.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        album: { type: 'string', description: 'Optional: list only images in this album.' },
+        share: { type: 'string', description: 'Optional: public read of a shared album by shareId (no auth needed).' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      }
+    }
+  },
+  {
+    name: 'photos_upload_from_url',
+    description: 'Upload an image to the photos R2 bucket by fetching it from a public URL. Optionally attaches it to an album in the same call. Returns the new R2 image key (and the album name if any). Useful for "save this URL into my album" flows.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Publicly fetchable URL of the image to upload.' },
+        album: { type: 'string', description: 'Optional: album name to attach the resulting key to (deduped).' },
+        filename: { type: 'string', description: 'Optional base filename. If omitted, a timestamp-based key is generated.' },
+        displayName: { type: 'string', description: 'Optional human-friendly name stored under image-meta.' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional tags stored under image-meta.' }
+      },
+      required: ['url']
+    }
+  },
+  {
+    name: 'photos_delete',
+    description: 'Soft-delete an image. Moves the object to trash/{timestamp}-{key} (recoverable) AND CASCADES: walks every album in KV and removes this key from each album.images array. Returns counts so you can confirm the cascade. Use carefully — confirm with the user before calling on a key referenced by multiple albums.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'R2 image key to soft-delete.' }
+      },
+      required: ['key']
+    }
+  },
   {
     name: 'analyze_image',
     description: 'Analyze an image by URL. Useful for describing photos, extracting text (OCR), identifying objects, or answering questions about visual content. Works with imgix CDN URLs (vegvisr.imgix.net) and any public image URL.',
@@ -1847,6 +1996,24 @@ const TOOL_DEFINITIONS = [
   // -------------------------------------------------------------------------
   // Contact Management
   // -------------------------------------------------------------------------
+  {
+    name: 'delegate_to_albums',
+    description: 'Delegate photo album / image management tasks to the Albums subagent. Use for: listing the user\'s albums, browsing album contents, creating/renaming/deleting albums, adding or removing images from an album, uploading new images from URLs, publishing an album for public sharing (with shareId), or soft-deleting images (with cascade across all albums). The subagent knows the auth + cascade gotchas and the two backing workers (albums.vegvisr.org + photos-api.vegvisr.org).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task: {
+          type: 'string',
+          description: 'What to do. Include all relevant details: which album, which images (URLs or R2 keys), whether to publish, etc. Examples: "List my albums", "Add these 3 URLs to my Summer-2025 album", "Show what is in album Norse-Gongs", "Publish album Summer-2025 for sharing", "Remove image 1730000000000-1.png from Summer-2025".'
+        },
+        albumName: {
+          type: 'string',
+          description: 'Optional: a specific album name the task targets, if the user already named one.'
+        }
+      },
+      required: ['task']
+    }
+  },
   {
     name: 'delegate_to_contact',
     description: 'Delegate contact management tasks to the Contact subagent. Use for: listing/searching contacts, viewing contact details, adding interaction logs (text or transcribed voice notes), creating or updating contacts. The subagent knows the exact table IDs and column names.',

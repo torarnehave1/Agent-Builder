@@ -17,6 +17,7 @@ import { runBotSubagent } from './bot-subagent.js'
 import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
 import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
+import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -1052,6 +1053,276 @@ async function executeGetAlbumImages(input, env) {
     albumName,
     imageCount: images.length,
     images,
+  }
+}
+
+// ── album & photo subagent tool implementations ──────────────────
+// Wrap the albums-worker (KV album records) and photos-worker (R2 + trash).
+// Auth: X-API-Token = emailVerificationToken, read via getAuthTokenFromToolInput.
+// Service bindings: env.ALBUMS_WORKER, env.PHOTOS_WORKER.
+
+async function albumsApiFetch({ env, authToken, method = 'GET', path, body = null }) {
+  if (!env.ALBUMS_WORKER) throw new Error('ALBUMS_WORKER service binding is not configured')
+  const headers = { 'X-API-Token': authToken }
+  const init = { method, headers }
+  if (body !== null) {
+    headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const res = await env.ALBUMS_WORKER.fetch(`https://vegvisr-albums-worker${path}`, init)
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+  if (!res.ok) throw new Error(data.error || `albums-worker ${res.status}: ${text.slice(0, 200)}`)
+  return data
+}
+
+async function photosApiFetch({ env, authToken, method = 'GET', path, body = null, formData = null }) {
+  if (!env.PHOTOS_WORKER) throw new Error('PHOTOS_WORKER service binding is not configured')
+  const headers = {}
+  if (authToken) headers['X-API-Token'] = authToken
+  const init = { method, headers }
+  if (formData) {
+    // Do NOT set Content-Type when sending FormData — runtime sets the multipart boundary
+    init.body = formData
+  } else if (body !== null) {
+    headers['Content-Type'] = 'application/json'
+    init.body = JSON.stringify(body)
+  }
+  const res = await env.PHOTOS_WORKER.fetch(`https://vegvisr-photos-worker${path}`, init)
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+  if (!res.ok) throw new Error(data.error || `photos-worker ${res.status}: ${text.slice(0, 200)}`)
+  return data
+}
+
+async function executeAlbumList(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to list albums.')
+  const path = input?.includeMeta ? '/photo-albums?includeMeta=1' : '/photo-albums'
+  const data = await albumsApiFetch({ env, authToken, path })
+  const albums = data?.albums || data?.names || data
+  const count = Array.isArray(albums) ? albums.length : 0
+  return { message: `Found ${count} album(s)`, count, albums }
+}
+
+async function executeAlbumGet(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to read an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const data = await albumsApiFetch({ env, authToken, path: `/photo-album?name=${encodeURIComponent(name)}` })
+  return {
+    message: `Album "${name}" loaded`,
+    name,
+    album: data,
+    imageCount: Array.isArray(data?.images) ? data.images.length : 0,
+  }
+}
+
+async function executeAlbumCreateOrUpdate(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to modify an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const body = { name }
+  if (Array.isArray(input.images)) body.images = input.images
+  if (typeof input.seoTitle === 'string') body.seoTitle = input.seoTitle
+  if (typeof input.seoDescription === 'string') body.seoDescription = input.seoDescription
+  if (typeof input.seoImageKey === 'string') body.seoImageKey = input.seoImageKey
+  if (typeof input.isShared === 'boolean') body.isShared = input.isShared
+  if (input.regenerateShareId === true) body.regenerateShareId = true
+  const data = await albumsApiFetch({ env, authToken, method: 'POST', path: '/photo-album', body })
+  return {
+    message: `Album "${name}" saved`,
+    name,
+    album: data,
+    shareId: data?.shareId || data?.album?.shareId || null,
+  }
+}
+
+async function executeAlbumDelete(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to delete an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const data = await albumsApiFetch({
+    env, authToken, method: 'DELETE',
+    path: `/photo-album?name=${encodeURIComponent(name)}`,
+  })
+  return { message: `Album "${name}" deleted`, name, result: data }
+}
+
+async function executeAlbumAddImages(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to modify an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const images = Array.isArray(input.images)
+    ? input.images
+    : (typeof input.image === 'string' ? [input.image] : [])
+  if (images.length === 0) throw new Error('images or image is required')
+  const body = images.length === 1 ? { name, image: images[0] } : { name, images }
+  const data = await albumsApiFetch({ env, authToken, method: 'POST', path: '/photo-album/add', body })
+  return {
+    message: `Added ${images.length} image(s) to "${name}"`,
+    name,
+    addedCount: images.length,
+    album: data,
+  }
+}
+
+async function executeAlbumRemoveImages(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to modify an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const images = Array.isArray(input.images)
+    ? input.images
+    : (typeof input.image === 'string' ? [input.image] : [])
+  if (images.length === 0) throw new Error('images or image is required')
+  const body = images.length === 1 ? { name, image: images[0] } : { name, images }
+  const data = await albumsApiFetch({ env, authToken, method: 'POST', path: '/photo-album/remove', body })
+  return {
+    message: `Removed ${images.length} image(s) from "${name}"`,
+    name,
+    removedCount: images.length,
+    album: data,
+  }
+}
+
+async function executeAlbumPublish(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to publish an album.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const data = await albumsApiFetch({
+    env, authToken, method: 'POST', path: '/photo-album',
+    body: { name, isShared: true },
+  })
+  const shareId = data?.shareId || data?.album?.shareId || null
+  return {
+    message: shareId ? `Album "${name}" published` : `Publish requested for "${name}" (shareId not in response)`,
+    name,
+    shareId,
+    shareUrl: shareId ? `https://seo.vegvisr.org/album/${shareId}` : null,
+    album: data,
+  }
+}
+
+async function executeAlbumRotateShare(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to rotate a share link.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const data = await albumsApiFetch({
+    env, authToken, method: 'POST', path: '/photo-album',
+    body: { name, isShared: true, regenerateShareId: true },
+  })
+  const shareId = data?.shareId || data?.album?.shareId || null
+  return {
+    message: `ShareId rotated for "${name}"`,
+    name,
+    shareId,
+    shareUrl: shareId ? `https://seo.vegvisr.org/album/${shareId}` : null,
+    album: data,
+  }
+}
+
+async function executePhotosList(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  const params = new URLSearchParams()
+  if (typeof input?.album === 'string' && input.album.trim()) params.set('album', input.album.trim())
+  if (typeof input?.share === 'string' && input.share.trim()) params.set('share', input.share.trim())
+  const qs = params.toString() ? `?${params.toString()}` : ''
+  // share mode is auth-not-required; bucket-listing is also auth-not-required.
+  // album mode needs auth unless the album is shared. Pass token if we have one.
+  const data = await photosApiFetch({
+    env,
+    authToken: authToken || null,
+    path: `/list-r2-images${qs}`,
+  })
+  const images = Array.isArray(data?.images) ? data.images : []
+  return {
+    message: `Listed ${images.length} image(s)` + (input?.album ? ` in album "${input.album}"` : input?.share ? ` from shared album` : ''),
+    count: images.length,
+    images,
+    album: data?.album || null,
+  }
+}
+
+async function executePhotosUploadFromUrl(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  const url = typeof input?.url === 'string' ? input.url.trim() : ''
+  if (!url) throw new Error('url is required')
+  if (!/^https?:\/\//i.test(url)) throw new Error('url must be HTTP(S)')
+
+  const imgRes = await fetch(url)
+  if (!imgRes.ok) throw new Error(`Failed to fetch source image (${imgRes.status})`)
+  const blob = await imgRes.blob()
+  const contentType = imgRes.headers.get('content-type') || blob.type || 'application/octet-stream'
+
+  // Derive filename: explicit input.filename → from URL path → fallback
+  let filename = (typeof input?.filename === 'string' && input.filename.trim()) ? input.filename.trim() : ''
+  if (!filename) {
+    try {
+      const u = new URL(url)
+      const last = u.pathname.split('/').filter(Boolean).pop() || 'image'
+      filename = last.includes('.') ? last : `${last}.${(contentType.split('/')[1] || 'bin').split(';')[0]}`
+    } catch {
+      filename = 'image.bin'
+    }
+  }
+
+  const formData = new FormData()
+  formData.append('file', new File([blob], filename, { type: contentType }))
+  if (typeof input?.album === 'string' && input.album.trim()) formData.append('album', input.album.trim())
+  if (typeof input?.filename === 'string' && input.filename.trim()) formData.append('filename', input.filename.trim())
+  if (typeof input?.displayName === 'string' && input.displayName.trim()) formData.append('displayName', input.displayName.trim())
+  if (Array.isArray(input?.tags) && input.tags.length > 0) {
+    try { formData.append('tags', JSON.stringify(input.tags)) } catch { /* ignore */ }
+  }
+
+  const data = await photosApiFetch({
+    env,
+    authToken: authToken || null,
+    method: 'POST',
+    path: '/upload',
+    formData,
+  })
+
+  const keys = Array.isArray(data?.keys) ? data.keys : []
+  const urls = Array.isArray(data?.urls) ? data.urls : []
+  return {
+    message: keys.length > 0
+      ? `Uploaded ${keys.length} image(s) to ${data?.album ? `album "${data.album}"` : 'bucket'}`
+      : 'Upload returned no keys',
+    keys,
+    urls,
+    key: keys[0] || null,
+    url: urls[0] || null,
+    album: data?.album || null,
+  }
+}
+
+async function executePhotosDelete(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  const key = typeof input?.key === 'string' ? input.key.trim() : ''
+  if (!key) throw new Error('key is required')
+  // Note: cascade — the worker walks every album in KV and removes this key.
+  const data = await photosApiFetch({
+    env,
+    authToken: authToken || null,
+    method: 'DELETE',
+    path: `/delete-r2-image?key=${encodeURIComponent(key)}`,
+  })
+  return {
+    message: `Image "${key}" soft-deleted (cascaded across albums)`,
+    key,
+    deleted: data?.deleted ?? null,
+    trashed: data?.trashed ?? null,
+    deletedAt: data?.deletedAt ?? null,
   }
 }
 
@@ -5630,6 +5901,28 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeSearchUnsplash(toolInput, env)
     case 'get_album_images':
       return await executeGetAlbumImages(toolInput, env)
+    case 'album_list':
+      return await executeAlbumList(toolInput, env)
+    case 'album_get':
+      return await executeAlbumGet(toolInput, env)
+    case 'album_create_or_update':
+      return await executeAlbumCreateOrUpdate(toolInput, env)
+    case 'album_delete':
+      return await executeAlbumDelete(toolInput, env)
+    case 'album_add_images':
+      return await executeAlbumAddImages(toolInput, env)
+    case 'album_remove_images':
+      return await executeAlbumRemoveImages(toolInput, env)
+    case 'album_publish':
+      return await executeAlbumPublish(toolInput, env)
+    case 'album_rotate_share':
+      return await executeAlbumRotateShare(toolInput, env)
+    case 'photos_list':
+      return await executePhotosList(toolInput, env)
+    case 'photos_upload_from_url':
+      return await executePhotosUploadFromUrl(toolInput, env)
+    case 'photos_delete':
+      return await executePhotosDelete(toolInput, env)
     case 'analyze_image':
       return await executeAnalyzeImage(toolInput, env)
     case 'get_formatting_reference':
@@ -5994,6 +6287,24 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
           ? `YouTube graph subagent completed: ${(result.summary || '').slice(0, 500)}`
           : `YouTube graph subagent failed: ${result.error || 'Unknown error'}`,
         viewUrl: result.viewUrl,
+      }
+    }
+    case 'delegate_to_albums': {
+      const result = await runAlbumSubagent(toolInput, env, progress, executeTool)
+      return {
+        success: result.success,
+        summary: result.summary,
+        albumName: result.albumName,
+        turns: result.turns,
+        model: result.model,
+        inputTokens: result.inputTokens || 0,
+        outputTokens: result.outputTokens || 0,
+        actionsPerformed: (result.actions || []).map(a => ({
+          tool: a.tool, success: a.success, summary: a.summary || a.error,
+        })),
+        message: result.success
+          ? `Album subagent completed: ${(result.summary || '').slice(0, 500)}`
+          : `Album subagent failed: ${result.error || 'Unknown error'}`,
       }
     }
     case 'delegate_to_contact': {

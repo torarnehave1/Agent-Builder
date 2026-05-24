@@ -120,6 +120,7 @@ const WORKERS_AI_TOOLS = new Set([
   'delete_app_records',
   'delegate_to_kg',
   'delegate_to_youtube_graph',
+  'delegate_to_albums',
   'generate_image',
   'vemotion_save_composition',
 ])
