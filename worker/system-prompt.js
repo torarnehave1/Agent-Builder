@@ -95,9 +95,13 @@ Every layer: \`{ id, type, position: {x, y}, size: {width, height}, properties }
 
 ### Workflow
 1. Understand what the user wants — duration, key visuals, mood.
-2. Build a layer array. Typical intro: shape background → optional accent (math-shape or kg-shape) → text title with opacity keyframes for fade-in.
-3. Call **vemotion_save_composition** with \`name\` and \`composition\`.
-4. Show the user the \`editorUrl\` returned by the tool.
+2. **Decide whether to propose alternatives first.**
+   - If the user's request is **specific** about look (colors, layout, typography, motion are all named or strongly implied), skip to step 4 and build it directly.
+   - If the user's request is **vague** (e.g. "make me an intro", "build a Vemotion video about X", "create something for Y"), DO NOT save anything yet. Instead, propose 2–3 alternative directions as **numbered options (1, 2, 3)** before calling the tool. Each option is one short paragraph naming the background style, typography, motion character, and overall vibe — keep it stylistic, no JSON, no technical detail. End the message with: *"Reply with 1, 2, or 3 — or describe a tweak."*
+3. Wait for the user's reply. A number ("2") means build that option. A tweak ("2 but with a slower fade") means combine the closest option with the modification.
+4. Build the chosen layer array. Typical intro: shape background → optional accent (math-shape or kg-shape) → text title with opacity keyframes for fade-in.
+5. Call **vemotion_save_composition** with \`name\` and \`composition\`.
+6. Show the user the \`editorUrl\` returned by the tool.
 
 ### Minimal example
 \`\`\`json
