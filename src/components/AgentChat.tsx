@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import SessionAnalysisPanel from './SessionAnalysisPanel';
+import JsonViewerModal from './JsonViewerModal';
 // rehype-sanitize removed: agent-generated content is trusted,
 // and the sanitizer was stripping graph viewer hrefs from links
 
@@ -376,6 +378,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   const [svgOpen, setSvgOpen] = useState(false);
+  const [jsonModalOpen, setJsonModalOpen] = useState(false);
   let inputStr = '';
   try { inputStr = JSON.stringify(tc.input, null, 2); } catch { inputStr = String(tc.input); }
   let resultStr = '';
@@ -393,6 +396,15 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
   const canPreview = isHtmlNode && tc.status === 'success';
   const svgContent = extractSvgFromResult(tc);
   const canSvgPreview = !!svgContent;
+
+  // Vemotion: when a composition is saved, embed the player + offer JSON view
+  const isVemotionSave = tc.tool === 'vemotion_save_composition' && tc.status === 'success';
+  const vemotionResult = (tc.result || {}) as Record<string, unknown>;
+  const vemotionCompositionId = typeof vemotionResult.compositionId === 'string' ? vemotionResult.compositionId : '';
+  const vemotionComposition = (input.composition && typeof input.composition === 'object') ? input.composition : null;
+  const vemotionName = typeof input.name === 'string' ? input.name : (typeof vemotionResult.name === 'string' ? vemotionResult.name : 'Composition');
+  const vemotionEditorUrl = typeof vemotionResult.editorUrl === 'string' ? vemotionResult.editorUrl : (vemotionCompositionId ? `https://vemotion.vegvisr.org/?compositionId=${vemotionCompositionId}` : '');
+  const vemotionEmbedUrl = vemotionCompositionId ? `https://vemotion.vegvisr.org/?compositionId=${encodeURIComponent(vemotionCompositionId)}&embed=1` : '';
 
   const saveAsTemplate = async () => {
     // Get the HTML content from whichever tool was used
@@ -478,6 +490,52 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
             <div className="mt-2 rounded overflow-hidden border border-white/10 bg-white/5 p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
               <div dangerouslySetInnerHTML={{ __html: svgContent! }} />
             </div>
+          )}
+        </div>
+      )}
+      {isVemotionSave && vemotionCompositionId && (
+        <div className="mx-3 my-2">
+          <div className="rounded-lg overflow-hidden border border-white/10 bg-black">
+            <iframe
+              src={vemotionEmbedUrl}
+              title={`Vemotion preview: ${vemotionName}`}
+              className="w-full block"
+              style={{ aspectRatio: '16 / 9', border: 0 }}
+              loading="lazy"
+              allow="autoplay; fullscreen"
+            />
+          </div>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {vemotionComposition && (
+              <button
+                type="button"
+                onClick={() => setJsonModalOpen(true)}
+                className="px-2 py-1 text-xs rounded bg-sky-600/20 text-sky-300 hover:bg-sky-600/30 border border-sky-500/20"
+              >
+                View JSON
+              </button>
+            )}
+            {vemotionEditorUrl && (
+              <a
+                href={vemotionEditorUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-2 py-1 text-xs rounded bg-violet-600/20 text-violet-300 hover:bg-violet-600/30 border border-violet-500/20"
+              >
+                Open in editor &#8599;
+              </a>
+            )}
+            <span className="text-[10px] text-white/30 ml-auto truncate" title={vemotionCompositionId}>
+              {vemotionCompositionId}
+            </span>
+          </div>
+          {vemotionComposition && (
+            <JsonViewerModal
+              open={jsonModalOpen}
+              title={`Composition JSON — ${vemotionName}`}
+              value={vemotionComposition}
+              onClose={() => setJsonModalOpen(false)}
+            />
           )}
         </div>
       )}
@@ -694,6 +752,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [analysisOpen, setAnalysisOpen] = useState(false);
   const [htmlNodePicker, setHtmlNodePicker] = useState<Array<{ id: string; label: string; info: string }> | null>(null);
   const lastAgentGraphRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -2188,7 +2247,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   const hasMessages = messages.length > 0 || current !== null;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-1 min-h-0">
+      <div className="flex flex-col flex-1 min-h-0">
       {/* Graph selector bar + Sessions + Copy Log */}
       <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-white/10 bg-slate-950/80 flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-2">
@@ -2200,6 +2260,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
             >
               Sessions ({sessions.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnalysisOpen(p => !p)}
+              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${analysisOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+              title="Open the Session Analysis side panel"
+            >
+              Analyze
             </button>
             {sessionsOpen && (
               <div className="absolute top-full mt-1 left-0 w-[calc(100vw-2rem)] sm:w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
@@ -2873,6 +2941,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           className="hidden"
         />
       </div>
+      </div>
+      {analysisOpen && <SessionAnalysisPanel userId={userId} onClose={() => setAnalysisOpen(false)} />}
     </div>
   );
 }
