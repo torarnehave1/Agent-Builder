@@ -817,6 +817,22 @@ Text layers have three optional properties:
 - **Iris-reveal intro:** any layer + mask-wipe radial keyframes [{0,0},{1,1}] = iris opens.
 - **Type-on title:** text layer + char-stagger opacity (~0.05s stagger) = classic terminal/typewriter reveal.
 
+## Reformatting for a different aspect ratio (refit)
+
+Use the **\`vemotion_refit_composition\`** tool when the user asks to reformat an existing composition for a new canvas size — "make this for Instagram", "version this for Reels", "square version", "vertical version", etc. The tool calls the Vemotion worker's canonical refit algorithm server-side; no LLM in the math. Three modes:
+
+| mode | Behaviour | When to pick |
+|---|---|---|
+| \`fill\` | Uniform scale + centred offset; edges may clip | **Default for most reformats.** Edges get cropped but the frame fills. |
+| \`fit\` | Uniform scale + letterbox bars on the longer axis | Use when nothing should be cut (e.g. text or a logo near the edge that must stay visible). |
+| \`stretch\` | Non-uniform scale; circles become ellipses, text squashes | Almost never. Only when the user explicitly asks for non-uniform stretch. |
+
+Inputs: pass \`compositionId\` (a saved comp) OR an inline \`composition\`. \`targetWidth\` + \`targetHeight\` + \`mode\` required. If \`name\` provided → saved as a NEW composition, returns id; if omitted → returns the refit body inline (useful for chaining).
+
+Common targets: 1280x720 / 1920x1080 (landscape), 1080x1080 (Square), 1080x1920 (Reels / Stories), 720x1280 (Reels SD).
+
+Known limitations carried over from §12: math-shape and motionScenes formulas with hard-coded pixel constants don't auto-scale (only references to \`x0\` / \`y0\` / \`w\` / \`h\` adapt). To make a math-shape refit cleanly, author its formula in terms of \`w\` / \`h\` percentages, e.g. \`x0 + p * w\` instead of \`x0 + t * 60\`.
+
 ## Minimal valid composition
 
 \`\`\`json

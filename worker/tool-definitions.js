@@ -769,6 +769,23 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'vemotion_refit_composition',
+    description: 'Reformat a Vemotion composition for a new canvas aspect ratio (e.g. 1280x720 landscape → 1080x1080 Instagram Square → 1080x1920 Reels). Server-side transformation — the Vemotion worker runs the canonical refit algorithm (src/lib/refit.ts); zero LLM in the math. Use whenever the user asks to "make this for Instagram", "version this for Reels", "square version", "vertical version", etc. Provide EXACTLY ONE of `compositionId` (refit a saved composition; owner check applies) or `composition` (refit an inline body). Mode `fill` is the default for most reformats. If `name` is provided, the result is saved as a NEW composition and `compositionId` is returned; if `name` is omitted, the refit composition body is returned inline (use for chaining downstream without persisting).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        compositionId: { type: 'string', description: 'Refit a saved composition by id. Provide this OR composition, not both.' },
+        composition: { type: 'object', description: 'Refit an inline CompositionData body. Provide this OR compositionId, not both. Must include width, height, layers[].' },
+        targetWidth: { type: 'number', description: 'New canvas width in pixels (e.g. 1080 for Square/Reels, 1920 for FHD landscape).' },
+        targetHeight: { type: 'number', description: 'New canvas height in pixels (e.g. 1080 for Square, 1920 for Reels, 1080 for FHD landscape).' },
+        mode: { type: 'string', enum: ['fit', 'fill', 'stretch'], description: 'fit = uniform scale + letterbox bars (nothing clipped). fill = uniform scale + centred offset, edges may clip (DEFAULT for most reformats). stretch = non-uniform scale, no clip but distorts circles/text.' },
+        name: { type: 'string', description: 'Optional. If provided, saves the refit result as a new composition under this name and returns its id. If omitted, returns the refit composition body inline without saving (useful when chaining).' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['targetWidth', 'targetHeight', 'mode']
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {

@@ -1913,6 +1913,75 @@ async function executeVemotionSaveComposition(input, env) {
   }
 }
 
+// Thin wrapper for POST /vemotion/composition/refit — the Vemotion worker
+// runs the canonical refit algorithm (src/lib/refit.ts). Zero LLM in the math.
+async function executeVemotionRefitComposition(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to refit a Vemotion composition.')
+  if (!env.VEMOTION_WORKER) throw new Error('VEMOTION_WORKER service binding is not configured')
+
+  const hasId = typeof input?.compositionId === 'string' && input.compositionId.trim()
+  const hasInline = input?.composition && typeof input.composition === 'object'
+  if (hasId && hasInline) throw new Error('Provide compositionId OR composition, not both.')
+  if (!hasId && !hasInline) throw new Error('Provide compositionId or an inline composition.')
+
+  const targetWidth = Number(input?.targetWidth)
+  const targetHeight = Number(input?.targetHeight)
+  if (!Number.isFinite(targetWidth) || targetWidth <= 0) throw new Error('targetWidth (positive number) is required')
+  if (!Number.isFinite(targetHeight) || targetHeight <= 0) throw new Error('targetHeight (positive number) is required')
+
+  const mode = typeof input?.mode === 'string' ? input.mode : ''
+  if (!['fit', 'fill', 'stretch'].includes(mode)) {
+    throw new Error('mode must be one of "fit" | "fill" | "stretch"')
+  }
+
+  const body = { targetWidth, targetHeight, mode }
+  if (hasId) body.compositionId = input.compositionId.trim()
+  if (hasInline) body.composition = input.composition
+  if (typeof input?.name === 'string' && input.name.trim()) body.name = input.name.trim()
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/composition/refit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Token': authToken },
+    body: JSON.stringify(body),
+  })
+
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+
+  if (res.status !== 200 && res.status !== 201) {
+    throw new Error(`vemotion refit ${res.status}: ${data.error || text.slice(0, 300)}`)
+  }
+
+  // 201 = saved (name was provided); 200 = inline transform (no save)
+  if (res.status === 201) {
+    const compositionId = data?.id || data?.summary?.id
+    return {
+      message: `Refit saved as new composition (${targetWidth}x${targetHeight}, ${mode})`,
+      mode: 'saved',
+      compositionId,
+      name: data?.summary?.name || body.name,
+      duration: data?.summary?.duration,
+      width: data?.summary?.width ?? targetWidth,
+      height: data?.summary?.height ?? targetHeight,
+      layerCount: data?.summary?.layerCount,
+      editorUrl: compositionId ? `https://vemotion.vegvisr.org/?compositionId=${compositionId}` : null,
+    }
+  }
+
+  // 200 inline
+  const refitComp = data?.composition || null
+  return {
+    message: `Refit computed (${targetWidth}x${targetHeight}, ${mode}); not saved`,
+    mode: 'inline',
+    composition: refitComp,
+    layerCount: Array.isArray(refitComp?.layers) ? refitComp.layers.length : null,
+    width: refitComp?.width ?? targetWidth,
+    height: refitComp?.height ?? targetHeight,
+  }
+}
+
 async function executeTranscribeAudio(input, env) {
   const { recordingId, audioUrl, language, saveToPortfolio = false, saveToGraph = false, graphTitle } = input
   // Resolve UUID to email if needed — audio-portfolio-worker expects email
@@ -6073,6 +6142,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListRealtimeVideos(toolInput, env)
     case 'vemotion_save_composition':
       return await executeVemotionSaveComposition(toolInput, env)
+    case 'vemotion_refit_composition':
+      return await executeVemotionRefitComposition(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':
