@@ -1745,9 +1745,77 @@ function getAuthTokenFromToolInput(input) {
 
 // ---------------------------------------------------------------------------
 // Vemotion — save a composition to the user's cloud library.
-// MVP: one tool. No render, no project endpoints, no list/get/delete.
+// Two modes:
+//   1) composition provided → save it as-is (with default fps/width/height/duration).
+//   2) albumName provided (and no composition) → server-side shortcut: fetch the
+//      album's real image keys from photos-worker, build a default cross-fade
+//      slideshow (one image per slide), save it. Zero LLM in the fetch path.
 // The user opens editorUrl in the Vemotion app to view/edit/render.
 // ---------------------------------------------------------------------------
+
+function buildSlideshowFromImageKeys(imageKeys, { secondsPerImage, transitionSeconds }) {
+  const spi = (typeof secondsPerImage === 'number' && secondsPerImage > 0) ? secondsPerImage : 3
+  const fade = (typeof transitionSeconds === 'number' && transitionSeconds >= 0) ? Math.min(transitionSeconds, spi / 2) : 0.5
+  const width = 1280
+  const height = 720
+  const layers = [
+    {
+      id: 'bg',
+      type: 'shape',
+      position: { x: 0, y: 0 },
+      size: { width, height },
+      properties: { shape: 'rect', color: '#000000' },
+    },
+  ]
+  let cursor = 0
+  imageKeys.forEach((key, idx) => {
+    const layerDuration = spi
+    const startTime = cursor
+    // Cross-fade keyframes layer-relative
+    const keyframes = [
+      { time: 0, value: 0 },
+      { time: fade, value: 1 },
+      { time: Math.max(fade, layerDuration - fade), value: 1 },
+      { time: layerDuration, value: 0 },
+    ]
+    layers.push({
+      id: `img-${idx + 1}`,
+      type: 'image',
+      position: { x: 0, y: 0 },
+      size: { width, height },
+      startTime,
+      layerDuration,
+      properties: {
+        src: `https://vegvisr.imgix.net/${key}`,
+        fit: 'cover',
+      },
+      animation: { property: 'opacity', keyframes },
+    })
+    // Overlap slides by the fade duration so the cross-fade is continuous
+    cursor += layerDuration - fade
+  })
+  const duration = imageKeys.length === 0
+    ? 5
+    : cursor + fade // tail covers the last image's fade-out
+  return { duration, fps: 30, width, height, layers }
+}
+
+async function fetchAlbumImageKeys({ env, authToken, albumName }) {
+  if (!env.PHOTOS_WORKER) throw new Error('PHOTOS_WORKER service binding is not configured')
+  const headers = {}
+  if (authToken) headers['X-API-Token'] = authToken
+  const res = await env.PHOTOS_WORKER.fetch(
+    `https://vegvisr-photos-worker/list-r2-images?album=${encodeURIComponent(albumName)}`,
+    { headers }
+  )
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+  if (!res.ok) throw new Error(data.error || `photos-worker ${res.status}: ${text.slice(0, 200)}`)
+  const images = Array.isArray(data?.images) ? data.images : []
+  return images.map(img => img?.key).filter(k => typeof k === 'string' && k.length > 0)
+}
+
 async function executeVemotionSaveComposition(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
   if (!authToken) {
@@ -1761,32 +1829,54 @@ async function executeVemotionSaveComposition(input, env) {
     ? input.name.trim()
     : 'Untitled composition'
 
-  const inputComp = (input?.composition && typeof input.composition === 'object') ? input.composition : {}
-  const layers = Array.isArray(inputComp.layers) ? inputComp.layers : []
-  if (layers.length === 0) {
-    throw new Error('composition.layers must be a non-empty array')
-  }
+  const albumName = typeof input?.albumName === 'string' && input.albumName.trim()
+    ? input.albumName.trim()
+    : ''
+  const hasComposition = input?.composition && typeof input.composition === 'object'
 
-  // Derive duration from layers (max of startTime + layerDuration) if not provided.
-  let derivedDuration = 5
-  for (const layer of layers) {
-    const start = typeof layer?.startTime === 'number' ? layer.startTime : 0
-    const dur = typeof layer?.layerDuration === 'number' ? layer.layerDuration : null
-    if (dur !== null) {
-      const candidate = start + dur
-      if (candidate > derivedDuration) derivedDuration = candidate
+  let composition
+  let sourceMode = 'custom'
+
+  if (!hasComposition && albumName) {
+    // SHORTCUT MODE: server-side resolve album → slideshow. Zero LLM in the fetch.
+    sourceMode = 'album-slideshow'
+    const imageKeys = await fetchAlbumImageKeys({ env, authToken, albumName })
+    if (imageKeys.length === 0) {
+      throw new Error(`Album "${albumName}" has no images — nothing to put in a slideshow.`)
     }
-  }
+    composition = buildSlideshowFromImageKeys(imageKeys, {
+      secondsPerImage: input.secondsPerImage,
+      transitionSeconds: input.transitionSeconds,
+    })
+  } else {
+    // CUSTOM MODE: caller supplied a full composition.
+    const inputComp = hasComposition ? input.composition : {}
+    const layers = Array.isArray(inputComp.layers) ? inputComp.layers : []
+    if (layers.length === 0) {
+      throw new Error('Provide either `composition` (with non-empty layers) OR `albumName` (shortcut for a slideshow).')
+    }
 
-  const composition = {
-    duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
-    fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
-    width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
-    height: typeof inputComp.height === 'number' ? inputComp.height : 720,
-    layers,
+    // Derive duration from layers (max of startTime + layerDuration) if not provided.
+    let derivedDuration = 5
+    for (const layer of layers) {
+      const start = typeof layer?.startTime === 'number' ? layer.startTime : 0
+      const dur = typeof layer?.layerDuration === 'number' ? layer.layerDuration : null
+      if (dur !== null) {
+        const candidate = start + dur
+        if (candidate > derivedDuration) derivedDuration = candidate
+      }
+    }
+
+    composition = {
+      duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
+      fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
+      width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
+      height: typeof inputComp.height === 'number' ? inputComp.height : 720,
+      layers,
+    }
+    if (typeof inputComp.fontFamily === 'string') composition.fontFamily = inputComp.fontFamily
+    if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
   }
-  if (typeof inputComp.fontFamily === 'string') composition.fontFamily = inputComp.fontFamily
-  if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
 
   const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/composition/save', {
     method: 'POST',
@@ -1810,11 +1900,15 @@ async function executeVemotionSaveComposition(input, env) {
   }
 
   return {
-    message: 'Vemotion composition saved',
+    message: sourceMode === 'album-slideshow'
+      ? `Vemotion slideshow built from album "${albumName}" (${composition.layers.length - 1} image(s))`
+      : 'Vemotion composition saved',
     compositionId,
     name: data?.summary?.name || name,
-    duration: data?.summary?.duration,
-    layerCount: data?.summary?.layerCount,
+    duration: data?.summary?.duration ?? composition.duration,
+    layerCount: data?.summary?.layerCount ?? composition.layers.length,
+    sourceMode,
+    sourceAlbum: sourceMode === 'album-slideshow' ? albumName : undefined,
     editorUrl: `https://vemotion.vegvisr.org/?compositionId=${compositionId}`,
   }
 }

@@ -730,14 +730,14 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'vemotion_save_composition',
-    description: 'Save a Vemotion video composition to the user\'s cloud library. Vemotion is the layer-based video composer at vemotion.vegvisr.org — you build a CompositionData object with a `layers` array (text / shape / math-shape / image / kg-shape / card) and optional per-layer animations, then call this tool. Returns the new compositionId and a URL the user can open to view and edit the composition in the Vemotion app. Use this for any user request to create / build / make a video, intro, animation, or composition. Does NOT render the video to MP4 — the user renders themselves from the editor.',
+    description: 'Save a Vemotion video composition to the user\'s cloud library. Vemotion is the layer-based video composer at vemotion.vegvisr.org. TWO USAGE MODES: (1) Pass `composition` — the full CompositionData object you assembled yourself (text / shape / math-shape / image / kg-shape / card layers with animations). Use this when you need custom styling. (2) Pass `albumName` — server-side shortcut that resolves the album to its real image keys and builds a default cross-fade slideshow (one image per slide). Use this when the user just wants a simple slideshow of an existing album. Returns the new compositionId and a URL the user can open to view and edit the composition in the Vemotion app. Does NOT render the video to MP4 — the user renders themselves from the editor.',
     input_schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Short title shown in the user\'s Vemotion composition list (e.g. "Hello World intro").' },
+        name: { type: 'string', description: 'Short title shown in the user\'s Vemotion composition list (e.g. "Hello World intro", "Summer 2026 slideshow").' },
         composition: {
           type: 'object',
-          description: 'The full Vemotion CompositionData. Must include a non-empty layers array. duration / fps / width / height fall back to 5s / 30fps / 1280x720 if omitted.',
+          description: 'Full Vemotion CompositionData. Required if albumName is NOT provided. Must include a non-empty layers array. duration / fps / width / height fall back to 5s / 30fps / 1280x720 if omitted.',
           properties: {
             duration: { type: 'number', description: 'Total duration in seconds. If omitted, derived from the maximum layer.startTime + layer.layerDuration, or 5.' },
             fps: { type: 'number', description: 'Frames per second. Default 30.' },
@@ -752,9 +752,12 @@ const TOOL_DEFINITIONS = [
           },
           required: ['layers']
         },
+        albumName: { type: 'string', description: 'SHORTCUT mode: name of an existing Vemotion album. When set (and `composition` is omitted), the executor fetches the real image keys from the album server-side and builds a default 1280x720 cross-fade slideshow — one image per slide. No LLM is involved in the fetch. Use for simple "slideshow of my X album" requests. Skip this and use `composition` for custom styling.' },
+        secondsPerImage: { type: 'number', description: 'Seconds each image is fully visible in albumName-shortcut mode (default 3). Ignored when `composition` is provided.' },
+        transitionSeconds: { type: 'number', description: 'Cross-fade duration in albumName-shortcut mode (default 0.5). Ignored when `composition` is provided.' },
         authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
       },
-      required: ['name', 'composition']
+      required: ['name']
     }
   },
   {
