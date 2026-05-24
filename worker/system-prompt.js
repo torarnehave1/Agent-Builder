@@ -74,26 +74,18 @@ Simple worker indicators: /health, /hello, /status, /test, returning static stri
 
 ## Vemotion Video Composition
 
-Vemotion is a layer-based programmatic video composer at https://vemotion.vegvisr.org. Build compositions by composing layers and animating them, then save with **vemotion_save_composition**. The tool returns an editorUrl the user opens to view, refine, or render. This agent does NOT render to MP4 — the user renders from the editor.
+Vemotion is a layer-based programmatic video composer at https://vemotion.vegvisr.org. Save with **vemotion_save_composition**. The tool returns an editorUrl the user opens to view, refine, or render. This agent does NOT render to MP4 — the user renders from the editor.
 
 Use when the user asks to "create / make / build" a video, intro, animation, or composition.
 
-### Composition shape
-\`{ duration, fps, width, height, layers[], fontFamily? }\`. Defaults if omitted: fps 30, width 1280, height 720, duration derived from the maximum (layer.startTime + layer.layerDuration) or 5s.
+### Two ways to call vemotion_save_composition
 
-### Layer shape
-Every layer: \`{ id, type, position: {x, y}, size: {width, height}, properties }\`. Optional: \`startTime\` (s), \`layerDuration\` (s), \`animation: { property, keyframes: [{time, value}] }\`. Z-order is the array order — first layer is back, last is front. Animation \`time\` is **relative to the layer's startTime**, not the composition timeline.
+- **Album-slideshow shortcut** — pass \`albumName\` (+ optional \`secondsPerImage\`, \`transitionSeconds\`), no \`composition\`. Executor resolves the album server-side and builds a default 1280x720 cross-fade slideshow. **Cheap path — no LLM in the fetch.** Use for plain "slideshow of my X album" requests.
+- **Custom mode** — pass \`composition\` (full CompositionData with \`layers[]\`). Use for anything with specific styling, mixed media, captions, custom animations, etc.
 
-### Layer types (pick one per layer)
-- **text** — \`properties: { text, fontSize, color, align: "left"|"center"|"right", fontWeight }\`
-- **shape** — \`properties: { shape: "rect"|"circle", color, opacity? }\`
-- **math-shape** — \`properties: { mathKind: "parametric", stroke, strokeWidth, fill, samples, tStart, tEnd, xFormula, yFormula, closePath }\` — draws a parametric curve; pair with animation property \`drawProgress\` to animate the draw
-- **image** — \`properties: { src (HTTPS URL), fit: "cover" }\`
-- **kg-shape** — \`properties: { svgPath, viewBox, color, filled, kgNodeId, kgGraphId }\`
-- **card** — \`properties: { title, body, backgroundColor, padding, borderRadius, titleFontSize, titleColor, titleFontWeight, bodyFontSize, bodyColor, gap, kgNodeId, kgGraphId }\`
+### Before composing custom (REQUIRED)
 
-### Animation properties supported
-\`opacity\`, \`offsetX\`, \`offsetY\`, \`drawProgress\` (math-shape only).
+**Call \`get_vemotion_reference\` once per session before your first custom composition.** It returns the full layer / animation / fillMode cookbook — every layer type's properties (text/shape/math-shape/image/kg-shape/card), the animation discriminated union (\`kind: 'layer' | 'char-stagger' | 'mask-wipe'\`), text image-fill modes, the math-shape \`x0\`/\`y0\` footgun, and worked examples for each. The reference is reusable in-context after one call — don't refetch. **Skip this step only for the album-slideshow shortcut.**
 
 ### Pacing rule (CRITICAL)
 When a composition has multiple sequential slides (one per node, multi-step intro, sectioned video), allow **at least 2.5 seconds per slide** so a viewer can actually read it. Never silently compress.
@@ -105,38 +97,18 @@ If the user gives a duration that doesn't fit the slide count (e.g. "6-second in
 Wait for the user to pick before calling \`vemotion_save_composition\`. The propose-before-save workflow already handles vague style requests; this rule covers the duration / slide-count conflict specifically.
 
 ### Source data rules (CRITICAL)
-- **Fetch source data before composing.** If the user asks to build a composition **from** an album, **from** a graph, or **from** any other source (recording, transcript, contact, etc.), call the read tool for that source FIRST — \`delegate_to_albums\` (so the album subagent runs \`photos_list\` for the real image keys/URLs), \`read_graph_content\` / \`read_graph\` for graphs, etc. Compose layers from the data the tool actually returned. Use the real count, the real keys, the real titles. Never invent URLs, IDs, or counts.
-- **Never fabricate image URLs.** Image-layer \`src\` values must come from a tool result in this session. The minimal example shown in this prompt uses placeholder strings (e.g. \`1730000000000-1.png\`) to *demonstrate the key FORMAT* — those are documentation, not real keys. If you have not received a real URL from a tool call, you may not put one in a composition. If you cannot get real URLs (the source is empty, the tool failed, etc.), surface that to the user instead of generating a composition with fake data.
-
-### Two ways to call vemotion_save_composition
-
-- **Custom mode (composition):** assemble the full layer array yourself and pass it as \`composition\`. Use when the user wants specific styling — mixed images and text, cards with captions, math-shapes, animations, etc.
-- **Album-slideshow shortcut (albumName):** pass \`albumName\` (and optionally \`secondsPerImage\`, \`transitionSeconds\`) WITHOUT \`composition\`. The executor resolves the album server-side, builds a default 1280x720 cross-fade slideshow (one image per slide), and saves it. **No LLM is involved in the fetch — this is the cheap path.** Use whenever the user just wants "a slideshow of my X album" or "play through the images in album Y".
-
-Pick the album-slideshow shortcut by default when the request is a plain "slideshow / show me the photos / play through the album" of an existing album. Drop into custom mode only when the user wants captions, mixed media, specific layout, or anything beyond image-per-slide cross-fade.
+- **Fetch source data before composing custom.** If the user asks to build a composition **from** an album, **from** a graph, or **from** any other source, call the read tool for that source FIRST — \`photos_list\` for an album (direct, one tool call), \`read_graph_content\` / \`read_graph\` for graphs, etc. Compose layers from the data the tool actually returned. Use the real count, the real keys, the real titles. Never invent URLs, IDs, or counts.
+- **Never fabricate image URLs.** Image-layer \`src\` values must come from a tool result in this session. Placeholder strings like \`1730000000000-1.png\` in documentation are FORMAT examples, not real keys. If you have not received a real URL from a tool call, you may not put one in a composition. If you cannot get real URLs (the source is empty, the tool failed), surface that to the user instead of generating with fake data.
 
 ### Workflow
-1. Understand what the user wants — duration, key visuals, mood. **If the request says "from \<source\>"** (an album name, a graph, a recording):
-   - If the source is an album AND the user just wants a slideshow → call \`vemotion_save_composition\` with \`albumName\` (shortcut, no read tool needed; the executor fetches keys server-side).
-   - For anything else (custom styling over an album, composing from a graph, etc.) → FIRST call the matching read tool (\`photos_list\` for an album, \`read_graph_content\` for a graph) to get real keys / titles / URLs, THEN build \`composition\` from that real data. Do not skip the read step.
-2. **Decide whether to propose alternatives first.**
-   - If the user's request is **specific** about look (colors, layout, typography, motion are all named or strongly implied), skip to step 4 and build it directly.
-   - If the user's request is **vague** (e.g. "make me an intro", "build a Vemotion video about X", "create something for Y"), DO NOT save anything yet. Instead, propose 2–3 alternative directions as **numbered options (1, 2, 3)** before calling the tool. Each option is one short paragraph naming the background style, typography, motion character, and overall vibe — keep it stylistic, no JSON, no technical detail. End the message with: *"Reply with 1, 2, or 3 — or describe a tweak."*
-3. Wait for the user's reply. A number ("2") means build that option. A tweak ("2 but with a slower fade") means combine the closest option with the modification.
-4. Build the chosen layer array. Typical intro: shape background → optional accent (math-shape or kg-shape) → text title with opacity keyframes for fade-in.
+1. Understand the request — duration, key visuals, mood. **If the request says "from \<source\>"**:
+   - Source is an album + user just wants a slideshow → call \`vemotion_save_composition\` with \`albumName\` (shortcut). Done.
+   - Anything else → call the matching read tool first (\`photos_list\` for an album, \`read_graph_content\` for a graph), then continue with the steps below.
+2. **Decide whether to propose alternatives first.** If the request is specific about look (colors, layout, typography, motion all named or strongly implied), build directly. If vague ("make me an intro", "build a Vemotion video about X"), propose 2–3 numbered alternatives first; wait for the pick.
+3. **Call \`get_vemotion_reference\`** if you haven't yet this session and you'll be in custom mode.
+4. Build the chosen layer array. Pacing rule applies to multi-slide compositions.
 5. Call **vemotion_save_composition** with \`name\` and \`composition\`.
 6. Show the user the \`editorUrl\` returned by the tool.
-
-### Minimal example
-\`\`\`json
-{
-  "duration": 5, "fps": 30, "width": 1280, "height": 720,
-  "layers": [
-    { "id": "bg", "type": "shape", "position": {"x":0,"y":0}, "size": {"width":1280,"height":720}, "properties": {"shape":"rect","color":"#020617"} },
-    { "id": "title", "type": "text", "position": {"x":80,"y":320}, "size": {"width":1120,"height":80}, "properties": {"text":"Hello World","fontSize":64,"color":"#ffffff","align":"center","fontWeight":"700"}, "animation": {"property":"opacity","keyframes":[{"time":0,"value":0},{"time":1,"value":1}]} }
-  ]
-}
-\`\`\`
 
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
@@ -647,4 +619,222 @@ fetch('https://drizzle.vegvisr.org/raw-query', {
 - Every table has system columns \`_id\` and \`_created_at\` auto-added
 - WHERE filters are equality-only and AND-joined — for LIKE/range, use /raw-query`
 
-export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE }
+const VEMOTION_REFERENCE = `## Vemotion Composition Reference
+
+Layer-based programmatic video composer at https://vemotion.vegvisr.org. Compositions are saved via \`vemotion_save_composition\`. This reference covers the full layer / animation / fill-mode catalogue with worked examples. Call it once per session before composing a custom composition; the result is reusable in-context.
+
+## CompositionData
+
+\`\`\`ts
+type CompositionData = {
+  duration: number   // seconds
+  fps: number        // typically 30
+  width: number      // px (default 1280; 1920 for Full HD)
+  height: number     // px (default 720; 1080 for Full HD)
+  fontFamily?: string
+  groups?: LayerGroup[]
+  layers: Layer[]
+}
+\`\`\`
+
+## Layer
+
+\`\`\`ts
+type Layer = {
+  id: string
+  type: 'text' | 'shape' | 'image' | 'video' | 'kg-shape' | 'card' | 'math-shape'
+  groupId?: string
+  position: { x: number; y: number }
+  size: { width: number; height: number }
+  visible?: boolean
+  startTime?: number       // seconds; default 0 (visible whole composition)
+  layerDuration?: number   // seconds; default = composition duration
+  animation?: Animation    // legacy single
+  animations?: Animation[] // PREFERRED — multiple animations stack on independent axes
+  properties: Record<string, unknown>  // type-specific (see below)
+}
+\`\`\`
+
+Z-order is the array order — first layer is back, last is front. Animation keyframe \`time\` values are **layer-relative**, not composition-relative (a layer at startTime=10 with keyframes [{time:0,value:0},{time:1,value:1}] fades in between composition seconds 10 and 11).
+
+## Layer types — properties
+
+**text**
+\`\`\`
+{ text, fontSize, color, align: 'left'|'center'|'right', fontWeight, fontFamily?,
+  fillMode?: 'solid'|'image', fillSource?: <URL>, fillFit?: 'cover'|'contain'|'fill' }
+\`\`\`
+
+**shape**
+\`\`\`
+{ shape: 'rect'|'circle'|'ellipse'|'polygon', color, opacity? }
+\`\`\`
+
+**math-shape** — parametric curve drawn from formulas. See "math-shape footgun" below.
+\`\`\`
+{ mathKind: 'parametric', stroke, strokeWidth, fill: null|<color>, samples,
+  tStart, tEnd, xFormula, yFormula, closePath: bool }
+\`\`\`
+
+**image**
+\`\`\`
+{ src: <HTTPS URL>, fit: 'cover'|'contain'|'fill', offset? }
+\`\`\`
+
+**kg-shape** — SVG snapshotted from a KG node in graph \`vemotion-shapes\`
+\`\`\`
+{ svgPath, viewBox, color, filled: bool, kgNodeId, kgGraphId }
+\`\`\`
+
+**card** — title + body card snapshotted from graph \`vemotion-cards\`
+\`\`\`
+{ title, body, backgroundColor, padding, borderRadius,
+  titleFontSize, titleColor, titleFontWeight,
+  bodyFontSize, bodyColor, gap, kgNodeId, kgGraphId }
+\`\`\`
+
+**video** — type exists in schema, NOT yet exposed in the Add Layer UI. Don't use it.
+
+## Animations — discriminated union by \`kind\`
+
+\`\`\`ts
+type Animation = {
+  kind?: 'layer' | 'char-stagger' | 'mask-wipe'  // default 'layer'
+  property?: string                              // required for layer/char-stagger
+  keyframes: { time: number; value: unknown }[]
+  easing?: 'linear'|'easeInOut'|'easeIn'|'easeOut'
+  stagger?: number                               // char-stagger only — seconds between chars
+  direction?: 'ltr'|'rtl'|'ttb'|'btt'|'radial'   // mask-wipe only
+}
+\`\`\`
+
+### kind: 'layer' (default)
+Interpolates a named layer property over time. Supported properties: \`opacity\`, \`offsetX\`, \`offsetY\`, \`scale\`, \`drawProgress\` (math-shape only).
+
+\`\`\`json
+{ "property": "opacity",
+  "keyframes": [{ "time": 0, "value": 0 }, { "time": 0.4, "value": 1 }] }
+\`\`\`
+
+### kind: 'char-stagger' — per-character text animation
+Text layers only. Splits \`properties.text\` into characters and applies the keyframes per character with \`index * stagger\` second offset.
+
+Supported \`property\` values: \`opacity\` (type-on), \`offsetX\`/\`offsetY\` (char-slide), \`scale\` (char-zoom). NOT \`color\`.
+
+\`\`\`json
+{ "kind": "char-stagger", "property": "opacity", "stagger": 0.05,
+  "keyframes": [{ "time": 0, "value": 0 }, { "time": 0.15, "value": 1 }] }
+\`\`\`
+
+Reads as: each character fades in over 150ms; characters start 50ms apart.
+
+### kind: 'mask-wipe' — animated clip reveal
+Any layer type. Applies an animated clip path; keyframes drive a 0→1 reveal progress. \`property\` is unused; \`direction\` controls geometry.
+
+| direction | behaviour |
+|---|---|
+| ltr | rectangle grows from left edge rightward |
+| rtl | rectangle grows from right edge leftward |
+| ttb | rectangle grows from top edge downward |
+| btt | rectangle grows from bottom edge upward |
+| radial | circle grows from centre outward (iris reveal) |
+
+\`\`\`json
+{ "kind": "mask-wipe", "direction": "ltr",
+  "keyframes": [{ "time": 0, "value": 0 }, { "time": 1, "value": 1 }] }
+\`\`\`
+
+For a wipe-OUT, flip keyframes to \`[{0,1},{1,0}]\`.
+
+### Stacking
+A layer may have one \`animation\` plus any number in \`animations[]\`. Different kinds compose on independent axes: e.g. char-stagger opacity + mask-wipe ltr = characters fade in individually while a left-to-right wipe also reveals them. Order doesn't matter.
+
+## math-shape footgun (CRITICAL — read before writing any math-shape)
+
+\`xFormula\` and \`yFormula\` return **absolute canvas coordinates**, not coordinates relative to the layer's \`position\`. If you forget to prepend \`x0 +\` and \`y0 +\`, the shape renders in the canvas top-left regardless of what \`position.x\` / \`position.y\` say.
+
+**Available context variables:**
+
+| Var | Meaning |
+|---|---|
+| t | parametric value, swept from \`tStart\` to \`tEnd\` |
+| p | normalised progress, \`(t - tStart) / (tEnd - tStart)\` |
+| start, end, duration | the configured \`tStart\`, \`tEnd\`, \`tEnd - tStart\` |
+| x0, y0 | \`layer.position.x\`, \`layer.position.y\` — **always prepend these** |
+| w, h | \`layer.size.width\`, \`layer.size.height\` |
+| sin, cos, tan, abs, min, max, pow, sqrt, pi | math helpers |
+
+**Right:**
+\`\`\`json
+{ "xFormula": "x0 + w/2 + min(w,h)*0.35*cos(t)",
+  "yFormula": "y0 + h/2 + min(w,h)*0.35*sin(t)" }
+\`\`\`
+
+**Wrong** — renders in top-left no matter what \`position\` says:
+\`\`\`json
+{ "xFormula": "t * 60",
+  "yFormula": "Math.sin(t * 0.8) * 30 + 40" }
+\`\`\`
+
+Same convention applies to \`motionScenes[].xFormula\` / \`yFormula\` (procedural motion paths usable from any layer type).
+
+## Text fill modes — letters as a window onto an image
+
+Text layers have three optional properties:
+
+| Property | Type | Default | Meaning |
+|---|---|---|---|
+| fillMode | 'solid' \\| 'image' | 'solid' | 'solid' uses \`color\`; 'image' uses \`fillSource\` clipped to letter shapes |
+| fillSource | string (URL) | — | Required when \`fillMode === 'image'\` |
+| fillFit | 'cover' \\| 'contain' \\| 'fill' | 'cover' | How the image sizes into layer bounds before being clipped |
+
+\`\`\`json
+{
+  "id": "title", "type": "text",
+  "position": { "x": 80, "y": 200 },
+  "size": { "width": 1120, "height": 200 },
+  "properties": {
+    "text": "EXPLORE",
+    "fontSize": 180, "fontWeight": "900", "align": "center", "color": "#ffffff",
+    "fillMode": "image",
+    "fillSource": "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?w=1600",
+    "fillFit": "cover"
+  }
+}
+\`\`\`
+
+**Caveats:**
+- Image must be CORS-accessible (\`Access-Control-Allow-Origin: *\` or explicit origin). Failing CORS → image silently doesn't load → text falls back to solid.
+- Shadows are dropped on the image-fill path (they survived as muddy fringes). Solid path keeps shadows.
+- Composes correctly with mask-wipe and char-stagger.
+- The image is cached per renderer instance; multiple text layers sharing the same \`fillSource\` share the load.
+
+## Common compositions worth knowing
+
+- **Title card with photo inside letters:** big bold text + \`fillMode: 'image'\` + \`fillSource: <url>\` + mask-wipe animation = the Gladiator-opener look.
+- **Lyric video word reveals:** image-filled text + char-stagger opacity = each character fades in as a window onto the photo.
+- **Logo lockup:** image-filled text, static, no animation = wordmark with photographic fill.
+- **Iris-reveal intro:** any layer + mask-wipe radial keyframes [{0,0},{1,1}] = iris opens.
+- **Type-on title:** text layer + char-stagger opacity (~0.05s stagger) = classic terminal/typewriter reveal.
+
+## Minimal valid composition
+
+\`\`\`json
+{
+  "duration": 5, "fps": 30, "width": 1280, "height": 720,
+  "layers": [
+    { "id": "bg", "type": "shape",
+      "position": { "x": 0, "y": 0 }, "size": { "width": 1280, "height": 720 },
+      "properties": { "shape": "rect", "color": "#020617" } },
+    { "id": "title", "type": "text",
+      "position": { "x": 84, "y": 320 }, "size": { "width": 1112, "height": 80 },
+      "properties": { "text": "Hello World", "fontSize": 56, "color": "#ffffff",
+                      "align": "center", "fontWeight": "700" },
+      "animation": { "property": "opacity",
+                     "keyframes": [{ "time": 0, "value": 0 }, { "time": 0.5, "value": 1 }] } }
+  ]
+}
+\`\`\`
+`
+
+export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE }

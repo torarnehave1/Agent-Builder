@@ -93,6 +93,7 @@ const WORKERS_AI_TOOLS = new Set([
   'add_edge',
   'get_formatting_reference',
   'get_node_types_reference',
+  'get_vemotion_reference',
   'search_pexels',
   'search_unsplash',
   'get_album_images',

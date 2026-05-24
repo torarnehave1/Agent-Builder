@@ -708,6 +708,14 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_vemotion_reference',
+    description: 'Get the full Vemotion composition cookbook — every layer type (text/shape/math-shape/image/kg-shape/card) with properties, the animation discriminated union (kind: layer / char-stagger / mask-wipe) with worked examples, text image-fill modes (letters as a window onto an image), the math-shape x0/y0 footgun rule with context-variable table, and common compositions (title-card-with-photo, type-on title, iris reveal). Call this BEFORE composing a custom Vemotion composition (i.e. before passing `composition` to vemotion_save_composition). Not needed for the album-slideshow shortcut (passing `albumName` to vemotion_save_composition).',
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
     name: 'list_recordings',
     description: 'List audio recordings from the current user\'s audio portfolio. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, and transcription status. Use this to find recordings before transcribing them.',
     input_schema: {

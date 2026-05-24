@@ -7,7 +7,7 @@
 
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
-import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE } from './system-prompt.js'
+import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
 import { runKgSubagent } from './kg-subagent.js'
@@ -6063,6 +6063,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     }
     case 'get_html_builder_reference':
       return { reference: HTML_BUILDER_REFERENCE }
+    case 'get_vemotion_reference':
+      return { reference: VEMOTION_REFERENCE }
     case 'who_am_i':
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':
