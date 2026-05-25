@@ -109,6 +109,7 @@ Wait for the user to pick before calling \`vemotion_save_composition\`. The prop
 4. Build the chosen layer array. Pacing rule applies to multi-slide compositions.
 5. Call **vemotion_save_composition** with \`name\` and \`composition\`.
 6. Show the user the \`editorUrl\` returned by the tool.
+7. **STOP.** Do NOT auto-document the composition in the current graph (no \`delegate_to_kg\` to add fulltext nodes about what you just made, no \`create_node\` to log the editorUrl). The user asked for a composition, not for graph entries. Only document in a graph if the user explicitly asks ("save a node for this", "add to the graph", "record it in my notes"). The same applies after \`vemotion_refit_composition\` — return the new editorUrl, do not auto-document.
 
 - **get_formatting_reference**: Get fulltext formatting syntax (SECTION, FANCY, QUOTE, etc.). Call this BEFORE creating styled content.
 - **get_node_types_reference**: Get data format reference for non-standard node types. Call this BEFORE creating mermaid-diagram, chart, youtube-video, etc.
