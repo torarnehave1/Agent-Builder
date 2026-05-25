@@ -397,8 +397,12 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
   const svgContent = extractSvgFromResult(tc);
   const canSvgPreview = !!svgContent;
 
-  // Vemotion: when a composition is saved, embed the player + offer JSON view
-  const isVemotionSave = tc.tool === 'vemotion_save_composition' && tc.status === 'success';
+  // Vemotion: when a composition is saved OR refit-saved, embed the player.
+  // (refit returns a compositionId only in save-mode; inline-mode has no id.)
+  const isVemotionSave = (
+    tc.tool === 'vemotion_save_composition'
+    || tc.tool === 'vemotion_refit_composition'
+  ) && tc.status === 'success';
   const vemotionResult = (tc.result || {}) as Record<string, unknown>;
   const vemotionCompositionId = typeof vemotionResult.compositionId === 'string' ? vemotionResult.compositionId : '';
   const vemotionComposition = (input.composition && typeof input.composition === 'object') ? input.composition : null;
