@@ -132,6 +132,34 @@ function buildCapabilityToolPayload(toolName, result) {
     }
   }
 
+  if (toolName === 'vemotion_save_composition') {
+    return {
+      compositionId: result.compositionId || null,
+      name: result.name || null,
+      duration: result.duration ?? null,
+      layerCount: result.layerCount ?? null,
+      editorUrl: result.editorUrl || null,
+      sourceMode: result.sourceMode || null,
+      sourceAlbum: result.sourceAlbum || null,
+    }
+  }
+
+  if (toolName === 'vemotion_refit_composition') {
+    // mode='saved' has compositionId + editorUrl. mode='inline' has neither
+    // (the refit body is on result.composition, large — frontend can show the
+    // composition via the existing tc.result truncation if it wants).
+    return {
+      mode: result.mode || null,
+      compositionId: result.compositionId || null,
+      name: result.name || null,
+      duration: result.duration ?? null,
+      layerCount: result.layerCount ?? null,
+      width: result.width ?? null,
+      height: result.height ?? null,
+      editorUrl: result.editorUrl || null,
+    }
+  }
+
   return null
 }
 
