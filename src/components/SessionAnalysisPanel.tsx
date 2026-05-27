@@ -68,7 +68,9 @@ export default function SessionAnalysisPanel({ userId, onClose }: Props) {
     try {
       const res = await fetch(`${AGENT_API}/analyze-session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        // x-user-id intentionally not sent — endpoint reads userId from body.
+        // Adding it triggers a CORS preflight failure against agent.vegvisr.org.
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: sid, userId }),
       });
       const data = await res.json();
@@ -95,7 +97,8 @@ export default function SessionAnalysisPanel({ userId, onClose }: Props) {
     try {
       const res = await fetch(`${AGENT_API}/analyze-session/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-id': userId },
+        // x-user-id intentionally not sent — endpoint reads userId from body.
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: selectedId, userId, history: dialog, message: text }),
       });
       const data = await res.json();

@@ -8,7 +8,7 @@ export function buildCorsHeaders(request, extra = {}) {
   const origin = request.headers.get('origin') || request.headers.get('Origin') || ''
   const headers = {
     'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Token, x-user-id',
     'Content-Type': 'application/json',
     'Vary': 'Origin',
   }
