@@ -2957,7 +2957,25 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       </div>
       </div>
       {analysisOpen && <SessionAnalysisPanel userId={userId} onClose={() => setAnalysisOpen(false)} />}
-      {recordingsOpen && <RecordingsPanel userId={userId} onClose={() => setRecordingsOpen(false)} />}
+      {recordingsOpen && (
+        <RecordingsPanel
+          userId={userId}
+          onClose={() => setRecordingsOpen(false)}
+          onInsertText={(text) => {
+            setInput(text);
+            // Defer focus so React renders the textarea content first, then focus + cursor-to-end.
+            window.setTimeout(() => {
+              const el = textareaRef.current;
+              if (!el) return;
+              el.focus();
+              el.selectionStart = el.selectionEnd = el.value.length;
+              // Trigger the auto-resize logic by mimicking what setInput's handler does.
+              el.style.height = 'auto';
+              el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+            }, 0);
+          }}
+        />
+      )}
     </div>
   );
 }

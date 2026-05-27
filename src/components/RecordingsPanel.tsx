@@ -19,6 +19,8 @@ interface Recording {
 interface Props {
   userId: string;
   onClose: () => void;
+  /** Insert text into the parent chat's input (replaces current value, focuses textarea). */
+  onInsertText?: (text: string) => void;
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -42,7 +44,15 @@ function formatDate(iso: string): string {
   }
 }
 
-export default function RecordingsPanel({ userId, onClose }: Props) {
+export default function RecordingsPanel({ userId, onClose, onInsertText }: Props) {
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyId = useCallback(async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedId(id);
+      window.setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 1200);
+    } catch { /* clipboard blocked — silent */ }
+  }, []);
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +145,15 @@ export default function RecordingsPanel({ userId, onClose }: Props) {
                   {r.category && <> · {r.category}</>}
                   {r.source && <> · {r.source}</>}
                 </div>
+                {/* Recording ID — visible, click to copy */}
+                <button
+                  type="button"
+                  onClick={() => copyId(r.recordingId)}
+                  className="mt-1 font-mono text-[10px] text-white/40 hover:text-white/70 break-all text-left"
+                  title="Click to copy the full recording ID"
+                >
+                  {copiedId === r.recordingId ? '✓ copied' : r.recordingId}
+                </button>
                 {(r.tags || []).length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {r.tags.map(t => (
@@ -164,6 +183,37 @@ export default function RecordingsPanel({ userId, onClose }: Props) {
                 )}
               </div>
             </div>
+            {/* Use-in-chat actions — drop a ready-to-edit prompt into the chat input */}
+            {onInsertText && (
+              <div className="mt-2 flex items-center gap-1 flex-wrap">
+                <button
+                  type="button"
+                  onClick={() => onInsertText(`Transcribe recording ${r.recordingId}`)}
+                  className="px-2 py-0.5 rounded bg-violet-500/15 text-violet-300 text-[10px] border border-violet-500/25 hover:bg-violet-500/25"
+                  title="Insert a transcribe prompt into the chat input"
+                  disabled={r.hasTranscription}
+                >
+                  {r.hasTranscription ? 'transcribed' : 'transcribe →'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onInsertText(`Analyze the transcription of recording ${r.recordingId}`)}
+                  className="px-2 py-0.5 rounded bg-white/[0.06] text-white/50 text-[10px] border border-white/10 hover:bg-white/[0.10] hover:text-white/80"
+                  title="Insert an analyze prompt into the chat input"
+                  disabled={!r.hasTranscription}
+                >
+                  analyze →
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onInsertText(`@recording ${r.recordingId} `)}
+                  className="px-2 py-0.5 rounded bg-white/[0.06] text-white/50 text-[10px] border border-white/10 hover:bg-white/[0.10] hover:text-white/80"
+                  title="Insert just the recording reference into the chat input — keep typing"
+                >
+                  use in chat →
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>
