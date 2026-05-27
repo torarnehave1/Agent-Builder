@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
+import RecordingsPanel from './RecordingsPanel';
 import JsonViewerModal from './JsonViewerModal';
 // rehype-sanitize removed: agent-generated content is trusted,
 // and the sanitizer was stripping graph viewer hrefs from links
@@ -757,6 +758,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [analysisOpen, setAnalysisOpen] = useState(false);
+  const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [htmlNodePicker, setHtmlNodePicker] = useState<Array<{ id: string; label: string; info: string }> | null>(null);
   const lastAgentGraphRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -2273,6 +2275,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             >
               Analyze
             </button>
+            <button
+              type="button"
+              onClick={() => setRecordingsOpen(p => !p)}
+              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${recordingsOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+              title="Browse your audio recordings (direct lookup, no agent involved)"
+            >
+              Recordings
+            </button>
             {sessionsOpen && (
               <div className="absolute top-full mt-1 left-0 w-[calc(100vw-2rem)] sm:w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
                 <button
@@ -2947,6 +2957,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       </div>
       </div>
       {analysisOpen && <SessionAnalysisPanel userId={userId} onClose={() => setAnalysisOpen(false)} />}
+      {recordingsOpen && <RecordingsPanel userId={userId} onClose={() => setRecordingsOpen(false)} />}
     </div>
   );
 }

@@ -1392,6 +1392,31 @@ export default {
         })
       }
 
+      // GET /recordings — list the user's audio portfolio recordings.
+      // Pure lookup; no LLM. Frontend (RecordingsPanel) calls this directly so
+      // users can browse their recordings without going through the agent.
+      // Reuses executeListRecordings via the executeTool dispatcher (per Lesson 21).
+      // Query: userId (required), limit (optional, default 20), query (optional).
+      if (pathname === '/recordings' && request.method === 'GET') {
+        const userId = url.searchParams.get('userId') || ''
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 200)
+        const query = url.searchParams.get('query') || ''
+        if (!userId) {
+          return new Response(JSON.stringify({ error: 'userId query param is required' }), {
+            status: 400, headers: corsHeaders,
+          })
+        }
+        try {
+          const result = await executeTool('list_recordings', { userId, limit, query }, env, {})
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/recordings] error', err)
+          return new Response(JSON.stringify({ error: err?.message || 'list recordings failed' }), {
+            status: 500, headers: corsHeaders,
+          })
+        }
+      }
+
       // POST /analyze-session — produce a broad overview of one stored agent chat session.
       // Body: { sessionId, userId? }. userId resolved from auth headers if not in body.
       // No tools — analyzer is text-in / text-out via ANTHROPIC binding.
