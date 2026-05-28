@@ -1014,8 +1014,15 @@ Two perpendicular sinusoids at different frequencies — produces braided, woven
 The math-shape formula evaluator supports a **finite** set of functions and operators. Step outside this list and the evaluator silently produces NaN or 0 — the layer looks fine in the JSON but nothing renders.
 
 - **Functions available**: \`sin, cos, tan, abs, min, max, pow, sqrt, pi\`
-- **Operators available**: \`+ - * / ^\` (caret is the same as \`pow\`)
+- **Operators available**: \`+ - * /\` only
 - **Context variables**: \`t, p, x0, y0, w, h, start, end, duration\`
+
+**NO \`^\` (caret) operator.** The evaluator's safety regex (\`renderer.ts\` line 136) rejects \`^\` outright — a formula containing \`^\` produces a \`null\` result for every sample, the points array stays empty, and the layer silently renders nothing. Always use \`pow(base, exponent)\` for powers:
+
+- ✗ \`sin(t)^3\` → renders NOTHING
+- ✓ \`pow(sin(t), 3)\` → renders correctly
+- ✗ \`cos(4*t)^3 * cos(t)\` → renders NOTHING
+- ✓ \`pow(cos(4*t), 3) * cos(t)\` → renders correctly
 
 **NOT available — work around with identities:**
 
