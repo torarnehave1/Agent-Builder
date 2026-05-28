@@ -904,6 +904,21 @@ for (let i = 0; i < N; i++) {
 
 When the user asks for a mandala / rosette / star / floral / decorative line-art pattern, **reach for these named curves first** — do not invent formulas. Each entry below names a curve, gives its parametric form in \`(x0, y0, w, h)\`-relative coordinates with \`R\` as the size parameter, and notes the visual outcome. Layer them on a math-shape (\`fill: null\`, \`stroke: '<color>'\`, \`closePath: true\` unless noted) and use \`drawProgress\` to trace them in.
 
+### The eight building blocks (recognise these to pick the right family)
+
+Almost every closed parametric curve worth using is one of eight patterns. Recognising the pattern tells you which family to reach for and which knobs to turn.
+
+1. **Parametric circle** \`(R·cos t, R·sin t)\` — circle, ellipse, lemniscate, limacon. Sweep t over [0, 2π].
+2. **Polar form** \`r(θ)·(cos θ, sin θ)\` — wraps any 1D radius function around the origin. Foundation of roses, cardioid, limacon, spirals.
+3. **Sum of harmonics** \`Σ aₖ·cos(k·t)\` — Fourier series in either coordinate. Foundation of the heart curve, trefoil knot, organic outlines.
+4. **Product of harmonics** \`f(t)·g(t)\` where both are trig sums — butterfly curve. Multiplication of harmonics gives detail at multiple scales (decorative / organic).
+5. **Rolling-circle combos** \`(R−r)·cos t + d·cos((R−r)/r · t)\` — cycloids, trochoids, deltoid (3-cusp), astroid (4-cusp), nephroid (2-cusp epicycloid), n-cusp hypocycloid.
+6. **Exponential growth** \`pow(2.71828, b·t) · trig(t)\` — logarithmic spiral, anything needing \`e^(b·t)\` (the evaluator has no \`exp\` — see Formula evaluator vocabulary below).
+7. **Rational function** \`f(t)/g(t)\` with polynomial f, g — folium of Descartes, Witch of Agnesi, single-bump bell curves without needing exp.
+8. **Implicit algebraic** \`f(x, y) = 0\` → convert to parametric via substitution like \`t = y/x\` — Cassini ovals, folium of Descartes.
+
+When proposing variants, name the building block: *"this is a rolling-circle (n-cusp hypocycloid)"*, *"this is a Fourier sum (smooth heart)"*. Lets the user see what knobs are available.
+
 ### Roses (k-petal floral curves)
 
 For \`r = cos(k·θ)\`: when **k is odd** the rose has **k petals**; when **k is even** the rose has **2k petals**. So \`cos(4·θ)\` gives 8 petals, \`cos(3·θ)\` gives 3 petals, \`cos(6·θ)\` gives 12 petals.
@@ -930,6 +945,41 @@ For \`r = cos(k·θ)\`: when **k is odd** the rose has **k petals**; when **k is
 - **Astroid** (4-cusp special case of hypocycloid; classic star). Simplest cusp formula:
   - \`xFormula: x0 + w/2 + R*cos(t)^3\`
   - \`yFormula: y0 + h/2 + R*sin(t)^3\`
+- **Deltoid** (3-cusp hypocycloid; the smallest cusp star):
+  - \`xFormula: x0 + w/2 + (2*R/3)*cos(t) + (R/3)*cos(2*t)\`
+  - \`yFormula: y0 + h/2 + (2*R/3)*sin(t) - (R/3)*sin(2*t)\`
+- **Nephroid** (2-cusp epicycloid; the coffee-cup caustic / kidney shape). Cusps point inward, bulges outward:
+  - \`xFormula: x0 + w/2 + 3*R*cos(t) - R*cos(3*t)\`
+  - \`yFormula: y0 + h/2 + 3*R*sin(t) - R*sin(3*t)\`
+
+### Drops, hearts, eggs, lemniscates, bells (single-formula iconic shapes)
+
+- **Cardioid** (heart-shape / drop with cusp at one end; bilateral symmetry):
+  - \`xFormula: x0 + w/2 + R*(1-cos(t))*cos(t)\`
+  - \`yFormula: y0 + h/2 + R*(1-cos(t))*sin(t)\`
+- **Limacon family** (one polar formula, four personalities — parameterised by \`a, b\`):
+  - \`xFormula: x0 + w/2 + (a + b*cos(t))*cos(t)\`
+  - \`yFormula: y0 + h/2 + (a + b*cos(t))*sin(t)\`
+  - **Regimes**: \`a > 2b\` → convex oval. \`b < a < 2b\` → dimpled limacon (notch on one side). \`a = b\` → **cardioid** (cusp appears). \`a < b\` → inner-loop limacon (self-intersecting). One formula, four distinct shapes — useful when proposing variants in a single family.
+- **Lemniscate of Bernoulli** (figure-8 / infinity sign):
+  - \`xFormula: x0 + w/2 + R*cos(t)/(1 + sin(t)^2)\`
+  - \`yFormula: y0 + h/2 + R*cos(t)*sin(t)/(1 + sin(t)^2)\`
+- **Heart curve** (smooth iconic heart, no cusp — Fourier sum):
+  - \`xFormula: x0 + w/2 + R*sin(t)^3\`
+  - \`yFormula: y0 + h/2 - (R/16)*(13*cos(t) - 5*cos(2*t) - 2*cos(3*t) - cos(4*t))\`
+  - The negation on yFormula points the heart upward (canvas y grows downward).
+- **Egg (Hügelschäffer)** — asymmetric oval, smooth at both ends (no cusp):
+  - \`xFormula: x0 + w/2 + a*cos(t)\`
+  - \`yFormula: y0 + h/2 + b*sin(t)*sqrt(1 - k*cos(t))\`
+  - \`k = 0\` → regular ellipse; \`0 < k < 1\` → pointier at one end. \`k ≈ 0.5\` for a clean egg.
+- **Witch of Agnesi** (single-bump bell curve — open):
+  - \`xFormula: x0 + w/2 + 2*a*tan(t)\`
+  - \`yFormula: y0 + h/2 - 2*a*cos(t)^2\`
+  - \`tStart\` near \`-pi/2\`, \`tEnd\` near \`pi/2\` (avoid the endpoints — tan blows up). \`closePath: false\`. Rational-function bell that does NOT need exp.
+- **Cassini oval** (product-of-distances family; lemniscate generalisation):
+  - \`r(t) = sqrt(a*a*cos(2*t) + sqrt(b^4 - a^4*sin(2*t)^2))\`
+  - Then \`xFormula: x0 + w/2 + r*cos(t)\`, \`yFormula: y0 + h/2 + r*sin(t)\` (inline r expansion).
+  - At \`b = a\` → lemniscate. \`b > a*sqrt(2)\` → single oval. In between → peanut / dumbbell.
 
 ### Scalloped rings (decorative borders)
 
@@ -959,6 +1009,29 @@ Two perpendicular sinusoids at different frequencies — produces braided, woven
 - \`xFormula: x0 + w/2 + R*cos(t)\`
 - \`yFormula: y0 + h/2 + R*sin(t)\`
 
+### Formula evaluator vocabulary (CRITICAL — know the limits)
+
+The math-shape formula evaluator supports a **finite** set of functions and operators. Step outside this list and the evaluator silently produces NaN or 0 — the layer looks fine in the JSON but nothing renders.
+
+- **Functions available**: \`sin, cos, tan, abs, min, max, pow, sqrt, pi\`
+- **Operators available**: \`+ - * / ^\` (caret is the same as \`pow\`)
+- **Context variables**: \`t, p, x0, y0, w, h, start, end, duration\`
+
+**NOT available — work around with identities:**
+
+| You need | Identity / workaround |
+|---|---|
+| \`exp(x)\` / \`e^x\` | \`pow(2.71828, x)\` |
+| \`cosh(x)\` | \`(pow(2.71828, x) + pow(2.71828, -x)) / 2\` |
+| \`sinh(x)\` | \`(pow(2.71828, x) - pow(2.71828, -x)) / 2\` |
+| \`tanh(x)\` | \`(pow(2.71828,x) - pow(2.71828,-x)) / (pow(2.71828,x) + pow(2.71828,-x))\` |
+| \`log(x)\` / \`ln(x)\` | Not feasible — switch to a different formula family or to \`type: 'path'\` |
+| \`asin / acos / atan / atan2\` | Not feasible — solve analytically or switch primitive |
+| Integrals (Fresnel, error function, Cornu spiral, …) | Taylor-approximate inside the formula, OR sample numerically and use \`type: 'path'\` with explicit anchors |
+| Conditional \`if t < 0 then ... else ...\` | Approximate with smooth sigmoid, e.g. \`1 / (1 + pow(2.71828, -k*x))\` for large k mimics a step. Or split into two layers. |
+
+Test any complex formula on a small composition before committing — the silent-NaN failure mode is the largest watchpoint.
+
 ### Rules for proposing curve variants to the user
 
 1. **Reach by NAME** — pick from the library above. Don't invent formulas mid-conversation.
@@ -967,6 +1040,17 @@ Two perpendicular sinusoids at different frequencies — produces braided, woven
 4. **Two or three options is usually enough**. Don't propose four variants from the same family — propose distinct families (a rose vs a hypocycloid vs a scallop) when the goal is breadth.
 5. For "intertwined" / "woven" requests, layer two curves with offsetting phase or frequency, both at the same \`drawProgress\` timing.
 6. For "build outward" requests, stagger \`startTime\` per layer from centre to perimeter — see Radial layouts above.
+
+### When to leave math-shape for type:'path' or type:'image'
+
+Math-shape has hard limits. Reach for a different primitive when:
+
+- **You need integrals or transcendentals beyond the workaround vocabulary** (Cornu spiral / Fresnel integrals, true non-elementary functions) → sample the curve numerically OUTSIDE the formula, then use \`type: 'path'\` with explicit anchor coordinates.
+- **You need straight lines with explicit corners** (star polygons \`{n/k}\` like the pentagram, polylines, charts, schematics, hand-drawn polygonal logos) → use \`type: 'path'\` with corner anchors (no in/out handles). For regular convex polygons, \`type: 'shape'\` with \`shape: 'polygon'\` is also valid.
+- **You need fine artistic control segment-by-segment** (a designed glyph, calligraphic flourish, signature, asymmetric logo) → \`type: 'path'\` with Bezier-handle anchors (\`in\` / \`out\` on each anchor).
+- **The shape is too complex to express in elementary math** (photo-realistic outlines, painted textures, illustrated icons, anything where the visual is the artifact) → \`type: 'image'\`. If you also want the image clipped to a text shape, use a text layer with \`fillMode: 'image'\`.
+
+Knowing where the math-shape boundary lies is part of the vocabulary. Trying to encode a hand-drawn shape with a parametric formula is usually a sign you should be on the path primitive instead.
 
 ## Common compositions worth knowing
 
