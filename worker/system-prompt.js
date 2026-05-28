@@ -718,6 +718,20 @@ Same convention for ellipses (subtract half of each axis), rectangles (top-left 
   tStart, tEnd, xFormula, yFormula, closePath: bool }
 \`\`\`
 
+### shape vs math-shape — pick the right primitive (CRITICAL)
+
+\`shape\` is a **filled** primitive — \`shape: 'circle'\` is a solid filled disc with no stroke option. It cannot draw a ring outline. Stacking filled \`shape: circle\` layers at decreasing opacity does NOT produce concentric outlines — it produces a soft-edged dark disc. The same is true for \`'rect'\`, \`'ellipse'\`, \`'polygon'\` — they are all filled.
+
+\`math-shape\` is a **stroked parametric curve** — set \`fill: null\` and \`stroke: '<color>'\` to draw an outline. \`math-shape\` also supports the \`drawProgress\` animation property (0→1), which traces the curve in over time — ideal for "ring building outward" or "mandala assembling petal by petal" effects.
+
+**Decision rule:**
+
+- Want a **filled shape** (background rect, solid coloured disc, polygon fill)? Use \`shape\`.
+- Want **line art / geometric outlines / mandala / rosette / star / scalloped border / traceable pattern**? Use \`math-shape\` with \`fill: null\` and a stroke. Use \`drawProgress\` to animate the trace.
+- Want both fill and stroke on the same shape? Two layers — one \`shape\` for the fill behind, one \`math-shape\` for the outline on top.
+
+The single biggest mistake when composing decorative line art is reaching for \`shape: circle\` because it's "the circle primitive." It's the filled circle primitive. For mandalas and outline work, \`math-shape\` is the right tool.
+
 **image**
 \`\`\`
 { src: <HTTPS URL>, fit: 'cover'|'contain'|'fill', offset? }
@@ -885,6 +899,74 @@ for (let i = 0; i < N; i++) {
 **Venn / flower-of-life overlap:** for adjacent circles in a ring to OVERLAP their neighbours (rather than sit side-by-side without touching), pick \`R\` so adjacent circle centres are closer than \`d\` apart. Chord between two adjacent centres on the ring is \`2R · sin(π/N)\`; require it to be strictly less than \`d\`. Smaller \`R\` per number of items \`N\` → more overlap, deeper lens intersections.
 
 **Pure concentric (target / ripple):** place all circles at \`cx = canvasW/2, cy = canvasH/2\` with the same centre, but different \`size\`. Vary the diameter linearly from inner to outer; draw largest first (back of z-order) so smaller ones layer on top. Each visible "ring" is the difference between two adjacent disks.
+
+## Parametric curve library (for mandalas, rosettes, stars, decorative borders)
+
+When the user asks for a mandala / rosette / star / floral / decorative line-art pattern, **reach for these named curves first** — do not invent formulas. Each entry below names a curve, gives its parametric form in \`(x0, y0, w, h)\`-relative coordinates with \`R\` as the size parameter, and notes the visual outcome. Layer them on a math-shape (\`fill: null\`, \`stroke: '<color>'\`, \`closePath: true\` unless noted) and use \`drawProgress\` to trace them in.
+
+### Roses (k-petal floral curves)
+
+For \`r = cos(k·θ)\`: when **k is odd** the rose has **k petals**; when **k is even** the rose has **2k petals**. So \`cos(4·θ)\` gives 8 petals, \`cos(3·θ)\` gives 3 petals, \`cos(6·θ)\` gives 12 petals.
+
+- **Rose smooth** (rounded petals). For 8 petals:
+  - \`xFormula: x0 + w/2 + R*cos(4*t)*cos(t)\`
+  - \`yFormula: y0 + h/2 + R*cos(4*t)*sin(t)\`
+- **Rose sharpened** — replace \`cos(k·t)\` with \`cos(k·t)^3\` (sign-preserving cube). Petals get sharper tips and narrower bases. Sample count ≥ 600.
+  - \`xFormula: x0 + w/2 + R*cos(4*t)^3*cos(t)\`
+  - \`yFormula: y0 + h/2 + R*cos(4*t)^3*sin(t)\`
+- **Rose intertwined** — two layers: one with \`cos(k·t)\`, one with \`sin(k·t)\`. The sin version is the cos version rotated by π/(2k). Result: 2× the petal positions, interleaved (8 cos + 8 sin = 16 visible).
+- **Rose at smaller radius for inner detail** — same formulas with smaller \`R\`, layered inside a larger rose for a lace/web effect.
+
+### Cycloids (curves with mathematical cusps — true sharp points)
+
+- **Hypocycloid** (n-cusp star, cusps point **outward**) — small circle of radius \`R/n\` rolling inside a circle of radius \`R\`. Generates n cusps at the outer radius; concave arcs between cusps.
+  - \`xFormula: x0 + w/2 + ((n-1)*R/n)*cos(t) + (R/n)*cos((n-1)*t)\`
+  - \`yFormula: y0 + h/2 + ((n-1)*R/n)*sin(t) - (R/n)*sin((n-1)*t)\`
+  - For 8-cusp star (n=8): \`(7*R/8)*cos(t) + (R/8)*cos(7*t)\` etc.
+  - Sample count ≥ 720 for crisp cusps.
+- **Epicycloid** (n-cusp lobed shape, cusps point **inward**) — small circle rolling OUTSIDE. Bulges outward between cusps. Flower-shape rather than star-shape.
+  - \`xFormula: x0 + w/2 + ((n+1)*R/n)*cos(t) - (R/n)*cos((n+1)*t)\`
+  - \`yFormula: y0 + h/2 + ((n+1)*R/n)*sin(t) - (R/n)*sin((n+1)*t)\`
+- **Astroid** (4-cusp special case of hypocycloid; classic star). Simplest cusp formula:
+  - \`xFormula: x0 + w/2 + R*cos(t)^3\`
+  - \`yFormula: y0 + h/2 + R*sin(t)^3\`
+
+### Scalloped rings (decorative borders)
+
+Sinusoidal radius variation: \`r = R + amp·sin(N·θ)\`. \`N\` = scallop count, \`amp\` = scallop depth. Looks like a fluted ring or a cog.
+
+- \`xFormula: x0 + w/2 + (R + amp*sin(N*t))*cos(t)\`
+- \`yFormula: y0 + h/2 + (R + amp*sin(N*t))*sin(t)\`
+- Sample count ≥ 480 (scallops need density).
+
+### Lissajous (woven figures)
+
+Two perpendicular sinusoids at different frequencies — produces braided, woven, or knot-like patterns. \`a:b\` frequency ratio controls weave; \`phase\` controls how lines cross.
+
+- \`xFormula: x0 + w/2 + R*sin(a*t + phase)\`
+- \`yFormula: y0 + h/2 + R*sin(b*t)\`
+- Try (a, b) = (3, 2), (3, 4), (5, 4) for distinct weaves. \`phase\` of π/2 = perpendicular start.
+
+### Spirals
+
+- **Archimedean** (even-spaced arms): \`r = a·θ\`, so:
+  - \`xFormula: x0 + w/2 + a*t*cos(t)\`, \`yFormula: y0 + h/2 + a*t*sin(t)\`
+  - Use a non-zero \`tStart\` to avoid the spiral converging to a point; e.g. \`tStart: 0.5, tEnd: 6*pi\` for ~3 turns.
+- **Logarithmic** (exponential growth — galaxy / nautilus): \`r = a·exp(b·t)\`. Requires \`exp\` in the formula vocabulary; if not available, sample with explicit \`pow(e, …)\`.
+
+### Plain ring (degenerate parametric — a circle outline)
+
+- \`xFormula: x0 + w/2 + R*cos(t)\`
+- \`yFormula: y0 + h/2 + R*sin(t)\`
+
+### Rules for proposing curve variants to the user
+
+1. **Reach by NAME** — pick from the library above. Don't invent formulas mid-conversation.
+2. Each proposed option = one named curve + (R, sample count, optional power/phase) parameters.
+3. **Name the visual outcome inline**: *"sharp outward points"*, *"rounded petals"*, *"concave arcs between cusps"*, *"woven figure-eight"*. The user is picking by visual outcome, not by formula.
+4. **Two or three options is usually enough**. Don't propose four variants from the same family — propose distinct families (a rose vs a hypocycloid vs a scallop) when the goal is breadth.
+5. For "intertwined" / "woven" requests, layer two curves with offsetting phase or frequency, both at the same \`drawProgress\` timing.
+6. For "build outward" requests, stagger \`startTime\` per layer from centre to perimeter — see Radial layouts above.
 
 ## Common compositions worth knowing
 
