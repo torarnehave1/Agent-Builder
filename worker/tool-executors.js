@@ -3040,8 +3040,13 @@ async function executeGetGroupMessages(input, env) {
     if (!before) break
   }
 
-  // Sort chronologically (oldest first) and trim to requested limit
-  allMessages.sort((a, b) => a.id - b.id)
+  // Sort newest-first (b.id - a.id). The downstream subagent loop truncates
+  // tool results at ~8000 chars; "newest first" means the truncation drops
+  // OLDEST messages, which is what callers asking "latest" want.
+  // The previous order (oldest-first) silently lost the most recent messages
+  // when results were truncated — readers asking for "the latest" got the
+  // latest of the surviving window, not the actual latest.
+  allMessages.sort((a, b) => b.id - a.id)
   const trimmed = allMessages.slice(0, requestedLimit)
 
   return {
