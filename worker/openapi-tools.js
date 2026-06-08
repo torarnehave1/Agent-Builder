@@ -178,15 +178,37 @@ function registrySystemWorkers(graph) {
   return (graph?.nodes || []).filter(n => n.type === 'system-worker')
 }
 
-async function fetchWorkerSpec(fetcher, baseUrl) {
-  try {
-    let res = await fetcher.fetch(`${baseUrl}/openapi.json`)
-    if (!res.ok) res = await fetcher.fetch(`${baseUrl}/api/docs`)
-    if (!res.ok) return null
-    return await res.json()
-  } catch {
-    return null
+/**
+ * Fetch a worker's OpenAPI spec.
+ * @param fetcher          the service-binding fetcher (env[binding])
+ * @param baseUrl          the binding's base URL (https://<binding-name>)
+ * @param explicitSpecUrl  optional, registry-supplied exact URL of the spec.
+ *                         When present this is tried first (verbatim if it
+ *                         starts with http(s)://, otherwise treated as a path
+ *                         under baseUrl). Used for workers whose spec lives
+ *                         at a non-root path (e.g. Vemotion: /vemotion/openapi.json).
+ */
+async function fetchWorkerSpec(fetcher, baseUrl, explicitSpecUrl) {
+  const candidates = []
+  if (explicitSpecUrl) {
+    if (/^https?:\/\//i.test(explicitSpecUrl)) {
+      candidates.push(explicitSpecUrl)
+    } else {
+      const path = explicitSpecUrl.startsWith('/') ? explicitSpecUrl : `/${explicitSpecUrl}`
+      candidates.push(`${baseUrl}${path}`)
+    }
   }
+  candidates.push(`${baseUrl}/openapi.json`, `${baseUrl}/api/docs`)
+
+  for (const url of candidates) {
+    try {
+      const res = await fetcher.fetch(url)
+      if (res.ok) return await res.json()
+    } catch {
+      // try next candidate
+    }
+  }
+  return null
 }
 
 /**
@@ -284,7 +306,7 @@ export async function loadOpenAPITools(env) {
 
     let spec
     try {
-      spec = await fetchWorkerSpec(fetcher, workerUrl)
+      spec = await fetchWorkerSpec(fetcher, workerUrl, meta.openapi_url)
     } catch (err) {
       errors.push({ worker: workerName, error: err?.message || 'fetch failed' })
       continue
