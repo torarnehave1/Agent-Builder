@@ -6512,7 +6512,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     case 'proff_find_business_network':
       return await executeProffTool('network', toolInput)
     default:
-      if (isOpenAPITool(toolName) && operationMap) {
+      // Fall through to the OpenAPI dispatcher for any tool registered via
+      // the registry walk in loadOpenAPITools (not just kg_*). The presence
+      // of the tool in operationMap is what matters.
+      if (operationMap && isOpenAPITool(toolName, operationMap)) {
         return await executeOpenAPITool(toolName, toolInput, env, operationMap)
       }
       throw new Error(`Unknown tool: ${toolName}`)
