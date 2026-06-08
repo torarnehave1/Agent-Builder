@@ -270,7 +270,15 @@ export async function loadOpenAPITools(env) {
 
     const workerName = meta.name || node.label
     const workerUrl = `https://${workerName}`
-    const prefix = meta.tool_prefix || ''
+    // Defensive default: the KG worker's tools have ALWAYS shipped with a kg_
+    // prefix (existing code, subagent allow-lists, system prompts, and per-agent
+    // tool-name arrays in agent_configs all reference kg_* names by string).
+    // If the registry node doesn't explicitly set tool_prefix, default to kg_
+    // for KG_WORKER so backwards compatibility holds even when the registry
+    // hasn't been annotated. Other bindings default to no prefix.
+    const prefix = meta.tool_prefix !== undefined
+      ? (meta.tool_prefix || '')
+      : (binding === 'KG_WORKER' ? 'kg_' : '')
     const auth = meta.auth || 'service-binding-superadmin'
     const nodeBlocklist = Array.isArray(meta.tool_blocklist) ? new Set(meta.tool_blocklist) : null
 
