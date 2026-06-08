@@ -1724,6 +1724,54 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'register_capability_worker',
+    description: 'Register an OpenAPI-publishing worker as a first-class capability provider for the Agent Builder. After registration, the worker\'s OpenAPI operations are auto-discovered on the next /tools fetch and become callable tools — no agent-worker code change needed. Use this any time you want a deployed worker that exposes /openapi.json (or any /<prefix>/openapi.json) to extend the agent\'s capabilities. Upserts by `binding`: if a system-worker node with the same binding already exists in graph_system_registry, its metadata is updated in place; otherwise a new node is added. The in-isolate OpenAPI cache is cleared so the worker\'s tools appear on the next request.',
+    input_schema: {
+      type: 'object',
+      required: ['binding', 'name', 'openapi_url'],
+      properties: {
+        binding: {
+          type: 'string',
+          description: 'The Cloudflare service-binding name as configured in the agent-worker\'s wrangler.toml (e.g. "VEMOTION_WORKER", "ALBUMS_WORKER"). Must already be bound — registration without a matching env binding is allowed but the worker\'s tools won\'t actually be reachable until the binding exists.'
+        },
+        name: {
+          type: 'string',
+          description: 'The Cloudflare worker script name (matches the binding\'s target — e.g. "vemotion-worker"). Used as the URL host for service-binding fetches: https://<name>/<path>.'
+        },
+        openapi_url: {
+          type: 'string',
+          description: 'Where the worker serves its OpenAPI spec. Either an absolute URL (https://...) or a path relative to the worker base. For workers whose spec lives at the root use "/openapi.json"; for workers that prefix their routes (e.g. Vemotion at api.vegvisr.org/vemotion/*) use the matching path like "/vemotion/openapi.json".'
+        },
+        label: {
+          type: 'string',
+          description: 'Human-readable label for the registry node (e.g. "Vemotion Worker"). Defaults to the binding name.'
+        },
+        domain: {
+          type: 'string',
+          description: 'Public domain the worker is reachable on (e.g. "api.vegvisr.org"). Informational; not used for tool dispatch.'
+        },
+        description: {
+          type: 'string',
+          description: 'Brief description of what capabilities this worker provides. Shown to the agent and to humans browsing the registry.'
+        },
+        tool_prefix: {
+          type: 'string',
+          description: 'Optional prefix prepended to every tool name derived from the worker\'s operationIds (e.g. "kg_"). Omit for no prefix — operation IDs are used as-is (snake_cased). Useful to namespace tool names and avoid collisions with existing tools.'
+        },
+        auth: {
+          type: 'string',
+          enum: ['service-binding-superadmin', 'x-api-token', 'none'],
+          description: 'How the agent should authenticate calls to this worker. service-binding-superadmin (default): sends `x-user-role: Superadmin` header via the service binding. x-api-token: forwards the calling user\'s emailVerificationToken as X-API-Token. none: no auth header.'
+        },
+        tool_blocklist: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional list of fully-qualified tool names (after tool_prefix is applied) to exclude from discovery. Use to prevent collisions with hardcoded tools or to hide internal endpoints.'
+        }
+      }
+    }
+  },
+  {
     name: 'read_worker',
     description: 'List all deployed Cloudflare Workers or get details about a specific worker. Use to inspect current state before modifying. Superadmin only.',
     input_schema: {

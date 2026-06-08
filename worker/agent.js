@@ -126,6 +126,7 @@ const WORKERS_AI_TOOLS = new Set([
   'generate_image',
   'vemotion_save_composition',
   'vemotion_refit_composition',
+  'register_capability_worker',
 ])
 
 const GRAPH_AWARE_TOOLS = new Set([

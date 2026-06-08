@@ -6,7 +6,7 @@
  */
 
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
-import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools } from './openapi-tools.js'
+import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
@@ -4529,6 +4529,159 @@ async function executeRegisterDeployedWorker(input, env) {
   }
 }
 
+/**
+ * Register or update a worker as a first-class capability provider for the
+ * Agent Builder. After this runs, the worker's OpenAPI operations are
+ * auto-discovered on the next /tools fetch (Phase 1's registry-walking
+ * loadOpenAPITools picks them up).
+ *
+ * Upsert semantics: keyed by `binding`. If a system-worker node with the same
+ * binding already exists, its metadata is merged in place. Otherwise a new
+ * node is added. We always clear the in-isolate OpenAPI cache so the next
+ * /tools fetch sees the registered worker immediately.
+ */
+async function executeRegisterCapabilityWorker(input, env) {
+  if (!env.KG_WORKER) throw new Error('KG_WORKER binding not available')
+
+  const binding = typeof input?.binding === 'string' && input.binding.trim() ? input.binding.trim() : ''
+  const name = typeof input?.name === 'string' && input.name.trim() ? input.name.trim() : ''
+  const openapi_url = typeof input?.openapi_url === 'string' && input.openapi_url.trim() ? input.openapi_url.trim() : ''
+  if (!binding) throw new Error('binding is required')
+  if (!name) throw new Error('name is required')
+  if (!openapi_url) throw new Error('openapi_url is required')
+
+  const label = typeof input?.label === 'string' && input.label.trim() ? input.label.trim() : binding
+  const domain = typeof input?.domain === 'string' ? input.domain.trim() : ''
+  const description = typeof input?.description === 'string' ? input.description.trim() : ''
+  const tool_prefix = typeof input?.tool_prefix === 'string' ? input.tool_prefix : ''
+  const auth = ['service-binding-superadmin', 'x-api-token', 'none'].includes(input?.auth)
+    ? input.auth
+    : 'service-binding-superadmin'
+  const tool_blocklist = Array.isArray(input?.tool_blocklist)
+    ? input.tool_blocklist.filter(t => typeof t === 'string')
+    : []
+
+  // 1. Probe the OpenAPI spec so we can refuse to register an unreachable one
+  //    and tell the caller how many operations they'll get.
+  let probedOpCount = null
+  let probedTitle = null
+  const fetcher = env[binding]
+  if (fetcher) {
+    let probeUrl
+    if (/^https?:\/\//i.test(openapi_url)) {
+      probeUrl = openapi_url
+    } else {
+      const path = openapi_url.startsWith('/') ? openapi_url : `/${openapi_url}`
+      probeUrl = `https://${name}${path}`
+    }
+    try {
+      const res = await fetcher.fetch(probeUrl)
+      if (res.ok) {
+        const spec = await res.json().catch(() => null)
+        if (spec && spec.paths) {
+          probedTitle = spec?.info?.title || null
+          probedOpCount = 0
+          for (const methods of Object.values(spec.paths)) {
+            for (const op of Object.values(methods)) {
+              if (typeof op === 'object' && op?.operationId) probedOpCount++
+            }
+          }
+        }
+      }
+    } catch {
+      // probe failure is non-fatal — register anyway, the registry walk will retry on next load
+    }
+  }
+
+  // 2. Read the current registry graph, find/replace the matching node by binding.
+  const graphRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getknowgraph?id=graph_system_registry')
+  if (!graphRes.ok) {
+    const t = await graphRes.text().catch(() => '')
+    throw new Error(`Failed to read graph_system_registry (${graphRes.status}): ${t.slice(0, 200)}`)
+  }
+  const graph = await graphRes.json()
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes.slice() : []
+  const edges = Array.isArray(graph.edges) ? graph.edges.slice() : []
+  const metadata = graph.metadata || {}
+
+  const existingIdx = nodes.findIndex(n =>
+    n?.type === 'system-worker' && n?.metadata && n.metadata.binding === binding
+  )
+
+  const newMetadata = {
+    // Preserve any fields already on the node, then overwrite with the new values.
+    ...(existingIdx >= 0 ? (nodes[existingIdx].metadata || {}) : {}),
+    binding,
+    name,
+    openapi_url,
+    tool_prefix,
+    auth,
+    ...(tool_blocklist.length > 0 ? { tool_blocklist } : {}),
+    ...(domain ? { domain } : {}),
+    registeredVia: 'register_capability_worker',
+    registeredAt: new Date().toISOString(),
+  }
+
+  const nodeId = existingIdx >= 0
+    ? nodes[existingIdx].id
+    : `worker-${name}`
+
+  const node = {
+    id: nodeId,
+    label,
+    type: 'system-worker',
+    color: existingIdx >= 0 ? (nodes[existingIdx].color || '#38bdf8') : '#38bdf8',
+    info: description || (existingIdx >= 0 ? nodes[existingIdx].info : '') || `Capability worker — ${name}`,
+    metadata: newMetadata,
+  }
+
+  if (existingIdx >= 0) {
+    nodes[existingIdx] = node
+  } else {
+    nodes.push(node)
+  }
+
+  const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: 'graph_system_registry',
+      graphData: { nodes, edges, metadata },
+      override: true,
+    }),
+  })
+  if (!saveRes.ok) {
+    const t = await saveRes.text().catch(() => '')
+    throw new Error(`Failed to save graph_system_registry (${saveRes.status}): ${t.slice(0, 200)}`)
+  }
+  const saveData = await saveRes.json().catch(() => ({}))
+
+  // 3. Invalidate the in-isolate OpenAPI cache so the next /tools fetch re-walks.
+  clearOpenAPICache()
+
+  return {
+    message: existingIdx >= 0
+      ? `Updated capability worker "${name}" (binding ${binding}) in graph_system_registry`
+      : `Registered capability worker "${name}" (binding ${binding}) in graph_system_registry`,
+    action: existingIdx >= 0 ? 'updated' : 'created',
+    nodeId,
+    binding,
+    name,
+    openapi_url,
+    tool_prefix,
+    auth,
+    probedTitle,
+    probedOpCount,
+    probeReachable: probedOpCount !== null,
+    serviceBindingPresent: !!fetcher,
+    registryVersion: saveData?.newVersion ?? null,
+    viewUrl: 'https://www.vegvisr.org/gnew-viewer?graphId=graph_system_registry',
+    note: probedOpCount === null
+      ? 'Spec was not reachable from the agent-worker isolate during probe. Registration saved anyway — the next /tools fetch will retry.'
+      : `Spec probed: ${probedOpCount} operation(s) found in "${probedTitle || 'untitled'}". They will appear in /tools on the next fetch.`,
+  }
+}
+
 async function executeReadWorker(input, env) {
   getVerifiedWorkerAdmin(input)
   const token = env.CLOUDFLARE_API_TOKEN
@@ -6293,6 +6446,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDeployWorker(toolInput, env)
     case 'register_deployed_worker':
       return await executeRegisterDeployedWorker(toolInput, env)
+    case 'register_capability_worker':
+      return await executeRegisterCapabilityWorker(toolInput, env)
     case 'read_worker':
       return await executeReadWorker(toolInput, env)
     case 'delete_worker':
