@@ -442,7 +442,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
         <span className="text-sm">&#x1f527;</span>
         <span className="font-semibold text-white">{tc.tool}</span>
         <span className={`ml-auto text-xs ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
-          {tc.status === 'running' ? (tc.progress || 'Running...') : tc.status === 'success' ? (tc.summary || 'Done') : 'Failed'}
+          {tc.status === 'running' ? (typeof tc.progress === 'string' ? tc.progress : 'Running...') : tc.status === 'success' ? (typeof tc.summary === 'string' ? tc.summary : 'Done') : 'Failed'}
         </span>
         <span className={`text-[10px] text-white/50 transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
       </button>

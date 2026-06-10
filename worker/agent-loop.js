@@ -610,7 +610,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             if (result?.graphId) {
               inferredGraphId = result.graphId
             }
-            const summary = result.message || `${toolUse.name} completed`
+            // Summary must be a string. Some tools (e.g. bot_send_message) return
+            // result.message as an OBJECT (the created chat-message record), which
+            // would crash the frontend renderer (React #31). Fall through to the
+            // tool name when result.message isn't a usable string.
+            const summary = (typeof result.message === 'string' && result.message.trim())
+              ? result.message
+              : (typeof result.summary === 'string' && result.summary.trim())
+                ? result.summary
+                : `${toolUse.name} completed`
             const resultLen = JSON.stringify(result).length
             const toolDuration = Date.now() - toolStart
             log(`${toolUse.name} OK (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
