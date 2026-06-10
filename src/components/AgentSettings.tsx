@@ -56,6 +56,10 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
   const [availableGroups, setAvailableGroups] = useState<{id: string, name: string}[]>([]);
   const [selectedGroupId, setSelectedGroupId] = useState('');
   const [initialBotGroups, setInitialBotGroups] = useState<{groupId: string, groupName: string}[]>([]);
+  // Set when this agent is already registered as a chat bot. Locks the name
+  // input — bot username is derived from name and renaming would orphan every
+  // prior @mention.
+  const [chatBotId, setChatBotId] = useState<string | null>(null);
 
   // Load agent list
   const loadAgents = useCallback(() => {
@@ -86,6 +90,7 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
     setBotGroups([]);
     setInitialBotGroups([]);
     setSelectedGroupId('');
+    setChatBotId(null);
   };
 
   // Load agent config if editing
@@ -111,11 +116,13 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
               if (meta.chatBotId || meta.botGraphId) {
                 setIsChatBot(true);
                 setBotGraphId(meta.botGraphId || '');
+                setChatBotId(meta.chatBotId || null);
               } else {
                 setIsChatBot(false);
                 setBotGraphId('');
+                setChatBotId(null);
               }
-            } catch { setIsChatBot(false); setBotGraphId(''); }
+            } catch { setIsChatBot(false); setBotGraphId(''); setChatBotId(null); }
           }
         })
         .catch(() => {});
@@ -441,13 +448,23 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
           <div className="rounded-lg border border-white/10 bg-slate-900/60 p-4 space-y-3">
             <label className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">Identity</label>
             <div>
-              <label className="text-[10px] text-gray-500 block mb-1">Name *</label>
+              <label className="text-[10px] text-gray-500 block mb-1">
+                Name *
+                {chatBotId && (
+                  <span className="ml-2 text-amber-400/70 normal-case font-normal">
+                    locked — renaming a registered bot would break every prior @mention
+                  </span>
+                )}
+              </label>
               <input
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
+                disabled={!!chatBotId}
                 placeholder="e.g. Book Writer, Market Analyst..."
-                className="w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40"
+                className={`w-full rounded-md bg-slate-950/60 border border-white/8 px-3 py-2 text-[11px] text-white placeholder:text-gray-600 focus:outline-none focus:border-emerald-500/40 ${
+                  chatBotId ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
               />
             </div>
             <div>
