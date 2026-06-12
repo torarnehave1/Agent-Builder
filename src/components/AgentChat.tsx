@@ -2631,7 +2631,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
             ))}
             {current.text && (
-              <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+              <div className="prose prose-sm max-w-none app-prose [&_a]:text-[color:var(--app-link)] [&_code]:bg-[var(--app-code-bg)] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-[var(--app-code-bg)] [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-[color:var(--app-text-muted)]">
                 <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                   {preprocessGraphLinks(current.text)}
                 </ReactMarkdown>

@@ -72,7 +72,8 @@ html[data-theme='light'] body {
 
 /* Markdown prose: light theme uses Tailwind's default (dark text); dark theme
    remaps the prose variables to their inverted values. Replaces prose-invert. */
-html[data-theme='light'] .app-prose {
+html[data-theme='light'] .app-prose,
+html[data-theme='light'] .prose-invert {
   --tw-prose-body: #334155;
   --tw-prose-headings: #0f172a;
   --tw-prose-bold: #0f172a;
