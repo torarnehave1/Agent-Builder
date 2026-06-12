@@ -296,7 +296,7 @@ function deriveCapabilityWorkflow(messages: ChatMessage[], current: AssistantSta
 
 function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowState }) {
   const statusClasses: Record<'pending' | 'running' | 'success' | 'error', string> = {
-    pending: 'border-white/10 bg-white/[0.04] text-white/40',
+    pending: 'app-border app-surface app-text-soft',
     running: 'border-sky-400/30 bg-sky-400/[0.10] text-sky-300',
     success: 'border-emerald-400/30 bg-emerald-400/[0.10] text-emerald-300',
     error: 'border-rose-400/30 bg-rose-400/[0.10] text-rose-300',
@@ -307,8 +307,8 @@ function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowStat
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
           <div className="text-[11px] uppercase tracking-[0.18em] text-amber-300/80 font-semibold">Capability Workflow</div>
-          <div className="text-sm text-white font-medium mt-1">{workflow.request}</div>
-          <div className="text-xs text-white/60 mt-1">
+          <div className="text-sm app-text font-medium mt-1">{workflow.request}</div>
+          <div className="text-xs app-text-muted mt-1">
             {workflow.capabilityType || 'capability'}
             {workflow.deliveryMode ? ` • ${workflow.deliveryMode}` : ''}
             {workflow.targetScope ? ` • scope: ${workflow.targetScope}` : ''}
@@ -316,7 +316,7 @@ function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowStat
             {workflow.endpointPath ? ` • ${workflow.endpointPath}` : ''}
           </div>
         </div>
-        <div className="text-xs text-white/70 max-w-[280px]">{workflow.currentLabel}</div>
+        <div className="text-xs app-text-muted max-w-[280px]">{workflow.currentLabel}</div>
       </div>
 
       <div className="flex flex-wrap gap-2 mt-3">
@@ -331,13 +331,13 @@ function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowStat
       </div>
 
       {workflow.requiredQuestions.length > 0 && (
-        <div className="mt-3 text-xs text-white/70">
-          <div className="text-white/85 font-medium mb-1">Missing details</div>
+        <div className="mt-3 text-xs app-text-muted">
+          <div className="app-text-strong font-medium mb-1">Missing details</div>
           {workflow.requiredQuestions.map((question, index) => (
             <div key={`${question.id || question.question || index}`} className="mb-1">
               {index + 1}. {question.question}
               {question.options && question.options.length > 0 && (
-                <span className="text-white/45"> ({question.options.join(', ')})</span>
+                <span className="app-text-soft"> ({question.options.join(', ')})</span>
               )}
             </div>
           ))}
@@ -345,7 +345,7 @@ function CapabilityWorkflowCard({ workflow }: { workflow: CapabilityWorkflowStat
       )}
 
       {workflow.optionalQuestions.length > 0 && workflow.requiredQuestions.length === 0 && workflow.phases[4].status !== 'success' && (
-        <div className="mt-3 text-xs text-white/60">
+        <div className="mt-3 text-xs app-text-muted">
           Optional decision: {workflow.optionalQuestions[0].question}
         </div>
       )}
@@ -433,26 +433,26 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
   };
 
   return (
-    <div className="my-2 border border-white/10 rounded-lg overflow-hidden text-[13px]">
+    <div className="my-2 border app-border rounded-lg overflow-hidden text-[13px]">
       <button
         type="button"
         onClick={() => setExpanded(p => !p)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-white/[0.04] hover:bg-white/[0.07] cursor-pointer select-none text-left"
+        className="w-full flex items-center gap-2 px-3 py-2 app-surface app-hover-surface-strong cursor-pointer select-none text-left"
       >
         <span className="text-sm">&#x1f527;</span>
-        <span className="font-semibold text-white">{tc.tool}</span>
+        <span className="font-semibold app-text">{tc.tool}</span>
         <span className={`ml-auto text-xs ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
           {tc.status === 'running' ? (typeof tc.progress === 'string' ? tc.progress : 'Running...') : tc.status === 'success' ? (typeof tc.summary === 'string' ? tc.summary : 'Done') : 'Failed'}
         </span>
-        <span className={`text-[10px] text-white/50 transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
+        <span className={`text-[10px] app-text-soft transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
       </button>
       {expanded && (
-        <div className="px-3 py-2 border-t border-white/10 bg-black/15">
-          <pre className="whitespace-pre-wrap break-all text-white/60 font-mono text-xs m-0">{inputStr}</pre>
+        <div className="px-3 py-2 border-t app-border app-surface">
+          <pre className="whitespace-pre-wrap break-all app-text-muted font-mono text-xs m-0">{inputStr}</pre>
           {resultStr && (
             <>
-              <hr className="border-none border-t border-white/10 my-1.5" />
-              <pre className="whitespace-pre-wrap break-all text-white/60 font-mono text-xs m-0">{resultStr}</pre>
+              <hr className="border-none border-t app-border my-1.5" />
+              <pre className="whitespace-pre-wrap break-all app-text-muted font-mono text-xs m-0">{resultStr}</pre>
             </>
           )}
         </div>
@@ -487,12 +487,12 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
           <button
             type="button"
             onClick={() => setSvgOpen(v => !v)}
-            className="px-2 py-1 text-xs rounded bg-violet-600 text-white hover:bg-violet-500"
+            className="px-2 py-1 text-xs rounded bg-violet-600 app-text hover:bg-violet-500"
           >
             {svgOpen ? 'Hide SVG' : 'Preview SVG'}
           </button>
           {svgOpen && (
-            <div className="mt-2 rounded overflow-hidden border border-white/10 bg-white/5 p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
+            <div className="mt-2 rounded overflow-hidden border app-border app-surface p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
               <div dangerouslySetInnerHTML={{ __html: svgContent! }} />
             </div>
           )}
@@ -500,7 +500,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
       )}
       {isVemotionSave && vemotionCompositionId && (
         <div className="mx-3 my-2">
-          <div className="rounded-lg overflow-hidden border border-white/10 bg-black">
+          <div className="rounded-lg overflow-hidden border app-border bg-black">
             <iframe
               src={vemotionEmbedUrl}
               title={`Vemotion preview: ${vemotionName}`}
@@ -530,7 +530,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
                 Open in editor &#8599;
               </a>
             )}
-            <span className="text-[10px] text-white/30 ml-auto truncate" title={vemotionCompositionId}>
+            <span className="text-[10px] app-text-faint ml-auto truncate" title={vemotionCompositionId}>
               {vemotionCompositionId}
             </span>
           </div>
@@ -598,9 +598,9 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
       <div className="my-3 p-4 rounded-lg border border-sky-400/20 bg-sky-400/[0.06]">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <div className="text-white font-semibold text-sm">{meta?.title || title}</div>
+            <div className="app-text font-semibold text-sm">{meta?.title || title}</div>
             {meta?.description && (
-              <div className="text-white/50 text-xs mt-1 line-clamp-2">{meta.description}</div>
+              <div className="app-text-soft text-xs mt-1 line-clamp-2">{meta.description}</div>
             )}
             <div className="flex flex-wrap gap-1.5 mt-2">
               {meta?.metaArea && (
@@ -610,10 +610,10 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
                 <span key={tag} className="px-1.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-[10px] font-medium">{tag}</span>
               ))}
               {meta?.nodeTypes.map(type => (
-                <span key={type} className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/50 text-[10px]">{type}</span>
+                <span key={type} className="px-1.5 py-0.5 rounded-full app-surface-strong app-text-soft text-[10px]">{type}</span>
               ))}
               {meta && (
-                <span className="px-1.5 py-0.5 rounded-full bg-white/10 text-white/40 text-[10px]">{meta.nodeCount} nodes</span>
+                <span className="px-1.5 py-0.5 rounded-full app-surface-strong app-text-soft text-[10px]">{meta.nodeCount} nodes</span>
               )}
             </div>
           </div>
@@ -686,8 +686,8 @@ const markdownComponents = {
         if (/\.(mp4|webm|mov|m4v)$/i.test(url.pathname)) {
           return (
             <span className="block my-2">
-              <video controls preload="metadata" className="w-full max-w-2xl rounded border border-white/10" src={href} />
-              <span className="block text-[11px] text-white/40 mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
+              <video controls preload="metadata" className="w-full max-w-2xl rounded border app-border" src={href} />
+              <span className="block text-[11px] app-text-soft mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
             </span>
           );
         }
@@ -696,7 +696,7 @@ const markdownComponents = {
           return (
             <span className="block my-2">
               <audio controls preload="none" className="w-full max-w-md" src={href} />
-              <span className="block text-[11px] text-white/40 mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
+              <span className="block text-[11px] app-text-soft mt-0.5 truncate">{extractText(children) || url.pathname.split('/').pop()}</span>
             </span>
           );
         }
@@ -723,7 +723,7 @@ const markdownComponents = {
       <span>
         <code className={className} {...props}>{children}</code>
         {isSvg && (
-          <span className="block mt-2 rounded overflow-hidden border border-white/10 bg-white/5 p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
+          <span className="block mt-2 rounded overflow-hidden border app-border app-surface p-4 flex items-center justify-center max-h-[500px] overflow-y-auto">
             <span dangerouslySetInnerHTML={{ __html: raw }} />
           </span>
         )}
@@ -2256,21 +2256,21 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     <div className="flex flex-1 min-h-0">
       <div className="flex flex-col flex-1 min-h-0">
       {/* Graph selector bar + Sessions + Copy Log */}
-      <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b border-white/10 bg-slate-950/80 flex-wrap gap-2">
+      <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b app-border app-panel flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-2">
           {/* Session picker */}
           <div className="relative">
             <button
               type="button"
               onClick={() => setSessionsOpen(p => !p)}
-              className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+              className="px-3 py-1 rounded-md border app-border app-surface app-text-muted text-xs app-hover-surface-strong app-hover-text-strong transition-colors"
             >
               Sessions ({sessions.length})
             </button>
             <button
               type="button"
               onClick={() => setAnalysisOpen(p => !p)}
-              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${analysisOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${analysisOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong'}`}
               title="Open the Session Analysis side panel"
             >
               Analyze
@@ -2278,33 +2278,33 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             <button
               type="button"
               onClick={() => setRecordingsOpen(p => !p)}
-              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${recordingsOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80'}`}
+              className={`ml-2 px-3 py-1 rounded-md border text-xs transition-colors ${recordingsOpen ? 'border-sky-400/50 bg-sky-500/15 text-sky-200' : 'app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong'}`}
               title="Browse your audio recordings (direct lookup, no agent involved)"
             >
               Recordings
             </button>
             {sessionsOpen && (
-              <div className="absolute top-full mt-1 left-0 w-[calc(100vw-2rem)] sm:w-72 max-h-64 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+              <div className="absolute top-full mt-1 left-0 w-[calc(100vw-2rem)] sm:w-72 max-h-64 overflow-y-auto app-panel border app-border rounded-lg z-50 shadow-xl">
                 <button
                   type="button"
                   onClick={() => { setMessages([]); setSessionId(null); setSessionsOpen(false); }}
-                  className="w-full px-3 py-2 text-left text-xs text-sky-400 hover:bg-white/[0.06] border-b border-white/10"
+                  className="w-full px-3 py-2 text-left text-xs text-sky-400 app-hover-surface-strong border-b app-border"
                 >
                   + New Session
                 </button>
                 {sessions.length === 0 && (
-                  <div className="px-3 py-3 text-white/30 text-xs">No saved sessions</div>
+                  <div className="px-3 py-3 app-text-faint text-xs">No saved sessions</div>
                 )}
                 {sessions.map(s => (
                   <div
                     key={s.id}
-                    className={`w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] flex items-center gap-1 ${s.id === sessionId ? 'text-sky-400 bg-sky-400/[0.06]' : 'text-white/60'}`}
+                    className={`w-full px-3 py-2 text-left text-xs app-hover-surface-strong flex items-center gap-1 ${s.id === sessionId ? 'text-sky-400 bg-sky-400/[0.06]' : 'app-text-muted'}`}
                   >
                     {renamingSessionId === s.id ? (
                       <input
                         autoFocus
                         title="Rename session"
-                        className="flex-1 min-w-0 bg-white/10 text-white text-xs px-1 py-0.5 rounded outline-none"
+                        className="flex-1 min-w-0 app-surface-strong app-text text-xs px-1 py-0.5 rounded outline-none"
                         value={renameValue}
                         onChange={e => setRenameValue(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') renameSession(s.id); if (e.key === 'Escape') setRenamingSessionId(null); }}
@@ -2318,19 +2318,19 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                         onDoubleClick={(e) => { e.stopPropagation(); setRenamingSessionId(s.id); setRenameValue(s.title); }}
                       >
                         <div className="truncate">{s.title}</div>
-                        {s.updatedAt && <div className="text-white/30 text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
+                        {s.updatedAt && <div className="app-text-faint text-[10px]">{new Date(s.updatedAt).toLocaleDateString()}</div>}
                       </button>
                     )}
                     <span
                       onClick={(e) => { e.stopPropagation(); setRenamingSessionId(s.id); setRenameValue(s.title); }}
-                      className="flex-shrink-0 text-white/20 hover:text-sky-400 text-[10px] px-0.5 cursor-pointer"
+                      className="flex-shrink-0 app-text-faint hover:text-sky-400 text-[10px] px-0.5 cursor-pointer"
                       title="Rename session"
                     >
                       &#9998;
                     </span>
                     <span
                       onClick={(e) => deleteSession(s.id, e)}
-                      className="flex-shrink-0 text-white/20 hover:text-rose-400 text-sm px-0.5 cursor-pointer"
+                      className="flex-shrink-0 app-text-faint hover:text-rose-400 text-sm px-0.5 cursor-pointer"
                       title="Delete session"
                     >
                       &times;
@@ -2344,11 +2344,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         <select
           value={graphId}
           onChange={e => onGraphChange(e.target.value)}
-          className="px-3 py-1.5 rounded-full border border-white/10 bg-white/[0.04] text-white text-[13px] max-w-[300px]"
+          className="px-3 py-1.5 rounded-full border app-border app-surface app-text text-[13px] max-w-[300px]"
         >
           <option value="">No graph context</option>
           {graphs.map(g => (
-            <option key={g.id} value={g.id} className="bg-slate-900 text-white">
+            <option key={g.id} value={g.id} className="app-panel app-text">
               {(g.metadata_title || g.id).slice(0, 50)}
             </option>
           ))}
@@ -2384,13 +2384,13 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 Develop
               </button>
               {htmlNodePicker && (
-                <div className="absolute top-full mt-1 right-0 w-64 bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+                <div className="absolute top-full mt-1 right-0 w-64 app-panel border app-border rounded-lg z-50 shadow-xl">
                   {htmlNodePicker.map(n => (
                     <button
                       key={n.id}
                       type="button"
                       onClick={() => { lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id); onPreview(n.info); setHtmlNodePicker(null); }}
-                      className="w-full px-3 py-2 text-left text-xs text-white/60 hover:bg-white/[0.06] hover:text-white"
+                      className="w-full px-3 py-2 text-left text-xs app-text-muted app-hover-surface-strong app-hover-text"
                     >
                       {n.label}
                     </button>
@@ -2404,7 +2404,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               <button
                 type="button"
                 onClick={copyLog}
-                className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+                className="px-3 py-1 rounded-md border app-border app-surface app-text-muted text-xs app-hover-surface-strong app-hover-text-strong transition-colors"
                 title="Copy chat log to clipboard"
               >
                 Copy Log
@@ -2412,7 +2412,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               <button
                 type="button"
                 onClick={() => setShowLog(p => !p)}
-                className="px-3 py-1 rounded-md border border-white/10 bg-white/[0.04] text-white/60 text-xs hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+                className="px-3 py-1 rounded-md border app-border app-surface app-text-muted text-xs app-hover-surface-strong app-hover-text-strong transition-colors"
                 title="Toggle raw log view"
               >
                 {showLog ? 'Hide Log' : 'View Log'}
@@ -2424,8 +2424,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Raw Log Panel */}
       {showLog && (
-        <div className="max-h-[300px] overflow-y-auto border-b border-white/10 bg-black/40 px-4 py-3">
-          <pre className="whitespace-pre-wrap break-all text-white/50 font-mono text-xs m-0">
+        <div className="max-h-[300px] overflow-y-auto border-b app-border app-surface px-4 py-3">
+          <pre className="whitespace-pre-wrap break-all app-text-soft font-mono text-xs m-0">
             {buildLog()}
           </pre>
         </div>
@@ -2451,7 +2451,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       )}
 
       {capabilityWorkflow && (
-        <div className="px-3 sm:px-4 py-3 border-b border-white/10 bg-slate-950/50 flex-shrink-0">
+        <div className="px-3 sm:px-4 py-3 border-b app-border app-panel flex-shrink-0">
           <CapabilityWorkflowCard workflow={capabilityWorkflow} />
         </div>
       )}
@@ -2459,8 +2459,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
         {!hasMessages && (
-          <div className="text-center py-10 sm:py-16 px-4 text-white/60">
-            <h2 className="text-white text-xl sm:text-2xl font-semibold mb-2 sm:mb-3">Agent Chat</h2>
+          <div className="text-center py-10 sm:py-16 px-4 app-text-muted">
+            <h2 className="app-text text-xl sm:text-2xl font-semibold mb-2 sm:mb-3">Agent Chat</h2>
             <p className="text-sm sm:text-base leading-relaxed max-w-[500px] mx-auto">
               I can help you create knowledge graphs, build HTML pages, modify content, and manage your apps. What would you like to do?
             </p>
@@ -2478,7 +2478,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             {msg.role === 'assistant' && (
               <div className="flex-shrink-0 mt-1">
                 {agentAvatar ? (
-                  <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border border-white/20 object-cover" />
+                  <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border app-border-strong object-cover" />
                 ) : (
                   <div className="w-7 h-7 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-purple-300 text-[10px] font-bold">
                     A
@@ -2489,8 +2489,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <div
             className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-[14px] text-[0.9rem] sm:text-[0.95rem] leading-relaxed break-words overflow-x-auto ${
               msg.role === 'user'
-                ? 'bg-sky-400/[0.16] border border-sky-400/30 text-white'
-                : 'bg-white/[0.06] border border-white/[0.12] text-white'
+                ? 'bg-sky-400/[0.16] border border-sky-400/30 app-text'
+                : 'app-surface border app-border app-text'
             }`}
           >
             {/* Show tool calls for completed assistant messages */}
@@ -2503,7 +2503,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             )}
             {msg.role === 'assistant' ? (
               <div>
-                <div className="prose prose-invert prose-sm max-w-none [&_a]:text-sky-400 [&_code]:bg-black/30 [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-black/30 [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-white/60">
+                <div className="prose prose-sm max-w-none app-prose [&_a]:text-[color:var(--app-link)] [&_code]:bg-[var(--app-code-bg)] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-[var(--app-code-bg)] [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-[color:var(--app-text-muted)]">
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                     {preprocessGraphLinks(msg.content || '_(completed with tool calls only)_')}
                   </ReactMarkdown>
@@ -2589,7 +2589,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                         key={imgIdx}
                         src={img.url}
                         alt={img.label || 'attached'}
-                        className="max-h-40 max-w-[200px] rounded-lg border border-white/20 object-cover"
+                        className="max-h-40 max-w-[200px] rounded-lg border app-border-strong object-cover"
                       />
                     ))}
                   </div>
@@ -2600,7 +2600,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     type="button"
                     onClick={() => handleInput(msg.content)}
                     disabled={streaming}
-                    className="flex-shrink-0 mt-0.5 text-white/30 hover:text-sky-400 transition-colors disabled:opacity-30"
+                    className="flex-shrink-0 mt-0.5 app-text-faint hover:text-sky-400 transition-colors disabled:opacity-30"
                     title="Use this prompt again"
                   >
                   +
@@ -2618,14 +2618,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             {/* Agent avatar */}
             <div className="flex-shrink-0 mt-1">
               {agentAvatar ? (
-                <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border border-white/20 object-cover" />
+                <img src={agentAvatar} alt="" className="w-7 h-7 rounded-full border app-border-strong object-cover" />
               ) : (
                 <div className="w-7 h-7 rounded-full bg-purple-600/30 border border-purple-500/30 flex items-center justify-center text-purple-300 text-[10px] font-bold">
                   A
                 </div>
               )}
             </div>
-          <div className="px-4 py-3 rounded-[14px] bg-white/[0.06] border border-white/[0.12] text-white text-[0.95rem] leading-relaxed">
+          <div className="px-4 py-3 rounded-[14px] app-surface border app-border app-text text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
               <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
@@ -2649,12 +2649,12 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Audio file panel */}
       {selectedAudioFile && (
-        <div className="px-4 py-3 border-t border-white/10 bg-slate-950/80">
-          <div className="max-w-[900px] mx-auto rounded-xl border border-white/10 bg-white/[0.04] p-4 text-xs text-white/70">
+        <div className="px-4 py-3 border-t app-border app-panel">
+          <div className="max-w-[900px] mx-auto rounded-xl border app-border app-surface p-4 text-xs app-text-muted">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-sm font-semibold text-white">{selectedAudioFile.name}</div>
-                <div className="mt-1 text-white/60">
+                <div className="text-sm font-semibold app-text">{selectedAudioFile.name}</div>
+                <div className="mt-1 app-text-muted">
                   {formatFileSize(selectedAudioFile.size)}
                   {selectedAudioFile.duration !== null && (
                     <> &bull; Duration: {formatDuration(selectedAudioFile.duration)}</>
@@ -2665,20 +2665,20 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 type="button"
                 onClick={clearSelectedAudio}
                 disabled={audioProcessing}
-                className="rounded-full border border-white/20 px-3 py-1 text-xs text-white/70 hover:bg-white/10 disabled:opacity-60"
+                className="rounded-full border app-border-strong px-3 py-1 text-xs app-text-muted app-hover-surface-strong disabled:opacity-60"
               >
                 &times;
               </button>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-2 text-xs text-white/70">
+              <label className="flex items-center gap-2 text-xs app-text-muted">
                 <input
                   type="checkbox"
                   checked={audioAutoDetect}
                   onChange={e => setAudioAutoDetect(e.target.checked)}
                   disabled={audioProcessing}
                   aria-label="Auto-detect language"
-                  className="h-4 w-4 rounded border-white/30 bg-white/10"
+                  className="h-4 w-4 rounded app-border-strong app-surface-strong"
                 />
                 Auto-detect language
               </label>
@@ -2686,11 +2686,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 value={audioLanguage}
                 onChange={e => setAudioLanguage(e.target.value)}
                 disabled={audioAutoDetect || audioProcessing}
-                className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-white"
+                className="rounded-full border app-border-strong app-surface-strong px-3 py-1 text-xs app-text"
                 aria-label="Audio language"
               >
                 {audioLanguageOptions.map(lang => (
-                  <option key={lang.code} value={lang.code} className="bg-slate-900 text-white">
+                  <option key={lang.code} value={lang.code} className="app-panel app-text">
                     {lang.label}
                   </option>
                 ))}
@@ -2699,13 +2699,13 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 type="button"
                 onClick={startAudioTranscription}
                 disabled={audioProcessing}
-                className="rounded-full border border-white/20 bg-white/10 px-4 py-1 text-xs text-white/80 hover:bg-white/20 disabled:opacity-60"
+                className="rounded-full border app-border-strong app-surface-strong px-4 py-1 text-xs app-text-strong app-hover-surface-strong disabled:opacity-60"
               >
                 {audioProcessing ? 'Transcribing...' : 'Transcribe'}
               </button>
             </div>
             {audioTranscriptionStatus && (
-              <div className="mt-3 text-xs text-white/60">
+              <div className="mt-3 text-xs app-text-muted">
                 {audioTranscriptionStatus}
                 {audioChunkProgress.total > 0 && (
                   <span> &bull; Chunk {audioChunkProgress.current}/{audioChunkProgress.total}</span>
@@ -2718,7 +2718,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Suggestion chips */}
       {suggestions.length > 0 && !streaming && (
-        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+        <div className="px-4 py-2 border-t app-border app-panel flex-shrink-0">
           <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
             {suggestions.map((s, i) => (
               <button
@@ -2746,19 +2746,19 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Pending file attachments */}
       {pendingFiles.length > 0 && (
-        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+        <div className="px-4 py-2 border-t app-border app-panel flex-shrink-0">
           <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
             {pendingFiles.map((file, i) => (
-              <div key={i} className="relative group flex items-center gap-2 px-3 py-1.5 bg-white/[0.06] border border-white/10 rounded-lg">
+              <div key={i} className="relative group flex items-center gap-2 px-3 py-1.5 app-surface border app-border rounded-lg">
                 <span className="text-lg">{file.mediaType === 'application/pdf' ? '\u{1F4D1}' : '\u{1F4C4}'}</span>
-                <div className="text-xs text-white/70">
+                <div className="text-xs app-text-muted">
                   <div className="font-medium truncate max-w-[150px]">{file.name}</div>
-                  <div className="text-white/40">{(file.size / 1024).toFixed(1)} KB</div>
+                  <div className="app-text-soft">{(file.size / 1024).toFixed(1)} KB</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => removeFile(i)}
-                  className="w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+                  className="w-5 h-5 rounded-full bg-red-500 app-text text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity ml-1"
                 >
                   &times;
                 </button>
@@ -2770,23 +2770,23 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Pending image thumbnails */}
       {pendingImages.length > 0 && (
-        <div className="px-4 py-2 border-t border-white/10 bg-slate-950/60 flex-shrink-0">
+        <div className="px-4 py-2 border-t app-border app-panel flex-shrink-0">
           <div className="flex gap-2 max-w-[900px] mx-auto flex-wrap">
             {pendingImages.map((img, i) => (
               <div key={i} className="relative group">
                 <img
                   src={img.url}
                   alt={img.label || 'attached'}
-                  className="h-16 w-16 object-cover rounded-lg border border-white/20"
+                  className="h-16 w-16 object-cover rounded-lg border app-border-strong"
                 />
                 <button
                   type="button"
                   onClick={() => removeImage(i)}
-                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 app-text text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                 >
                   &times;
                 </button>
-                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white/80 px-1 py-0.5 rounded-b-lg truncate">
+                <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-[9px] text-white/90 px-1 py-0.5 rounded-b-lg truncate">
                   {img.label}
                 </div>
               </div>
@@ -2807,7 +2807,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Input area */}
       <div
-        className={`px-3 sm:px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t bg-slate-950/80 flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'border-white/10'}`}
+        className={`px-3 sm:px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t app-panel flex-shrink-0 transition-colors ${imageDragActive ? 'border-sky-400 bg-sky-400/[0.06]' : 'app-border'}`}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setImageDragActive(true); }}
         onDragLeave={() => setImageDragActive(false)}
         onDrop={handleImageDrop}
@@ -2857,7 +2857,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             type="button"
             onClick={() => audioInputRef.current?.click()}
             disabled={audioProcessing}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors disabled:opacity-40"
+            className="px-3 py-2.5 rounded-xl border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors disabled:opacity-40"
             title="Upload audio file for transcription"
           >
             &#x1F3A4;
@@ -2865,7 +2865,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <button
             type="button"
             onClick={() => imageInputRef.current?.click()}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+            className="px-3 py-2.5 rounded-xl border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors"
             title="Attach image"
           >
             &#x1F5BC;
@@ -2873,7 +2873,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-2.5 rounded-xl border border-white/10 bg-white/[0.04] text-white/60 hover:bg-white/[0.08] hover:text-white/80 transition-colors"
+            className="px-3 py-2.5 rounded-xl border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors"
             title="Attach PDF or text file"
           >
             &#x1F4CE;
@@ -2881,7 +2881,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <div className="flex-1 min-w-0 relative">
             {/* Bot @mention dropdown */}
             {input.match(/^@\S*$/) && bots.length > 0 && (
-              <div className="absolute bottom-full mb-1 left-0 w-full max-h-40 overflow-y-auto bg-slate-900 border border-white/10 rounded-lg z-50 shadow-xl">
+              <div className="absolute bottom-full mb-1 left-0 w-full max-h-40 overflow-y-auto app-panel border app-border rounded-lg z-50 shadow-xl">
                 {bots
                   .filter(b => !input.slice(1) || b.username.toLowerCase().startsWith(input.slice(1).toLowerCase()) || b.name.toLowerCase().startsWith(input.slice(1).toLowerCase()))
                   .map(b => (
@@ -2889,11 +2889,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                       key={b.id}
                       type="button"
                       onClick={() => { setInput(`@${b.username} `); textareaRef.current?.focus(); }}
-                      className="w-full px-3 py-2 text-left text-xs hover:bg-white/[0.06] text-white/70 flex items-center gap-2"
+                      className="w-full px-3 py-2 text-left text-xs app-hover-surface-strong app-text-muted flex items-center gap-2"
                     >
                       {b.avatar_url && <img src={b.avatar_url} className="w-5 h-5 rounded-full" alt="" />}
-                      <span className="font-medium text-white/90">@{b.username}</span>
-                      <span className="text-white/40">{b.name}</span>
+                      <span className="font-medium app-text-strong">@{b.username}</span>
+                      <span className="app-text-soft">{b.name}</span>
                     </button>
                   ))}
               </div>
@@ -2908,7 +2908,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               onPaste={handleImagePaste}
               placeholder={pendingFiles.length > 0 ? 'Ask about the file(s)...' : pendingImages.length > 0 ? 'Ask about the image(s)...' : bots.length > 0 ? 'Type your message or @bot...' : 'Type your message...'}
               rows={1}
-              className="w-full px-3 sm:px-3.5 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl text-white text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
+              className="w-full px-3 sm:px-3.5 py-2.5 app-surface border app-border rounded-xl app-text text-[0.9rem] sm:text-[0.95rem] font-[inherit] resize-none leading-relaxed max-h-[200px] overflow-y-auto focus:outline-none focus:border-sky-400/50 focus:ring-[3px] focus:ring-sky-400/15"
             />
           </div>
           {streaming ? (
@@ -2924,7 +2924,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               type="button"
               onClick={() => sendMessage()}
               disabled={!input.trim() && pendingImages.length === 0 && pendingFiles.length === 0}
-              className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] text-white text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 sm:px-5 py-2.5 rounded-xl border border-sky-400/40 bg-sky-400/[0.16] app-text text-[0.9rem] sm:text-[0.95rem] font-medium cursor-pointer whitespace-nowrap transition-all hover:bg-sky-400/[0.24] disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Send
             </button>

@@ -20,22 +20,87 @@ body {
 
 html[data-theme='dark'] body {
   --app-bg: #020617;
-  --app-surface: #0f172a;
+  --app-surface: rgba(255,255,255,0.05);
   --app-surface-2: rgba(255,255,255,0.04);
+  --app-surface-strong: rgba(255,255,255,0.10);
+  --app-panel: #0f172a;
   --app-border: rgba(255,255,255,0.10);
+  --app-border-strong: rgba(255,255,255,0.20);
   --app-text: #f8fafc;
-  --app-text-muted: rgba(248,250,252,0.70);
+  --app-text-strong: rgba(248,250,252,0.85);
+  --app-text-muted: rgba(248,250,252,0.65);
   --app-text-soft: rgba(248,250,252,0.45);
+  --app-text-faint: rgba(248,250,252,0.30);
+  --app-code-bg: rgba(0,0,0,0.30);
+  --app-link: #38bdf8;
 }
 
 html[data-theme='light'] body {
   --app-bg: #f8fafc;
-  --app-surface: #ffffff;
+  --app-surface: rgba(15,23,42,0.04);
   --app-surface-2: rgba(15,23,42,0.04);
+  --app-surface-strong: rgba(15,23,42,0.08);
+  --app-panel: #ffffff;
   --app-border: rgba(15,23,42,0.12);
+  --app-border-strong: rgba(15,23,42,0.22);
   --app-text: #0f172a;
-  --app-text-muted: rgba(15,23,42,0.72);
-  --app-text-soft: rgba(15,23,42,0.5);
+  --app-text-strong: rgba(15,23,42,0.90);
+  --app-text-muted: rgba(15,23,42,0.68);
+  --app-text-soft: rgba(15,23,42,0.52);
+  --app-text-faint: rgba(15,23,42,0.40);
+  --app-code-bg: rgba(15,23,42,0.06);
+  --app-link: #0284c7;
+}
+
+/* Theme-flipping semantic utilities (drive off html[data-theme] via the
+   --app-* variables above). Used to make AgentChat honor light/dark without
+   per-element conditionals. */
+.app-text          { color: var(--app-text); }
+.app-text-strong   { color: var(--app-text-strong); }
+.app-text-muted    { color: var(--app-text-muted); }
+.app-text-soft     { color: var(--app-text-soft); }
+.app-text-faint    { color: var(--app-text-faint); }
+.app-panel          { background-color: var(--app-panel); }
+.app-surface        { background-color: var(--app-surface); }
+.app-surface-strong { background-color: var(--app-surface-strong); }
+.app-border         { border-color: var(--app-border); }
+.app-border-strong  { border-color: var(--app-border-strong); }
+.app-hover-surface:hover        { background-color: var(--app-surface); }
+.app-hover-surface-strong:hover { background-color: var(--app-surface-strong); }
+.app-hover-text:hover           { color: var(--app-text); }
+.app-hover-text-strong:hover    { color: var(--app-text-strong); }
+
+/* Markdown prose: light theme uses Tailwind's default (dark text); dark theme
+   remaps the prose variables to their inverted values. Replaces prose-invert. */
+html[data-theme='light'] .app-prose {
+  --tw-prose-body: #334155;
+  --tw-prose-headings: #0f172a;
+  --tw-prose-bold: #0f172a;
+  --tw-prose-links: var(--app-link);
+  --tw-prose-code: #0f172a;
+  --tw-prose-quotes: #334155;
+  --tw-prose-quote-borders: #0284c7;
+  --tw-prose-bullets: #64748b;
+  --tw-prose-counters: #64748b;
+  --tw-prose-hr: rgba(15,23,42,0.12);
+}
+html[data-theme='dark'] .app-prose {
+  --tw-prose-body: rgba(248,250,252,0.85);
+  --tw-prose-headings: #f8fafc;
+  --tw-prose-lead: rgba(248,250,252,0.80);
+  --tw-prose-links: var(--app-link);
+  --tw-prose-bold: #f8fafc;
+  --tw-prose-counters: rgba(248,250,252,0.60);
+  --tw-prose-bullets: rgba(248,250,252,0.40);
+  --tw-prose-hr: rgba(255,255,255,0.12);
+  --tw-prose-quotes: rgba(248,250,252,0.75);
+  --tw-prose-quote-borders: #38bdf8;
+  --tw-prose-captions: rgba(248,250,252,0.60);
+  --tw-prose-code: #f8fafc;
+  --tw-prose-pre-code: #e2e8f0;
+  --tw-prose-pre-bg: transparent;
+  --tw-prose-th-borders: rgba(255,255,255,0.20);
+  --tw-prose-td-borders: rgba(255,255,255,0.10);
 }
 
 @keyframes fade-in {
@@ -44,4 +109,119 @@ html[data-theme='light'] body {
 }
 .animate-fade-in {
   animation: fade-in 0.2s ease-out forwards;
+}
+
+/* === Light-theme global override for dark-hardcoded components ===
+   Flips unambiguous dark Tailwind classes to light values when
+   data-theme=light. Unlayered → wins over Tailwind layered utilities.
+   Solid white button labels on colored backgrounds are restored below. */
+
+html[data-theme='light'] .bg-slate-950,
+html[data-theme='light'] .bg-slate-950\/50,
+html[data-theme='light'] .bg-slate-950\/60,
+html[data-theme='light'] .bg-slate-950\/80,
+html[data-theme='light'] .bg-slate-950\/85,
+html[data-theme='light'] .bg-slate-950\/95,
+html[data-theme='light'] .bg-slate-900,
+html[data-theme='light'] .bg-slate-900\/30,
+html[data-theme='light'] .bg-slate-900\/40,
+html[data-theme='light'] .bg-slate-900\/50,
+html[data-theme='light'] .bg-slate-900\/60,
+html[data-theme='light'] .bg-slate-900\/80,
+html[data-theme='light'] .bg-slate-900\/95 {
+  background-color: #ffffff;
+}
+html[data-theme='light'] .bg-white\/\[0\.03\],
+html[data-theme='light'] .bg-white\/3,
+html[data-theme='light'] .bg-white\/\[0\.04\],
+html[data-theme='light'] .bg-white\/\[0\.05\],
+html[data-theme='light'] .bg-white\/5,
+html[data-theme='light'] .bg-white\/\[0\.06\],
+html[data-theme='light'] .bg-white\/10,
+html[data-theme='light'] .bg-white\/\[0\.07\],
+html[data-theme='light'] .bg-white\/20 {
+  background-color: rgba(15,23,42,0.05);
+}
+html[data-theme='light'] .border-white\/5,
+html[data-theme='light'] .border-white\/6,
+html[data-theme='light'] .border-white\/8,
+html[data-theme='light'] .border-white\/10 {
+  border-color: rgba(15,23,42,0.12);
+}
+html[data-theme='light'] .border-white\/20,
+html[data-theme='light'] .border-white\/30 {
+  border-color: rgba(15,23,42,0.22);
+}
+html[data-theme='light'] .text-white {
+  color: #0f172a;
+}
+html[data-theme='light'] .text-white\/70,
+html[data-theme='light'] .text-white\/80,
+html[data-theme='light'] .text-white\/85,
+html[data-theme='light'] .text-white\/90 {
+  color: rgba(15,23,42,0.88);
+}
+html[data-theme='light'] .text-white\/50,
+html[data-theme='light'] .text-white\/60 {
+  color: rgba(15,23,42,0.66);
+}
+html[data-theme='light'] .text-white\/30,
+html[data-theme='light'] .text-white\/40,
+html[data-theme='light'] .text-white\/45 {
+  color: rgba(15,23,42,0.52);
+}
+html[data-theme='light'] .text-white\/20,
+html[data-theme='light'] .text-white\/25 {
+  color: rgba(15,23,42,0.42);
+}
+html[data-theme='light'] .bg-white\/5:hover,
+html[data-theme='light'] .bg-white\/6:hover,
+html[data-theme='light'] .bg-white\/10:hover,
+html[data-theme='light'] .bg-white\/20:hover,
+html[data-theme='light'] .bg-white\/\[0\.06\]:hover,
+html[data-theme='light'] .bg-white\/\[0\.07\]:hover,
+html[data-theme='light'] .bg-white\/\[0\.08\]:hover,
+html[data-theme='light'] .bg-white\/\[0\.10\]:hover {
+  background-color: rgba(15,23,42,0.07);
+}
+html[data-theme='light'] .group:hover .group-hover\:bg-white\/8,
+html[data-theme='light'] .bg-white\/8:focus {
+  background-color: rgba(15,23,42,0.07);
+}
+html[data-theme='light'] .text-white:hover {
+  color: #0f172a;
+}
+html[data-theme='light'] .text-white\/60:hover,
+html[data-theme='light'] .text-white\/70:hover,
+html[data-theme='light'] .text-white\/80:hover {
+  color: rgba(15,23,42,0.9);
+}
+html[data-theme='light'] .border-white\/20:hover {
+  border-color: rgba(15,23,42,0.22);
+}
+/* keep white labels on colored buttons */
+html[data-theme='light'] [class*="bg-gradient-"].text-white, html[data-theme='light'] [class*="bg-gradient"].text-white,
+html[data-theme='light'] [class*="bg-purple-"].text-white, html[data-theme='light'] [class*="bg-purple"].text-white,
+html[data-theme='light'] [class*="bg-violet-"].text-white, html[data-theme='light'] [class*="bg-violet"].text-white,
+html[data-theme='light'] [class*="bg-fuchsia-"].text-white, html[data-theme='light'] [class*="bg-fuchsia"].text-white,
+html[data-theme='light'] [class*="bg-pink-"].text-white, html[data-theme='light'] [class*="bg-pink"].text-white,
+html[data-theme='light'] [class*="bg-sky-"].text-white, html[data-theme='light'] [class*="bg-sky"].text-white,
+html[data-theme='light'] [class*="bg-blue-"].text-white, html[data-theme='light'] [class*="bg-blue"].text-white,
+html[data-theme='light'] [class*="bg-indigo-"].text-white, html[data-theme='light'] [class*="bg-indigo"].text-white,
+html[data-theme='light'] [class*="bg-emerald-"].text-white, html[data-theme='light'] [class*="bg-emerald"].text-white,
+html[data-theme='light'] [class*="bg-green-"].text-white, html[data-theme='light'] [class*="bg-green"].text-white,
+html[data-theme='light'] [class*="bg-teal-"].text-white, html[data-theme='light'] [class*="bg-teal"].text-white,
+html[data-theme='light'] [class*="bg-cyan-"].text-white, html[data-theme='light'] [class*="bg-cyan"].text-white,
+html[data-theme='light'] [class*="bg-amber-"].text-white, html[data-theme='light'] [class*="bg-amber"].text-white,
+html[data-theme='light'] [class*="bg-orange-"].text-white, html[data-theme='light'] [class*="bg-orange"].text-white,
+html[data-theme='light'] [class*="bg-red-"].text-white, html[data-theme='light'] [class*="bg-red"].text-white,
+html[data-theme='light'] [class*="bg-rose-"].text-white, html[data-theme='light'] [class*="bg-rose"].text-white,
+html[data-theme='light'] [class*="bg-yellow-"].text-white, html[data-theme='light'] [class*="bg-yellow"].text-white {
+  color: #ffffff;
+}
+
+/* keep light text on dark bg-black scrims/overlays, incl. nested */
+html[data-theme='light'] [class*="bg-black"][class*="text-white"],
+html[data-theme='light'] [class*="bg-black"] [class*="text-white"] {
+  color: rgba(255,255,255,0.92);
 }
