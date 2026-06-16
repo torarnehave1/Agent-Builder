@@ -7,6 +7,7 @@ import { getStoredLanguage, setStoredLanguage } from './lib/storage';
 import { getStoredThemeMode, resolveTheme, setStoredThemeMode, type ThemeMode } from './lib/theme';
 import { useTranslation } from './lib/useTranslation';
 import AgentBuilder from './components/AgentBuilder';
+import ImpersonationBar from './components/ImpersonationBar';
 
 const MAGIC_BASE = 'https://cookie.vegvisr.org';
 const DASHBOARD_BASE = 'https://dashboard.vegvisr.org';
@@ -333,6 +334,7 @@ function App() {
       {authStatus === 'authed' && authUser && (
         <div className="flex flex-col h-screen">
           <EcosystemNav className={`flex-shrink-0 px-4 py-2 border-b ${resolvedTheme === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950'}`} />
+          <ImpersonationBar />
           <AgentBuilder
             userId={authUser.userId}
             userEmail={authUser.email}
