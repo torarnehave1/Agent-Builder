@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused on KG operations only
@@ -107,7 +108,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   const rawGraphId = input.graphId || null
   let graphId = (typeof rawGraphId === 'string' && rawGraphId.trim()) ? rawGraphId.trim() : null
   const maxTurns = 10
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

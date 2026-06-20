@@ -13,6 +13,7 @@ import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStruct
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
+import { DEFAULT_MODEL, MODELS } from './models.js'
 import { runBotSubagent } from './bot-subagent.js'
 import { runAgentBuilderSubagent } from './agent-builder-subagent.js'
 import { runVideoSubagent } from './video-subagent.js'
@@ -867,7 +868,11 @@ async function executePerplexitySearch(input, env) {
   const query = input.query
   if (!query) throw new Error('query is required')
 
-  const model = input.model || 'sonar'
+  // FORCE sonar-pro. The basic `sonar` tier returns terse non-cited text
+  // that lets the model fall back to training data and skip the citations
+  // the user actually asked for. We do not let the model downgrade — even
+  // if it puts model: 'sonar' in the tool input, we override here.
+  const model = 'sonar-pro'
   const validModels = ['sonar', 'sonar-pro', 'sonar-reasoning']
   if (!validModels.includes(model)) {
     throw new Error(`Invalid model: ${model}. Use one of: ${validModels.join(', ')}`)
@@ -1348,7 +1353,7 @@ async function executeAnalyzeImage(input, env) {
           { type: 'text', text: question }
         ]
       }],
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELS.HAIKU,
       max_tokens: 2048,
     })
   })
@@ -1509,7 +1514,1060 @@ async function executeAdminRegisterUser(input, env) {
   }
 }
 
+// Register a World Founder in the world_founders + domains registry (Superadmin only, idempotent).
+// Makes the domain resolve in onboarding-status, permits the founder in the login allowlist, and
+// links the World content tag. Does NOT touch Cloudflare — pure D1 registry write.
+async function executeRegisterWorldFounder(input, env) {
+  // Superadmin gate — resolve the caller robustly. The agent loop injects input.userId +
+  // input.authContext; read role from authContext first, else look up the profile by userId.
+  // Return structured errors (do NOT throw) so the agent narrates the reason instead of a silent
+  // SSE stream error.
+  const ac = input.authContext || {}
+  const callerUserId = input.userId || ac.userId || ac.profile?.user_id || ac.session?.id || null
+  let callerRole = String(ac.role || ac.profile?.role || ac.session?.role || '').trim()
+  if (!callerRole && callerUserId) {
+    try {
+      const p = await resolveUserProfile(callerUserId, env)
+      callerRole = String(p?.Role || p?.role || '').trim()
+    } catch (e) { /* fall through to role check */ }
+  }
+  if (callerRole.toLowerCase() !== 'superadmin') {
+    return { success: false, error: `Superadmin role required to register a World Founder. Resolved caller userId=${callerUserId || 'none'}, role=${callerRole || 'unknown'}.` }
+  }
+
+  const founderEmail = (input.founder_email || '').trim().toLowerCase()
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!founderEmail || !founderEmail.includes('@')) return { success: false, error: 'founder_email (a valid email) is required' }
+  if (!domain || !domain.includes('.')) return { success: false, error: 'domain (e.g. example.com) is required' }
+
+  const stem = domain.split('.')[0]
+  const worldName = (input.world_name || '').trim() || (stem.charAt(0).toUpperCase() + stem.slice(1))
+  const metaTag = (input.meta_area_tag || '').trim() || ('#' + stem.toUpperCase())
+  const cfAccount = (input.cf_account_id || '').trim() || null
+  const hostingModel = (input.hosting_model || 'own_account').trim()
+  const holder = (input.account_holder_email || '').trim().toLowerCase() || founderEmail
+
+  const existingWF = await env.DB
+    .prepare('SELECT id FROM world_founders WHERE founder_email = ? AND domain = ?')
+    .bind(founderEmail, domain).first()
+  let wfCreated = false
+  if (!existingWF) {
+    await env.DB.prepare(
+      `INSERT INTO world_founders (id, founder_email, world_name, domain, cf_account_id, meta_area_tag, account_holder_email, hosting_model, founder_role, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'World Founder', 'active')`
+    ).bind(crypto.randomUUID(), founderEmail, worldName, domain, cfAccount, metaTag, holder, hostingModel).run()
+    wfCreated = true
+  }
+
+  const existingDom = await env.DB.prepare('SELECT id FROM domains WHERE domain = ?').bind(domain).first()
+  let domCreated = false
+  if (!existingDom) {
+    await env.DB.prepare(
+      `INSERT INTO domains (id, domain, cf_account_id, hosting_model, kind, status)
+       VALUES (?, ?, ?, ?, 'world', 'active')`
+    ).bind(crypto.randomUUID(), domain, cfAccount, hostingModel).run()
+    domCreated = true
+  }
+
+  return {
+    success: true,
+    founder_email: founderEmail,
+    domain,
+    world_name: worldName,
+    meta_area_tag: metaTag,
+    cf_account_id: cfAccount,
+    hosting_model: hostingModel,
+    world_founders: wfCreated ? 'created' : 'already present',
+    domains: domCreated ? 'created' : 'already present',
+    next: `Verify with onboarding_status for ${founderEmail} — domain should resolve via world-founder-registry and the login allowlist now permits this founder.`,
+  }
+}
+
+// Publish the World-Founder page (central template:world-founder-page from WORLD_TEMPLATES) into a
+// founder's HTML_PAGES KV so it serves at me.<domain>. Superadmin only. Uses the FOUNDER's own
+// cf_api_token (from config) to act in the founder's Cloudflare account. Returns structured errors.
+async function executePublishWorldPage(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to publish a World page.' }
+
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { success: false, error: 'domain (e.g. lydmorah.net) is required' }
+  const host = (input.host || ('me.' + domain)).trim().toLowerCase()
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker (add it to wrangler.toml + redeploy).' }
+  const templateKey = (input.template_key || 'template:world-founder-page').trim()
+  const html = await env.WORLD_TEMPLATES.get(templateKey)
+  if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }
+
+  // Mint the publish token LOCALLY with agent-worker's own HTML_PUBLISH_SECRET, then POST the page
+  // to /__html/publish. agent-worker is the single owner of the publish secret: it signs here AND
+  // stamps the same secret into each brand proxy (provision_world_kv / set_world_publish_secret),
+  // so signer and verifier never drift and no unreadable api-worker value is needed (Lesson 44).
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) {
+    return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding. One-time: run `wrangler secret put HTML_PUBLISH_SECRET` in the Agent-Builder/worker dir with a value you generate (e.g. `openssl rand -hex 32`). The same secret is stamped into each World brand proxy by provision_world_kv / set_world_publish_secret.' }
+  }
+  const uid = callerProfile?.user_id || callerProfile?.email || 'agent-worker'
+  const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+  const publishToken = await signPublishToken({ uid, appId: 'world-founder-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
+
+  const proxyUrl = (input.proxy_url || `https://${host}/__html/publish`).trim()
+  let pubRes, pubJson
+  try {
+    pubRes = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken },
+      body: JSON.stringify({ hostname: host, html, overwrite: true }),
+    })
+    pubJson = await pubRes.json().catch(() => null)
+  } catch (e) {
+    return { success: false, error: `Could not reach ${proxyUrl}: ${e.message}. Pass proxy_url=<brand-proxy>.workers.dev/__html/publish if ${host} doesn't route to the brand proxy yet.` }
+  }
+  if (!pubRes.ok || !pubJson || !pubJson.ok) {
+    const detail = (pubJson && pubJson.error) || `HTTP ${pubRes.status}`
+    return { success: false, error: `Publish rejected: ${detail}` }
+  }
+
+  return {
+    success: true,
+    domain,
+    host,
+    key: `html:${host}`,
+    url: `https://${host}/`,
+    template_bytes: html.length,
+    via: proxyUrl,
+    next: `Published html:${host} via /__html/publish. Open https://${host}/ to see it.`,
+  }
+}
+
+// Re-publish the World-Founder page to EVERY active World in the world_founders registry. Use after
+// editing the shared template so all live me.<domain> pages pick up the change in one call. Reads the
+// template + secret ONCE, then loops the distinct active domains minting a host-scoped token per host
+// and POSTing to me.<domain>/__html/publish. Per-World failures (e.g. a World not yet provisioned —
+// no me. route / publish secret) are captured and reported; they do NOT abort the run. Superadmin only.
+async function executePublishAllWorldPages(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to publish all World pages.' }
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const templateKey = (input.template_key || 'template:world-founder-page').trim()
+  const html = await env.WORLD_TEMPLATES.get(templateKey)
+  if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+
+  // Distinct active World domains from the registry.
+  let domains = []
+  try {
+    const rows = await env.DB.prepare("SELECT DISTINCT domain FROM world_founders WHERE status = 'active' AND domain IS NOT NULL AND domain != '' ORDER BY domain").all()
+    domains = ((rows && rows.results) || []).map((r) => String(r.domain || '').trim().toLowerCase()).filter(Boolean)
+  } catch (e) {
+    return { success: false, error: `Could not read world_founders: ${e.message}` }
+  }
+  if (!domains.length) return { success: false, error: 'No active Worlds found in world_founders.' }
+
+  const uid = callerProfile?.user_id || callerProfile?.email || 'agent-worker'
+  const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+  const results = []
+  for (const domain of domains) {
+    const host = 'me.' + domain
+    try {
+      const publishToken = await signPublishToken({ uid, appId: 'world-founder-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
+      const proxyUrl = `https://${host}/__html/publish`
+      const pubRes = await fetch(proxyUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken },
+        body: JSON.stringify({ hostname: host, html, overwrite: true }),
+      })
+      const pubJson = await pubRes.json().catch(() => null)
+      if (pubRes.ok && pubJson && pubJson.ok) results.push({ domain, host, ok: true, url: `https://${host}/` })
+      else results.push({ domain, host, ok: false, error: (pubJson && pubJson.error) || `HTTP ${pubRes.status}` })
+    } catch (e) {
+      results.push({ domain, host, ok: false, error: e.message })
+    }
+  }
+
+  const published = results.filter((r) => r.ok).length
+  const failed = results.filter((r) => !r.ok)
+  return {
+    success: true,
+    template_key: templateKey,
+    total: domains.length,
+    published,
+    failed: failed.length,
+    results,
+    next: failed.length
+      ? `Published ${published}/${domains.length}. Not published (likely not provisioned — run provision_world_kv): ${failed.map((f) => f.domain).join(', ')}.`
+      : `Published ${published}/${domains.length} World pages.`,
+  }
+}
+
+// Store a founder's Cloudflare account id + API token in their config row, so the World-provisioning
+// tools can act in the founder's own CF account. Superadmin only. Token is stored server-side (D1)
+// and never echoed back. The token needs Workers KV Storage edit scope (and Workers Scripts + DNS
+// for the full deploy/route tools).
+async function executeSetWorldCredentials(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to set World credentials.' }
+
+  let founderEmail = (input.founder_email || '').trim().toLowerCase()
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!founderEmail && domain) {
+    let wf = await env.DB.prepare("SELECT founder_email FROM world_founders WHERE domain = ? AND cf_account_id IS NOT NULL AND cf_account_id != '' ORDER BY created_at LIMIT 1").bind(domain).first()
+    if (!wf) wf = await env.DB.prepare('SELECT founder_email FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+    founderEmail = String((wf && wf.founder_email) || '').toLowerCase()
+  }
+  if (!founderEmail) return { success: false, error: 'founder_email (or a domain with a registered founder) is required' }
+
+  const cfToken = (input.cf_api_token || '').trim()
+  const cfAccount = (input.cf_account_id || '').trim()
+  if (!cfToken) return { success: false, error: 'cf_api_token is required' }
+
+  const existing = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
+  if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
+
+  if (cfAccount) {
+    await env.DB.prepare('UPDATE config SET cf_api_token = ?, cf_account_id = ? WHERE email = ?').bind(cfToken, cfAccount, founderEmail).run()
+  } else {
+    await env.DB.prepare('UPDATE config SET cf_api_token = ? WHERE email = ?').bind(cfToken, founderEmail).run()
+  }
+  return {
+    success: true,
+    founder_email: founderEmail,
+    cf_account_id: cfAccount || '(unchanged)',
+    cf_api_token: 'stored (never echoed)',
+    next: 'You can now run provision_world_kv / publish_world_page for this founder.',
+  }
+}
+
+// Shared by the World infra tools (provision_world_kv / deploy_world_proxy / set_world_route_dns):
+// Superadmin-gate the caller, then resolve the founder's stored Cloudflare account id + API token
+// (set via set_world_credentials). Returns { error } on any failure, else { founderEmail, cfAccount, cfToken }.
+async function resolveWorldInfraContext(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { error: 'Superadmin role required for World infrastructure operations.' }
+
+  const domain = (input.domain || '').trim().toLowerCase()
+  let founderEmail = (input.founder_email || '').trim().toLowerCase()
+  let wfAccount = ''
+  if (domain) {
+    let wf = await env.DB.prepare("SELECT founder_email, cf_account_id FROM world_founders WHERE domain = ? AND cf_account_id IS NOT NULL AND cf_account_id != '' ORDER BY created_at LIMIT 1").bind(domain).first()
+    if (!wf) wf = await env.DB.prepare('SELECT founder_email, cf_account_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+    if (!founderEmail) founderEmail = String((wf && wf.founder_email) || '').toLowerCase()
+    wfAccount = String((wf && wf.cf_account_id) || '').trim()
+  }
+  if (!founderEmail) return { error: 'founder_email (or a domain with a registered founder) is required' }
+
+  const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+  // Fall back to the world_founders registry's cf_account_id when config doesn't carry it, so a bare
+  // `set_world_credentials … token` (no account id) still resolves — the registry is authoritative.
+  const cfAccount = (input.cf_account_id || (row && row.cf_account_id) || wfAccount || '').trim()
+  const cfToken = row && row.cf_api_token
+  if (!cfAccount) return { error: `No cf_account_id for ${founderEmail} — run set_world_credentials first.` }
+  if (!cfToken) return { error: `No cf_api_token stored for ${founderEmail} — run set_world_credentials first.` }
+  return { founderEmail, cfAccount, cfToken, domain }
+}
+
+const cfApi = async (path, token, init = {}) => {
+  const res = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    ...init,
+    headers: { Authorization: `Bearer ${token}`, ...(init.headers || {}) },
+  })
+  const json = await res.json().catch(() => null)
+  const errMsg = json && json.errors && json.errors[0] && (json.errors[0].message || json.errors[0].code)
+  return { ok: res.ok && json && json.success, status: res.status, json, error: errMsg }
+}
+
+// HS256 publish-token signing (same shape api-worker/html-publish-token.js mints). agent-worker is
+// the SINGLE owner of the publish secret: it SIGNS the token here AND STAMPS the same secret into
+// each World's brand proxy (setBrandProxySecret), so signer and verifier can never drift and no
+// unreadable api-worker value is ever needed (Lesson 44).
+const b64url = (bytes) => {
+  let bin = ''
+  const u = new Uint8Array(bytes)
+  for (let i = 0; i < u.length; i++) bin += String.fromCharCode(u[i])
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+async function signPublishToken(payload, secret) {
+  const enc = new TextEncoder()
+  const header = b64url(enc.encode(JSON.stringify({ alg: 'HS256', typ: 'JWT' })))
+  const body = b64url(enc.encode(JSON.stringify(payload)))
+  const data = `${header}.${body}`
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data))
+  return `${data}.${b64url(sig)}`
+}
+
+// Write HTML_PUBLISH_SECRET onto a World's brand-proxy worker via the CF API (Workers Scripts edit).
+// Returns { ok, workerName, status?, detail?, scripts? }. workerName defaults to <stem>-brand-proxy.
+async function setBrandProxySecret(cfAccount, cfToken, domain, secret, workerNameOverride) {
+  const stem = (domain || '').split('.')[0]
+  const workerName = (workerNameOverride || `${stem}-brand-proxy`).trim()
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}/secrets`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${cfToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'HTML_PUBLISH_SECRET', text: secret, type: 'secret_text' }),
+  })
+  const json = await res.json().catch(() => null)
+  if (res.ok && json && json.success) return { ok: true, workerName }
+  const detail = (json && json.errors && json.errors[0] && (json.errors[0].message || json.errors[0].code)) || `HTTP ${res.status}`
+  let scripts = null
+  if (res.status === 404) {
+    const list = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts`, { headers: { Authorization: `Bearer ${cfToken}` } })
+    const lj = await list.json().catch(() => null)
+    scripts = (lj && lj.success && (lj.result || []).map((s) => s.id)) || []
+  }
+  return { ok: false, workerName, status: res.status, detail, scripts }
+}
+
+// Bind the HTML_PAGES KV namespace to a World's brand-proxy worker via the CF API (Workers Scripts
+// edit). This is the step that previously had to be done by hand in the Cloudflare dashboard. It is
+// idempotent (skips when already bound to the same namespace) and PRESERVES every other binding —
+// it reads the current settings, keeps all existing bindings (including the HTML_PUBLISH_SECRET
+// secret_text entry, which CF keeps by name), and appends/repairs only the HTML_PAGES binding
+// (Lesson 21: merge, never rebuild). Callers MUST run setBrandProxySecret AFTER this so the publish
+// secret is always (re-)stamped last — that makes a secret wipe by the settings PATCH impossible to
+// observe even if CF's semantics ever changed. Returns { ok, workerName, alreadyBound?, bound? } or
+// { ok:false, status, detail } — a failure is non-fatal (the manual dashboard step still works).
+async function bindKvNamespaceToBrandProxy(cfAccount, cfToken, domain, nsId, workerNameOverride) {
+  const stem = (domain || '').split('.')[0]
+  const workerName = (workerNameOverride || `${stem}-brand-proxy`).trim()
+  const base = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}/settings`
+
+  const getRes = await fetch(base, { headers: { Authorization: `Bearer ${cfToken}` } })
+  const getJson = await getRes.json().catch(() => null)
+  if (!getRes.ok || !getJson || !getJson.success) {
+    const detail = (getJson && getJson.errors && getJson.errors[0] && (getJson.errors[0].message || getJson.errors[0].code)) || `HTTP ${getRes.status}`
+    return { ok: false, workerName, status: getRes.status, detail, note: getRes.status === 404 ? 'brand proxy worker not found — pass worker_name.' : 'could not read worker settings — token likely lacks Workers Scripts edit.' }
+  }
+  const settings = getJson.result || {}
+  const bindings = Array.isArray(settings.bindings) ? settings.bindings : []
+  const existing = bindings.find((b) => b.type === 'kv_namespace' && b.name === 'HTML_PAGES')
+  if (existing && existing.namespace_id === nsId) {
+    return { ok: true, workerName, alreadyBound: true }
+  }
+  // Keep every other binding verbatim (secret_text entries are preserved by name); drop any stale
+  // HTML_PAGES kv binding pointing at a different namespace, then append the correct one.
+  const nextBindings = bindings
+    .filter((b) => !(b.type === 'kv_namespace' && b.name === 'HTML_PAGES'))
+    .concat([{ type: 'kv_namespace', name: 'HTML_PAGES', namespace_id: nsId }])
+
+  const form = new FormData()
+  form.append('settings', JSON.stringify({ bindings: nextBindings }))
+  const patchRes = await fetch(base, { method: 'PATCH', headers: { Authorization: `Bearer ${cfToken}` }, body: form })
+  const patchJson = await patchRes.json().catch(() => null)
+  if (patchRes.ok && patchJson && patchJson.success) return { ok: true, workerName, bound: true }
+  const detail = (patchJson && patchJson.errors && patchJson.errors[0] && (patchJson.errors[0].message || patchJson.errors[0].code)) || `HTTP ${patchRes.status}`
+  return { ok: false, workerName, status: patchRes.status, detail }
+}
+
+// Attach the me.<domain> hostname to the brand-proxy worker as a Workers Custom Domain (creates the
+// proxied DNS record + edge cert and routes the host to the worker). This is the step that makes
+// publish_world_page's POST to https://me.<domain>/__html/publish actually reach the worker —
+// without it the host is NXDOMAIN and publish 530s. Needs Zone:Read (resolve zone_id) + Workers
+// Routes/Domains edit on the founder token. Idempotent: skips when already attached to this worker.
+// Returns { ok, host, workerName, alreadyAttached?|attached? } or { ok:false, status, detail, note }.
+async function attachBrandProxyDomain(cfAccount, cfToken, domain, workerNameOverride, hostOverride) {
+  const stem = (domain || '').split('.')[0]
+  const workerName = (workerNameOverride || `${stem}-brand-proxy`).trim()
+  const host = (hostOverride || `me.${domain}`).trim().toLowerCase()
+
+  // Already attached? (idempotent)
+  const existing = await cfApi(`/accounts/${cfAccount}/workers/domains?hostname=${encodeURIComponent(host)}`, cfToken)
+  if (existing.ok && Array.isArray(existing.json.result) && existing.json.result.length) {
+    const cur = existing.json.result[0]
+    if ((cur.service || '') === workerName) return { ok: true, host, workerName, alreadyAttached: true }
+  }
+
+  // Resolve the zone id for the apex domain (the custom-domain API requires zone_id).
+  const zr = await cfApi(`/zones?name=${encodeURIComponent(domain)}`, cfToken)
+  const zoneId = zr.ok && Array.isArray(zr.json.result) && zr.json.result[0] && zr.json.result[0].id
+  if (!zoneId) {
+    return { ok: false, host, workerName, status: zr.status, detail: zr.error || 'zone not found', note: 'could not resolve zone_id — token likely lacks Zone:Read, or the domain is not on this Cloudflare account.' }
+  }
+
+  // PUT is upsert for Workers custom domains.
+  const put = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ zone_id: zoneId, hostname: host, service: workerName, environment: 'production' }),
+  })
+  if (put.ok) return { ok: true, host, workerName, attached: true }
+  return { ok: false, host, workerName, status: put.status, detail: put.error || `HTTP ${put.status}`, note: 'could not attach custom domain — token likely lacks Workers Routes/Domains edit, or the worker name is wrong (pass worker_name).' }
+}
+
+// Create (deploy) a World's brand-proxy worker in the founder's own Cloudflare account — the piece
+// that serves me.<domain> + the /__html/publish + /__html/check endpoints. Uploads the canonical
+// brand-proxy script (template:brand-proxy in WORLD_TEMPLATES) with HTML_PAGES + BRAND_CONFIG KV
+// bindings (created if missing) and HTML_PUBLISH_SECRET, then attaches me.<domain>. Fixes the
+// "HTTP 530 (worker not reachable)" case where no brand proxy exists yet. Idempotent: skips an
+// existing worker unless force=true (protects working proxies — Lesson 11). Superadmin only.
+async function executeDeployWorldProxy(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { founderEmail, cfAccount, cfToken, domain } = ctx
+  const stem = (domain || '').split('.')[0]
+  const workerName = (input.worker_name || `${stem}-brand-proxy`).trim()
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const script = await env.WORLD_TEMPLATES.get('template:brand-proxy')
+  if (!script) return { success: false, error: 'Brand-proxy script not found in WORLD_TEMPLATES (key "template:brand-proxy").' }
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+
+  const scriptUrl = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}`
+
+  // Idempotent: don't overwrite an existing proxy unless force=true. Still (re)attach the route.
+  const existing = await fetch(scriptUrl, { headers: { Authorization: `Bearer ${cfToken}` } })
+  if (existing.ok && !input.force) {
+    const dom = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, input.host)
+    return {
+      success: true, domain, worker_name: workerName, created: false,
+      route: dom.ok ? { ok: true, host: dom.host } : { ok: false, host: dom.host, error: `${dom.status}: ${dom.detail}` },
+      note: `Brand proxy ${workerName} already exists — left as is (pass force=true to redeploy).`,
+      next: `Run provision_world_kv for ${domain} (confirms KV + secret), then publish_world_page.`,
+    }
+  }
+
+  // Ensure both KV namespaces the proxy binds exist (idempotent create-or-find).
+  const ensureNs = async (title) => {
+    const list = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken)
+    if (!list.ok) return { error: `Could not list KV namespaces (${list.status}): ${list.error || 'unknown'} — token likely lacks Workers KV Storage scope.` }
+    let ns = (list.json.result || []).find((n) => n.title === title)
+    if (!ns) {
+      const mk = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces`, cfToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) })
+      if (!mk.ok) return { error: `Could not create KV namespace "${title}" (${mk.status}): ${mk.error || 'unknown'}` }
+      ns = mk.json.result
+    }
+    return { id: ns && ns.id }
+  }
+  const htmlNs = await ensureNs('HTML_PAGES')
+  if (htmlNs.error) return { success: false, error: htmlNs.error }
+  const brandNs = await ensureNs('BRAND_CONFIG')
+  if (brandNs.error) return { success: false, error: brandNs.error }
+  try { await env.DB.prepare('UPDATE config SET cf_kv_namespace_id = ? WHERE email = ?').bind(htmlNs.id, founderEmail).run() } catch (e) { console.error('record kv ns failed:', e) }
+
+  // Upload the ESM module worker with its bindings + the publish secret stamped in at deploy.
+  const metadata = {
+    main_module: 'index.js',
+    compatibility_date: '2025-01-15',
+    bindings: [
+      { type: 'kv_namespace', name: 'HTML_PAGES', namespace_id: htmlNs.id },
+      { type: 'kv_namespace', name: 'BRAND_CONFIG', namespace_id: brandNs.id },
+      { type: 'secret_text', name: 'HTML_PUBLISH_SECRET', text: secret },
+    ],
+  }
+  const form = new FormData()
+  form.append('metadata', JSON.stringify(metadata))
+  form.append('index.js', new File([script], 'index.js', { type: 'application/javascript+module' }))
+  const up = await fetch(scriptUrl, { method: 'PUT', headers: { Authorization: `Bearer ${cfToken}` }, body: form })
+  const upJson = await up.json().catch(() => null)
+  if (!up.ok || !upJson || !upJson.success) {
+    const detail = (upJson && upJson.errors && upJson.errors[0] && (upJson.errors[0].message || upJson.errors[0].code)) || `HTTP ${up.status}`
+    return { success: false, error: `Worker upload failed: ${detail}`, worker_name: workerName, note: 'token needs Workers Scripts edit + Workers KV Storage edit.' }
+  }
+
+  const route = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, input.host)
+  return {
+    success: true,
+    domain,
+    worker_name: workerName,
+    created: true,
+    kv: { HTML_PAGES: htmlNs.id, BRAND_CONFIG: brandNs.id },
+    publish_secret: 'set',
+    route: route.ok ? { ok: true, host: route.host } : { ok: false, host: route.host, error: `${route.status}: ${route.detail}`, note: route.note },
+    next: route.ok
+      ? `Brand proxy ${workerName} deployed + ${route.host} routed + secret set. Run publish_world_page for ${domain}.`
+      : `Brand proxy ${workerName} deployed + secret set, but ${route.host} not routed: ${route.note} Then run publish_world_page.`,
+  }
+}
+
+// Create (idempotently) the HTML_PAGES KV namespace in the founder's own Cloudflare account, and
+// record its id in config.cf_kv_namespace_id. Mirrors `world.sh provision` step 1, but via the CF
+// API using the founder's stored token (Workers KV Storage edit scope required).
+async function executeProvisionWorldKv(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { founderEmail, cfAccount, cfToken, domain } = ctx
+  const title = (input.title || 'HTML_PAGES').trim()
+
+  const list = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken)
+  if (!list.ok) {
+    return { success: false, error: `Could not list KV namespaces in ${cfAccount} (${list.status}): ${list.error || 'unknown'}. The token likely lacks Workers KV Storage scope.` }
+  }
+  let ns = (list.json.result || []).find((n) => n.title === title)
+  let created = false
+  if (!ns) {
+    const mk = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces`, cfToken, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    })
+    if (!mk.ok) return { success: false, error: `Could not create KV namespace "${title}" (${mk.status}): ${mk.error || 'unknown'}` }
+    ns = mk.json.result
+    created = true
+  }
+  const nsId = ns && ns.id
+  if (!nsId) return { success: false, error: 'KV namespace id missing from CF response.' }
+
+  await env.DB.prepare('UPDATE config SET cf_kv_namespace_id = ? WHERE email = ?').bind(nsId, founderEmail).run()
+
+  // Bind HTML_PAGES to the brand proxy (the step that used to be a manual Cloudflare dashboard
+  // action). Runs BEFORE the secret step below so setBrandProxySecret always (re-)stamps
+  // HTML_PUBLISH_SECRET last — a settings PATCH can therefore never leave the secret wiped.
+  // Non-fatal: a failure here just means the operator falls back to the manual binding step.
+  let kv_binding
+  {
+    const b = await bindKvNamespaceToBrandProxy(cfAccount, cfToken, domain, nsId, input.worker_name)
+    kv_binding = b.ok
+      ? { ok: true, worker_name: b.workerName, note: b.alreadyBound ? 'HTML_PAGES already bound to the brand proxy.' : 'HTML_PAGES bound to the brand proxy.' }
+      : { ok: false, worker_name: b.workerName, error: `${b.status}: ${b.detail}`, note: b.note || 'could not bind HTML_PAGES — bind it manually in the dashboard (Workers & Pages → brand proxy → Settings → Bindings → KV Namespace: HTML_PAGES).' }
+  }
+
+  // Also set the brand-proxy publish secret so the World is immediately publishable — the step that
+  // world.sh only PRINTED and was never run, which is why lydmorah had HTML_PAGES but no secret
+  // (Lesson 44). Uses agent-worker's HTML_PUBLISH_SECRET — the exact secret publish_world_page mints
+  // with. Needs Workers Scripts edit scope on the token + the brand proxy to exist.
+  let publish_secret
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) {
+    publish_secret = { ok: false, note: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET` (e.g. `openssl rand -hex 32`), then re-run to configure the brand-proxy secret.' }
+  } else {
+    const r = await setBrandProxySecret(cfAccount, cfToken, domain, secret, input.worker_name)
+    publish_secret = r.ok
+      ? { ok: true, worker_name: r.workerName, note: 'HTML_PUBLISH_SECRET set on the brand proxy — World is publishable.' }
+      : { ok: false, worker_name: r.workerName, error: `${r.status}: ${r.detail}`, scripts: r.scripts || undefined, note: r.status === 404 ? 'brand proxy worker not found — pass worker_name (see scripts list).' : 'could not set secret — token likely lacks Workers Scripts edit scope.' }
+  }
+
+  // Attach me.<domain> to the brand proxy so the host actually resolves + routes to the worker.
+  // Without this, publish_world_page POSTs to a NXDOMAIN host and 530s. Non-fatal: a failure just
+  // means the operator attaches the custom domain manually (Cloudflare dashboard → the worker →
+  // Settings → Domains & Routes → Add Custom Domain: me.<domain>).
+  let route
+  {
+    const r = await attachBrandProxyDomain(cfAccount, cfToken, domain, input.worker_name, input.host)
+    route = r.ok
+      ? { ok: true, host: r.host, worker_name: r.workerName, note: r.alreadyAttached ? `${r.host} already routed to the brand proxy.` : `${r.host} attached to the brand proxy (DNS + cert provisioning may take a few seconds).` }
+      : { ok: false, host: r.host, worker_name: r.workerName, error: `${r.status}: ${r.detail}`, note: r.note || `could not attach ${r.host} — add it manually as a Workers custom domain on the brand proxy.` }
+  }
+
+  const allReady = publish_secret.ok && kv_binding.ok && route.ok
+  return {
+    success: true,
+    founder_email: founderEmail,
+    cf_account_id: cfAccount,
+    title,
+    kv_namespace_id: nsId,
+    created,
+    note: created ? 'HTML_PAGES KV created.' : 'HTML_PAGES KV already existed — reused.',
+    kv_binding,
+    publish_secret,
+    route,
+    next: allReady
+      ? `HTML_PAGES created + bound, publish secret set, ${route.host} routed. Run publish_world_page for ${domain}.`
+      : !kv_binding.ok
+        ? `HTML_PAGES ready but NOT bound to the brand proxy: ${kv_binding.note} Then run publish_world_page for ${domain}.`
+        : !route.ok
+          ? `HTML_PAGES bound + secret set, but ${route.host} is NOT routed to the brand proxy: ${route.note} Then run publish_world_page for ${domain}.`
+          : `HTML_PAGES ready + bound + routed, but publish secret NOT set: ${publish_secret.note}`,
+  }
+}
+
+// Read-only readiness check for a World's publish path. Stores NOTHING and creates NO token.
+// Asks the World's own brand proxy (/__html/check) whether HTML_PAGES is enabled+bound and the
+// host routes, and whether the Superadmin publish-token mint works. The publish-secret match can
+// only be confirmed by an actual publish_world_page run (a check cannot write).
+async function executeCheckWorldPublish(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { success: false, error: 'domain (e.g. lydmorah.net) is required' }
+  const hosts = input.host ? [String(input.host).trim().toLowerCase()] : [`me.${domain}`, domain]
+
+  const results = []
+  for (const h of hosts) {
+    const entry = { host: h, routes_to_proxy: false, html_pages_enabled: false, has_page: false, detail: '' }
+    try {
+      const r = await fetch(`https://${h}/__html/check?hostname=${encodeURIComponent(h)}`, { headers: { Accept: 'application/json' } })
+      entry.http = r.status
+      const j = r.ok ? await r.json().catch(() => null) : null
+      if (j && typeof j.ok !== 'undefined') {
+        entry.routes_to_proxy = true
+        entry.html_pages_enabled = !!j.ok
+        entry.has_page = !!j.exists
+        entry.detail = j.ok
+          ? (j.exists ? 'HTML_PAGES enabled; a page is already published here' : 'HTML_PAGES enabled; no page yet — ready to publish')
+          : 'brand proxy reachable but HTML_PAGES not enabled/bound'
+      } else if (r.ok) {
+        entry.detail = 'host returned 200 but not the brand-proxy check shape — host likely does not route to the brand proxy'
+      } else {
+        entry.detail = `no brand-proxy check (HTTP ${r.status}) — brand proxy/HTML_PAGES not enabled for this host`
+      }
+    } catch (e) {
+      entry.detail = `could not reach ${h}: ${e.message}`
+    }
+    results.push(entry)
+  }
+
+  // Is agent-worker's publish secret configured? publish_world_page mints with it, and
+  // provision_world_kv / set_world_publish_secret stamp the same value into each brand proxy.
+  const mint_ok = !!env.HTML_PUBLISH_SECRET
+  const mint_detail = mint_ok
+    ? 'agent-worker HTML_PUBLISH_SECRET is set (publish can mint)'
+    : 'agent-worker HTML_PUBLISH_SECRET NOT set — run `wrangler secret put HTML_PUBLISH_SECRET` once'
+
+  return {
+    success: true,
+    domain,
+    hosts: results,
+    mint_ok,
+    mint_detail,
+    note: 'Read-only — stores nothing and creates no token. HTML_PAGES is enabled per-World from the Cloudflare dashboard (create + bind the namespace to the brand proxy). Whether the publish secret on the brand proxy matches can only be confirmed by an actual publish_world_page run.',
+  }
+}
+
+// Set a World's brand-proxy worker secret HTML_PUBLISH_SECRET to the SHARED value held on
+// agent-worker (env.HTML_PUBLISH_SECRET), using the World's stored Cloudflare token (Workers
+// Scripts edit scope). This is the routine that makes /__html/publish work for the World — the
+// step world.sh only printed as a manual instruction. The secret value never appears in chat:
+// it lives on agent-worker (operator sets it once via `wrangler secret put`) and is written
+// straight into the brand proxy via the CF API.
+async function executeSetWorldPublishSecret(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { founderEmail, cfAccount, cfToken, domain } = ctx
+
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) {
+    return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding. One-time setup: in the Agent-Builder/worker dir run `wrangler secret put HTML_PUBLISH_SECRET` with a value you generate (e.g. `openssl rand -hex 32`). publish_world_page mints with this same secret.' }
+  }
+
+  const r = await setBrandProxySecret(cfAccount, cfToken, domain, secret, input.worker_name)
+  if (!r.ok) {
+    if (r.status === 404) {
+      return { success: false, error: `Worker "${r.workerName}" not found in ${cfAccount}. Scripts in this account: ${(r.scripts || []).join(', ') || '(none, or token lacks Workers Scripts read)'}. Pass worker_name with the correct brand-proxy name.` }
+    }
+    return { success: false, error: `Could not set HTML_PUBLISH_SECRET on ${r.workerName} (${r.status}): ${r.detail} — the token likely lacks Workers Scripts edit scope.` }
+  }
+
+  return {
+    success: true,
+    domain,
+    founder_email: founderEmail,
+    cf_account_id: cfAccount,
+    worker_name: r.workerName,
+    secret: "set to agent-worker's shared value (never echoed)",
+    next: `HTML_PUBLISH_SECRET set on ${r.workerName}. Now run publish_world_page for ${domain}.`,
+  }
+}
+
+// ── User API key operations ───────────────────────────────────────
+
+const VALID_KEY_PROVIDERS = ['openai', 'anthropic', 'google', 'grok', 'perplexity', 'proff']
+
+// Resolve the target user (self by default; another user requires Superadmin caller).
+// Returns { targetUserId, targetEmail, onBehalf }.
+async function resolveKeyTarget(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerEmail = (callerProfile?.email || (typeof callerUserId === 'string' && callerUserId.includes('@') ? callerUserId : '')).toLowerCase()
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+
+  const targetEmail = (input.targetEmail || '').trim().toLowerCase()
+
+  // Self-service: no target, or target is the caller's own email
+  if (!targetEmail || targetEmail === callerEmail) {
+    return {
+      targetUserId: callerProfile?.user_id || callerUserId,
+      targetEmail: callerEmail || null,
+      onBehalf: false,
+    }
+  }
+
+  // Admin-on-behalf: another user — Superadmin required
+  if (callerRole !== 'Superadmin') {
+    throw new Error('Superadmin role required to manage API keys for another user')
+  }
+  const targetProfile = await resolveUserProfile(targetEmail, env)
+  if (!targetProfile?.user_id) {
+    throw new Error(`No user found with email ${targetEmail}`)
+  }
+  return {
+    targetUserId: targetProfile.user_id,
+    targetEmail: targetProfile.email || targetEmail,
+    onBehalf: true,
+  }
+}
+
+async function executeStoreUserApiKey(input, env) {
+  const provider = (input.provider || '').trim().toLowerCase()
+  const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
+
+  if (!provider) throw new Error('provider is required')
+  if (!VALID_KEY_PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid provider. Must be one of: ${VALID_KEY_PROVIDERS.join(', ')}`)
+  }
+  if (!apiKey) throw new Error('apiKey is required')
+
+  const { targetUserId, targetEmail, onBehalf } = await resolveKeyTarget(input, env)
+
+  const res = await env.USER_KEYS_WORKER.fetch('https://user-keys-worker/user-api-keys', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: targetUserId,
+      provider,
+      apiKey,
+      metadata: { keyName: input.keyName || null, displayName: provider },
+    }),
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Failed to store API key (HTTP ${res.status})`)
+  }
+
+  return {
+    success: true,
+    provider,
+    onBehalf,
+    targetUserId,
+    targetEmail,
+    message: `${provider} API key stored${onBehalf ? ` for ${targetEmail}` : ''}.`,
+  }
+}
+
+async function executeRemoveUserApiKey(input, env) {
+  const provider = (input.provider || '').trim().toLowerCase()
+  if (!provider) throw new Error('provider is required')
+  if (!VALID_KEY_PROVIDERS.includes(provider)) {
+    throw new Error(`Invalid provider. Must be one of: ${VALID_KEY_PROVIDERS.join(', ')}`)
+  }
+
+  const { targetUserId, targetEmail, onBehalf } = await resolveKeyTarget(input, env)
+
+  const res = await env.USER_KEYS_WORKER.fetch(
+    `https://user-keys-worker/user-api-keys/${encodeURIComponent(provider)}?userId=${encodeURIComponent(targetUserId)}`,
+    { method: 'DELETE' }
+  )
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Failed to delete API key (HTTP ${res.status})`)
+  }
+
+  return {
+    success: true,
+    provider,
+    onBehalf,
+    targetUserId,
+    targetEmail,
+    message: `${provider} API key removed${onBehalf ? ` for ${targetEmail}` : ''}.`,
+  }
+}
+
 // ── Email operations ──────────────────────────────────────────────
+
+async function executeListEmailAccounts(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  const profile = await resolveUserProfile(callerUserId, env)
+  if (!profile?.email) throw new Error('Could not resolve user profile')
+
+  const headers = {}
+  if (env.INTERNAL_SHARED_SECRET) {
+    headers['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    headers['x-internal-caller'] = profile.email
+  }
+
+  const res = await env.EMAIL_WORKER.fetch(
+    `https://email-worker.internal/email-accounts?user=${encodeURIComponent(profile.email)}`,
+    { method: 'GET', headers }
+  )
+
+  const responseText = await res.text()
+  let result
+  try { result = JSON.parse(responseText) } catch { result = { raw: responseText } }
+
+  if (!res.ok || result.success === false) {
+    throw new Error(`Failed to list email accounts: ${result.error || responseText}`)
+  }
+
+  let accounts = Array.isArray(result.accounts) ? result.accounts : []
+  const filterEmail = typeof input?.email === 'string' ? input.email.trim().toLowerCase() : ''
+  if (filterEmail) {
+    accounts = accounts.filter(a => (a.email || '').toLowerCase() === filterEmail)
+  }
+
+  let message
+  if (filterEmail) {
+    if (accounts.length > 0) {
+      const a = accounts[0]
+      message = `Email account ${filterEmail} IS configured (id: ${a.id}, accountType: ${a.accountType}, isDefault: ${a.isDefault}, hasPassword: ${a.hasPassword}). It can be used as a sender via send_email with fromEmail="${a.email}".`
+    } else {
+      message = `Email account ${filterEmail} is NOT configured for this user. Use add_email_account to register it.`
+    }
+  } else {
+    message = `Found ${accounts.length} configured sender account(s) for ${profile.email}.`
+  }
+
+  return {
+    success: true,
+    accounts,
+    count: accounts.length,
+    message,
+  }
+}
+
+async function executeAddEmailDestination(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  const profile = await resolveUserProfile(callerUserId, env)
+  if (!profile?.email) throw new Error('Could not resolve user profile')
+
+  const email = typeof input?.email === 'string' ? input.email.trim() : ''
+  if (!email || !email.includes('@')) {
+    throw new Error('A valid recipient email address is required')
+  }
+
+  const headers = { 'Content-Type': 'application/json' }
+  if (env.INTERNAL_SHARED_SECRET) {
+    headers['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    headers['x-internal-caller'] = profile.email
+  }
+
+  const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/email-destinations', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ email }),
+  })
+
+  const responseText = await res.text()
+  let result
+  try { result = JSON.parse(responseText) } catch { result = { raw: responseText } }
+
+  if (!res.ok || result.success === false) {
+    throw new Error(`Failed to add email destination: ${result.error || responseText}`)
+  }
+
+  const addr = result.address || {}
+  const isVerified = !!addr.verified
+  return {
+    success: true,
+    address: addr,
+    message:
+      `Destination ${email} registered with Cloudflare Email Routing. ` +
+      (isVerified
+        ? `Already verified — env.EMAIL.send() can send to this address now.`
+        : `Cloudflare has sent a verification email to ${email}. Once the recipient clicks the link, sends to this address will succeed. Until then, attempts will fail.`),
+  }
+}
+
+async function executeAddEmailAccount(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  const profile = await resolveUserProfile(callerUserId, env)
+  if (!profile?.email) throw new Error('Could not resolve user profile')
+
+  const email = (input.email || '').trim()
+  if (!email || !email.includes('@')) {
+    throw new Error('A valid email address is required')
+  }
+  const emailLower = email.toLowerCase()
+
+  // Smart default for accountType: gmail for @gmail.com, smtp otherwise.
+  // smtp routes through /send-email → Cloudflare Email Service (no password).
+  // gmail routes through /send-gmail-email → requires appPassword.
+  let accountType = (input.accountType || '').trim().toLowerCase()
+  if (!accountType) {
+    accountType = emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp'
+  }
+  if (accountType !== 'gmail' && accountType !== 'smtp') {
+    throw new Error(`accountType must be "smtp" or "gmail" (got "${accountType}")`)
+  }
+
+  const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
+  if (accountType === 'gmail' && !appPassword) {
+    throw new Error('appPassword is required for Gmail accounts. Generate one at https://myaccount.google.com/apppasswords')
+  }
+  if (accountType === 'smtp' && appPassword) {
+    // Not fatal — server stores it — but the SMTP path doesn't use it. Warn upstream.
+    console.warn(`[add_email_account] appPassword provided for smtp account ${email} — will be stored but unused by Cloudflare Email Service path.`)
+  }
+
+  // Optional operator override: configure a sender in ANOTHER user's profile (Superadmin only).
+  // The email-worker's requireOwnership demands x-internal-caller === target, so set the caller
+  // header to the target email when an operator is acting for someone else.
+  let targetEmail = profile.email
+  const forUser = (input.forUserEmail || '').trim().toLowerCase()
+  if (forUser && forUser !== (profile.email || '').toLowerCase()) {
+    if ((profile.role || '').toLowerCase() !== 'superadmin') {
+      throw new Error('forUserEmail requires Superadmin — you can only configure your own sender accounts.')
+    }
+    if (!forUser.includes('@')) throw new Error('forUserEmail must be a valid email address')
+    targetEmail = forUser
+  }
+
+  const internalHeaders = {}
+  if (env.INTERNAL_SHARED_SECRET) {
+    internalHeaders['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    internalHeaders['x-internal-caller'] = targetEmail
+  }
+
+  // Dedup: check existing accounts via GET /email-accounts to avoid silent duplicates
+  // (POST upserts by id, so a fresh uuid would create a second entry for the same email).
+  const listRes = await env.EMAIL_WORKER.fetch(
+    `https://email-worker.internal/email-accounts?user=${encodeURIComponent(targetEmail)}`,
+    { method: 'GET', headers: internalHeaders }
+  )
+  if (listRes.ok) {
+    const listJson = await listRes.json().catch(() => ({ accounts: [] }))
+    const existing = (listJson.accounts || []).find(a => (a.email || '').toLowerCase() === emailLower)
+    if (existing) {
+      throw new Error(
+        `Email account "${email}" is already configured (id: ${existing.id}, accountType: ${existing.accountType}, isDefault: ${!!existing.isDefault}). ` +
+        `Delete or update the existing entry first if you want to change it.`
+      )
+    }
+  }
+  // GET failure is non-fatal — fall through to POST. POST will still succeed; user just
+  // doesn't get the friendly duplicate-detection error.
+
+  const accountId = crypto.randomUUID()
+  const payload = {
+    userEmail: targetEmail,
+    account: {
+      id: accountId,
+      email,
+      name: (input.name || '').trim(),
+      accountType,
+      isDefault: input.isDefault === true,
+    },
+  }
+  if (appPassword) payload.appPassword = appPassword
+
+  const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/email-accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...internalHeaders },
+    body: JSON.stringify(payload),
+  })
+
+  const responseText = await res.text()
+  let result
+  try { result = JSON.parse(responseText) } catch { result = { raw: responseText } }
+
+  if (!res.ok || result.error) {
+    throw new Error(`Failed to add email account: ${result.error || responseText}`)
+  }
+
+  const stored = result.account || payload.account
+  const sendPath = accountType === 'gmail' ? '/send-gmail-email (Gmail SMTP)' : '/send-email (Cloudflare Email Service)'
+
+  return {
+    success: true,
+    account: stored,
+    message:
+      `Added email account ${email} (id: ${stored.id}, accountType: ${accountType}, isDefault: ${stored.isDefault}). ` +
+      `Sender path: ${sendPath}. Use send_email with fromEmail="${email}" to send from this address.`,
+  }
+}
+
+// Set / update the Gmail app password on an EXISTING sender account (add_email_account refuses
+// to touch an account that already exists). Finds the account by email, reuses its id so the
+// email-worker POST upserts (updates) it, and stores the new appPassword.
+async function executeSetEmailPassword(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error('No user context available')
+
+  const profile = await resolveUserProfile(callerUserId, env)
+  if (!profile?.email) throw new Error('Could not resolve user profile')
+
+  const email = (input.email || '').trim()
+  if (!email || !email.includes('@')) throw new Error('A valid email address is required')
+  const emailLower = email.toLowerCase()
+
+  const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
+  if (!appPassword) throw new Error('appPassword is required')
+
+  // Optional operator override: set the password on ANOTHER user's existing sender (Superadmin only).
+  let targetEmail = profile.email
+  const forUser = (input.forUserEmail || '').trim().toLowerCase()
+  if (forUser && forUser !== (profile.email || '').toLowerCase()) {
+    if ((profile.role || '').toLowerCase() !== 'superadmin') {
+      throw new Error('forUserEmail requires Superadmin — you can only configure your own sender accounts.')
+    }
+    if (!forUser.includes('@')) throw new Error('forUserEmail must be a valid email address')
+    targetEmail = forUser
+  }
+
+  const internalHeaders = {}
+  if (env.INTERNAL_SHARED_SECRET) {
+    internalHeaders['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    internalHeaders['x-internal-caller'] = targetEmail
+  }
+
+  // Find the EXISTING account by email to reuse its id (POST upserts by id).
+  const listRes = await env.EMAIL_WORKER.fetch(
+    `https://email-worker.internal/email-accounts?user=${encodeURIComponent(targetEmail)}`,
+    { method: 'GET', headers: internalHeaders }
+  )
+  if (!listRes.ok) throw new Error('Could not load existing email accounts')
+  const listJson = await listRes.json().catch(() => ({ accounts: [] }))
+  const existing = (listJson.accounts || []).find(a => (a.email || '').toLowerCase() === emailLower)
+  if (!existing) {
+    throw new Error(`Email account "${email}" is not configured. Use add_email_account to create it first.`)
+  }
+
+  const payload = {
+    userEmail: targetEmail,
+    account: {
+      id: existing.id,
+      email: existing.email || email,
+      name: existing.name || '',
+      accountType: existing.accountType || (emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp'),
+      isDefault: !!existing.isDefault,
+    },
+    appPassword,
+  }
+
+  const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/email-accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...internalHeaders },
+    body: JSON.stringify(payload),
+  })
+  const responseText = await res.text()
+  let result
+  try { result = JSON.parse(responseText) } catch { result = { raw: responseText } }
+  if (!res.ok || result.error) throw new Error(`Failed to set email password: ${result.error || responseText}`)
+
+  const stored = result.account || payload.account
+  return {
+    success: true,
+    account: { id: stored.id, email: stored.email, accountType: stored.accountType, hasPassword: true },
+    message: `Updated the app password on existing sender ${email} (id: ${stored.id}). Use send_email with fromEmail="${email}" to send from this address.`,
+  }
+}
 
 async function executeSendEmail(input, env) {
   const callerUserId = input.userId
@@ -1561,9 +2619,14 @@ async function executeSendEmail(input, env) {
     html,
   }
 
+  const headers = { 'Content-Type': 'application/json' }
+  if (env.INTERNAL_SHARED_SECRET) {
+    headers['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    headers['x-internal-caller'] = profile.email
+  }
   const res = await env.EMAIL_WORKER.fetch(`https://email-worker.internal${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   })
 
@@ -1829,6 +2892,14 @@ async function executeVemotionSaveComposition(input, env) {
     ? input.name.trim()
     : 'Untitled composition'
 
+  // When a compositionId is supplied, the Vemotion worker updates that row
+  // in place (versioned) instead of minting a new composition. This is what
+  // makes "tweak the composition you just made" non-destructive — without it,
+  // every save forks a new id and prior edits are lost.
+  const requestedId = (typeof input?.compositionId === 'string' && input.compositionId.trim())
+    ? input.compositionId.trim()
+    : (typeof input?.id === 'string' && input.id.trim() ? input.id.trim() : '')
+
   const albumName = typeof input?.albumName === 'string' && input.albumName.trim()
     ? input.albumName.trim()
     : ''
@@ -1878,13 +2949,16 @@ async function executeVemotionSaveComposition(input, env) {
     if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
   }
 
+  const saveBody = { name, composition }
+  if (requestedId) saveBody.id = requestedId
+
   const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/composition/save', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-API-Token': authToken,
     },
-    body: JSON.stringify({ name, composition }),
+    body: JSON.stringify(saveBody),
   })
 
   // /composition/save returns 201 on create, 200 on update; both are success.
@@ -1892,24 +2966,72 @@ async function executeVemotionSaveComposition(input, env) {
     const errText = await res.text().catch(() => '')
     throw new Error(`Failed to save Vemotion composition (${res.status}): ${errText.slice(0, 300)}`)
   }
+  const wasUpdate = res.status === 200
 
   const data = await res.json().catch(() => ({}))
-  const compositionId = data?.id || data?.summary?.id
-  if (!compositionId) {
+  const savedId = data?.id || data?.summary?.id
+  if (!savedId) {
     throw new Error(`Vemotion save returned no id: ${JSON.stringify(data).slice(0, 200)}`)
   }
 
   return {
     message: sourceMode === 'album-slideshow'
       ? `Vemotion slideshow built from album "${albumName}" (${composition.layers.length - 1} image(s))`
-      : 'Vemotion composition saved',
-    compositionId,
+      : (wasUpdate
+        ? `Vemotion composition updated in place (id ${savedId})`
+        : 'Vemotion composition saved'),
+    compositionId: savedId,
+    updated: wasUpdate,
     name: data?.summary?.name || name,
     duration: data?.summary?.duration ?? composition.duration,
     layerCount: data?.summary?.layerCount ?? composition.layers.length,
     sourceMode,
     sourceAlbum: sourceMode === 'album-slideshow' ? albumName : undefined,
-    editorUrl: `https://vemotion.vegvisr.org/?compositionId=${compositionId}`,
+    editorUrl: `https://vemotion.vegvisr.org/?compositionId=${savedId}`,
+  }
+}
+
+// Read a saved composition by id — GET /vemotion/composition?id=<id>.
+// This is the load half of non-destructive editing: read the FULL current
+// composition, modify the layers you need in-context, then call
+// vemotion_save_composition with the same compositionId to update in place.
+// Never rebuild a composition from memory — read it first.
+async function executeVemotionGetComposition(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to read a Vemotion composition.')
+  if (!env.VEMOTION_WORKER) throw new Error('VEMOTION_WORKER service binding is not configured')
+
+  const id = (typeof input?.compositionId === 'string' && input.compositionId.trim())
+    ? input.compositionId.trim()
+    : (typeof input?.id === 'string' && input.id.trim() ? input.id.trim() : '')
+  if (!id) throw new Error('compositionId is required to read a composition.')
+
+  const res = await env.VEMOTION_WORKER.fetch(
+    `https://vemotion-worker/vemotion/composition?id=${encodeURIComponent(id)}`,
+    { headers: { 'X-API-Token': authToken } }
+  )
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+
+  if (res.status === 404) throw new Error(`No Vemotion composition found with id "${id}".`)
+  if (res.status !== 200) {
+    throw new Error(`vemotion get ${res.status}: ${data.error || text.slice(0, 300)}`)
+  }
+
+  const composition = data?.composition || null
+  if (!composition || !Array.isArray(composition.layers)) {
+    throw new Error(`Composition "${id}" came back without a valid layers array.`)
+  }
+
+  return {
+    message: `Loaded composition "${data?.name || id}" (${composition.layers.length} layer(s), v${data?.version ?? 1})`,
+    compositionId: id,
+    name: data?.name || null,
+    version: data?.version ?? null,
+    composition,
+    layerCount: composition.layers.length,
+    editorUrl: `https://vemotion.vegvisr.org/?compositionId=${id}`,
   }
 }
 
@@ -2035,7 +3157,8 @@ async function executeTranscribeAudio(input, env) {
 
 // ── Semantic analysis operations ──────────────────────────────────
 
-const ANALYSIS_MODEL = 'claude-sonnet-4-20250514'
+// Stable model name — no -YYYYMMDD snapshot.
+const ANALYSIS_MODEL = 'claude-sonnet-4-6'
 
 async function executeAnalyzeNode(input, env) {
   const { graphId, nodeId, analysisType = 'all', store = false } = input
@@ -2728,7 +3851,7 @@ async function executeGenerateWithAi(input, env) {
 
   // Map provider to service binding and default model
   const providers = {
-    claude:  { binding: env.ANTHROPIC,       url: 'https://anthropic.vegvisr.org/chat',  defaultModel: 'claude-sonnet-4-5' },
+    claude:  { binding: env.ANTHROPIC,       url: 'https://anthropic.vegvisr.org/chat',  defaultModel: 'claude-sonnet-4-6' },
     openai:  { binding: env.OPENAI_WORKER,   url: 'https://openai.vegvisr.org/chat',     defaultModel: 'gpt-4o' },
     grok:    { binding: env.GROK_WORKER,     url: 'https://grok.vegvisr.org/chat',       defaultModel: 'grok-4-latest' },
     gemini:  { binding: env.GEMINI_WORKER,   url: 'https://gemini.vegvisr.org/chat',     defaultModel: 'gemini-2.5-flash' },
@@ -3328,7 +4451,7 @@ async function executeCreateAgent(input, env) {
     input.name,
     input.description || '',
     input.systemPrompt || '',
-    input.model || 'claude-haiku-4-5-20251001',
+    input.model || DEFAULT_MODEL,
     input.maxTokens || 4096,
     input.temperature ?? 0.3,
     JSON.stringify(input.tools || []),
@@ -3339,7 +4462,7 @@ async function executeCreateAgent(input, env) {
   return {
     agentId: id,
     name: input.name,
-    model: input.model || 'claude-haiku-4-5-20251001',
+    model: input.model || DEFAULT_MODEL,
     message: `Created agent "${input.name}" with ID ${id}`,
   }
 }
@@ -4166,14 +5289,15 @@ async function executeGetSystemRegistry(input, env) {
   if (need('agents')) {
     try {
       const agentsRes = await env.DB.prepare(
-        'SELECT id, user_id, name, description, model, tools, is_active, created_at FROM agent_configs WHERE is_active = 1 ORDER BY created_at DESC'
+        'SELECT id, created_by, name, description, model, tools, is_active, created_at FROM agent_configs WHERE is_active = 1 ORDER BY created_at DESC'
       ).all()
       userAgents = agentsRes.results.map(a => {
         let toolCount = 0
         try { toolCount = JSON.parse(a.tools || '[]').length } catch {}
-        return { id: a.id, name: a.name, description: a.description, model: a.model, toolCount, createdBy: a.user_id, createdAt: a.created_at }
+        return { id: a.id, name: a.name, description: a.description, model: a.model, toolCount, createdBy: a.created_by, createdAt: a.created_at }
       })
-    } catch {
+    } catch (e) {
+      console.error('[get_system_registry] agent_configs query failed:', e?.message || e)
       userAgents = []
     }
   }
@@ -4407,8 +5531,22 @@ async function executeDeployWorker(input, env) {
   const compatDate = input.compatibilityDate || '2024-11-01'
   const registerInGraph = input.registerInGraph !== false
 
-  // Step 1: Deploy the worker code via multipart form
-  const metadata = JSON.stringify({ main_module: 'index.js', compatibility_date: compatDate })
+  // Step 1: Deploy the worker code via multipart form.
+  // A1: bind D1 (DB → vegvisr_org) + the internal shared secret so an agent-deployed admin worker
+  // can role-check the caller and mutate config. deploy_worker reads its OWN env.INTERNAL_SHARED_SECRET
+  // (no value needed from the user) and stamps it as a secret_text binding. Opt out with bindAdmin:false.
+  const bindings = []
+  if (input.bindAdmin !== false) {
+    bindings.push({ type: 'd1', name: 'DB', id: '507d1efd-1dda-45ef-971f-52d2c8e8afe8' })
+    if (env.INTERNAL_SHARED_SECRET) {
+      bindings.push({ type: 'secret_text', name: 'INTERNAL_SHARED_SECRET', text: env.INTERNAL_SHARED_SECRET })
+    }
+  }
+  const metadata = JSON.stringify({
+    main_module: 'index.js',
+    compatibility_date: compatDate,
+    ...(bindings.length ? { bindings } : {}),
+  })
   const formData = new FormData()
   formData.append('metadata', new Blob([metadata], { type: 'application/json' }))
   formData.append('index.js', new Blob([code], { type: 'application/javascript+module' }), 'index.js')
@@ -4834,6 +5972,14 @@ async function executeInvokeRegistryWorker(input, env) {
     headers.authorization = `Bearer ${authToken}`
     headers.cookie = `vegvisr_token=${encodeURIComponent(authToken)}`
   }
+  // Internal-auth contract (A1): present the shared secret + the VERIFIED caller email so a
+  // deployed admin worker (built from get_secure_worker_template) can trust the call and
+  // role-check the caller in D1 — without the worker needing to resolve a session itself.
+  if (env.INTERNAL_SHARED_SECRET) {
+    headers['x-internal-auth'] = env.INTERNAL_SHARED_SECRET
+    const callerEmail = authContext?.email || authContext?.profile?.email || authContext?.session?.email || ''
+    if (callerEmail) headers['x-internal-caller'] = String(callerEmail).toLowerCase()
+  }
 
   const fetchOptions = { method, headers }
   if (body && method !== 'GET') fetchOptions.body = JSON.stringify(body)
@@ -4921,6 +6067,18 @@ async function resolveCallerProfile(subject, env) {
 }
 
 async function requireSuperadmin(request, env) {
+  // Internal-auth fast-path: the agent-builder presents x-internal-auth (shared secret, set by
+  // deploy_worker as a binding) + x-internal-caller (the VERIFIED session email). The secret cannot
+  // be client-forged, so trust the caller and role-check it in D1. Everything else uses the session.
+  const internalAuth = request.headers.get('x-internal-auth') || '';
+  if (internalAuth && env.INTERNAL_SHARED_SECRET && internalAuth === env.INTERNAL_SHARED_SECRET) {
+    const caller = (request.headers.get('x-internal-caller') || '').toLowerCase();
+    if (!caller) return { ok: false, status: 400, error: 'x-internal-caller required' };
+    const profile = await resolveCallerProfile({ email: caller }, env);
+    const role = String(profile?.role || '').toLowerCase();
+    if (role !== 'superadmin') return { ok: false, status: 403, error: 'Superadmin required (caller ' + caller + ')' };
+    return { ok: true, subject: { email: caller }, profile };
+  }
   const subject = await resolveSession(request);
   if (!subject) return { ok: false, status: 401, error: 'Authentication required' };
   const profile = await resolveCallerProfile(subject, env);
@@ -5575,6 +6733,25 @@ async function executeDbQuery(input, env) {
   }
 }
 
+// Full onboarding status for a client (aggregates config + chat + RDAP + DNS).
+// Calls the knowledge-graph-worker /onboarding-status endpoint (Superadmin-gated).
+async function executeOnboardingStatus(input, env) {
+  const email = (input.email || '').trim()
+  if (!email) throw new Error('email is required')
+  const domain = (input.domain || '').trim()
+  const url = `https://knowledge.vegvisr.org/onboarding-status?email=${encodeURIComponent(email)}` +
+    (domain ? `&domain=${encodeURIComponent(domain)}` : '')
+  const req = new Request(url, { headers: { 'x-user-role': 'Superadmin' } })
+  // Use the service binding (direct worker-to-worker) — fetching the public vegvisr.org
+  // hostname from a same-zone worker 522s. Fall back to public fetch only if the binding is absent.
+  const res = env.KG_WORKER ? await env.KG_WORKER.fetch(req) : await fetch(req)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(`onboarding-status ${res.status}: ${text.slice(0, 200)}`)
+  }
+  return await res.json()
+}
+
 // ── Chat DB tools ─────────────────────────────────────────────────
 
 async function executeChatDbListTables(env) {
@@ -6161,7 +7338,7 @@ async function executeTranslate(input, env) {
     body: JSON.stringify({
       userId: 'system:translate',
       messages: [{ role: 'user', content: `Translate the following text to ${targetLang}. Return ONLY the translated text, nothing else.\n\n${text}` }],
-      model: 'claude-haiku-4-5-20251001',
+      model: MODELS.HAIKU,
       max_tokens: 2048,
       temperature: 0,
     })
@@ -6170,6 +7347,182 @@ async function executeTranslate(input, env) {
   if (!res.ok) throw new Error(data.error || 'Translation failed')
   const translated = (data.content || []).find(c => c.type === 'text')?.text || ''
   return { original: text, translated, target_language: targetLang, source_language: input.source_language || 'auto' }
+}
+
+// ── App showcase (Vegr.ai App Catalog) ───────────────────────────
+// Build/refresh the World-Founder-facing showcase on each app node of the
+// App Catalog graph: logo (from the Assets album, label '<slug>-logo') +
+// a generated benefit pitch. Idempotent; original catalog content is kept
+// losslessly in the node's showcaseSourceInfo field. Superadmin only.
+
+const APP_CATALOG_GRAPH_ID = '6074a2bf-082b-4e92-a91d-eeab94c69b66'
+
+function slugifyAppName(label) {
+  return String(label || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+function extractDevLinks(text) {
+  const urls = String(text || '').match(/https?:\/\/[^\s)\]]+/g) || []
+  const repo = urls.find(u => /github\.com/i.test(u)) || null
+  const live = urls.find(u => !/github\.com/i.test(u)) || null
+  return { live, repo }
+}
+
+function buildShowcaseInfo({ name, logoUrl, tagline, cards, live, repo }) {
+  const cardBlock = cards.slice(0, 3).map(c => `**${c.title}**\n${c.body}`).join('\n\n')
+  let info = ''
+  info += `![${name} logo|width:120px; height:auto; margin: '0 auto'](${logoUrl}?w=240&auto=format)\n\n`
+  info += `[FANCY | font-size: 2.4em; color: #0f2a43; text-align: center]\n${name}\n[END FANCY]\n\n`
+  info += `[SECTION | background-color: #f4f8fb; color: #1a1a1a; padding: 18px; border-radius: 10px; font-size: 1.15em]\n${tagline}\n[END SECTION]\n\n`
+  info += `[FLEXBOX-CARDS]\n${cardBlock}\n[END FLEXBOX]`
+  const footerBits = []
+  if (live) footerBits.push(`Live: ${live}`)
+  if (repo) footerBits.push(`Repo: ${repo}`)
+  if (footerBits.length) {
+    info += `\n\n[SECTION | background-color: #ffffff; color: #555555; padding: 10px; border-radius: 8px; font-size: 0.95em]\n${footerBits.join('  ·  ')}\n[END SECTION]`
+  }
+  return info
+}
+
+async function generateAppPitch(env, { name, sourceInfo, userId }) {
+  const prompt = `You are writing a short product pitch for "${name}", one app in the Vegr.ai platform. The reader is a "World Founder" — a non-technical community builder who does NOT know this app and is deciding whether to add it to their own branded online space (their "World"). Write benefit-first, plain language, no jargon, no developer terms. Frame everything as what it gives THEIR World and members.
+
+Source description (may be technical — translate it into founder benefits):
+${String(sourceInfo || '').slice(0, 1500)}
+
+Return ONLY a JSON object, no markdown fences:
+{
+  "tagline": "one line, max ~90 chars, what this gives your World",
+  "cards": [
+    { "title": "2-3 words", "body": "max ~110 chars benefit" },
+    { "title": "2-3 words", "body": "max ~110 chars benefit" },
+    { "title": "2-3 words", "body": "max ~110 chars benefit" }
+  ]
+}`
+  const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: userId || 'system:app-showcase',
+      messages: [{ role: 'user', content: prompt }],
+      model: 'claude-sonnet-4-6',
+      max_tokens: 700,
+      temperature: 0.4,
+    }),
+  })
+  if (!res.ok) throw new Error(`pitch generation failed (status ${res.status})`)
+  const data = await res.json()
+  const textBlock = (data.content || []).find(b => b.type === 'text')
+  if (!textBlock) throw new Error('no pitch returned from Claude')
+  let parsed
+  try {
+    parsed = JSON.parse(textBlock.text.trim().replace(/^```json\s*/i, '').replace(/```$/i, '').trim())
+  } catch {
+    throw new Error('Claude returned non-JSON pitch')
+  }
+  const tagline = String(parsed.tagline || '').trim()
+  const cards = Array.isArray(parsed.cards)
+    ? parsed.cards.filter(c => c && c.title && c.body).slice(0, 3)
+    : []
+  if (!tagline || cards.length < 3) throw new Error('pitch missing tagline or 3 cards')
+  return { tagline, cards }
+}
+
+async function executeGenerateAppShowcase(input, env) {
+  // Superadmin gate
+  const callerId = input?.authContext?.email || input?.authContext?.userId || input?.userId
+  const profile = callerId ? await resolveUserProfile(callerId, env) : null
+  const role = String(profile?.role || input?.authContext?.role || '').toLowerCase()
+  if (role !== 'superadmin') throw new Error('generate_app_showcase requires Superadmin.')
+
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in (no API token) to read the Assets album.')
+
+  const graphId = (typeof input.graphId === 'string' && input.graphId.trim()) || APP_CATALOG_GRAPH_ID
+  const albumName = (typeof input.albumName === 'string' && input.albumName.trim()) || 'Assets'
+  const regenerate = input.regenerate === true
+  const target = (typeof input.app === 'string' && input.app.trim()) ? input.app.trim() : 'all'
+  const targetSlug = target.toLowerCase() === 'all' ? 'all' : slugifyAppName(target)
+
+  // 1. Logo index from the Assets album: label '<slug>-logo' -> imgix url
+  const albumData = await photosApiFetch({ env, authToken, path: `/list-r2-images?album=${encodeURIComponent(albumName)}` })
+  const logoByLabel = {}
+  for (const img of (albumData.images || [])) {
+    const label = String(img.name || img.displayName || '').trim().toLowerCase()
+    if (label.endsWith('-logo') && img.url) logoByLabel[label] = img.url
+  }
+
+  // 2. Catalog graph
+  const { graph } = await fetchGraphForVersion(graphId, env)
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
+  if (!nodes.length) throw new Error(`Catalog graph ${graphId} has no nodes`)
+
+  const updated = []
+  const skipped = []
+
+  for (const node of nodes) {
+    const slug = slugifyAppName(node.label)
+    if (!slug) continue
+    if (targetSlug !== 'all' && slug !== targetSlug) continue
+
+    const logoUrl = logoByLabel[`${slug}-logo`]
+    if (!logoUrl) {
+      // No logo in Assets — never touch the node (covers + logo-less apps).
+      skipped.push({ app: node.label, slug, reason: `no '${slug}-logo' image in album '${albumName}'` })
+      continue
+    }
+
+    const alreadyHasShowcase = Number(node.showcaseVersion || 0) > 0
+    if (alreadyHasShowcase && !regenerate) {
+      skipped.push({ app: node.label, slug, reason: 'already has showcase (pass regenerate:true to rewrite)' })
+      continue
+    }
+
+    // Lossless source — the original catalog content, preserved across regenerations.
+    const sourceInfo = (alreadyHasShowcase && typeof node.showcaseSourceInfo === 'string')
+      ? node.showcaseSourceInfo
+      : (node.info || '')
+
+    let pitch
+    try {
+      pitch = await generateAppPitch(env, { name: node.label, sourceInfo, userId: callerId })
+    } catch (err) {
+      skipped.push({ app: node.label, slug, reason: `pitch failed: ${err.message}` })
+      continue
+    }
+
+    const { live, repo } = extractDevLinks(sourceInfo)
+    const info = buildShowcaseInfo({ name: node.label, logoUrl, tagline: pitch.tagline, cards: pitch.cards, live, repo })
+    const fields = {
+      info,
+      showcaseVersion: Number(node.showcaseVersion || 0) + 1,
+      showcaseUpdatedAt: new Date().toISOString(),
+    }
+    if (!alreadyHasShowcase) fields.showcaseSourceInfo = sourceInfo
+
+    try {
+      await patchNodeWithVersionRetry(env, graphId, node.id, fields)
+      updated.push({ app: node.label, slug, logoUrl, nodeId: node.id })
+    } catch (err) {
+      skipped.push({ app: node.label, slug, reason: `patch failed: ${err.message}` })
+    }
+  }
+
+  if (targetSlug !== 'all' && !updated.length && !skipped.length) {
+    throw new Error(`No catalog node matched app '${target}' (slug '${targetSlug}')`)
+  }
+
+  return {
+    message: `App showcase: ${updated.length} updated, ${skipped.length} skipped`,
+    graphId,
+    album: albumName,
+    updated,
+    skipped,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+  }
 }
 
 // ── Tool dispatcher ───────────────────────────────────────────────
@@ -6222,6 +7575,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeSearchUnsplash(toolInput, env)
     case 'get_album_images':
       return await executeGetAlbumImages(toolInput, env)
+    case 'generate_app_showcase':
+      return await executeGenerateAppShowcase(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -6300,6 +7655,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListRealtimeVideos(toolInput, env)
     case 'vemotion_save_composition':
       return await executeVemotionSaveComposition(toolInput, env)
+    case 'vemotion_get_composition':
+      return await executeVemotionGetComposition(toolInput, env)
     case 'vemotion_refit_composition':
       return await executeVemotionRefitComposition(toolInput, env)
     case 'transcribe_audio':
@@ -6312,8 +7669,36 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAnalyzeTranscription(toolInput, env, progress)
     case 'admin_register_user':
       return await executeAdminRegisterUser(toolInput, env)
+    case 'register_world_founder':
+      return await executeRegisterWorldFounder(toolInput, env)
+    case 'publish_world_page':
+      return await executePublishWorldPage(toolInput, env)
+    case 'publish_all_world_pages':
+      return await executePublishAllWorldPages(toolInput, env)
+    case 'deploy_world_proxy':
+      return await executeDeployWorldProxy(toolInput, env)
+    case 'set_world_credentials':
+      return await executeSetWorldCredentials(toolInput, env)
+    case 'provision_world_kv':
+      return await executeProvisionWorldKv(toolInput, env)
+    case 'check_world_publish':
+      return await executeCheckWorldPublish(toolInput, env)
+    case 'set_world_publish_secret':
+      return await executeSetWorldPublishSecret(toolInput, env)
+    case 'store_user_api_key':
+      return await executeStoreUserApiKey(toolInput, env)
+    case 'remove_user_api_key':
+      return await executeRemoveUserApiKey(toolInput, env)
     case 'send_email':
       return await executeSendEmail(toolInput, env)
+    case 'add_email_account':
+      return await executeAddEmailAccount(toolInput, env)
+    case 'set_email_password':
+      return await executeSetEmailPassword(toolInput, env)
+    case 'list_email_accounts':
+      return await executeListEmailAccounts(toolInput, env)
+    case 'add_email_destination':
+      return await executeAddEmailDestination(toolInput, env)
     case 'save_form_data':
       return await executeSaveFormData(toolInput, env)
     case 'query_data_nodes':
@@ -6458,6 +7843,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDbListTables(env)
     case 'db_query':
       return await executeDbQuery(toolInput, env)
+    case 'onboarding_status':
+      return await executeOnboardingStatus(toolInput, env)
     case 'calendar_list_tables':
       return await executeCalendarListTables(env)
     case 'calendar_query':

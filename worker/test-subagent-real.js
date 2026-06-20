@@ -183,7 +183,7 @@ Use read_html_section to search the code and answer based on what you actually f
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         userId: 'html-builder-test',
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 16384,
         temperature: 0.2,
         system: HTML_BUILDER_SYSTEM_PROMPT,

@@ -8,6 +8,7 @@
 import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
+import { DEFAULT_MODEL, MODELS } from './models.js'
 
 /**
  * Calculate cost in USD for a completed session.
@@ -18,16 +19,22 @@ function calculateCost(model, inputTokens, outputTokens) {
   const PRICES = {
     // Haiku 4.5
     'claude-haiku-4-5-20251001': { in: 0.80, out: 4.00 },
-    // Sonnet 4.6
+    'claude-haiku-4-5':          { in: 0.80, out: 4.00 },
+    // Sonnet 4.6 — stable name preferred. Old -20250514 snapshot was retired
+    // by Anthropic on 2026-06-15; keep the entry for historical cost-tracking
+    // of older runs but no live caller should resolve to that name.
     'claude-sonnet-4-6':         { in: 3.00, out: 15.00 },
     'claude-sonnet-4-20250514':  { in: 3.00, out: 15.00 },
-    // Opus 4.6
+    // Opus 4.8 — stable name. Same retirement story for the old snapshot.
+    'claude-opus-4-8':           { in: 15.00, out: 75.00 },
     'claude-opus-4-6':           { in: 15.00, out: 75.00 },
     'claude-opus-4-20250514':    { in: 15.00, out: 75.00 },
+    // Fable
+    'claude-fable-5':            { in: 3.00, out: 15.00 },
     // Fast path
     'fast-path':                 { in: 0, out: 0 },
   }
-  const price = PRICES[model] || PRICES['claude-haiku-4-5-20251001']
+  const price = PRICES[model] || PRICES[MODELS.HAIKU]
   return ((inputTokens / 1_000_000) * price.in) + ((outputTokens / 1_000_000) * price.out)
 }
 
@@ -80,6 +87,25 @@ async function loadAllTools(env) {
 function truncateResult(result) {
   let resultStr = JSON.stringify(result)
   const MAX_RESULT_SIZE = 12000
+
+  // Composition payloads (vemotion_get_composition, refit inline) MUST reach
+  // Claude intact — a partially-sliced composition would be saved back
+  // corrupted, dropping the very layers the user wants preserved. Give them a
+  // much larger ceiling and never blind-slice; if a composition is genuinely
+  // enormous, surface that as an explicit error instead of silent truncation.
+  if (result && typeof result === 'object' && result.composition && Array.isArray(result.composition.layers)) {
+    const COMPOSITION_MAX = 120000
+    if (resultStr.length <= COMPOSITION_MAX) return resultStr
+    return JSON.stringify({
+      message: result.message || 'Composition loaded',
+      compositionId: result.compositionId || null,
+      name: result.name || null,
+      version: result.version ?? null,
+      layerCount: result.composition.layers.length,
+      error: `Composition JSON is ${resultStr.length} chars, over the ${COMPOSITION_MAX}-char limit for in-context editing. Do NOT attempt to rebuild it from memory. Tell the user to edit this one in the Vemotion editor, or ask which specific layers to change.`,
+    })
+  }
+
   if (resultStr.length > MAX_RESULT_SIZE) {
     const truncated = JSON.parse(resultStr)
     if (truncated.nodes) {
@@ -135,12 +161,25 @@ function buildCapabilityToolPayload(toolName, result) {
   if (toolName === 'vemotion_save_composition') {
     return {
       compositionId: result.compositionId || null,
+      updated: result.updated === true,
       name: result.name || null,
       duration: result.duration ?? null,
       layerCount: result.layerCount ?? null,
       editorUrl: result.editorUrl || null,
       sourceMode: result.sourceMode || null,
       sourceAlbum: result.sourceAlbum || null,
+    }
+  }
+
+  if (toolName === 'vemotion_get_composition') {
+    // Only the lightweight fields reach the frontend; the full composition body
+    // is large and is consumed by Claude (for editing), not the chat UI.
+    return {
+      compositionId: result.compositionId || null,
+      name: result.name || null,
+      version: result.version ?? null,
+      layerCount: result.layerCount ?? null,
+      editorUrl: result.editorUrl || null,
     }
   }
 
@@ -310,7 +349,7 @@ function hasGraphWriteCompletion(messages) {
  */
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
-  const model = options.model || 'claude-haiku-4-5-20251001'
+  const model = options.model || DEFAULT_MODEL
   const authContext = options?.authContext || null
   let turn = 0
   const startTime = Date.now()
@@ -404,7 +443,18 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         log(`ERROR: Anthropic API error — ${JSON.stringify(data.error || 'unknown')}`)
         stats.success = false
         stats.error = JSON.stringify(data.error || 'Anthropic API error')
-        writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Anthropic API error' })}\n\n`))
+        // Surface a READABLE message in the chat (event: text renders as assistant content; event:
+        // error does not). For the out-of-credits case show "API Refund needed" so the operator
+        // knows it's billing, not a bug. Then close cleanly with done so the UI doesn't show a bare
+        // stream error.
+        const errMsg = String((data.error && data.error.message) || '')
+        const isCredit = /credit balance is too low|insufficient.*credit|too low to access/i.test(errMsg)
+        const friendly = isCredit
+          ? '⚠️ API Refund needed — the Anthropic API credit balance is too low to run the agent. Top up at console.anthropic.com (Plans & Billing), then retry. This is a billing issue, not a code error.'
+          : `⚠️ The AI service returned an error: ${errMsg || 'Anthropic API error'}`
+        writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: friendly })}\n\n`))
+        writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Anthropic API error', refundNeeded: isCredit })}\n\n`))
+        writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, error: true })}\n\n`))
         break
       }
 
@@ -474,7 +524,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
                 role: 'user',
                 content: `Based on this conversation context and the assistant's last response, suggest exactly 3 short follow-up prompts the user might want to ask next. Each should be a natural next step, question, or action. Return ONLY a JSON array of 3 strings, no explanation.\n\nRecent conversation:\n${recentContext}\n\nAssistant's response:\n${lastAssistantText.slice(0, 500)}`
               }],
-              model: 'claude-haiku-4-5-20251001',
+              model: MODELS.HAIKU,
               max_tokens: 256,
               temperature: 0.7,
             }),
@@ -814,7 +864,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         userId: userId,
         apiKey: env.ANTHROPIC_API_KEY || undefined,
         messages: messages,
-        model: agentConfig.model || 'claude-haiku-4-5-20251001',
+        model: agentConfig.model || DEFAULT_MODEL,
         max_tokens: agentConfig.max_tokens || 4096,
         temperature: agentConfig.temperature ?? 0.3,
         system: agentConfig.system_prompt,

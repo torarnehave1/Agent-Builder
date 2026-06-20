@@ -13,7 +13,7 @@ const agentConfig = {
   userId: 'user_demo',
   systemPrompt: `You are a research agent that builds knowledge graphs.
 When given a topic, create a structured knowledge graph with relevant HTML nodes for examples and code.`,
-  model: 'claude-sonnet-4-5' as const,
+  model: 'claude-sonnet-4-6' as const,
   temperature: 0.7,
   maxTokens: 4096
 };

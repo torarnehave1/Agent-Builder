@@ -9,7 +9,9 @@
  * v1: non-streaming JSON responses. Ephemeral dialog (caller carries history).
  */
 
-const ANALYSIS_MODEL = 'claude-sonnet-4-20250514'
+// Stable model name — no -YYYYMMDD snapshot, so an Anthropic deprecation of
+// an older snapshot can't silently break analysis runs.
+const ANALYSIS_MODEL = 'claude-sonnet-4-6'
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history'
 
 const MESSAGE_FETCH_LIMIT = 200

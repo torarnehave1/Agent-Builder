@@ -327,7 +327,9 @@ async function executeVideoTool(toolName, toolInput, env) {
 async function runVideoSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, userId } = input
   const maxTurns = 15
-  const model = 'claude-sonnet-4-20250514'
+  // Use the stable model name (no -YYYYMMDD snapshot) so Anthropic
+  // deprecations of older snapshots can't silently break this subagent.
+  const model = 'claude-sonnet-4-6'
 
   const log = (msg) => console.log(`[video-subagent] ${msg}`)
   const progress = typeof onProgress === 'function' ? onProgress : () => {}

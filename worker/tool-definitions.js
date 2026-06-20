@@ -426,18 +426,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'perplexity_search',
-    description: 'Search the web using Perplexity AI with real-time results and citations. Returns detailed answers with source URLs. Use this for in-depth research, recent news, or when you need cited sources. Choose model: "sonar" (fast), "sonar-pro" (deep search), or "sonar-reasoning" (complex analysis).',
+    description: 'Search the web using Perplexity AI sonar-pro with real-time results and citations. Returns detailed answers WITH source URLs and titles. Use this for in-depth research, recent news, or when you need cited sources. The tier is fixed to sonar-pro (deep search with citations) — you cannot downgrade it.',
     input_schema: {
       type: 'object',
       properties: {
         query: {
           type: 'string',
           description: 'The search query'
-        },
-        model: {
-          type: 'string',
-          enum: ['sonar', 'sonar-pro', 'sonar-reasoning'],
-          description: 'Perplexity model: sonar (fast, default), sonar-pro (deep search), sonar-reasoning (complex analysis)'
         },
         search_recency_filter: {
           type: 'string',
@@ -738,11 +733,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'vemotion_save_composition',
-    description: 'Save a Vemotion video composition to the user\'s cloud library. Vemotion is the layer-based video composer at vemotion.vegvisr.org. TWO USAGE MODES: (1) Pass `composition` — the full CompositionData object you assembled yourself (text / shape / math-shape / image / kg-shape / card layers with animations). Use this when you need custom styling. (2) Pass `albumName` — server-side shortcut that resolves the album to its real image keys and builds a default cross-fade slideshow (one image per slide). Use this when the user just wants a simple slideshow of an existing album. Returns the new compositionId and a URL the user can open to view and edit the composition in the Vemotion app. Does NOT render the video to MP4 — the user renders themselves from the editor.',
+    description: 'Save a Vemotion video composition to the user\'s cloud library. Vemotion is the layer-based video composer at vemotion.vegvisr.org. TWO USAGE MODES: (1) Pass `composition` — the full CompositionData object you assembled yourself (text / shape / math-shape / image / kg-shape / card layers with animations). Use this when you need custom styling. (2) Pass `albumName` — server-side shortcut that resolves the album to its real image keys and builds a default cross-fade slideshow (one image per slide). Use this when the user just wants a simple slideshow of an existing album. CREATE vs UPDATE: omit `compositionId` to create a NEW composition; pass `compositionId` to UPDATE that existing composition in place (versioned, keeps the same id). **To edit a composition the user already has, you MUST first call `vemotion_get_composition` to load its current layers, modify them in-context, then save back with the same `compositionId`.** Never rebuild a composition from memory and save without an id — that forks a new composition and silently drops the layers you forgot. Returns the compositionId and a URL to open/edit in the Vemotion app. Does NOT render to MP4 — the user renders from the editor.',
     input_schema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Short title shown in the user\'s Vemotion composition list (e.g. "Hello World intro", "Summer 2026 slideshow").' },
+        compositionId: { type: 'string', description: 'UPDATE mode: id of an existing composition to overwrite in place (e.g. "comp_abc123"). Omit to create a new composition. Always pass this when editing a composition the user already has — load it first with vemotion_get_composition, then save back with this same id.' },
         composition: {
           type: 'object',
           description: 'Full Vemotion CompositionData. Required if albumName is NOT provided. Must include a non-empty layers array. duration / fps / width / height fall back to 5s / 30fps / 1280x720 if omitted.',
@@ -766,6 +762,18 @@ const TOOL_DEFINITIONS = [
         authToken: { type: 'string', description: 'User emailVerificationToken. Usually auto-forwarded by the chat client; omit unless calling manually.' }
       },
       required: ['name']
+    }
+  },
+  {
+    name: 'vemotion_get_composition',
+    description: 'Load a saved Vemotion composition by id and return its FULL current CompositionData (all layers, exactly as stored). This is the read half of non-destructive editing. ALWAYS call this before editing a composition the user already has ("add an animation to that video", "make the slides longer", "remove the text", "tweak the composition you just made"). Workflow: vemotion_get_composition(compositionId) → modify the returned layers in-context → vemotion_save_composition with the SAME compositionId to update in place. Do NOT reconstruct a composition from memory — read it first so no layers are lost.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        compositionId: { type: 'string', description: 'Id of the composition to load (e.g. "comp_abc123"). This is the id returned by a prior vemotion_save_composition or shown in the editor URL.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['compositionId']
     }
   },
   {
@@ -870,6 +878,137 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['email']
+    }
+  },
+  {
+    name: 'store_user_api_key',
+    description: 'Store (or replace) an encrypted provider API key for a user. The key is encrypted server-side (AES-256-GCM) by the user-keys-worker and never stored in plaintext. By default the key is stored for the CURRENT logged-in user (self-service). To store a key on behalf of ANOTHER user, pass that user\'s email as `targetEmail` — this requires the caller to be Superadmin and will be rejected otherwise. Re-storing the same provider overwrites the previous key. Use this when the user asks to add, set, save, or update their (or another user\'s) OpenAI / Anthropic / Google / Grok / Perplexity / Proff API key. Never echoes the key value back.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        provider: {
+          type: 'string',
+          enum: ['openai', 'anthropic', 'google', 'grok', 'perplexity', 'proff'],
+          description: 'Which provider the key belongs to (required).'
+        },
+        apiKey: {
+          type: 'string',
+          description: 'The API key value to store (required). E.g. "sk-..." for OpenAI, "sk-ant-..." for Anthropic. Encrypted at rest; never returned to clients.'
+        },
+        targetEmail: {
+          type: 'string',
+          description: 'Optional. Email of the user to store the key FOR. Omit to store for the current user. If set to a different user than the caller, the caller must be Superadmin.'
+        },
+        keyName: {
+          type: 'string',
+          description: 'Optional friendly name for the key, e.g. "Production OpenAI Key".'
+        }
+      },
+      required: ['provider', 'apiKey']
+    }
+  },
+  {
+    name: 'remove_user_api_key',
+    description: 'Delete a stored provider API key. By default removes the key for the CURRENT logged-in user. To remove a key for ANOTHER user, pass that user\'s email as `targetEmail` — this requires the caller to be Superadmin. Idempotent: succeeds even if no such key existed. Use this when the user asks to remove, delete, revoke, or clear a stored provider API key. To see which keys are configured, use who_am_i.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        provider: {
+          type: 'string',
+          enum: ['openai', 'anthropic', 'google', 'grok', 'perplexity', 'proff'],
+          description: 'Which provider key to delete (required).'
+        },
+        targetEmail: {
+          type: 'string',
+          description: 'Optional. Email of the user whose key to remove. Omit for the current user. If different from the caller, the caller must be Superadmin.'
+        }
+      },
+      required: ['provider']
+    }
+  },
+  {
+    name: 'add_email_destination',
+    description: 'Register a new RECIPIENT email address in Cloudflare Email Routing so the platform is allowed to send mail to it. Cloudflare will email the recipient a verification link; the address can only receive mail through env.EMAIL.send() AFTER the recipient clicks that link. Use this when the user asks to "add a destination", "register a recipient", "allow sending to X", or when a send fails with "destination not verified". This is different from add_email_account — that registers a SENDER (From: address) in the user\'s profile; this registers a RECIPIENT (To: address) at the account level.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'The recipient email address to register as a verified destination (required). E.g., "post@universi.no". Cloudflare will send a verification email to this address.'
+        }
+      },
+      required: ['email']
+    }
+  },
+  {
+    name: 'list_email_accounts',
+    description: 'List the user\'s configured SENDER email accounts (the addresses they can use as From: when calling send_email). Optionally filter to a single address with the `email` parameter — useful for "is this address already configured?" checks before calling add_email_account. THIS IS THE CANONICAL SOURCE for "does sender email X exist?" questions. DO NOT use db_query against the `config` table to answer this — sender accounts live inside the `data` JSON blob at `data.settings.emailAccounts[]`, and direct SQL on `config.email` returns the user\'s LOGIN email, not their sender list. The returned list contains the bare metadata (no passwords).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'Optional. If provided, returns only the matching account (or empty list if not configured). If omitted, returns all sender accounts for the user.'
+        }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'add_email_account',
+    description: 'Add a new sender email account to the user\'s profile so it can be used by send_email. For @vegvisr.org addresses, no password is needed — the email is sent via Cloudflare Email Service automatically. For Gmail addresses, an app password is required (the user generates one at https://myaccount.google.com/apppasswords). Use this when the user asks to add, register, or configure a new From address. Dedupes by email — fails clearly if the address is already configured.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'The email address to register as a sender (required). E.g., "noreply@vegvisr.org", "torarnehave@vegr.ai", or "you@gmail.com".'
+        },
+        name: {
+          type: 'string',
+          description: 'Optional human-readable display name for the account, e.g. "Vegvisr no-reply".'
+        },
+        isDefault: {
+          type: 'boolean',
+          description: 'Make this the default sender account when send_email is called without an explicit fromEmail. Default: false.'
+        },
+        accountType: {
+          type: 'string',
+          enum: ['smtp', 'gmail'],
+          description: 'Sender backend. "smtp" routes through Cloudflare Email Service (vegvisr.org and any other CF-verified domain — no password needed). "gmail" routes through Gmail SMTP (requires appPassword). If omitted, defaults to "gmail" for @gmail.com addresses and "smtp" otherwise.'
+        },
+        appPassword: {
+          type: 'string',
+          description: 'Gmail app password. REQUIRED if accountType is "gmail". Never needed for "smtp". Stored server-side and never returned to clients.'
+        },
+        forUserEmail: {
+          type: 'string',
+          description: 'OPERATOR USE (Superadmin only). Configure this sender in ANOTHER user\'s profile instead of your own — pass the target user\'s login email (e.g. "iamazing.page@gmail.com"). Omit to add to your own profile. A non-Superadmin caller passing this gets an error.'
+        }
+      },
+      required: ['email']
+    }
+  },
+  {
+    name: 'set_email_password',
+    description: 'Set or update the Gmail app password on an EXISTING sender email account in the user\'s profile. Use this when the user pastes an app password for an address that is ALREADY configured (add_email_account refuses to touch an existing account; this updates it in place). Finds the account by email and stores the new app password server-side (never returned). After this, send_email from that address works.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'The existing sender email address to set the app password on (required). E.g. "msneeggen@gmail.com".'
+        },
+        appPassword: {
+          type: 'string',
+          description: 'The Gmail app password to store (required). Generated at https://myaccount.google.com/apppasswords. Stored server-side, never returned.'
+        },
+        forUserEmail: {
+          type: 'string',
+          description: 'OPERATOR USE (Superadmin only). Set the password on ANOTHER user\'s existing sender instead of your own — pass the target user\'s login email. Omit to target your own profile. A non-Superadmin caller passing this gets an error.'
+        }
+      },
+      required: ['email', 'appPassword']
     }
   },
   {
@@ -1055,7 +1194,7 @@ const TOOL_DEFINITIONS = [
       properties: {
         provider: { type: 'string', enum: ['claude', 'openai', 'grok', 'gemini'], description: 'Which AI provider to use' },
         prompt: { type: 'string', description: 'The prompt/instruction for content generation' },
-        model: { type: 'string', description: 'Optional: specific model name (e.g., "claude-sonnet-4-5", "gpt-4o", "grok-4-latest", "gemini-2.5-flash"). If omitted, uses the provider default.' },
+        model: { type: 'string', description: 'Optional: specific model name (e.g., "claude-sonnet-4-6", "gpt-4o", "grok-4-latest", "gemini-2.5-flash"). If omitted, uses the provider default.' },
         maxTokens: { type: 'number', description: 'Max tokens to generate (default: 2048)' }
       },
       required: ['provider', 'prompt']
@@ -1085,7 +1224,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'db_query',
-    description: 'Run a read-only SQL SELECT query against the main vegvisr_org database. Use this to inspect config, user_api_keys, graphs, and other tables. Only SELECT queries are allowed.',
+    description: 'Run a read-only SQL SELECT query against the main vegvisr_org database. Use this to inspect config, user_api_keys, graphs, and other tables. Only SELECT queries are allowed. NOTE: for any "onboarding status / client status / is X ready / how is X doing" question, use the onboarding_status tool instead — a raw config row does NOT contain the registrar, DNS-move state, chat engagement, knowledge-graph count, or engagement verdict.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1097,6 +1236,18 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['sql']
+    }
+  },
+  {
+    name: 'onboarding_status',
+    description: 'Get the COMPLETE onboarding status for a client by email (and optional domain). Returns role, registrar, dns_move state (not_started/propagating/active), RealtimeKit (app + meeting rooms), R2 recording, telemetry KV, knowledge graphs, chat engagement, routine graph, and an engagement verdict on a 5-level ladder (lowest→highest: PARK < ON WAIT < NUDGE < DEVELOPING < GO — PARK=dormant, ON WAIT=engaged but blocked on DNS propagation, NUDGE=some signal but stalled, DEVELOPING=actively building but not yet live, GO=shipped a live published page; with a reason). ALWAYS use this for any "onboarding status / is X ready / how is client X doing / what is the status for X" question. DO NOT use db_query against the config table for onboarding status — this tool aggregates many sources (config, chat DB, RDAP registrar, live DNS) that a single config row does not have. Pass the domain when the email is on a custom domain (e.g. kristoffer@vitalinnsikt.no -> vitalinnsikt.no); the domain also auto-derives from the email when omitted. The response ALSO includes a `world` block — the collective World activity across identities: its chat group, KGs tagged with the World (#<DOMAIN-STEM>), contributors, and a World-level verdict. ALWAYS present the `world` block when it is non-null (chat group name + message count, KG count, contributors, World verdict) — it captures work done under a different identity than the account-holder email (e.g. a project owner who created the group and graphs under their personal email). Report BOTH the personal capabilities AND the World aggregate. The response also includes `published_pages` (in both capabilities and world) — a live HTTP probe of the brand-proxy for the apex, www, and any assigned subdomain; each entry is {host, live, published_at}. A live published page is the FINAL step of the onboarding journey, so it pushes BOTH verdicts to GO (engagement.published / world.published are true). ALWAYS mention which hosts are live when any published_pages entry has live=true. published_pages AUTO-DISCOVERS every published page including arbitrary subdomains (e.g. claude.iamazing.page, ua.iamazing.page) — not just apex/www. The World may be resolved via the World Founder registry: when result.domain_source=\'world-founder-registry\' the founder\'s email did not reveal the domain (e.g. msneeggen@gmail.com founds iamazing.page), and result.founder_of lists the Worlds they found ({world_name, domain, cf_account_id, meta_area_tag, account_holder_email}) — state the founder→World relationship in your answer. result.ownership is the ORGANIZATIONAL stack for this person: {system_owner:{org_name,scope}|null, orgs:[{name,function,percent}], worlds:[{world_name,domain,org_name,hosting_model}], domains_operated:[{domain,kind,org_name}]}. When present, OPEN your answer with it — e.g. "Tor Arne Håve represents Universi AS (System Owner, 80% owner) and co-owns AlivenessLAB AS (20%)". A role (System Owner / World Founder) is held by an ORG and represented by the person; orgs[].percent is their ownership share. Always frame Worlds as founded by the ORG (org_name), not the person. The OVERALL verdict is engagement.verdict — it is the HIGHER of the personal and World ladders: when the World is further along than the account-holder identity (whose activity often lives under other identities, e.g. iamazing.page work is Maiken\'s), engagement.verdict is lifted to the World level and engagement.personal_verdict holds the raw account-only signal. So ALWAYS present engagement.verdict as the overall status; if it differs from personal_verdict, briefly note the World is being actively worked on under other identities. Never report the lower personal_verdict as the overall. capabilities.email_sending reports whether the account can SEND mail — {ok, verified, accounts, with_password, senders[], verified_senders[], last_verified_at}. TWO distinct levels: ok=true = CONFIGURED (≥1 sender has a stored Gmail app password — the "machine password"); verified=true = PROVEN (a real test send actually succeeded, stamped at last_verified_at). Present it as a provisioning step like RealtimeKit/R2, and STATE THE LEVEL: "verified sender (proven by a real send on <last_verified_at>)" when verified=true, "configured but not yet verified — no successful send on record" when ok=true but verified=false, or "email sending not set up" when ok=false. capabilities.email_routing reports whether the domain RECEIVES mail via Cloudflare Email Routing — {enabled, mx[]}; enabled=true means MX points to route*.mx.cloudflare.net, enabled=false with a non-empty mx means the domain uses other mail (e.g. Google smtp.google.com — say which), enabled=null means no domain/lookup failed. Note email_sending (can SEND as the account) and email_routing (can RECEIVE on the domain via Cloudflare) are independent steps; report both.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'Client email (the config-row email), e.g. kristoffer@vitalinnsikt.no' },
+        domain: { type: 'string', description: 'Optional domain for the registrar/DNS/zone/routine-graph checks, e.g. vitalinnsikt.no' }
+      },
+      required: ['email']
     }
   },
   {
@@ -1390,7 +1541,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'trigger_bot_response',
-    description: 'Trigger a chatbot to respond in its group. The bot uses the chatbot subagent (with tools like search_knowledge, web_search). Posts the response back to the group automatically.',
+    description: 'Trigger a chatbot to GENERATE its own reply based on recent group context. The bot uses its chatbot subagent (with tools like search_knowledge, web_search) to author a fresh response, which is then posted to the group. The bot decides what to say — there is NO parameter for custom message text and any verbatim text you might want it to say is IGNORED. Use this only when you want the bot to react autonomously to the conversation. If the user asked you to make a bot SAY a specific message (e.g. "tell the group X", "post Y as @botname"), DO NOT use this tool — use `bot_send_message` instead, which posts the literal text you provide.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1946,7 +2097,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delegate_to_bot',
-    description: 'Delegate ANY bot management task to the specialized Bot Management subagent. Use this for ALL questions about AI chatbots — including: list/create/update/delete bots, get bot details, add/remove bots from groups, trigger bot responses, change bot configuration (model, temperature, tools, personality graph). If the user asks anything about bots, bot creation, bot configuration, or triggering bot responses, ALWAYS delegate here.',
+    description: 'Delegate bot MANAGEMENT tasks to the specialized Bot Management subagent. Use this for: list/create/update/delete bots, get bot details, add/remove bots from groups, change bot configuration (model, temperature, tools, personality graph), or asking the bot to GENERATE a contextual reply from conversation. DO NOT use this when the user asks you to make a bot post a SPECIFIC, verbatim message (e.g. "tell the group X", "post Y as @botname", "have @creative say Z") — for that, call `bot_send_message` directly, which posts the literal text. delegate_to_bot uses trigger_bot_response under the hood and that auto-generates the bot\'s reply, DISCARDING any verbatim text.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1997,7 +2148,7 @@ const TOOL_DEFINITIONS = [
         name: { type: 'string', description: 'Display name for the agent (required)' },
         description: { type: 'string', description: 'Short description of what the agent does' },
         systemPrompt: { type: 'string', description: 'System prompt that defines the agent behavior' },
-        model: { type: 'string', description: 'LLM model ID. Options: claude-haiku-4-5-20251001, claude-sonnet-4-20250514, claude-opus-4-20250514' },
+        model: { type: 'string', description: 'LLM model ID. Use stable names so Anthropic snapshot retirements do not break the agent. Options: claude-haiku-4-5-20251001 (fast/cheap), claude-sonnet-4-6 (balanced), claude-opus-4-8 (most capable).' },
         temperature: { type: 'number', description: 'Temperature (0.0–1.0). Default 0.3' },
         maxTokens: { type: 'integer', description: 'Max response tokens. Default 4096' },
         tools: { type: 'array', items: { type: 'string' }, description: 'Array of tool names the agent can use' },
@@ -2243,6 +2394,141 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['graphId', 'nodeOrder']
+    }
+  },
+  {
+    name: 'register_world_founder',
+    description:
+      'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: "The founder's Vegvisr login email, e.g. kristoffer@vitalinnsikt.no" },
+        domain: { type: 'string', description: "The World's domain, e.g. vitalinnsikt.no" },
+        world_name: { type: 'string', description: 'Display name for the World, e.g. Vitalinnsikt. Defaults to the capitalized domain stem.' },
+        meta_area_tag: { type: 'string', description: "Content tag, e.g. '#VITALINNSIKT'. Defaults to '#' + the uppercased domain stem." },
+        cf_account_id: { type: 'string', description: "The founder's Cloudflare account id (32 hex chars). Optional." },
+        hosting_model: { type: 'string', description: "'own_account' (founder hosts in their own CF account) or 'central'. Default 'own_account'." },
+        account_holder_email: { type: 'string', description: 'CF account-holder email if different from founder_email. Optional.' },
+      },
+      required: ['founder_email', 'domain'],
+    },
+  },
+  {
+    name: 'publish_world_page',
+    description:
+      "Publish the World-Founder page so it serves at me.<domain>. Reads the central template (template:world-founder-page in WORLD_TEMPLATES), mints a host-scoped publish token signed with agent-worker's own HTML_PUBLISH_SECRET, then POSTs the page to the brand proxy's /__html/publish, which writes html:<host> into its own KV. Superadmin only. The page self-brands from its own host. The brand proxy must hold the SAME secret — provision_world_kv (or set_world_publish_secret) sets it. If a World returns 'Invalid or missing publish token', run provision_world_kv for it first.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. lydmorah.net" },
+        host: { type: 'string', description: 'Host to publish at. Defaults to me.<domain>.' },
+        proxy_url: { type: 'string', description: "Override the publish endpoint, e.g. https://<brand-proxy>.workers.dev/__html/publish." },
+        template_key: { type: 'string', description: "Template key in WORLD_TEMPLATES. Default 'template:world-founder-page'." },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'publish_all_world_pages',
+    description:
+      "Re-publish the World-Founder page to EVERY active World in the world_founders registry — use this after editing the shared template (template:world-founder-page in WORLD_TEMPLATES) so all live me.<domain> pages pick up the change in ONE call. For each active domain it mints a host-scoped token (signed with agent-worker's HTML_PUBLISH_SECRET) and POSTs to me.<domain>/__html/publish. Superadmin only. Returns a per-World result list with published/failed counts. Worlds not yet provisioned (no me.<domain> route / publish secret) fail individually with their error and are reported — they do NOT stop the rest; run provision_world_kv for those.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        template_key: { type: 'string', description: "Template key in WORLD_TEMPLATES. Default 'template:world-founder-page'." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'deploy_world_proxy',
+    description:
+      "Create (deploy) a World's brand-proxy worker (<stem>-brand-proxy) in the founder's OWN Cloudflare account — the piece that serves me.<domain> plus the /__html/publish + /__html/check endpoints. This is the step that fixes 'HTTP 530 (worker not reachable)', i.e. when no brand proxy exists yet. It uploads the canonical brand-proxy script (template:brand-proxy in WORLD_TEMPLATES), creates the HTML_PAGES + BRAND_CONFIG KV namespaces if missing, binds them, stamps HTML_PUBLISH_SECRET at deploy, and attaches me.<domain> as a custom domain. After this the World is publishable — run publish_world_page. Superadmin only; requires the founder's stored token (set_world_credentials) with Workers Scripts edit + Workers KV Storage edit + DNS/Routes edit + Zone read. Idempotent: skips an existing worker (still (re)attaches the route); pass force=true to redeploy the script.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. movemetime.com" },
+        founder_email: { type: 'string', description: 'Optional — resolved from the domain via world_founders if omitted.' },
+        worker_name: { type: 'string', description: 'Override the brand-proxy worker name (default <stem>-brand-proxy).' },
+        host: { type: 'string', description: 'Host to attach (default me.<domain>).' },
+        force: { type: 'boolean', description: 'Redeploy the script even if the worker already exists.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'set_world_credentials',
+    description:
+      "Store a founder's Cloudflare account id + API token in their config so the World-provisioning tools (provision_world_kv, publish_world_page, deploy_world_proxy, set_world_route_dns) can act in the founder's OWN Cloudflare account. Superadmin only. The token is stored server-side and never echoed. It must have Workers KV Storage edit scope (plus Workers Scripts + DNS edit for the deploy/route tools).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: "The founder's email (or pass domain to resolve it from world_founders)." },
+        domain: { type: 'string', description: "The World's domain, used to resolve the founder if founder_email is omitted." },
+        cf_account_id: { type: 'string', description: "The founder's Cloudflare account id (32 hex). Optional if already set." },
+        cf_api_token: { type: 'string', description: "The founder's Cloudflare API token (scoped to their account). Required. Stored, never returned." },
+      },
+      required: ['cf_api_token'],
+    },
+  },
+  {
+    name: 'provision_world_kv',
+    description:
+      "Make a World publishable in one step: (1) create/find the HTML_PAGES KV namespace in the founder's OWN Cloudflare account (idempotent) and record its id in config.cf_kv_namespace_id, and (2) set the brand proxy's HTML_PUBLISH_SECRET to agent-worker's value so publish_world_page works. This is the routine that was previously only printed as a manual step (Lesson 44). Superadmin only. Requires the founder's stored token (set_world_credentials) to have Workers KV Storage edit + Workers Scripts edit scope, agent-worker to have its HTML_PUBLISH_SECRET set, and the brand proxy to exist. Reports KV + publish_secret results separately.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. iamazing.page (resolves the founder)." },
+        founder_email: { type: 'string', description: 'Override the founder email (else resolved from the domain via world_founders).' },
+        cf_account_id: { type: 'string', description: "Override the founder's Cloudflare account id (else from config)." },
+        worker_name: { type: 'string', description: "Brand-proxy worker name for the secret step. Defaults to <stem>-brand-proxy." },
+        title: { type: 'string', description: "KV namespace title. Default 'HTML_PAGES'." },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'check_world_publish',
+    description:
+      "Read-only readiness check for a World's publish path. Stores nothing and creates no token. Asks the World's own brand proxy (GET /__html/check) whether HTML_PAGES is enabled+bound and whether the host(s) route to the brand proxy, and whether the Superadmin publish-token mint works. Use this to see if a World (e.g. lydmorah.net) has HTML_PAGES set up before publishing. HTML_PAGES is enabled per-World from the Cloudflare dashboard; this only reports status. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. lydmorah.net" },
+        host: { type: 'string', description: 'Check a single host. Defaults to checking both me.<domain> and <domain>.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'set_world_publish_secret',
+    description:
+      "Set a World's brand-proxy HTML_PUBLISH_SECRET to agent-worker's own value, so publish_world_page works for that World. Standalone version of the secret step that provision_world_kv also does. Uses the World's stored Cloudflare token (needs Workers Scripts edit scope) to write the secret into the brand proxy worker via the CF API; the value is held on agent-worker (env.HTML_PUBLISH_SECRET, set once by the operator via `wrangler secret put` — a value they generate) and never passes through chat. Superadmin only. Prereqs: register_world_founder + set_world_credentials (stored token) for the domain.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. lydmorah.net" },
+        founder_email: { type: 'string', description: 'Override the founder email (else resolved from world_founders for the domain).' },
+        cf_account_id: { type: 'string', description: "Override the founder's Cloudflare account id (else from config)." },
+        worker_name: { type: 'string', description: "Brand-proxy worker script name. Defaults to <stem>-brand-proxy (e.g. lydmorah-brand-proxy). If wrong, the tool lists the account's scripts." },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'generate_app_showcase',
+    description:
+      "Build or refresh the World-Founder-facing app showcase on the Vegr.ai App Catalog graph (default 6074a2bf-082b-4e92-a91d-eeab94c69b66). For each app node it embeds the app logo (resolved from the 'Assets' photo album by the semantic label '<app-slug>-logo', served via imgix) and a generated benefit pitch laid out as logo, then app name, then a one-line tagline, then three benefit cards — written for a World Founder who does not know the apps. The showcase becomes the node body; the original catalog content is preserved losslessly in the node's showcaseSourceInfo field, so a manual edit or a re-run never loses it. Idempotent: nodes that already have a showcase are left untouched unless regenerate:true. Apps with no '<slug>-logo' image in the Assets album are skipped and reported so the operator knows which logos to add. Superadmin only. Run with app:'all' for every app, or app:'<name or slug>' (e.g. 'Vemotion') for one.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: "App name or slug to (re)build, e.g. 'Vemotion' or 'vemotion', or 'all' for every app node in the catalog. Default 'all'." },
+        regenerate: { type: 'boolean', description: 'If true, rewrite the showcase for apps that already have one. If false (default), apps that already have a showcase are left untouched.' },
+        graphId: { type: 'string', description: 'Override the catalog graph id. Defaults to the App Catalog 6074a2bf-082b-4e92-a91d-eeab94c69b66.' },
+        albumName: { type: 'string', description: "Photo album holding the logos. Defaults to 'Assets'." },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      }
     }
   }
 ]

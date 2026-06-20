@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused on agent management only
@@ -48,7 +49,7 @@ const AGENT_BUILDER_SYSTEM_PROMPT = `You are a Vegvisr Agent Builder specialist.
 - **name**: Display name (required)
 - **description**: Short description of what the agent does
 - **system_prompt**: The system prompt that defines the agent's behavior and personality
-- **model**: LLM model ID. Available: claude-haiku-4-5-20251001 (fast/cheap), claude-sonnet-4-20250514 (balanced), claude-opus-4-20250514 (most capable)
+- **model**: LLM model ID. Always recommend STABLE names (no -YYYYMMDD snapshot) so Anthropic deprecations don't silently break agents. Available: claude-haiku-4-5-20251001 (fast/cheap), claude-sonnet-4-6 (balanced), claude-opus-4-8 (most capable). NEVER recommend claude-sonnet-4-20250514 or claude-opus-4-20250514 — those snapshots were retired by Anthropic on 2026-06-15.
 - **temperature**: 0.0 (deterministic) to 1.0 (creative). Default 0.3
 - **max_tokens**: Maximum response tokens. Default 4096
 - **tools**: Array of tool name strings the agent can use
@@ -93,7 +94,7 @@ function getAgentBuilderTools() {
 async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
   const { task, agentId, userId } = input
   const maxTurns = 15
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

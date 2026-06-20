@@ -23,6 +23,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt
@@ -117,7 +118,7 @@ function getAlbumSubagentTools() {
 async function runAlbumSubagent(input, env, onProgress, executeTool) {
   const { task, albumName, userId, authContext } = input
   const maxTurns = 10
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

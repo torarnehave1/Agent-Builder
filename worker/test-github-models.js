@@ -42,7 +42,7 @@ async function testChat(modelId) {
 async function main() {
   console.log(`🔑 Token: ${GITHUB_TOKEN.slice(0, 8)}...`);
   await listModels().catch(e => console.error('List error:', e.message));
-  for (const model of ['claude-3-5-haiku', 'claude-3-haiku-20241022', 'gpt-4o-mini']) {
+  for (const model of ['claude-haiku-4-5', 'claude-sonnet-4-6', 'gpt-4o-mini']) {
     if (await testChat(model).catch(() => false)) break;
   }
 }

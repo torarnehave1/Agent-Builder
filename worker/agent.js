@@ -127,6 +127,9 @@ const WORKERS_AI_TOOLS = new Set([
   'vemotion_save_composition',
   'vemotion_refit_composition',
   'register_capability_worker',
+  'add_email_account',
+  'list_email_accounts',
+  'add_email_destination',
 ])
 
 const GRAPH_AWARE_TOOLS = new Set([

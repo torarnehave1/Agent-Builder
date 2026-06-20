@@ -8,24 +8,36 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — built dynamically per bot
 // ---------------------------------------------------------------------------
 
-function buildBotSystemPrompt(bot, groupName, personality) {
+function buildBotSystemPrompt(bot, groupName, personality, tools) {
+  const toolNames = Array.isArray(tools) ? tools.map(t => t.name).filter(Boolean) : []
+  const hasTools = toolNames.length > 0
+  const toolListLine = hasTools
+    ? `\n## Your Tools\nYou have these tools available: ${toolNames.join(', ')}. Each tool's full description is provided to you separately — read those descriptions to know what each tool does.`
+    : ''
+  const toolUseRule = hasTools
+    ? `- When the conversation contains a question or request that benefits from current information, web research, knowledge-graph lookup, or any capability one of your tools can provide, **use the tool first** and base your reply on real data. Do not answer from training data alone when a tool can give you a better answer.
+- When a tool returns URLs, sources, or citations (e.g. perplexity_search.sources / .citations), **include the actual URLs in your reply as clickable markdown links** like [Title](https://…). Do not just mention site names — paste the real links from the tool result. A "research with links" answer means literal links, not "Search for X on YouTube".
+- Prefer the higher-quality tool tier when the user asks for sources or research: for perplexity_search that means model: "sonar-pro" (the default if you don't specify). Use "sonar" only when speed matters more than citations.`
+    : `- If you don't know something, say so honestly.`
+
   return `You are ${bot.name} (@${bot.username}), a chat bot in the Hallo Vegvisr group "${groupName}".
 
 ${bot.system_prompt || ''}
 
-${personality ? `## Your Knowledge & Personality\n${personality}` : ''}
+${personality ? `## Your Knowledge & Personality\n${personality}` : ''}${toolListLine}
 
 ## Rules
 - Respond naturally as a group chat participant
-- Keep responses concise unless asked for detail
+- Keep responses focused — concise when the question is simple, detailed when the question merits it (e.g. a research answer with links)
 - Do not prefix your response with your name or any label
 - Do not repeat what others said
-- If you don't know something, say so honestly
+${toolUseRule}
 - Be helpful, friendly, and on-topic`
 }
 
@@ -87,12 +99,13 @@ async function runChatbotSubagent(input, env, executeTool) {
     bot,          // { id, name, username, system_prompt, graph_id, tools, model, max_turns, temperature }
     groupId,
     groupName,
-    triggerMessage, // The message that triggered this bot
+    triggerMessage, // The message that triggered this bot (object {user_id, body, ...} from chat, or string from /bot-chat)
     recentMessages, // Array of recent messages for context
+    triggerUserId,  // Optional explicit user id of the human who triggered the bot. When omitted, we fall back to triggerMessage.user_id. Needed so per-user-keyed tools (perplexity_search, etc.) can look up the right API key.
   } = input
 
   const maxTurns = Math.min(bot.max_turns || 10, 20)
-  const model = bot.model || 'claude-haiku-4-5-20251001'
+  const model = bot.model || DEFAULT_MODEL
   const temperature = bot.temperature ?? 0.7
 
   const log = (msg) => console.log(`[chatbot-subagent:@${bot.username}] ${msg}`)
@@ -115,8 +128,8 @@ async function runChatbotSubagent(input, env, executeTool) {
     }
   }
 
-  const systemPrompt = buildBotSystemPrompt(bot, groupName, personality)
   const tools = getBotTools(JSON.parse(typeof bot.tools === 'string' ? bot.tools : JSON.stringify(bot.tools || [])))
+  const systemPrompt = buildBotSystemPrompt(bot, groupName, personality, tools)
   const formattedContext = formatMessages(recentMessages || [])
 
   const userMessage = triggerMessage
@@ -136,7 +149,12 @@ async function runChatbotSubagent(input, env, executeTool) {
       userId: `bot:${bot.id}`,
       messages,
       model,
-      max_tokens: 1024,
+      // Chat bots historically capped at 1024 tokens — too tight for tool-
+      // using responses (a perplexity_search result alone can blow the
+      // budget, causing the model to skip the tool and answer from training
+      // data). 4096 matches Agent Builder's default for general agents and
+      // leaves room for both research and synthesis.
+      max_tokens: 4096,
       temperature,
       system: systemPrompt,
     }
@@ -172,7 +190,17 @@ async function runChatbotSubagent(input, env, executeTool) {
       const toolResults = []
       for (const toolUse of toolUses) {
         try {
-          const result = await executeTool(toolUse.name, toolUse.input, env, {})
+          // Inject userId so per-user-keyed tools (e.g. perplexity_search) can
+          // look up the human triggerer's API key. Matches agent-loop's pattern
+          // at agent-loop.js:609. Falls back to triggerMessage.user_id when
+          // /bot-respond passes the full message object.
+          const effectiveUserId = triggerUserId
+            || (triggerMessage && typeof triggerMessage === 'object' ? triggerMessage.user_id : null)
+            || null
+          const toolInput = effectiveUserId
+            ? { ...toolUse.input, userId: effectiveUserId }
+            : toolUse.input
+          const result = await executeTool(toolUse.name, toolInput, env, {})
           const resultStr = JSON.stringify(result)
           const truncated = resultStr.length > 8000
             ? resultStr.slice(0, 8000) + '... [truncated]'

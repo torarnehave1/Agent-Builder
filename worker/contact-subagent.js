@@ -8,6 +8,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt
@@ -75,7 +76,7 @@ function getContactSubagentTools() {
 async function runContactSubagent(input, env, onProgress, executeTool) {
   const { task, contactId, contactName, userId } = input
   const maxTurns = 10
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

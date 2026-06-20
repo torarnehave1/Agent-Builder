@@ -8,6 +8,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused on bot management only
@@ -83,7 +84,7 @@ function getBotSubagentTools() {
 async function runBotSubagent(input, env, onProgress, executeTool) {
   const { task, botId, groupId, userId } = input
   const maxTurns = 15
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

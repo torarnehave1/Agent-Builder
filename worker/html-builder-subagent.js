@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused, ~2K tokens, HTML rules only
@@ -655,7 +656,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const maxTurns = 12
   const WALL_TIME_LIMIT_MS = 120_000  // 2 minutes max — bail out gracefully
   const startTime = Date.now()
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 

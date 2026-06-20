@@ -86,6 +86,37 @@ type AgentUIPart = Parameters<typeof isToolUIPart>[0];
 type ToolUIPart = Parameters<typeof getToolName>[0];
 
 function readVegvisrAuthToken(): string | null {
+  // Identity priority MUST match AgentChat.tsx: the logged-in user shown in the
+  // UI is localStorage.user.emailVerificationToken. The `.vegvisr.org`-wide
+  // `vegvisr_token` cookie is shared across every Vegvisr app and can hold a
+  // DIFFERENT account than the one displayed here — trusting it first caused
+  // gemma-path saves (e.g. vemotion compositions) to be attributed to the wrong
+  // owner, producing "Forbidden" on load. So localStorage wins; cookie is a
+  // last-resort fallback only.
+  if (typeof window !== 'undefined') {
+    try {
+      const rawUser = window.localStorage.getItem('user');
+      if (rawUser) {
+        const parsed = JSON.parse(rawUser);
+        const userToken = parsed?.emailVerificationToken;
+        if (typeof userToken === 'string' && userToken.trim()) return userToken.trim();
+      }
+    } catch {
+      // ignore storage parsing errors
+    }
+
+    for (const key of ['token', 'authToken']) {
+      try {
+        const value = window.localStorage.getItem(key);
+        if (value?.trim()) return value.trim();
+      } catch {
+        // ignore storage access errors
+      }
+    }
+  }
+
+  // Fallback: the shared cross-app cookie. Only reached when no localStorage
+  // identity exists (e.g. token-only embed contexts).
   if (typeof document !== 'undefined') {
     const cookieMatch = document.cookie.match(/(?:^|;\s*)vegvisr_token=([^;]+)/);
     if (cookieMatch?.[1]) {
@@ -94,28 +125,6 @@ function readVegvisrAuthToken(): string | null {
       } catch {
         return cookieMatch[1];
       }
-    }
-  }
-
-  if (typeof window === 'undefined') return null;
-
-  try {
-    const rawUser = window.localStorage.getItem('user');
-    if (rawUser) {
-      const parsed = JSON.parse(rawUser);
-      const userToken = parsed?.emailVerificationToken;
-      if (typeof userToken === 'string' && userToken.trim()) return userToken.trim();
-    }
-  } catch {
-    // ignore storage parsing errors
-  }
-
-  for (const key of ['token', 'authToken']) {
-    try {
-      const value = window.localStorage.getItem(key);
-      if (value?.trim()) return value.trim();
-    } catch {
-      // ignore storage access errors
     }
   }
 

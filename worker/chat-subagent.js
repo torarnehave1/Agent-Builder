@@ -8,6 +8,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused on chat group operations only
@@ -75,6 +76,8 @@ const CHAT_SUBAGENT_SYSTEM_PROMPT = `You are a Hallo Vegvisr Chat Groups special
   - "last/latest/most recent message" → \`SELECT id, user_id, created_at, message_type, body FROM group_messages WHERE group_id = ? ORDER BY id DESC LIMIT 1\`
   - "last N messages" → same query with \`LIMIT N\`
 - First resolve the group ID with \`list_chat_groups\` or \`chat_db_query\`, then query group_messages.
+- **bot_id format when reporting back to the caller**: ALWAYS use the BARE UUID from \`chat_bots.id\` or \`group_bot_members.bot_id\` (e.g. \`c45c2ec8-1b6e-4cb2-8a37-bc68d1d91e64\`). NEVER prefix with \`"bot:"\`. The \`bot:<UUID>\` form is a DISPLAY convention used only inside \`group_messages.user_id\` (to distinguish bot messages from human ones). The chat-worker now strips that prefix defensively, but downstream tools like \`bot_send_message\` and \`add_bot_to_group\` expect the bare UUID, so don't introduce the prefix in your responses.
+- **Returning many messages to the caller**: when the user wants to go through every message (e.g. "go message by message", "list ALL messages", "show me each post one by one", "for each message ask me YES/NO"), DO NOT collapse the result into a markdown summary table that omits items. Use \`chat_db_query\` with no LIMIT (or LIMIT 4000) and return EVERY row as a structured list. Include \`id\`, \`user_id\`, \`message_type\`, and \`body\` (trim long body fields to ~200 chars each in your output if needed, but never drop entire messages). The caller is going to iterate per-message — missing any row breaks the user task.
 
 After completing your task, provide a brief summary of what you did.`
 
@@ -114,7 +117,7 @@ function getChatSubagentTools() {
 async function runChatSubagent(input, env, onProgress, executeTool) {
   const { task, groupId, groupName, userId } = input
   const maxTurns = 15
-  const model = env.SUBAGENT_MODEL || 'claude-haiku-4-5-20251001'
+  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
   let outputTokens = 0
 
@@ -238,9 +241,15 @@ async function runChatSubagent(input, env, onProgress, executeTool) {
             summary: result.message || `${toolUse.name} ok`,
           })
 
-          // Truncate large results to keep subagent context manageable
-          const truncated = resultStr.length > 10000
-            ? resultStr.slice(0, 10000) + '... [truncated]'
+          // Truncate large results to keep subagent context manageable.
+          // Tool-aware caps: chat_db_query and get_group_messages are intentional
+          // bulk-data queries — the WHOLE POINT is to return many rows — so they
+          // get a much higher cap. Other tools (CRUD confirmations, status checks)
+          // keep the smaller default since they shouldn't be returning huge blobs.
+          const DATA_DUMP_TOOLS = new Set(['chat_db_query', 'get_group_messages'])
+          const cap = DATA_DUMP_TOOLS.has(toolUse.name) ? 100000 : 10000
+          const truncated = resultStr.length > cap
+            ? resultStr.slice(0, cap) + '... [truncated]'
             : resultStr
 
           toolResults.push({

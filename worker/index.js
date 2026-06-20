@@ -18,6 +18,7 @@ import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
+import { DEFAULT_MODEL, MODELS, KNOWN_MODELS } from './models.js'
 import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
@@ -1246,6 +1247,7 @@ export default {
                 groupName: 'Agent Chat',
                 triggerMessage: message,
                 recentMessages,
+                triggerUserId: userId,
               },
               env,
               executeTool
@@ -1289,7 +1291,7 @@ export default {
         let systemPrompt = CHAT_SYSTEM_PROMPT
         let toolFilter = null
         let agentAvatarUrl = null
-        let agentModel = model || 'claude-haiku-4-5-20251001'
+        let agentModel = model || DEFAULT_MODEL
 
         // Load dynamic behavior rules from graph_system_prompt
         const dynamicRules = await loadDynamicPrompt(env)
@@ -1954,7 +1956,7 @@ export default {
           name,
           description || '',
           system_prompt || '',
-          model || 'claude-haiku-4-5-20251001',
+          model || DEFAULT_MODEL,
           max_tokens || 4096,
           temperature ?? 0.3,
           JSON.stringify(tools || []),
@@ -1986,6 +1988,15 @@ export default {
         if (!agentId) {
           return new Response(JSON.stringify({ error: 'id is required' }), { status: 400, headers: corsHeaders })
         }
+        // Reject unknown / retired model names up-front. KNOWN_MODELS holds the
+        // current stable set; anything else (including old -YYYYMMDD snapshots
+        // Anthropic has retired) is blocked so we can't save broken configs.
+        if (body.model !== undefined && body.model !== null && body.model !== '' && !KNOWN_MODELS.has(body.model)) {
+          return new Response(JSON.stringify({
+            error: `Unknown model: ${body.model}. Use one of: ${Array.from(KNOWN_MODELS).join(', ')}.`,
+            allowedModels: Array.from(KNOWN_MODELS),
+          }), { status: 400, headers: corsHeaders })
+        }
         const allowedFields = ['name', 'description', 'system_prompt', 'model', 'max_tokens', 'temperature', 'avatar_url', 'is_active']
         const sets = []
         const values = []
@@ -2000,10 +2011,109 @@ export default {
         if (sets.length === 0) {
           return new Response(JSON.stringify({ error: 'No fields to update' }), { status: 400, headers: corsHeaders })
         }
+
+        // Block name changes for registered chat bots. chat_bots.username is
+        // derived from name; renaming would orphan every prior @mention in old
+        // group messages (the literal text remains but no bot row matches it).
+        // Once a bot, the name is locked. Other fields can still be edited.
+        if (body.name !== undefined) {
+          const current = await env.DB.prepare(
+            'SELECT name, metadata FROM agent_configs WHERE id = ?'
+          ).bind(agentId).first()
+          if (current) {
+            let currentMeta = {}
+            try { currentMeta = current.metadata ? JSON.parse(current.metadata) : {} } catch { currentMeta = {} }
+            const newName = String(body.name).trim()
+            if (currentMeta.chatBotId && newName !== current.name) {
+              return new Response(JSON.stringify({
+                error: 'Cannot rename a registered chat bot. The bot username is derived from the name and renaming would break every prior @mention. Deactivate the bot and create a new agent if you need a different name.'
+              }), { status: 400, headers: corsHeaders })
+            }
+          }
+        }
+
         values.push(agentId)
         await env.DB.prepare(
           `UPDATE agent_configs SET ${sets.join(', ')} WHERE id = ?`
         ).bind(...values).run()
+
+        // Sync chat_bots row when this agent is registered as a chat bot.
+        // chat_bots is created on /register-agent-bot and that path was the only
+        // point that ever copied agent fields across. Subsequent edits to the
+        // agent never propagated, leaving the bot row stale. Sync here so any
+        // edit to the agent's user-facing fields reaches the chat surface too.
+        //
+        // Field mapping:
+        //   agent_configs.name              -> chat_bots.name
+        //   agent_configs.avatar_url        -> chat_bots.avatar_url
+        //   agent_configs.system_prompt     -> chat_bots.system_prompt
+        //   agent_configs.model             -> chat_bots.model
+        //   agent_configs.tools (JSON str)  -> chat_bots.tools (JSON str)
+        //   agent_configs.temperature       -> chat_bots.temperature
+        //   metadata.botGraphId             -> chat_bots.graph_id
+        //
+        // chat_bots.username is NOT synced — it stays at whatever
+        // /register-agent-bot set on creation. Renames are blocked at the top of
+        // this handler, so username never needs to follow name.
+        //
+        // NOT synced:
+        //   chat_bots.max_turns — no equivalent in agent_configs (agent_configs
+        //                         has max_tokens, a different concept). Stays at
+        //                         whatever value /register-agent-bot set.
+        try {
+          const updatedAgent = await env.DB.prepare(
+            `SELECT name, avatar_url, system_prompt, model, tools, temperature, metadata
+             FROM agent_configs WHERE id = ?`
+          ).bind(agentId).first()
+
+          if (updatedAgent) {
+            let meta = {}
+            try { meta = updatedAgent.metadata ? JSON.parse(updatedAgent.metadata) : {} } catch { meta = {} }
+            let chatBotId = meta.chatBotId
+
+            // Fallback: agents created before chatBotId was tracked have an
+            // empty metadata. Match by name to the most recent active bot row,
+            // then self-heal by backfilling chatBotId so future edits take the
+            // fast path.
+            if (!chatBotId && updatedAgent.name) {
+              const candidate = await env.CHAT_DB.prepare(
+                `SELECT id FROM chat_bots WHERE name = ? AND is_active = 1 ORDER BY created_at DESC LIMIT 1`
+              ).bind(updatedAgent.name).first()
+              if (candidate) {
+                chatBotId = candidate.id
+                meta.chatBotId = chatBotId
+                await env.DB.prepare('UPDATE agent_configs SET metadata = ? WHERE id = ?')
+                  .bind(JSON.stringify(meta), agentId).run()
+              }
+            }
+
+            if (chatBotId) {
+              const graphId = meta.botGraphId ? (String(meta.botGraphId).trim() || null) : null
+
+              await env.CHAT_DB.prepare(
+                `UPDATE chat_bots
+                 SET name = ?, avatar_url = ?, system_prompt = ?, model = ?,
+                     tools = ?, temperature = ?, graph_id = ?, updated_at = ?
+                 WHERE id = ?`
+              ).bind(
+                updatedAgent.name,
+                updatedAgent.avatar_url || null,
+                updatedAgent.system_prompt || '',
+                updatedAgent.model || null,
+                updatedAgent.tools || '[]',
+                updatedAgent.temperature ?? null,
+                graphId,
+                Date.now(),
+                chatBotId
+              ).run()
+            }
+          }
+        } catch (syncErr) {
+          // Sync failure must not break the agent update itself — the agent_configs
+          // write already succeeded. Log and move on; user can re-save to retry.
+          console.error('chat_bots sync failed:', syncErr)
+        }
+
         return new Response(JSON.stringify({ id: agentId, updated: true }), { headers: corsHeaders })
       }
 
