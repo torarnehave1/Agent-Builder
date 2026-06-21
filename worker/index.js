@@ -205,6 +205,47 @@ export default {
         return new Response(JSON.stringify({ bots }), { headers: corsHeaders })
       }
 
+      // GET /work-contexts — Work Context cards for the UI.
+      // Graph-driven (NOT hardcoded): reads nodes of type 'work-context' from the
+      // Work Contexts graph. Each node describes one selectable context: title
+      // (label), description (info), and a metadata bundle
+      // { icon, targetGraphId, tools[], starterPrompts[], order, color }.
+      // Add/edit a context = edit that graph in the Knowledge Editor. No code
+      // change. (See Lesson 25 — capability defined in a graph, not in code.)
+      if (pathname === '/work-contexts' && request.method === 'GET') {
+        // Stable home of the work-context definitions (UUID — KG requires v4 ids).
+        const WORK_CONTEXTS_GRAPH_ID = '0b61898c-c892-4dbc-9e35-2980e274a5d8'
+        try {
+          const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${WORK_CONTEXTS_GRAPH_ID}`)
+          if (!res.ok) {
+            // Graph not created yet → empty list, not an error.
+            return new Response(JSON.stringify({ contexts: [] }), { headers: corsHeaders })
+          }
+          const data = await res.json()
+          const contexts = (data.nodes || [])
+            .filter(n => n.type === 'work-context' && n.visible !== false)
+            .map(n => {
+              const m = n.metadata || {}
+              return {
+                id: n.id,
+                title: n.label || n.id,
+                description: (n.info || '').trim(),
+                color: n.color || m.color || null,
+                icon: m.icon || 'ti-square',
+                targetGraphId: m.targetGraphId || '',
+                tools: Array.isArray(m.tools) ? m.tools : [],
+                starterPrompts: Array.isArray(m.starterPrompts) ? m.starterPrompts : [],
+                order: typeof m.order === 'number' ? m.order : 999,
+              }
+            })
+            .sort((a, b) => a.order - b.order)
+          return new Response(JSON.stringify({ contexts }), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/work-contexts] error', err)
+          return new Response(JSON.stringify({ contexts: [], error: err?.message || 'failed' }), { headers: corsHeaders })
+        }
+      }
+
       // POST /api/data-node/submit — Public form submission endpoint
       // Landing pages POST here to append records to data-nodes (no auth required)
       if (pathname === '/api/data-node/submit' && request.method === 'POST') {
@@ -1274,7 +1315,8 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode } = body
+        const planMode = mode === 'plan'
         // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
@@ -1327,6 +1369,14 @@ export default {
           systemPrompt += `\n\n## Active HTML App\nThe active HTML node is "${activeHtmlNodeId}" in graph "${graphId}". Use this nodeId when reading or editing the HTML app — do NOT guess node IDs.`
         }
 
+        // PLAN MODE — read-only. The agent may inspect (read graphs/nodes, search,
+        // fetch, analyze) but MUST NOT change anything. Enforced hard at the tool
+        // gate in agent-loop.js; this instruction tells the model upfront so it
+        // produces a plan instead of wasting turns hitting the gate.
+        if (planMode) {
+          systemPrompt += `\n\n## PLAN MODE IS ACTIVE (read-only)\nYou are operating in PLAN MODE. You may READ and INVESTIGATE freely (read graphs/nodes, search, list, fetch URLs, analyze). You MUST NOT make any change: no creating, patching, deleting, adding, sending, generating images/text, or delegating to subagents — all write tools are disabled and will be refused.\n\nYour job in Plan mode: understand the request, inspect whatever you need, then present a clear, numbered PLAN of exactly what you would do — which tools, in what order, on which graph/nodes/data, and what the result would be. Then STOP and wait. Do NOT attempt write tools "just to see". When the user is satisfied, they will switch to Auto mode to approve execution.`
+        }
+
         const chatMessages = userMessages.map(m => ({ role: m.role, content: m.content }))
 
         // Inject current UI context into the last user message so the model doesn't miss it.
@@ -1373,6 +1423,7 @@ export default {
           streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, effectiveUserId, env, {
             model: agentModel,
             maxTurns: maxTurns || 8,
+            mode: planMode ? 'plan' : 'auto',
             toolFilter,
             avatarUrl: agentAvatarUrl,
             graphId: graphId || null,
@@ -2299,7 +2350,7 @@ export default {
       // POST /bot-respond — Chatbot subagent: generate and post bot response
       if (pathname === '/bot-respond' && request.method === 'POST') {
         const body = await request.json()
-        const { bot, group_id, group_name, trigger_message, recent_messages } = body
+        const { bot, group_id, group_name, trigger_message, recent_messages, placeholder_id } = body
 
         if (!bot || !group_id) {
           return new Response(JSON.stringify({ error: 'bot and group_id are required' }), {
@@ -2328,7 +2379,9 @@ export default {
             }), { status: 500, headers: corsHeaders })
           }
 
-          // Post the bot's response back to the group via CHAT_WORKER
+          // Post the bot's response back to the group via CHAT_WORKER. When a
+          // placeholder_id is present, /bot-message finalizes the existing
+          // 'bot_thinking' row in place instead of inserting a new one.
           if (env.CHAT_WORKER) {
             const postRes = await env.CHAT_WORKER.fetch('https://group-chat-worker/bot-message', {
               method: 'POST',
@@ -2337,6 +2390,7 @@ export default {
                 bot_id: bot.id,
                 group_id,
                 body: result.response,
+                placeholder_id: placeholder_id || undefined,
               }),
             })
             const postData = await postRes.json()

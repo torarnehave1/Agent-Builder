@@ -49,6 +49,7 @@ interface Props {
   model?: string;
   pendingGraphContext?: { id: string; title: string } | null;
   onPendingGraphContextProcessed?: () => void;
+  activeContext?: { title: string; description?: string; starterPrompts: string[] } | null;
 }
 
 interface ToolCall {
@@ -746,7 +747,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed }: Props) {
+export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed, activeContext }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -775,6 +776,16 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       .then(data => { if (data.bots) { const filtered = data.bots.filter((b: { is_active?: boolean }) => b.is_active !== false); console.log('[AgentChat] bots loaded:', filtered.map((b: { username: string }) => b.username)); setBots(filtered); } })
       .catch(() => {});
   }, [userId]);
+
+  // Agent execution mode — 'plan' (read-only, proposes only) | 'auto' (executes).
+  // Persisted so the user's choice survives reloads. Defaults to 'auto' to
+  // preserve existing behavior; flip to 'plan' for full control with no writes.
+  const [agentMode, setAgentMode] = useState<'plan' | 'auto'>(() => {
+    try { return localStorage.getItem('agentMode') === 'plan' ? 'plan' : 'auto'; } catch { return 'auto'; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('agentMode', agentMode); } catch { /* ignore */ }
+  }, [agentMode]);
 
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -1868,6 +1879,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         body: JSON.stringify({
           userId,
           messages: apiMessages,
+          mode: agentMode,
           graphId: lastAgentGraphRef.current || graphId || undefined,
           agentId: agentId || undefined,
           activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
@@ -2458,12 +2470,34 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
-        {!hasMessages && (
+        {!hasMessages && !(activeContext && activeContext.starterPrompts.length > 0) && (
           <div className="text-center py-10 sm:py-16 px-4 app-text-muted">
             <h2 className="app-text text-xl sm:text-2xl font-semibold mb-2 sm:mb-3">Agent Chat</h2>
             <p className="text-sm sm:text-base leading-relaxed max-w-[500px] mx-auto">
               I can help you create knowledge graphs, build HTML pages, modify content, and manage your apps. What would you like to do?
             </p>
+          </div>
+        )}
+
+        {!hasMessages && activeContext && activeContext.starterPrompts.length > 0 && (
+          <div className="py-8 sm:py-12 px-2 max-w-[560px] mx-auto w-full">
+            <h2 className="app-text text-xl sm:text-2xl font-semibold mb-1.5">{activeContext.title}</h2>
+            {activeContext.description && (
+              <p className="app-text-muted text-sm leading-relaxed mb-5">{activeContext.description}</p>
+            )}
+            <p className="app-text-faint text-xs font-medium mb-2">Start here</p>
+            <div className="flex flex-col gap-2">
+              {activeContext.starterPrompts.map((p, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => sendMessage(p)}
+                  className="text-left app-surface border app-border rounded-lg px-3.5 py-2.5 text-sm app-text app-hover-surface-strong transition-colors"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -2851,6 +2885,33 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             )}
           </>
         )}
+
+        {/* Execution mode toggle — Plan (read-only) vs Auto (executes) */}
+        <div className="flex items-center gap-2 max-w-[900px] mx-auto mb-2">
+          <div className="inline-flex rounded-lg border app-border overflow-hidden text-xs font-medium">
+            <button
+              type="button"
+              onClick={() => setAgentMode('plan')}
+              title="Plan mode: the agent may read and investigate, but cannot create, change, delete, or generate anything. It proposes a plan and stops."
+              className={`px-3 py-1.5 transition-colors ${agentMode === 'plan' ? 'bg-amber-400/20 text-amber-300' : 'app-surface app-text-muted app-hover-surface-strong'}`}
+            >
+              ◐ Plan
+            </button>
+            <button
+              type="button"
+              onClick={() => setAgentMode('auto')}
+              title="Auto mode: the agent executes actions (create, edit, delete, generate) without asking first."
+              className={`px-3 py-1.5 transition-colors ${agentMode === 'auto' ? 'bg-sky-400/20 text-sky-300' : 'app-surface app-text-muted app-hover-surface-strong'}`}
+            >
+              ▶ Auto
+            </button>
+          </div>
+          <span className="text-xs app-text-soft">
+            {agentMode === 'plan'
+              ? 'Read-only — the agent proposes, never changes anything.'
+              : 'The agent executes actions without asking.'}
+          </span>
+        </div>
 
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
           <button

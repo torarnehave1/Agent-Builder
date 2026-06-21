@@ -8,9 +8,10 @@ import GraphPortfolioTab from './GraphPortfolioTab';
 import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel, isWorkersAIModel } from './ModelSettings';
 import UsageDashboard from './UsageDashboard';
+import WorkContextTab, { type WorkContext } from './WorkContextTab';
 import type { ResolvedTheme, ThemeMode } from '../lib/theme';
 
-type View = 'chat' | 'graphs' | 'data' | 'agents' | 'settings' | 'usage';
+type View = 'context' | 'chat' | 'graphs' | 'data' | 'agents' | 'settings' | 'usage';
 
 interface Props {
   userId: string;
@@ -32,7 +33,8 @@ interface PendingGraphContext {
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout, themeMode, resolvedTheme, onThemeChange }: Props) {
   const [graphId, setGraphId] = useState('');
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
-  const [view, setView] = useState<View>('chat');
+  const [view, setView] = useState<View>('context');
+  const [activeContext, setActiveContext] = useState<WorkContext | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
   const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['chat', 'graphs', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
+            {(['context', 'chat', 'graphs', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -59,7 +61,8 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                     : isLight ? 'text-slate-500 hover:text-slate-900' : 'text-white/50 hover:text-white/80'
                 }`}
               >
-                {tab === 'chat' ? 'Chat'
+                {tab === 'context' ? 'Start'
+                  : tab === 'chat' ? 'Chat'
                   : tab === 'graphs' ? (
                     <>
                       Graphs
@@ -105,6 +108,16 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
         </div>
       </header>
 
+      {view === 'context' && (
+        <WorkContextTab
+          onSelect={(ctx) => {
+            setActiveContext(ctx);
+            if (ctx.targetGraphId) setGraphId(ctx.targetGraphId);
+            setView('chat');
+          }}
+        />
+      )}
+
       {view === 'chat' && isWorkersAIModel(model) && (
         <div className="flex flex-1 min-h-0">
           <VegvisrAgentChat userId={userId} model={model} graphId={graphId} onGraphChange={setGraphId} resolvedTheme={resolvedTheme} />
@@ -127,6 +140,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               model={model}
               pendingGraphContext={pendingGraphContext}
               onPendingGraphContextProcessed={() => setPendingGraphContext(null)}
+              activeContext={activeContext}
             />
           </div>
           {previewHtml && (

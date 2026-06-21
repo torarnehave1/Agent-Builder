@@ -11,6 +11,60 @@ import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
 
 /**
+ * PLAN MODE — read-only allowlist (fail-closed).
+ *
+ * When the chat runs in Plan mode (options.mode === 'plan'), ONLY the tools in
+ * this set may execute. Every other tool — every create/patch/delete/add/send,
+ * every generate_*, every delegate_to_* (subagents write on the agent's behalf),
+ * and any tool added in the future — is blocked at the gate and returned to the
+ * model as "blocked, propose a plan instead".
+ *
+ * Allowlist, not blocklist, on purpose: a new write tool added later is blocked
+ * by default. The only failure mode is a genuine read tool being momentarily
+ * unavailable in Plan mode — an annoyance, never a safety hole.
+ */
+const READ_ONLY_TOOLS = new Set([
+  // Knowledge-graph reads
+  'read_graph', 'read_graph_content', 'read_node', 'kg_get_know_graph',
+  'list_graphs', 'list_meta_areas', 'search_graphs',
+  // App-data / DB reads
+  'query_data_nodes', 'query_app_table', 'get_app_table_schema',
+  'db_list_tables', 'db_query',
+  'calendar_list_tables', 'calendar_query', 'chat_db_list_tables', 'chat_db_query',
+  // Reference docs (pure reads)
+  'get_formatting_reference', 'get_node_types_reference',
+  'get_html_builder_reference', 'get_vemotion_reference', 'get_contract',
+  // Web / media lookups
+  'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash',
+  'get_album_images', 'album_list', 'album_get', 'photos_list', 'analyze_image',
+  // Recordings / video reads
+  'list_recordings', 'list_realtime_videos', 'vemotion_get_composition',
+  // Analysis (read-only — reasons over existing content, writes nothing)
+  'analyze_node', 'analyze_graph', 'analyze_transcription',
+  // Identity / discovery / status
+  'who_am_i', 'onboarding_status', 'describe_capabilities',
+  'get_system_registry', 'get_secure_worker_template', 'read_worker',
+  // Capability planning (classifies + returns a plan; mutates nothing)
+  'create_capability_blueprint',
+  // Calendar reads
+  'calendar_get_settings', 'calendar_check_availability',
+  'calendar_list_bookings', 'calendar_get_status',
+  // Chat reads
+  'list_chat_groups', 'get_group_messages', 'get_group_stats',
+  'get_group_members', 'get_poll_results', 'list_bots', 'get_bot',
+  // Agent reads
+  'list_agents', 'get_agent',
+  // Contact reads
+  'list_contacts', 'search_contacts', 'get_contact_logs',
+  // Email reads
+  'list_email_accounts',
+  // Proff (external business-registry lookups — read-only)
+  'proff_search_companies', 'proff_get_financials', 'proff_get_company_details',
+  'proff_get_public_company_info', 'proff_search_persons', 'proff_get_person_details',
+  'proff_find_business_network',
+])
+
+/**
  * Calculate cost in USD for a completed session.
  * Prices per million tokens (as of 2026-03).
  * Cache tokens cost 10% of input price — we don't distinguish here, so this is a conservative estimate.
@@ -351,6 +405,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const maxTurns = options.maxTurns || 8
   const model = options.model || DEFAULT_MODEL
   const authContext = options?.authContext || null
+  const planMode = options.mode === 'plan'
   let turn = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
@@ -379,7 +434,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     log(`tool filter applied: ${options.toolFilter.length} allowed → ${allTools.length} tools`)
   }
 
-  log(`started | model=${model} maxTurns=${maxTurns} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
+  log(`started | model=${model} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
 
   try {
     // Emit agent identity info if available (avatar, etc.)
@@ -590,6 +645,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         ])
 
         const executeAndStream = async (toolUse) => {
+          // PLAN MODE gate — fail-closed. Block anything not on the read-only allowlist.
+          // The tool never runs; the model is told to propose a plan and stop.
+          if (planMode && !READ_ONLY_TOOLS.has(toolUse.name)) {
+            const message = `PLAN MODE is active (read-only). The "${toolUse.name}" tool makes changes and was NOT executed. Do not retry it or any other write/create/modify/generate/delegate tool. Instead, present a concise step-by-step PLAN of exactly what you would do — which tools, in what order, on which graph/nodes/data — and then STOP and wait. The user will switch to Auto mode to approve and run it.`
+            log(`PLAN MODE blocked ${toolUse.name}`)
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: 'Blocked — Plan mode (read-only). Proposed, not executed.' })}\n\n`))
+            return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ blocked: true, planMode: true, message }) }
+          }
+
           const GRAPH_DISCOVERY_TOOLS = new Set(['search_graphs', 'list_graphs'])
           if (
             requiresCreateGraph
