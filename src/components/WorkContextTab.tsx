@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Flag, Network, LayoutGrid, Film, Users, Building2, Square, ArrowRight,
+  Mail, UserCog, Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -15,7 +16,15 @@ const ICONS: Record<string, LucideIcon> = {
   'ti-movie': Film,
   'ti-users': Users,
   'ti-building': Building2,
+  'ti-mail': Mail,
+  'ti-user-cog': UserCog,
+  'ti-sparkles': Sparkles,
 };
+
+export interface Capability {
+  name: string;
+  summary: string;
+}
 
 export interface WorkContext {
   id: string;
@@ -24,7 +33,7 @@ export interface WorkContext {
   color: string | null;
   icon: string;
   targetGraphId: string;
-  tools: string[];
+  capabilities: Capability[];
   starterPrompts: string[];
 }
 
@@ -93,7 +102,9 @@ export default function WorkContextTab({ onSelect }: Props) {
                   <span className="app-text font-medium text-[0.95rem]">{ctx.title}</span>
                   <span className="app-text-muted text-[0.82rem] leading-relaxed">{ctx.description}</span>
                   <span className="app-text-faint text-[0.72rem] mt-1">
-                    {ctx.tools.length} tool{ctx.tools.length === 1 ? '' : 's'}
+                    {ctx.capabilities.length > 0
+                      ? `${ctx.capabilities.length} capabilit${ctx.capabilities.length === 1 ? 'y' : 'ies'}`
+                      : 'Full toolbox'}
                     {ctx.targetGraphId ? ' · 1 graph' : ''}
                     {ctx.starterPrompts.length ? ` · ${ctx.starterPrompts.length} prompts` : ''}
                   </span>

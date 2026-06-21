@@ -215,6 +215,19 @@ export default {
       if (pathname === '/work-contexts' && request.method === 'GET') {
         // Stable home of the work-context definitions (UUID — KG requires v4 ids).
         const WORK_CONTEXTS_GRAPH_ID = '0b61898c-c892-4dbc-9e35-2980e274a5d8'
+        // Map each tool name → a short, human-readable capability summary so the
+        // UI can tell the user what a context can do in plain language (not raw
+        // tool names). Sourced from the tool's own description (first sentence).
+        const toolSummary = (name) => {
+          const def = TOOL_DEFINITIONS.find(t => t.name === name)
+          if (!def || !def.description) {
+            // Fallback: humanize the tool name (register_world_founder → "Register world founder")
+            const words = name.replace(/_/g, ' ')
+            return words.charAt(0).toUpperCase() + words.slice(1)
+          }
+          const first = def.description.split(/(?<=[.!?])\s/)[0].trim()
+          return first.length > 90 ? first.slice(0, 87).trimEnd() + '…' : first
+        }
         try {
           const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${WORK_CONTEXTS_GRAPH_ID}`)
           if (!res.ok) {
@@ -226,6 +239,7 @@ export default {
             .filter(n => n.type === 'work-context' && n.visible !== false)
             .map(n => {
               const m = n.metadata || {}
+              const toolNames = Array.isArray(m.tools) ? m.tools : []
               return {
                 id: n.id,
                 title: n.label || n.id,
@@ -233,7 +247,8 @@ export default {
                 color: n.color || m.color || null,
                 icon: m.icon || 'ti-square',
                 targetGraphId: m.targetGraphId || '',
-                tools: Array.isArray(m.tools) ? m.tools : [],
+                // Friendly capability list for the UI: { name, summary }.
+                capabilities: toolNames.map(name => ({ name, summary: toolSummary(name) })),
                 starterPrompts: Array.isArray(m.starterPrompts) ? m.starterPrompts : [],
                 order: typeof m.order === 'number' ? m.order : 999,
               }
@@ -1315,7 +1330,7 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext } = body
         const planMode = mode === 'plan'
         // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
         const authContext = authToken
@@ -1355,6 +1370,19 @@ export default {
             const tools = JSON.parse(agentConfig.tools || '[]')
             if (tools.length > 0) toolFilter = tools
           }
+        }
+
+        // Inject the selected Work Context as ORIENTATION (never a restriction).
+        // Tells the agent which domain the user started in and what that context
+        // highlights — so it frames answers and can answer "what can I do here?"
+        // accurately. The full toolbox stays available; cross-domain is allowed.
+        if (workContext && typeof workContext === 'object' && workContext.title) {
+          const caps = Array.isArray(workContext.capabilities) ? workContext.capabilities : []
+          const capLines = caps.map(c => `- ${c.summary || c.name}`).join('\n')
+          systemPrompt += `\n\n## Current Work Context: ${workContext.title}\n` +
+            (workContext.description ? `Focus: ${workContext.description}\n` : '') +
+            (capLines ? `\nCapabilities highlighted to the user in this context:\n${capLines}\n` : '') +
+            `\nThis context is ORIENTATION, not a restriction. The user can ask for anything and you keep your full toolbox — cross-domain requests (e.g. read a graph, then make a video, then send an email) are fully allowed. If the user asks "what can I do here" or similar, answer in plain, friendly language describing what's possible in this context (and beyond it), and offer to start one of the concrete actions.`
         }
 
         // Inject current graph context from the UI.

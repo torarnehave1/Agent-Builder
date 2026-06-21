@@ -49,7 +49,7 @@ interface Props {
   model?: string;
   pendingGraphContext?: { id: string; title: string } | null;
   onPendingGraphContextProcessed?: () => void;
-  activeContext?: { title: string; description?: string; starterPrompts: string[] } | null;
+  activeContext?: { title: string; description?: string; starterPrompts: string[]; capabilities?: { name: string; summary: string }[] } | null;
 }
 
 interface ToolCall {
@@ -1880,6 +1880,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           userId,
           messages: apiMessages,
           mode: agentMode,
+          workContext: activeContext ? {
+            title: activeContext.title,
+            description: activeContext.description || '',
+            capabilities: (activeContext.capabilities || []).map(c => ({ name: c.name, summary: c.summary })),
+          } : undefined,
           graphId: lastAgentGraphRef.current || graphId || undefined,
           agentId: agentId || undefined,
           activeHtmlNodeId: lastHtmlNodeIdRef.current || undefined,
@@ -2498,6 +2503,24 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 </button>
               ))}
             </div>
+
+            {activeContext.capabilities && activeContext.capabilities.length > 0 && (
+              <div className="mt-6">
+                <p className="app-text-faint text-xs font-medium mb-2">What I can do here</p>
+                <ul className="flex flex-col gap-1.5">
+                  {activeContext.capabilities.map((c) => (
+                    <li key={c.name} className="flex gap-2 text-[0.82rem] app-text-muted leading-relaxed">
+                      <span className="app-text-faint mt-0.5">•</span>
+                      <span>{c.summary}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <p className="app-text-faint text-xs mt-5 leading-relaxed">
+              This is just a starting point — you can still ask for anything outside this focus. The full toolbox stays available.
+            </p>
           </div>
         )}
 
@@ -2911,6 +2934,20 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               ? 'Read-only — the agent proposes, never changes anything.'
               : 'The agent executes actions without asking.'}
           </span>
+          {activeContext && (
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-xs app-text-faint hidden sm:inline">Context: <span className="app-text-muted">{activeContext.title}</span></span>
+              <button
+                type="button"
+                onClick={() => sendMessage('What can I do here?')}
+                disabled={streaming}
+                title={`Ask the agent what you can do in the "${activeContext.title}" context`}
+                className="text-xs px-2.5 py-1 rounded-lg border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors disabled:opacity-40"
+              >
+                What can I do here?
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-2 max-w-[900px] mx-auto items-end">
