@@ -296,7 +296,19 @@ export default {
             const g = await res.json()
             universe = (g.nodes || [])
               .filter(n => /^app-\d+$/.test(n.id || ''))
-              .map(n => ({ id: n.id, title: n.label || n.id }))
+              .map(n => {
+                const info = n.info || ''
+                const logoM = info.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/)
+                let desc = ''
+                const witM = info.match(/\*\*What it is:\*\*\s*([^\n]+)/i)
+                if (witM) desc = witM[1].trim()
+                else {
+                  const secM = info.match(/\[SECTION[^\]]*\]\s*\n([^\n]+)/)
+                  if (secM && !/^\s*\*\*/.test(secM[1])) desc = secM[1].trim()
+                }
+                if (desc.length > 130) desc = desc.slice(0, 127) + '…'
+                return { id: n.id, title: n.label || n.id, logo: logoM ? logoM[1] : '', description: desc }
+              })
           }
         } catch (err) { console.error('[/world-app-interests] universe fetch failed', err) }
         const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(founderEmail).first()
