@@ -261,6 +261,50 @@ export default {
         }
       }
 
+      // GET/POST /world-app-interests — a World Founder's app selections (Apps tab).
+      // GET  → { universe:[{id,title}] (from the App Catalog), selected:[appId...] }.
+      // POST { apps:[appId...] } → saves selected ids to config.data.app_interests.
+      // Auth: X-API-Token (the founder's emailVerificationToken) → resolves the user.
+      // Unselected apps stay in the universe (selection is just the marked subset);
+      // deselecting removes from the list but never deletes — still selectable later.
+      if (pathname === '/world-app-interests' && (request.method === 'GET' || request.method === 'POST')) {
+        const xToken = request.headers.get('X-API-Token') || ''
+        const auth = await resolveAuthorizedCallerWithCredentials({ authToken: xToken }, env)
+        const founderEmail = auth?.email
+        if (!founderEmail) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — a valid X-API-Token is required' }), { status: 401, headers: corsHeaders })
+        }
+
+        if (request.method === 'POST') {
+          const body = await request.json().catch(() => ({}))
+          const apps = Array.isArray(body.apps) ? body.apps.filter(a => typeof a === 'string') : []
+          const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(founderEmail).first()
+          let data = {}
+          try { data = JSON.parse(row?.data || '{}') } catch { data = {} }
+          if (!data || typeof data !== 'object') data = {}
+          data.app_interests = apps
+          await env.DB.prepare('UPDATE config SET data = ? WHERE email = ?').bind(JSON.stringify(data), founderEmail).run()
+          return new Response(JSON.stringify({ success: true, selected: apps }), { headers: corsHeaders })
+        }
+
+        // GET — the app universe (App Catalog) + this founder's current selection.
+        const APP_CATALOG_GRAPH_ID = '6074a2bf-082b-4e92-a91d-eeab94c69b66'
+        let universe = []
+        try {
+          const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${APP_CATALOG_GRAPH_ID}`)
+          if (res.ok) {
+            const g = await res.json()
+            universe = (g.nodes || [])
+              .filter(n => /^app-\d+$/.test(n.id || ''))
+              .map(n => ({ id: n.id, title: n.label || n.id }))
+          }
+        } catch (err) { console.error('[/world-app-interests] universe fetch failed', err) }
+        const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(founderEmail).first()
+        let selected = []
+        try { const d = JSON.parse(row?.data || '{}'); if (Array.isArray(d.app_interests)) selected = d.app_interests } catch { selected = [] }
+        return new Response(JSON.stringify({ universe, selected }), { headers: corsHeaders })
+      }
+
       // POST /api/data-node/submit — Public form submission endpoint
       // Landing pages POST here to append records to data-nodes (no auth required)
       if (pathname === '/api/data-node/submit' && request.method === 'POST') {

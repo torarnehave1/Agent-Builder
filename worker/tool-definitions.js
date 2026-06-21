@@ -2415,6 +2415,18 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_world_app_interests',
+    description:
+      "Get the apps a World Founder marked as interested in — read from their config.data.app_interests, which they set via the Apps tab on me.<domain>. Returns the selected app ids with human-readable titles from the App Catalog. Superadmin only. Read-only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: "The founder's Vegvisr login email, e.g. lydmorah.net@gmail.com" },
+      },
+      required: ['founder_email'],
+    },
+  },
+  {
     name: 'publish_world_page',
     description:
       "Publish the World-Founder page so it serves at me.<domain>. Reads the central template (template:world-founder-page in WORLD_TEMPLATES), mints a host-scoped publish token signed with agent-worker's own HTML_PUBLISH_SECRET, then POSTs the page to the brand proxy's /__html/publish, which writes html:<host> into its own KV. Superadmin only. The page self-brands from its own host. The brand proxy must hold the SAME secret — provision_world_kv (or set_world_publish_secret) sets it. If a World returns 'Invalid or missing publish token', run provision_world_kv for it first.",

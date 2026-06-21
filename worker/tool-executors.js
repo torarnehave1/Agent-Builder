@@ -1749,6 +1749,46 @@ async function executeSetWorldCredentials(input, env) {
   }
 }
 
+// Read a World Founder's app selections (config.data.app_interests, set by the
+// founder via the Apps tab on me.<domain>). Superadmin only, read-only. Resolves
+// titles from the App Catalog so the result is human-readable.
+async function executeGetWorldAppInterests(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to read World app interests.' }
+
+  const founderEmail = (input.founder_email || '').trim().toLowerCase()
+  if (!founderEmail) return { success: false, error: 'founder_email is required' }
+
+  const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(founderEmail).first()
+  if (!row) return { success: false, error: `No config row for ${founderEmail}.` }
+  let selectedIds = []
+  try { const d = JSON.parse(row.data || '{}'); if (Array.isArray(d.app_interests)) selectedIds = d.app_interests } catch { selectedIds = [] }
+
+  // Resolve app titles from the App Catalog (best-effort).
+  const titles = {}
+  try {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getknowgraph?id=6074a2bf-082b-4e92-a91d-eeab94c69b66')
+    if (res.ok) {
+      const g = await res.json()
+      for (const n of (g.nodes || [])) if (/^app-\d+$/.test(n.id || '')) titles[n.id] = n.label || n.id
+    }
+  } catch { /* titles stay empty — ids still returned */ }
+
+  const selected = selectedIds.map((id) => ({ id, title: titles[id] || id }))
+  return {
+    success: true,
+    founder_email: founderEmail,
+    count: selected.length,
+    selected,
+    summary: selected.length
+      ? `${founderEmail} selected ${selected.length} app(s): ${selected.map((s) => s.title).join(', ')}`
+      : `${founderEmail} has no apps selected yet.`,
+  }
+}
+
 // Shared by the World infra tools (provision_world_kv / deploy_world_proxy / set_world_route_dns):
 // Superadmin-gate the caller, then resolve the founder's stored Cloudflare account id + API token
 // (set via set_world_credentials). Returns { error } on any failure, else { founderEmail, cfAccount, cfToken }.
@@ -7683,6 +7723,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeProvisionWorldKv(toolInput, env)
     case 'check_world_publish':
       return await executeCheckWorldPublish(toolInput, env)
+    case 'get_world_app_interests':
+      return await executeGetWorldAppInterests(toolInput, env)
     case 'set_world_publish_secret':
       return await executeSetWorldPublishSecret(toolInput, env)
     case 'store_user_api_key':
