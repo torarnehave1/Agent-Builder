@@ -23,7 +23,7 @@ function buildBotSystemPrompt(bot, groupName, personality, tools) {
   const toolUseRule = hasTools
     ? `- When the conversation contains a question or request that benefits from current information, web research, knowledge-graph lookup, or any capability one of your tools can provide, **use the tool first** and base your reply on real data. Do not answer from training data alone when a tool can give you a better answer.
 - When a tool returns URLs, sources, or citations (e.g. perplexity_search.sources / .citations), **include the actual URLs in your reply as clickable markdown links** like [Title](https://…). Do not just mention site names — paste the real links from the tool result. A "research with links" answer means literal links, not "Search for X on YouTube".
-- Prefer the higher-quality tool tier when the user asks for sources or research: for perplexity_search that means model: "sonar-pro" (the default if you don't specify). Use "sonar" only when speed matters more than citations.`
+- When a tool CREATES an artifact and returns its identifier (e.g. create_graph returns graphId, addNode returns nodeId, upload_media returns a media URL), **always include a clickable link to the artifact in your final reply**. For a knowledge graph the link is \`[View graph](https://www.vegvisr.org/gnew-viewer?graphId=<graphId>)\`. For an uploaded image use the returned URL directly. Never say "the graph has been created" without pasting the link the user can click. This is the whole point of the operation.`
     : `- If you don't know something, say so honestly.`
 
   return `You are ${bot.name} (@${bot.username}), a chat bot in the Hallo Vegvisr group "${groupName}".
