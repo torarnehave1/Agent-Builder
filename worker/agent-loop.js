@@ -5,7 +5,7 @@
  * executeAgent: log-based for /execute endpoint
  */
 
-import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL, PROFF_TOOLS } from './tool-definitions.js'
+import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
@@ -130,7 +130,13 @@ async function loadAllTools(env) {
     'list_contacts', 'search_contacts', 'get_contact_logs', 'add_contact_log', 'create_contact',
   ])
   const filteredTools = TOOL_DEFINITIONS.filter(t => !ORCHESTRATOR_BLOCKED_TOOLS.has(t.name))
-  const allTools = [...filteredTools, ...dynamicTools, WEB_SEARCH_TOOL, ...PROFF_TOOLS]
+  // NOTE: WEB_SEARCH_TOOL (Anthropic's native server-side web_search_20250305) is
+  // deliberately NOT included. streamingAgentLoop has no server-tool handling — it
+  // doesn't resume `pause_turn` and persists bare `server_tool_use` blocks without
+  // their `web_search_tool_result`, which the API then rejects on the next turn
+  // ("server_tool_use ... without corresponding web_search_tool_result"). The agent
+  // uses the client-side perplexity_search tool for web search instead.
+  const allTools = [...filteredTools, ...dynamicTools, ...PROFF_TOOLS]
 
   return { allTools, operationMap }
 }

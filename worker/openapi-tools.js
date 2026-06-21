@@ -417,7 +417,21 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
   if (auth === 'service-binding-superadmin') {
     headers['x-user-role'] = 'Superadmin'
   } else if (auth === 'x-api-token') {
-    const token = input.authToken || (input.authContext && input.authContext.authToken) || ''
+    let token = input.authToken || (input.authContext && input.authContext.authToken) || ''
+    // Robustness fallback: if no token rode in on the request (e.g. the chat
+    // authenticated via cookie/header rather than a body authToken), resolve the
+    // caller's emailVerificationToken from config so X-API-Token workers still
+    // authenticate AS the user. Without this the call 401s on those auth paths.
+    if (!token && env.DB) {
+      const email = (input.authContext && input.authContext.email) || ''
+      const uid = input.userId || (input.authContext && input.authContext.userId) || ''
+      try {
+        let row = null
+        if (email) row = await env.DB.prepare('SELECT emailVerificationToken FROM config WHERE email = ?').bind(email).first()
+        if (!row && uid) row = await env.DB.prepare('SELECT emailVerificationToken FROM config WHERE user_id = ?').bind(uid).first()
+        token = (row && row.emailVerificationToken) || ''
+      } catch { /* leave empty → worker returns a clear 401 rather than us masking it */ }
+    }
     if (token) headers['X-API-Token'] = token
   }
   // auth === 'none' → no auth header added

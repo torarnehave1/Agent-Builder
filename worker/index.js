@@ -12,7 +12,7 @@
 
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
-import { TOOL_DEFINITIONS, WEB_SEARCH_TOOL } from './tool-definitions.js'
+import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
@@ -2006,7 +2006,7 @@ export default {
         return new Response(JSON.stringify({
           hardcoded: TOOL_DEFINITIONS.map(t => ({ name: t.name, description: t.description })),
           dynamic: dynamicTools.map(t => ({ name: t.name, description: t.description })),
-          total: TOOL_DEFINITIONS.length + dynamicTools.length + 1, // +1 for web_search
+          total: TOOL_DEFINITIONS.length + dynamicTools.length,
         }), { headers: corsHeaders })
       }
 

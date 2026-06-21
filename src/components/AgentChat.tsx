@@ -207,6 +207,44 @@ function getCapabilityToolContext(tc: ToolCall): string | null {
   return null;
 }
 
+// Compact, faithful record of the tools an assistant turn ran — replayed into
+// history so the agent REMEMBERS what it already did across turns (fixes the
+// drift/forgetting/confabulation from prose-only replay). Kept short: key scalar
+// inputs + summary + any result ids (graphId/nodeId/url/…). No nested dumps.
+function compactToolInput(input: unknown): string {
+  if (!input || typeof input !== 'object') return '';
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
+    if (k === 'userId' || k === 'authContext' || k === 'authToken') continue;
+    let s: string;
+    if (typeof v === 'string') s = v.length > 60 ? v.slice(0, 57) + '…' : v;
+    else if (typeof v === 'number' || typeof v === 'boolean') s = String(v);
+    else continue; // skip nested objects/arrays in the compact view
+    parts.push(`${k}=${s}`);
+  }
+  return parts.join(', ');
+}
+
+function toolResultIds(result: unknown): string {
+  const r = asRecord(result);
+  return ['graphId', 'nodeId', 'url', 'compositionId', 'id', 'key']
+    .filter((k) => typeof r[k] === 'string' && r[k])
+    .map((k) => `${k}=${String(r[k])}`)
+    .join(', ');
+}
+
+function buildToolActionRecord(toolCalls: ToolCall[]): string {
+  if (!toolCalls.length) return '';
+  const lines = toolCalls.map((tc) => {
+    const inp = compactToolInput(tc.input);
+    const ids = toolResultIds(tc.result);
+    const summary = tc.summary || (tc.status === 'error' ? 'failed' : 'done');
+    const tail = [summary, ids].filter(Boolean).join(' · ');
+    return `- ${tc.tool}(${inp})${tc.status === 'error' ? ' [ERROR]' : ''} → ${tail}`;
+  });
+  return `[Actions you already completed this turn — this is your memory. Do NOT repeat work already done here; build on it.]\n${lines.join('\n')}`;
+}
+
 function deriveCapabilityWorkflow(messages: ChatMessage[], current: AssistantState | null): CapabilityWorkflowState | null {
   const allToolCalls: ToolCall[] = [];
   for (const msg of messages) {
@@ -1579,12 +1617,16 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         return { role: m.role, content: summary + '\n\n(Full transcription text available locally — use the "Save to Graph" button to save directly.)' };
       }
       if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+        // Faithful action record for ALL tools (the memory fix) + the structured
+        // capability context for the 3 workflow tools that still need their fields.
+        const actionRecord = buildToolActionRecord(m.toolCalls);
         const capabilityToolContext = m.toolCalls
           .map(getCapabilityToolContext)
           .filter((value): value is string => Boolean(value))
           .join('\n');
-        const contentWithToolContext = capabilityToolContext
-          ? `${m.content || 'Tool-assisted assistant turn.'}\n\n${capabilityToolContext}`
+        const extra = [actionRecord, capabilityToolContext].filter(Boolean).join('\n\n');
+        const contentWithToolContext = extra
+          ? `${m.content || 'Tool-assisted assistant turn.'}\n\n${extra}`
           : m.content;
         return { role: m.role, content: contentWithToolContext };
       }

@@ -1,13 +1,20 @@
 # Agent-Builder — Claude Code Instructions
 
-## MANDATORY — read `_project/lessons_learned.md` BEFORE EVERY RESPONSE
+## Discipline — `RULES.md` is auto-injected; read `lessons_learned.md` on demand
 
-Not per session. **Per response.** The full file, with the Read tool. Token cost is not a
-consideration. If you are about to send any reply that involves code, commits, claims about
-state, design decisions, or interpreting an instruction — open the file first. The Read call
-is visible in the transcript; that's the proof it happened.
+The distilled rulebook [`_project/RULES.md`](./_project/RULES.md) is injected into context
+**every turn** by a `UserPromptSubmit` hook (`.claude/settings.local.json`). It is always
+present, so the rules apply without a manual read — this replaces the old "read the full
+lessons file every response" mandate (which relied on memory and kept lapsing — Lesson 28).
 
-**Companion docs** (read in order): [_project/lessons_learned.md](./_project/lessons_learned.md) (failure patterns + active improvements — READ FIRST) · [_project/STATUS.md](./_project/STATUS.md) · [_project/TODO.md](./_project/TODO.md) · [_project/PLAN.md](./_project/PLAN.md) · [_project/TEST_PLAN.md](./_project/TEST_PLAN.md).
+The full archive [`_project/lessons_learned.md`](./_project/lessons_learned.md) (the *why*,
+anecdotes, iterations) is the deep reference: read it with the Read tool **on demand** when a
+specific lesson's full context matters before a related code/design decision.
+
+**When a new failure lands:** append a full lesson to `lessons_learned.md` AND add its
+one-line rule to `RULES.md` (keep the rulebook current — it's what's enforced every turn).
+
+**Companion docs:** [_project/RULES.md](./_project/RULES.md) (auto-injected rulebook) · [_project/lessons_learned.md](./_project/lessons_learned.md) (full archive) · [_project/STATUS.md](./_project/STATUS.md) · [_project/TODO.md](./_project/TODO.md) · [_project/PLAN.md](./_project/PLAN.md) · [_project/TEST_PLAN.md](./_project/TEST_PLAN.md).
 
 ---
 
