@@ -307,7 +307,12 @@ export default {
                   if (secM && !/^\s*\*\*/.test(secM[1])) desc = secM[1].trim()
                 }
                 if (desc.length > 130) desc = desc.slice(0, 127) + '…'
-                return { id: n.id, title: n.label || n.id, logo: logoM ? logoM[1] : '', description: desc }
+                const m = n.metadata || {}
+                return {
+                  id: n.id, title: n.label || n.id, logo: logoM ? logoM[1] : '', description: desc,
+                  capabilities_summary: m.capabilities_summary || '',
+                  highlights: Array.isArray(m.highlights) ? m.highlights : [],
+                }
               })
           }
         } catch (err) { console.error('[/world-app-interests] universe fetch failed', err) }
