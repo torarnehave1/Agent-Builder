@@ -313,6 +313,19 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'patch_node_metadata',
+    description: "Set or update specific keys in a node's metadata WITHOUT clobbering the rest (merge-safe). Use this instead of patch_node when changing metadata: patch_node replaces the whole metadata object, this merges. Provide only the keys to change, e.g. metadata: { capabilities_summary: '...', highlights: ['...'] }. Reads current metadata, shallow-merges your keys, writes back.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID containing the node' },
+        nodeId: { type: 'string', description: 'The node ID to update' },
+        metadata: { type: 'object', description: 'Metadata keys to merge into the node (only the keys you want to change).' },
+      },
+      required: ['graphId', 'nodeId', 'metadata'],
+    },
+  },
+  {
     name: 'edit_html_node',
     description: 'Surgically edit an html-node by finding and replacing an exact string in its HTML content. Unlike patch_node (which replaces the entire info field), this tool only changes the specific part you target — all other code stays untouched. Use this instead of patch_node when modifying existing HTML apps to avoid accidentally breaking working code. You can make multiple edits by calling this tool multiple times.',
     input_schema: {

@@ -297,6 +297,46 @@ async function executePatchNode(input, env) {
   }
 }
 
+// Merge-safe metadata update. patch_node does Object.assign(node, fields), so
+// passing fields.metadata REPLACES the whole metadata object. This reads the
+// node's current metadata, shallow-merges the provided keys, and writes the
+// merged result back — so editing one key (e.g. capabilities_summary) keeps the
+// others (icon, highlights, …). Code-hardcoded tool, NOT in the registry.
+async function executePatchNodeMetadata(input, env) {
+  const graphId = input.graphId
+  const nodeId = input.nodeId
+  const patch = (input.metadata && typeof input.metadata === 'object') ? input.metadata : null
+  if (!graphId || !nodeId || !patch) {
+    return { success: false, error: 'graphId, nodeId, and metadata (object) are required' }
+  }
+  let graph
+  try {
+    const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+    if (!res.ok) return { success: false, error: `Graph ${graphId} not found (${res.status})` }
+    graph = await res.json()
+  } catch (e) {
+    return { success: false, error: `Could not read graph: ${e.message}` }
+  }
+  const node = (graph.nodes || []).find(n => n.id === nodeId)
+  if (!node) {
+    const ids = (graph.nodes || []).map(n => `"${n.id}"`).join(', ')
+    return { success: false, error: `Node ${nodeId} not found. Valid node IDs: ${ids}` }
+  }
+  const merged = { ...(node.metadata || {}), ...patch }
+  try {
+    const data = await patchNodeWithVersionRetry(env, graphId, nodeId, { metadata: merged })
+    return {
+      success: true, graphId, nodeId,
+      updatedKeys: Object.keys(patch),
+      metadata: merged,
+      version: data.newVersion,
+      message: `Node "${nodeId}" metadata merged: ${Object.keys(patch).join(', ')}`,
+    }
+  } catch (e) {
+    return { success: false, error: e.message || 'patchNode failed' }
+  }
+}
+
 async function executeEditHtmlNode(input, env) {
   // 1. Read the current node content
   const readRes = await env.KG_WORKER.fetch(
@@ -7592,6 +7632,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReadNode(toolInput, env)
     case 'patch_node':
       return await executePatchNode(toolInput, env)
+    case 'patch_node_metadata':
+      return await executePatchNodeMetadata(toolInput, env)
     case 'edit_html_node':
       return await executeEditHtmlNode(toolInput, env)
     case 'patch_graph_metadata':
