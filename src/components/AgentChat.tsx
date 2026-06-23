@@ -414,7 +414,7 @@ function extractSvgFromResult(tc: ToolCall): string | null {
 
 // ---------- Tool Call Card ----------
 
-function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void }) {
+function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void; onSend?: (text: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   const [svgOpen, setSvgOpen] = useState(false);
@@ -449,6 +449,11 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
   const vemotionName = typeof input.name === 'string' ? input.name : (typeof vemotionResult.name === 'string' ? vemotionResult.name : 'Composition');
   const vemotionEditorUrl = typeof vemotionResult.editorUrl === 'string' ? vemotionResult.editorUrl : (vemotionCompositionId ? `https://vemotion.vegvisr.org/?compositionId=${vemotionCompositionId}` : '');
   const vemotionEmbedUrl = vemotionCompositionId ? `https://vemotion.vegvisr.org/?compositionId=${encodeURIComponent(vemotionCompositionId)}&embed=1` : '';
+
+  const isTemplatePicker = tc.tool === 'list_challenge_templates' && tc.status === 'success';
+  const templatePickerItems = isTemplatePicker
+    ? ((tc.result as Record<string, unknown>)?.templates as Array<{ key: string; name: string; description: string; preview_html: string }> | undefined) ?? []
+    : [];
 
   const saveAsTemplate = async () => {
     // Get the HTML content from whichever tool was used
@@ -581,6 +586,39 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode }: { tc: ToolCal
               onClose={() => setJsonModalOpen(false)}
             />
           )}
+        </div>
+      )}
+      {isTemplatePicker && templatePickerItems.length > 0 && (
+        <div className="mx-3 my-3">
+          <div className="text-[11px] font-semibold app-text-soft uppercase tracking-wide mb-2">Choose a template</div>
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+            {templatePickerItems.map((t) => (
+              <div key={t.key} className="border app-border rounded-lg overflow-hidden flex flex-col">
+                <div className="relative bg-white" style={{ height: 220 }}>
+                  <iframe
+                    srcDoc={t.preview_html}
+                    title={`Preview: ${t.name}`}
+                    sandbox="allow-scripts"
+                    className="absolute inset-0 w-full h-full border-0"
+                    style={{ transformOrigin: 'top left', pointerEvents: 'none' }}
+                  />
+                </div>
+                <div className="p-2 app-surface flex flex-col gap-1 flex-1">
+                  <div className="text-[13px] font-semibold app-text">{t.name}</div>
+                  <div className="text-[11px] app-text-soft flex-1">{t.description}</div>
+                  {onSend && (
+                    <button
+                      type="button"
+                      onClick={() => onSend(`Use the "${t.name}" template (key: ${t.key})`)}
+                      className="mt-1 w-full py-1.5 text-xs rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/20 font-medium"
+                    >
+                      Use this template
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -2596,7 +2634,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
               <div className="mb-2">
                 {msg.toolCalls.map(tc => (
-                  <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
+                  <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} onSend={sendMessage} />
                 ))}
               </div>
             )}
@@ -2727,7 +2765,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <div className="px-4 py-3 rounded-[14px] app-surface border app-border app-text text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
-              <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} />
+              <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} onSend={sendMessage} />
             ))}
             {current.text && (
               <div className="prose prose-sm max-w-none app-prose [&_a]:text-[color:var(--app-link)] [&_code]:bg-[var(--app-code-bg)] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[0.85em] sm:[&_code]:text-[0.9em] [&_pre]:bg-[var(--app-code-bg)] [&_pre]:p-2 sm:[&_pre]:p-3 [&_pre]:rounded-lg [&_pre]:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_blockquote]:border-l-[3px] [&_blockquote]:border-sky-400 [&_blockquote]:pl-3 [&_blockquote]:text-[color:var(--app-text-muted)]">

@@ -807,6 +807,18 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'vemotion_list_compositions',
+    description: 'List the logged-in user\'s saved Vemotion compositions (their personal cloud library — NOT a knowledge graph). Use this whenever the user wants to FIND, search, browse, or pick one of their existing compositions ("find a composition about X", "what compositions do I have", "open my vegvisr video", "list my videos"). Vemotion compositions are NOT stored in knowledge graphs — do NOT use search_graphs/read_graph for them; this is the correct tool. Each item returns compositionId, name, updatedAt, duration, dimensions, layerCount and an editorUrl. Optionally pass `query` to filter by name (case-insensitive substring) when the user is looking for a specific topic. After finding the one they mean, load its full content with vemotion_get_composition.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional case-insensitive substring to filter compositions by name (e.g. "vegvisr"). Omit to list all.' },
+        limit: { type: 'number', description: 'Max compositions to return (1-200). Default 50.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      }
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
@@ -2440,6 +2452,74 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'list_challenge_templates',
+    description:
+      "List available challenge page templates — reads all template-meta:challenge-* entries from WORLD_TEMPLATES KV and returns their name, description, key, and preview_html. Use this when a World Founder is choosing a visual style for their challenge page. The result includes preview_html for each template so the UI can render a side-by-side picker. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'publish_challenge_page',
+    description:
+      "Publish the challenge participant page to challenge.<domain> — reads the challenge's template_key from D1 (falls back to template:challenge-page) from WORLD_TEMPLATES KV, mints a host-scoped publish token, and POSTs to challenge.<domain>/__html/publish. The challenge.<domain> custom domain must already be attached to the brand proxy (provision_world_kv does this automatically). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World Founder's domain, e.g. lydmorah.net — the page publishes to challenge.<domain>" },
+        host: { type: 'string', description: 'Override the target host (default: challenge.<domain>)' },
+        proxy_url: { type: 'string', description: 'Override the brand-proxy publish endpoint (default: https://challenge.<domain>/__html/publish). Use the .workers.dev URL if the custom domain is not yet routed.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'create_challenge',
+    description:
+      "Create a new Challenge for a World Founder — writes a row to the `challenges` table in vegvisr_org. A Challenge is bound to a chat group (group_id = the group whose members are the participants) and a shared KG graph (main_graph_id = the journey graph). Participants access it at challenge.<domain>. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World Founder's domain, e.g. lydmorah.net" },
+        group_id: { type: 'string', description: 'The hallo_vegvisr_chat group_id whose members are the challenge participants (= the membership gate)' },
+        main_graph_id: { type: 'string', description: 'KG graph ID for the shared challenge journey (the main content / weekly tasks graph)' },
+        title: { type: 'string', description: 'Human-readable challenge title' },
+        slug: { type: 'string', description: 'URL-safe slug (optional)' },
+        weeks: { type: 'number', description: 'Duration in weeks (optional, default 0 = open-ended)' },
+        hero_image_url: { type: 'string', description: 'HTTPS URL for the challenge hero image shown at the top of the participant page (e.g. an imgix URL or Pexels/Unsplash URL the user provided in chat)' },
+        template_key: { type: 'string', description: "KV key of the chosen challenge page template (from list_challenge_templates). Defaults to 'template:challenge-page' if omitted." },
+      },
+      required: ['domain', 'group_id', 'main_graph_id'],
+    },
+  },
+  {
+    name: 'list_challenge_participants',
+    description:
+      "List all participants enrolled in a Challenge — reads the `challenge_participants` table. Returns each participant's user_id, personal_graph_id, progress, and status. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        challenge_id: { type: 'string', description: 'The UUID of the challenge (from the challenges table, returned by create_challenge)' },
+      },
+      required: ['challenge_id'],
+    },
+  },
+  {
+    name: 'get_participant_graph',
+    description:
+      "Get a single participant's personal graph ID and progress for a given Challenge. Useful for the founder to review a specific participant's build-up or progress state. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        challenge_id: { type: 'string', description: 'The UUID of the challenge' },
+        participant_user_id: { type: 'string', description: "The participant's user_id (from config.userId or their email)" },
+      },
+      required: ['challenge_id', 'participant_user_id'],
+    },
+  },
+  {
     name: 'publish_world_page',
     description:
       "Publish the World-Founder page so it serves at me.<domain>. Reads the central template (template:world-founder-page in WORLD_TEMPLATES), mints a host-scoped publish token signed with agent-worker's own HTML_PUBLISH_SECRET, then POSTs the page to the brand proxy's /__html/publish, which writes html:<host> into its own KV. Superadmin only. The page self-brands from its own host. The brand proxy must hold the SAME secret — provision_world_kv (or set_world_publish_secret) sets it. If a World returns 'Invalid or missing publish token', run provision_world_kv for it first.",
@@ -2495,6 +2575,19 @@ const TOOL_DEFINITIONS = [
         cf_api_token: { type: 'string', description: "The founder's Cloudflare API token (scoped to their account). Required. Stored, never returned." },
       },
       required: ['cf_api_token'],
+    },
+  },
+  {
+    name: 'check_world_credentials',
+    description:
+      "Read-only: report whether a World's Cloudflare credentials (cf_account_id + cf_api_token) are stored in config — presence ONLY, the token is never returned (just a last-6 suffix to identify it). Checks every candidate email for the domain: the registry founder, the registry account_holder_email, and any founder_email you pass. Use it to answer 'are the World credentials set, and under which account?' — e.g. iamazing.page's token may live under iamazing.page@gmail.com, not the founder msneeggen@gmail.com. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. iamazing.page — checks the registry founder + account_holder for it." },
+        founder_email: { type: 'string', description: 'Also check this specific email/account, e.g. iamazing.page@gmail.com.' },
+      },
+      required: [],
     },
   },
   {

@@ -1772,6 +1772,38 @@ async function executeSetWorldCredentials(input, env) {
   const cfAccount = (input.cf_account_id || '').trim()
   if (!cfToken) return { success: false, error: 'cf_api_token is required' }
 
+  // Validate the token against the CF API before storing. /user/tokens/verify ONLY recognizes
+  // USER-owned tokens — an ACCOUNT-owned token (scoped to "Entire account", which is what the
+  // World accounts use) fails it with "Invalid API Token" even though it is valid and works for
+  // real operations. So: try user-verify; if it fails and we have an account id, fall back to the
+  // account-scoped verify (/accounts/<id>/tokens/verify). Accept if either reports active.
+  const verifyTokenAt = async (url) => {
+    try { return await (await fetch(url, { headers: { Authorization: `Bearer ${cfToken}` } })).json() }
+    catch { return {} }
+  }
+  let verifyData = await verifyTokenAt('https://api.cloudflare.com/client/v4/user/tokens/verify')
+  let tokenActive = verifyData.success && verifyData.result?.status === 'active'
+  if (!tokenActive && cfAccount) {
+    verifyData = await verifyTokenAt(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/tokens/verify`)
+    tokenActive = verifyData.success && verifyData.result?.status === 'active'
+  }
+  if (!tokenActive) {
+    const cfErr = (verifyData.errors || []).map(e => e.message).join('; ') || 'token rejected by Cloudflare'
+    return { success: false, error: `CF token validation failed: ${cfErr}. Check the token and retry.`, token_suffix: cfToken.slice(-6) }
+  }
+  // The token is active — but /accounts/<id>/tokens/verify only checks the BEARER token, it ignores
+  // the path account id, so a TYPO'd cf_account_id passes token-verify and stores silently. Confirm
+  // the account id itself is real with a direct account read: GET /accounts/<id> returns code 9109
+  // "Invalid account identifier" for a wrong id. Reject ONLY on 9109 (the typo case) — a scope/403
+  // (token can't read account details) is NOT a reason to reject, since the token already verified.
+  if (cfAccount) {
+    const acct = await verifyTokenAt(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}`)
+    const invalidAccount = (acct.errors || []).some(e => e.code === 9109 || /invalid account identifier/i.test(e.message || ''))
+    if (invalidAccount) {
+      return { success: false, error: `cf_account_id "${cfAccount}" is invalid — Cloudflare returned "Invalid account identifier". Check for a typo in the account id.`, cf_account_id: cfAccount }
+    }
+  }
+
   const existing = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
   if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
 
@@ -1785,7 +1817,58 @@ async function executeSetWorldCredentials(input, env) {
     founder_email: founderEmail,
     cf_account_id: cfAccount || '(unchanged)',
     cf_api_token: 'stored (never echoed)',
+    token_suffix: `...${cfToken.slice(-6)}`,
+    token_status: verifyData.result?.status,
     next: 'You can now run provision_world_kv / publish_world_page for this founder.',
+  }
+}
+
+// Read-only: report whether a World's Cloudflare credentials (cf_account_id + cf_api_token) are
+// stored in config — presence ONLY, the token is never echoed (last-6 suffix to identify it).
+// Checks every candidate email for the domain: the registry founder, the registry account_holder,
+// and any founder_email passed. Answers "are the credentials set, and under which account row?"
+async function executeCheckWorldCredentials(input, env) {
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to check World credentials.' }
+
+  const domain = (input.domain || '').trim().toLowerCase()
+  const explicitEmail = (input.founder_email || '').trim().toLowerCase()
+
+  const candidates = new Set()
+  if (explicitEmail) candidates.add(explicitEmail)
+  let registry = null
+  if (domain) {
+    registry = await env.DB.prepare(
+      'SELECT founder_email, account_holder_email, cf_account_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1'
+    ).bind(domain).first()
+    if (registry && registry.founder_email) candidates.add(String(registry.founder_email).toLowerCase())
+    if (registry && registry.account_holder_email) candidates.add(String(registry.account_holder_email).toLowerCase())
+  }
+  if (!candidates.size) return { success: false, error: 'Provide a domain (with a registered founder) or a founder_email.' }
+
+  const accounts = []
+  for (const email of candidates) {
+    const r = await env.DB.prepare('SELECT email, cf_account_id, cf_api_token FROM config WHERE email = ?').bind(email).first()
+    const tokenSet = !!(r && r.cf_api_token)
+    accounts.push({
+      email,
+      config_row: !!r,
+      cf_account_id: (r && r.cf_account_id) || null,
+      cf_api_token_set: tokenSet,
+      token_suffix: tokenSet ? `...${String(r.cf_api_token).slice(-6)}` : null,
+    })
+  }
+  const ready = accounts.filter((a) => a.cf_api_token_set && a.cf_account_id)
+  return {
+    success: true,
+    domain: domain || null,
+    registry: registry ? { founder_email: registry.founder_email, account_holder_email: registry.account_holder_email || null, registry_cf_account_id: registry.cf_account_id || null } : null,
+    accounts,
+    ready_account: ready.length ? ready[0].email : null,
+    summary: accounts.map((a) =>
+      `${a.email}: ${a.config_row ? '' : 'NO config row, '}${a.cf_api_token_set ? `token SET ${a.token_suffix}` : 'token NOT set'}${a.cf_account_id ? `, account ${a.cf_account_id}` : ', no account id'}`
+    ).join(' | '),
   }
 }
 
@@ -2040,6 +2123,7 @@ async function executeDeployWorldProxy(input, env) {
   try { await env.DB.prepare('UPDATE config SET cf_kv_namespace_id = ? WHERE email = ?').bind(htmlNs.id, founderEmail).run() } catch (e) { console.error('record kv ns failed:', e) }
 
   // Upload the ESM module worker with its bindings + the publish secret stamped in at deploy.
+  const defaultOrigin = (input.default_origin || `https://${domain}`).trim()
   const metadata = {
     main_module: 'index.js',
     compatibility_date: '2025-01-15',
@@ -2047,6 +2131,7 @@ async function executeDeployWorldProxy(input, env) {
       { type: 'kv_namespace', name: 'HTML_PAGES', namespace_id: htmlNs.id },
       { type: 'kv_namespace', name: 'BRAND_CONFIG', namespace_id: brandNs.id },
       { type: 'secret_text', name: 'HTML_PUBLISH_SECRET', text: secret },
+      { type: 'plain_text', name: 'DEFAULT_ORIGIN', text: defaultOrigin },
     ],
   }
   const form = new FormData()
@@ -2143,6 +2228,16 @@ async function executeProvisionWorldKv(input, env) {
       : { ok: false, host: r.host, worker_name: r.workerName, error: `${r.status}: ${r.detail}`, note: r.note || `could not attach ${r.host} — add it manually as a Workers custom domain on the brand proxy.` }
   }
 
+  // Also attach challenge.<domain> so the challenge participant page can be published.
+  // Non-fatal: if it fails, the founder can add the domain manually or run publish_challenge_page later.
+  let challenge_route
+  {
+    const r = await attachBrandProxyDomain(cfAccount, cfToken, domain, input.worker_name, `challenge.${domain}`)
+    challenge_route = r.ok
+      ? { ok: true, host: r.host, note: r.alreadyAttached ? `challenge.${domain} already routed.` : `challenge.${domain} attached to the brand proxy.` }
+      : { ok: false, host: `challenge.${domain}`, error: `${r.status}: ${r.detail}`, note: `Could not attach challenge.${domain} — add it manually as a Workers custom domain on the brand proxy, then run publish_challenge_page.` }
+  }
+
   const allReady = publish_secret.ok && kv_binding.ok && route.ok
   return {
     success: true,
@@ -2155,13 +2250,70 @@ async function executeProvisionWorldKv(input, env) {
     kv_binding,
     publish_secret,
     route,
+    challenge_route,
     next: allReady
-      ? `HTML_PAGES created + bound, publish secret set, ${route.host} routed. Run publish_world_page for ${domain}.`
+      ? `HTML_PAGES created + bound, publish secret set, ${route.host} routed. Run publish_world_page for ${domain}. Run publish_challenge_page for ${domain} to activate the participant page.`
       : !kv_binding.ok
         ? `HTML_PAGES ready but NOT bound to the brand proxy: ${kv_binding.note} Then run publish_world_page for ${domain}.`
         : !route.ok
           ? `HTML_PAGES bound + secret set, but ${route.host} is NOT routed to the brand proxy: ${route.note} Then run publish_world_page for ${domain}.`
           : `HTML_PAGES ready + bound + routed, but publish secret NOT set: ${publish_secret.note}`,
+  }
+}
+
+async function executePublishChallengePage(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to publish the challenge page.' }
+
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { success: false, error: 'domain (e.g. lydmorah.net) is required' }
+  const host = (input.host || ('challenge.' + domain)).trim().toLowerCase()
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const challengeRow = await env.DB.prepare(
+    'SELECT template_key FROM challenges WHERE domain = ? ORDER BY created_at DESC LIMIT 1'
+  ).bind(domain).first()
+  const templateKey = challengeRow?.template_key || 'template:challenge-page'
+  const html = await env.WORLD_TEMPLATES.get(templateKey)
+  if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES. Push it with: wrangler kv key put "${templateKey}" --path challenge-page.html --namespace-id <WORLD_TEMPLATES id> --remote` }
+
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — run `wrangler secret put HTML_PUBLISH_SECRET` first.' }
+
+  const uid = callerProfile?.user_id || callerProfile?.email || 'agent-worker'
+  const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+  const publishToken = await signPublishToken({ uid, appId: 'challenge-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
+
+  const proxyUrl = (input.proxy_url || `https://${host}/__html/publish`).trim()
+  let pubRes, pubJson
+  try {
+    pubRes = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken },
+      body: JSON.stringify({ hostname: host, html, overwrite: true }),
+    })
+    pubJson = await pubRes.json().catch(() => null)
+  } catch (e) {
+    return { success: false, error: `Could not reach ${proxyUrl}: ${e.message}. Pass proxy_url=<brand-proxy>.workers.dev/__html/publish if ${host} does not route to the brand proxy yet.` }
+  }
+  if (!pubRes.ok || !pubJson || !pubJson.ok) {
+    const detail = (pubJson && pubJson.error) || `HTTP ${pubRes.status}`
+    return { success: false, error: `Publish rejected: ${detail}` }
+  }
+
+  return {
+    success: true,
+    domain,
+    host,
+    key: `html:${host}`,
+    url: `https://${host}/`,
+    template_key: templateKey,
+    template_bytes: html.length,
+    via: proxyUrl,
+    next: `Published challenge page to html:${host} using template "${templateKey}". Open https://${host}/ — participants sign in with their magic link.`,
   }
 }
 
@@ -3112,6 +3264,55 @@ async function executeVemotionGetComposition(input, env) {
     composition,
     layerCount: composition.layers.length,
     editorUrl: `https://vemotion.vegvisr.org/?compositionId=${id}`,
+  }
+}
+
+// List the user's saved Vemotion compositions — GET /vemotion/compositions.
+// The worker owner-filters by the X-API-Token caller, so this only returns the
+// logged-in user's library. Optional `query` filters by name client-side (the
+// endpoint has no q param; libraries are small so list-then-filter is fine).
+async function executeVemotionListCompositions(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to list your Vemotion compositions.')
+  if (!env.VEMOTION_WORKER) throw new Error('VEMOTION_WORKER service binding is not configured')
+
+  const limit = Math.min(Math.max(Number(input?.limit) || 50, 1), 200)
+  const res = await env.VEMOTION_WORKER.fetch(
+    `https://vemotion-worker/vemotion/compositions?limit=${limit}`,
+    { headers: { 'X-API-Token': authToken } }
+  )
+  const text = await res.text()
+  let data = {}
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+  if (res.status !== 200) {
+    throw new Error(`vemotion list ${res.status}: ${data.error || text.slice(0, 300)}`)
+  }
+
+  let compositions = Array.isArray(data?.compositions) ? data.compositions : []
+  const query = (typeof input?.query === 'string' && input.query.trim()) ? input.query.trim().toLowerCase() : ''
+  if (query) {
+    compositions = compositions.filter(c => String(c?.name || '').toLowerCase().includes(query))
+  }
+
+  const items = compositions.map(c => ({
+    compositionId: c.id || c.compositionId || null,
+    name: c.name || '(untitled)',
+    updatedAt: c.updatedAt || null,
+    duration: c.duration ?? null,
+    width: c.width ?? null,
+    height: c.height ?? null,
+    layerCount: c.layerCount ?? null,
+    editorUrl: (c.id || c.compositionId) ? `https://vemotion.vegvisr.org/?compositionId=${c.id || c.compositionId}` : null,
+  }))
+
+  const scope = query ? ` matching "${input.query.trim()}"` : ''
+  return {
+    message: items.length
+      ? `Found ${items.length} composition(s)${scope}.`
+      : `No compositions${scope} in your Vemotion library.`,
+    count: items.length,
+    query: input?.query || null,
+    compositions: items,
   }
 }
 
@@ -5908,33 +6109,36 @@ async function executeReadWorker(input, env) {
   const CF_API_BASE = getCfApiBase(env)
   const { workerName } = input
 
-  if (workerName) {
-    // Get details for a specific worker
-    const res = await fetch(`${CF_API_BASE}/scripts/${workerName}`, {
-      headers: { 'Authorization': `Bearer ${token}` },
-    })
-    const data = await res.json()
-    if (!data.success) return { error: `Worker "${workerName}" not found`, details: data.errors }
+  // CF `GET /scripts` returns a JSON envelope ({success, result:[...]}); each
+  // entry carries the per-worker metadata we report. `GET /scripts/{name}`,
+  // by contrast, returns the SCRIPT BODY itself (multipart/form-data for module
+  // workers, whose boundary starts with `--`) — calling res.json() on it throws
+  // "No number after minus sign in JSON at position 1". So resolve a single
+  // worker by filtering the list, never by hitting /scripts/{name}.
+  const res = await fetch(`${CF_API_BASE}/scripts`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  })
+  const listText = await res.text()
+  let data
+  try {
+    data = JSON.parse(listText)
+  } catch {
+    return { error: 'Cloudflare returned a non-JSON worker list', details: listText.slice(0, 300) }
+  }
+  if (!data.success) return { error: 'Failed to list workers', details: data.errors }
 
-    const r = data.result
+  if (workerName) {
+    const r = (data.result || []).find(w => w.id === workerName)
+    if (!r) return { error: `Worker "${workerName}" not found` }
     return {
       name: r.id,
       modifiedOn: r.modified_on,
       createdOn: r.created_on,
-      deploymentId: r.deployment_id,
       lastDeployedFrom: r.last_deployed_from,
       hasModules: r.has_modules,
       compatibilityDate: r.compatibility_date,
-      handlers: r.handlers,
     }
   }
-
-  // List all workers
-  const res = await fetch(`${CF_API_BASE}/scripts`, {
-    headers: { 'Authorization': `Bearer ${token}` },
-  })
-  const data = await res.json()
-  if (!data.success) return { error: 'Failed to list workers', details: data.errors }
 
   const workers = data.result.map(w => ({
     name: w.id,
@@ -7739,6 +7943,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeVemotionSaveComposition(toolInput, env)
     case 'vemotion_get_composition':
       return await executeVemotionGetComposition(toolInput, env)
+    case 'vemotion_list_compositions':
+      return await executeVemotionListCompositions(toolInput, env)
     case 'vemotion_refit_composition':
       return await executeVemotionRefitComposition(toolInput, env)
     case 'transcribe_audio':
@@ -7761,12 +7967,24 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDeployWorldProxy(toolInput, env)
     case 'set_world_credentials':
       return await executeSetWorldCredentials(toolInput, env)
+    case 'check_world_credentials':
+      return await executeCheckWorldCredentials(toolInput, env)
     case 'provision_world_kv':
       return await executeProvisionWorldKv(toolInput, env)
     case 'check_world_publish':
       return await executeCheckWorldPublish(toolInput, env)
     case 'get_world_app_interests':
       return await executeGetWorldAppInterests(toolInput, env)
+    case 'list_challenge_templates':
+      return await executeListChallengeTemplates(toolInput, env)
+    case 'publish_challenge_page':
+      return await executePublishChallengePage(toolInput, env)
+    case 'create_challenge':
+      return await executeCreateChallenge(toolInput, env)
+    case 'list_challenge_participants':
+      return await executeListChallengeParticipants(toolInput, env)
+    case 'get_participant_graph':
+      return await executeGetParticipantGraph(toolInput, env)
     case 'set_world_publish_secret':
       return await executeSetWorldPublishSecret(toolInput, env)
     case 'store_user_api_key':
@@ -8280,6 +8498,87 @@ async function executeReorderNodes(input, env) {
     order: reordered.map(n => n.id),
     message: `Nodes reordered successfully (${reordered.length} nodes, version ${saveData.newVersion})`
   }
+}
+
+// ── Challenge tools (Lesson 25: code-hardcoded, NOT in registry) ──────────────
+
+async function executeListChallengeTemplates(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to list challenge templates.' }
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template-meta:challenge-' })
+  const templates = []
+  for (const k of keys) {
+    const meta = await env.WORLD_TEMPLATES.get(k.name, { type: 'json' })
+    if (meta) templates.push(meta)
+  }
+  return { success: true, count: templates.length, templates }
+}
+
+async function executeCreateChallenge(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to create a challenge.' }
+
+  const { domain, group_id, main_graph_id, title, slug, weeks, hero_image_url, template_key } = input
+  if (!domain || !group_id || !main_graph_id) return { success: false, error: 'domain, group_id, and main_graph_id are required' }
+  // Idempotent: one challenge per (domain, group_id). Re-running the same command returns the
+  // EXISTING row (so the challenge_id is retrievable) instead of inserting a duplicate.
+  const existing = await env.DB.prepare(
+    'SELECT id, main_graph_id, title, status, hero_image_url, template_key FROM challenges WHERE domain = ? AND group_id = ?'
+  ).bind(domain, group_id).first()
+  if (existing) {
+    return { success: true, challenge_id: existing.id, domain, group_id, main_graph_id: existing.main_graph_id, title: existing.title, status: existing.status, hero_image_url: existing.hero_image_url || null, template_key: existing.template_key || null, already_existed: true, message: `Challenge already exists for ${domain} (group ${group_id}) — challenge_id: ${existing.id}` }
+  }
+  const id = crypto.randomUUID()
+  await env.DB.prepare(
+    'INSERT INTO challenges (id, domain, group_id, main_graph_id, slug, title, status, weeks, hero_image_url, template_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, domain, group_id, main_graph_id, slug || null, title || null, 'active', weeks || 0, hero_image_url || null, template_key || null).run()
+  return { success: true, challenge_id: id, domain, group_id, main_graph_id, title, hero_image_url: hero_image_url || null, template_key: template_key || null, message: `Challenge created for ${domain} — challenge_id: ${id}` }
+}
+
+async function executeListChallengeParticipants(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to list challenge participants.' }
+
+  const { challenge_id } = input
+  if (!challenge_id) return { success: false, error: 'challenge_id is required' }
+  const rows = await env.DB.prepare(
+    'SELECT challenge_id, participant_user_id, personal_graph_id, progress, joined_at, status FROM challenge_participants WHERE challenge_id = ? ORDER BY joined_at'
+  ).bind(challenge_id).all()
+  const participants = (rows.results || []).map(r => {
+    let progress = {}
+    try { progress = JSON.parse(r.progress || '{}') } catch { progress = {} }
+    return { ...r, progress }
+  })
+  return { success: true, challenge_id, count: participants.length, participants }
+}
+
+async function executeGetParticipantGraph(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to view participant graphs.' }
+
+  const { challenge_id, participant_user_id } = input
+  if (!challenge_id || !participant_user_id) return { success: false, error: 'challenge_id and participant_user_id are required' }
+  const row = await env.DB.prepare(
+    'SELECT * FROM challenge_participants WHERE challenge_id = ? AND participant_user_id = ?'
+  ).bind(challenge_id, participant_user_id).first()
+  if (!row) return { success: false, error: `No participant row found for ${participant_user_id} in challenge ${challenge_id}` }
+  let progress = {}
+  try { progress = JSON.parse(row.progress || '{}') } catch { progress = {} }
+  return { success: true, challenge_id, participant_user_id, personal_graph_id: row.personal_graph_id, status: row.status, joined_at: row.joined_at, progress }
 }
 
 export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }
