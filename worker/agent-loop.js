@@ -38,7 +38,7 @@ const READ_ONLY_TOOLS = new Set([
   'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash',
   'get_album_images', 'album_list', 'album_get', 'photos_list', 'analyze_image',
   // Recordings / video reads
-  'list_recordings', 'list_realtime_videos', 'vemotion_get_composition',
+  'list_recordings', 'list_realtime_videos', 'vemotion_get_composition', 'vemotion_list_compositions',
   // Analysis (read-only — reasons over existing content, writes nothing)
   'analyze_node', 'analyze_graph', 'analyze_transcription',
   // Identity / discovery / status
@@ -734,14 +734,19 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // result.message as an OBJECT (the created chat-message record), which
             // would crash the frontend renderer (React #31). Fall through to the
             // tool name when result.message isn't a usable string.
+            // Executors signal failure by RETURNING { success: false, error } (not throwing).
+            // Propagate that — never report a non-throwing failure as success (Lesson 1).
+            const toolFailed = !!(result && result.success === false)
             const summary = (typeof result.message === 'string' && result.message.trim())
               ? result.message
               : (typeof result.summary === 'string' && result.summary.trim())
                 ? result.summary
-                : `${toolUse.name} completed`
+                : (toolFailed && typeof result.error === 'string' && result.error.trim())
+                  ? result.error
+                  : `${toolUse.name} ${toolFailed ? 'failed' : 'completed'}`
             const resultLen = JSON.stringify(result).length
             const toolDuration = Date.now() - toolStart
-            log(`${toolUse.name} OK (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
+            log(`${toolUse.name} ${toolFailed ? 'returned FAILURE' : 'OK'} (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
 
             // Roll subagent tokens into parent session totals
             if (result.inputTokens) stats.inputTokens += result.inputTokens
@@ -755,17 +760,19 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               const toolModel = result.model || model
               env.STATS_DB.prepare(
                 `INSERT INTO session_tools (id, session_id, tool_name, subagent, template_id, graph_id, node_id, success, duration_ms, occurred_at, model)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)`
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
               ).bind(
                 crypto.randomUUID(), sessionId, toolUse.name,
                 subagent, templateId,
                 result.graphId || toolUse.input.graphId || null,
                 result.nodeId || toolUse.input.nodeId || null,
+                toolFailed ? 0 : 1,
                 toolDuration, new Date().toISOString(), toolModel
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
 
-            const ssePayload = { tool: toolUse.name, success: true, summary }
+            const ssePayload = { tool: toolUse.name, success: !toolFailed, summary }
+            if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
             const capabilityPayload = buildCapabilityToolPayload(toolUse.name, result)
             if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
             // Pass nodeId and graphId for tools that create or edit HTML nodes
@@ -783,6 +790,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ssePayload.recordingId = result.recordingId
               ssePayload.saveToGraph = result.saveToGraph || false
               ssePayload.graphTitle = result.graphTitle || null
+            }
+            // Pass templates array so AgentChat can render the iframe picker
+            if (toolUse.name === 'list_challenge_templates' && Array.isArray(result.templates)) {
+              ssePayload.templates = result.templates
             }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
             // Strip large fields that are only for the frontend (not needed by Claude)
@@ -1088,7 +1099,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
           if (result?.graphId) {
             inferredGraphId = result.graphId
           }
-          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
+          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !(result && result.success === false), result, timestamp: new Date().toISOString() })
           sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) })
         } catch (error) {
           executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
@@ -1100,7 +1111,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       const parallelResults = await Promise.all(parallelTools.map(async (toolUse) => {
         try {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
-          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: true, result, timestamp: new Date().toISOString() })
+          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !(result && result.success === false), result, timestamp: new Date().toISOString() })
           return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) }
         } catch (error) {
           executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
