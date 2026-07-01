@@ -3223,6 +3223,65 @@ async function executeVemotionSaveComposition(input, env) {
   }
 }
 
+// Generate a composition from REAL computed geometry — POST /vemotion/generate/structure.
+// Thin pass-through: the agent supplies PARAMETERS only; the Vemotion worker runs
+// the deterministic math (icosahedron subdivision, projection, strut clustering),
+// saves the composition, and returns { id, editorUrl, summary }. This exists because
+// an LLM cannot hand-author correct parametric geometry — it produces noise-wave
+// formulas. Keep this executor dumb: forward params, surface the result.
+async function executeVemotionGenerateStructure(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to generate a Vemotion structure. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+
+  const body = {
+    structureType: (typeof input?.structureType === 'string' && input.structureType.trim()) ? input.structureType.trim() : 'geodesic-dome',
+    params: (input?.params && typeof input.params === 'object' && !Array.isArray(input.params)) ? input.params : {},
+  }
+  if (typeof input?.name === 'string' && input.name.trim()) body.name = input.name.trim()
+  const requestedId = (typeof input?.compositionId === 'string' && input.compositionId.trim())
+    ? input.compositionId.trim()
+    : (typeof input?.id === 'string' && input.id.trim() ? input.id.trim() : '')
+  if (requestedId) body.compositionId = requestedId
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/generate/structure', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-API-Token': authToken,
+    },
+    body: JSON.stringify(body),
+  })
+
+  // /generate/structure returns 201 on create, 200 on update; both are success.
+  if (res.status !== 200 && res.status !== 201) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`Failed to generate Vemotion structure (${res.status}): ${errText.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => ({}))
+  const savedId = data?.id
+  if (!savedId) {
+    throw new Error(`Vemotion generate returned no id: ${JSON.stringify(data).slice(0, 200)}`)
+  }
+
+  const summary = data?.summary || {}
+  const strutBits = Array.isArray(summary.strutTypes)
+    ? summary.strutTypes.map((s) => `${s.label}=${s.mm}mm×${s.count}`).join(', ')
+    : ''
+  return {
+    message: `Vemotion ${body.structureType} generated (${summary.triangles ?? '?'} triangles, ${summary.layerCount ?? '?'} layers)${strutBits ? ` — struts: ${strutBits}` : ''}`,
+    compositionId: savedId,
+    updated: res.status === 200,
+    structureType: data?.structureType || body.structureType,
+    summary,
+    editorUrl: data?.editorUrl || `https://vemotion.vegvisr.org/?compositionId=${savedId}`,
+  }
+}
+
 // Read a saved composition by id — GET /vemotion/composition?id=<id>.
 // This is the load half of non-destructive editing: read the FULL current
 // composition, modify the layers you need in-context, then call
@@ -7947,6 +8006,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeVemotionListCompositions(toolInput, env)
     case 'vemotion_refit_composition':
       return await executeVemotionRefitComposition(toolInput, env)
+    case 'vemotion_generate_structure':
+      return await executeVemotionGenerateStructure(toolInput, env)
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':

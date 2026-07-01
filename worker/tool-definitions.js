@@ -819,6 +819,33 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'vemotion_generate_structure',
+    description: 'Generate a Vemotion composition from REAL, computed geometry — for parametric technical structures that a language model cannot draw accurately by hand. The Vemotion worker runs the deterministic math server-side (e.g. icosahedron subdivision, 3D→2D projection, strut-length clustering) and returns a fully rendered composition. Use this INSTEAD of assembling math-shape formulas yourself whenever the user asks for a geodesic dome or similar engineered structure — hand-written parametric formulas produce noise, not real geometry. Currently supported structureType: "geodesic-dome" (an animated wireframe dome that builds triangle-by-triangle, with a split-view strut-dimensions panel and true mm measurements via composition scale). The result is saved to the user\'s cloud library; returns the compositionId, an editorUrl to open it, and a summary (triangle count, strut types with real mm lengths). Pass `compositionId` to overwrite an existing composition in place. Does NOT render to MP4 — the user renders from the editor.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        structureType: { type: 'string', enum: ['geodesic-dome'], description: 'Which parametric structure to generate. Currently only "geodesic-dome" is supported. Default "geodesic-dome".' },
+        name: { type: 'string', description: 'Title shown in the user\'s Vemotion list (e.g. "Geodesic Dome 24V"). If omitted, a default name is generated from the parameters.' },
+        compositionId: { type: 'string', description: 'UPDATE mode: id of an existing composition to overwrite in place (e.g. "comp_abc123"). Omit to create a new one.' },
+        params: {
+          type: 'object',
+          description: 'Structure parameters. For geodesic-dome:',
+          properties: {
+            frequency: { type: 'number', description: 'Geodesic frequency (icosahedron subdivision, 1-8). Higher = more triangles / smoother. Default 4. Note: a request for a very high frequency like "24V" should still use 4-6 here — the geometry stays visually equivalent at screen scale while remaining legible.' },
+            diameterMeters: { type: 'number', description: 'Dome diameter in metres (default 8, i.e. ~50 m² footprint).' },
+            animationStyle: { type: 'string', enum: ['triangle-by-triangle', 'band', 'all-at-once'], description: 'How the dome builds on screen. "triangle-by-triangle" (default) reveals one triangle at a time from base to apex; "band" reveals a whole latitude ring at once; "all-at-once" fades the full mesh in together.' },
+            splitView: { type: 'boolean', description: 'When true (default), the dome sits on the left and a strut-dimensions panel on the right.' },
+            showDimensions: { type: 'boolean', description: 'When true (default), draws the strut-type table, per-band table, mm segment labels and Ø/height annotations. Requires splitView.' },
+            width: { type: 'number', description: 'Canvas width px (default 1280).' },
+            height: { type: 'number', description: 'Canvas height px (default 720).' },
+            fps: { type: 'number', description: 'Frames per second (default 30).' }
+          }
+        },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client; omit unless calling manually.' }
+      }
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
