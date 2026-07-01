@@ -1065,7 +1065,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'send_email',
-    description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. Use this when the user asks to send, write, or compose an email.',
+    description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. Use this when the user asks to send, write, or compose an email. A Superadmin can pass forUserEmail to send from a DIFFERENT user account (e.g. to trigger a verified send for a founder, which stamps last_verified_at on that founder).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1084,6 +1084,10 @@ const TOOL_DEFINITIONS = [
         fromEmail: {
           type: 'string',
           description: 'Sender email address (optional). If omitted, uses the user\'s default email account.'
+        },
+        forUserEmail: {
+          type: 'string',
+          description: 'Superadmin only. Send from ANOTHER user account (their configured sender) instead of your own. Use to trigger a verified send on a founder behalf without them logging in; the email-worker stamps last_verified_at on that founder. The sender must already be configured on that user with an app password.'
         }
       },
       required: ['to', 'subject', 'html']
@@ -2486,6 +2490,29 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: 'backup_challenge_templates_to_kg',
+    description:
+      "Backup all challenge page templates from WORLD_TEMPLATES KV into the knowledge graph graph_challenge_templates_backup. Each template is stored as a fulltext node containing its full HTML. Run this before editing templates or any time you want a restore point. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'restore_challenge_template_from_kg',
+    description:
+      "Restore a single challenge page template from the KG backup graph back into WORLD_TEMPLATES KV. Use template_key to specify which template to restore (e.g. 'template:challenge-page' or 'template:challenge-page-gamified'). Optionally specify graph_id to restore from a different graph (defaults to graph_challenge_templates_backup). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        template_key: { type: 'string', description: "KV key of the template to restore, e.g. 'template:challenge-page'" },
+        graph_id: { type: 'string', description: "KG graph ID to restore from (default: graph_challenge_templates_backup)" },
+      },
+      required: ['template_key'],
     },
   },
   {

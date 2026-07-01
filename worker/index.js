@@ -322,6 +322,73 @@ export default {
         return new Response(JSON.stringify({ universe, selected }), { headers: corsHeaders })
       }
 
+      // GET /challenge-session — participant session for challenge.<domain>
+      // Verifies the caller is a member of the challenge group (via CHAT_DB).
+      // On first entry: creates a personal KG graph (UUID v4) + challenge_participants row.
+      // Returns: { challenge, participant, main_graph_id, personal_graph_id, progress }
+      // Auth: X-API-Token header (participant's emailVerificationToken).
+      // Query param: ?domain=<founder-domain> (e.g. challenge.lydmorah.net → domain=lydmorah.net)
+      if (pathname === '/challenge-session' && request.method === 'GET') {
+        const xToken = request.headers.get('X-API-Token') || ''
+        const domain = url.searchParams.get('domain') || ''
+        const auth = await resolveAuthorizedCallerWithCredentials({ authToken: xToken }, env)
+        if (!auth?.email) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — a valid X-API-Token is required' }), { status: 401, headers: corsHeaders })
+        }
+        if (!domain) {
+          return new Response(JSON.stringify({ error: 'Missing ?domain= query parameter' }), { status: 400, headers: corsHeaders })
+        }
+        // Look up the challenge by domain
+        const challenge = await env.DB.prepare('SELECT * FROM challenges WHERE domain = ? AND status = ? ORDER BY created_at DESC LIMIT 1').bind(domain, 'active').first()
+        if (!challenge) {
+          return new Response(JSON.stringify({ error: `No active challenge found for domain: ${domain}` }), { status: 404, headers: corsHeaders })
+        }
+        // Resolve participant user_id from config
+        const configRow = await env.DB.prepare('SELECT user_id FROM config WHERE email = ?').bind(auth.email).first()
+        const userId = configRow?.user_id || auth.email
+        // Check group membership in CHAT_DB
+        const member = await env.CHAT_DB.prepare('SELECT user_id FROM group_members WHERE group_id = ? AND user_id = ?').bind(challenge.group_id, userId).first()
+        if (!member) {
+          return new Response(JSON.stringify({ error: 'Not a member of this challenge group', challenge_id: challenge.id }), { status: 403, headers: corsHeaders })
+        }
+        // Find-or-create challenge_participants row (lazy enrollment)
+        let participant = await env.DB.prepare('SELECT * FROM challenge_participants WHERE challenge_id = ? AND participant_user_id = ?').bind(challenge.id, userId).first()
+        if (!participant) {
+          const personalGraphId = crypto.randomUUID()
+          // Create a minimal personal KG graph via KG_WORKER
+          const personalGraph = {
+            metadata: {
+              title: `${auth.email} — ${challenge.title || 'Challenge'} Personal Graph`,
+              description: `Personal challenge graph for participant ${auth.email}`,
+              createdBy: auth.email,
+              metaArea: '#Challenge #Personal',
+              category: 'Challenge',
+              version: 0
+            },
+            nodes: [],
+            edges: []
+          }
+          await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: personalGraphId, graphData: personalGraph, override: false })
+          })
+          await env.DB.prepare(
+            'INSERT INTO challenge_participants (challenge_id, participant_user_id, personal_graph_id, progress, status) VALUES (?, ?, ?, ?, ?)'
+          ).bind(challenge.id, userId, personalGraphId, '{}', 'active').run()
+          participant = { challenge_id: challenge.id, participant_user_id: userId, personal_graph_id: personalGraphId, progress: '{}', status: 'active' }
+        }
+        let progress = {}
+        try { progress = JSON.parse(participant.progress || '{}') } catch { progress = {} }
+        return new Response(JSON.stringify({
+          challenge: { id: challenge.id, title: challenge.title, slug: challenge.slug, weeks: challenge.weeks, main_graph_id: challenge.main_graph_id, hero_image_url: challenge.hero_image_url || null },
+          participant: { user_id: userId, email: auth.email, status: participant.status },
+          main_graph_id: challenge.main_graph_id,
+          personal_graph_id: participant.personal_graph_id,
+          progress
+        }), { headers: corsHeaders })
+      }
+
       // POST /api/data-node/submit — Public form submission endpoint
       // Landing pages POST here to append records to data-nodes (no auth required)
       if (pathname === '/api/data-node/submit' && request.method === 'POST') {
@@ -1439,11 +1506,18 @@ export default {
         // accurately. The full toolbox stays available; cross-domain is allowed.
         if (workContext && typeof workContext === 'object' && workContext.title) {
           const caps = Array.isArray(workContext.capabilities) ? workContext.capabilities : []
-          const capLines = caps.map(c => `- ${c.summary || c.name}`).join('\n')
+          const capLines = caps.map(c => `- **${c.name}** — ${c.summary || c.name}`).join('\n')
           systemPrompt += `\n\n## Current Work Context: ${workContext.title}\n` +
             (workContext.description ? `Focus: ${workContext.description}\n` : '') +
-            (capLines ? `\nCapabilities highlighted to the user in this context:\n${capLines}\n` : '') +
-            `\nThis context is ORIENTATION, not a restriction. The user can ask for anything and you keep your full toolbox — cross-domain requests (e.g. read a graph, then make a video, then send an email) are fully allowed. If the user asks "what can I do here" or similar, answer in plain, friendly language describing what's possible in this context (and beyond it), and offer to start one of the concrete actions.`
+            (capLines ? `\nCapabilities in this context (tool name — what it does):\n${capLines}\n` : '') +
+            `\nThis context is ORIENTATION, not a restriction. The user keeps the full toolbox — cross-domain requests (read a graph, then make a video, then send an email) are fully allowed.\n` +
+            `\n### Answering "what can you do / what tools / what commands do I write" while this context is active\n` +
+            `Answer IMMEDIATELY from the capability list above, in the SAME turn, with NO tool call. Do NOT call describe_capabilities, get_system_registry, or any other tool to answer this — you already have everything you need above. Do not dump the entire global toolbox; stay focused on this context.\n` +
+            `Format the answer as a short numbered list. For each capability give:\n` +
+            `  1. a concrete example prompt the user can copy and type (e.g. for Vemotion: "Make a 9:16 reel from album 'Holiday2024'"), and\n` +
+            `  2. the underlying tool name in parentheses, and\n` +
+            `  3. a one-line "what it does / how it works".\n` +
+            `End by offering to start one of them. Keep it tight — this is a help answer, not an essay. The user can still ask for anything outside this focus.`
         }
 
         // Inject current graph context from the UI.

@@ -2805,18 +2805,35 @@ async function executeSendEmail(input, env) {
   const callerUserId = input.userId
   if (!callerUserId) throw new Error('No user context available')
 
-  // Resolve user profile to find their email accounts
-  const profile = await resolveUserProfile(callerUserId, env)
-  if (!profile) throw new Error('Could not resolve user profile')
+  // Resolve the CALLER's profile
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  if (!callerProfile) throw new Error('Could not resolve user profile')
 
-  // Parse the data column to get email accounts
+  // Optional operator override: send from ANOTHER user's configured sender (Superadmin only).
+  // Mirrors set_email_password's forUserEmail. Lets a Superadmin trigger a real send — which the
+  // email-worker stamps as a verified send (last_verified_at) — on a founder's behalf, without the
+  // founder having to log in. The effective sender below becomes that target user.
+  let profile = callerProfile
+  const forUser = (input.forUserEmail || '').trim().toLowerCase()
+  if (forUser && forUser !== (callerProfile.email || '').toLowerCase()) {
+    if ((callerProfile.role || '').toLowerCase() !== 'superadmin') {
+      throw new Error('forUserEmail requires Superadmin — you can only send from your own sender accounts.')
+    }
+    if (!forUser.includes('@')) throw new Error('forUserEmail must be a valid email address')
+    const targetProfile = await resolveUserProfile(forUser, env)
+    if (!targetProfile?.email) throw new Error(`No user found with email ${forUser}`)
+    profile = targetProfile
+  }
+
+  // Parse the data column to get email accounts (of the EFFECTIVE sender — caller, or the
+  // forUserEmail target when a Superadmin is sending on someone's behalf).
   let userData = {}
   if (profile.data) {
     try { userData = JSON.parse(profile.data) } catch { /* ignore */ }
   }
   const accounts = userData?.settings?.emailAccounts || []
   if (accounts.length === 0) {
-    throw new Error('No email accounts configured. Please set up an email account in vemail.vegvisr.org first.')
+    throw new Error(`No email accounts configured for ${profile.email}. Set one up in vemail.vegvisr.org first.`)
   }
 
   // Find the right account: use fromEmail if specified, otherwise default account
@@ -8038,6 +8055,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetWorldAppInterests(toolInput, env)
     case 'list_challenge_templates':
       return await executeListChallengeTemplates(toolInput, env)
+    case 'backup_challenge_templates_to_kg':
+      return await executeBackupChallengeTemplatesToKg(toolInput, env)
+    case 'restore_challenge_template_from_kg':
+      return await executeRestoreChallengeTemplateFromKg(toolInput, env)
     case 'publish_challenge_page':
       return await executePublishChallengePage(toolInput, env)
     case 'create_challenge':
@@ -8578,6 +8599,134 @@ async function executeListChallengeTemplates(input, env) {
     if (meta) templates.push(meta)
   }
   return { success: true, count: templates.length, templates }
+}
+
+async function executeBackupChallengeTemplatesToKg(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const callerEmail = callerProfile?.email || 'torarnehave@gmail.com'
+
+  // Collect all template-meta entries to find template keys
+  const { keys: metaKeys } = await env.WORLD_TEMPLATES.list({ prefix: 'template-meta:challenge-' })
+  if (!metaKeys.length) return { success: false, error: 'No challenge templates found in WORLD_TEMPLATES.' }
+
+  // Use a fixed graph ID so repeated backups overwrite the same graph
+  const graphId = 'graph_challenge_templates_backup'
+  const nodes = []
+  const edges = []
+  const backedUp = []
+
+  for (const k of metaKeys) {
+    const meta = await env.WORLD_TEMPLATES.get(k.name, { type: 'json' })
+    if (!meta) continue
+    const html = await env.WORLD_TEMPLATES.get(meta.key)
+    if (!html) continue
+
+    const nodeId = 'template_' + meta.key.replace(/[^a-zA-Z0-9]/g, '_')
+    nodes.push({
+      id: nodeId,
+      label: meta.name || meta.key,
+      type: 'fulltext',
+      color: '#0f2a43',
+      bibl: [],
+      position: {},
+      visible: true,
+      info: `## ${meta.name}\n\n**Key:** \`${meta.key}\`\n\n**Description:** ${meta.description || ''}\n\n---\n\n\`\`\`html\n${html}\n\`\`\``,
+      metadata: { templateKey: meta.key, backedUpAt: new Date().toISOString() }
+    })
+    backedUp.push(meta.key)
+  }
+
+  if (!nodes.length) return { success: false, error: 'Could not read HTML for any templates.' }
+
+  const graphData = {
+    metadata: {
+      title: 'Challenge Page Templates Backup',
+      description: 'Auto-backup of all challenge page templates from WORLD_TEMPLATES KV. Restore any template by running restore_challenge_template_from_kg.',
+      createdBy: callerEmail,
+      metaArea: '#ChallengeTemplates #Backup',
+      category: 'System',
+      version: 0
+    },
+    nodes,
+    edges
+  }
+
+  const kgRes = await fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-email': callerEmail, 'x-user-role': 'Superadmin' },
+    body: JSON.stringify({ id: graphId, graphData, override: true })
+  })
+  if (!kgRes.ok) {
+    const err = await kgRes.text()
+    return { success: false, error: `KG save failed: ${err}` }
+  }
+  const kgData = await kgRes.json()
+  return {
+    success: true,
+    graphId,
+    backedUp,
+    nodeCount: nodes.length,
+    version: kgData.newVersion,
+    viewer: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+    message: `Backed up ${nodes.length} template(s) to knowledge graph "${graphId}" (version ${kgData.newVersion}).`
+  }
+}
+
+async function executeRestoreChallengeTemplateFromKg(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const callerEmail = callerProfile?.email || 'torarnehave@gmail.com'
+
+  const { template_key } = input
+  if (!template_key) return { success: false, error: 'template_key is required (e.g. "template:challenge-page").' }
+
+  // Read backup graph from KG
+  const graphId = input.graph_id || 'graph_challenge_templates_backup'
+  const kgRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, {
+    headers: { 'x-user-email': callerEmail, 'x-user-role': 'Superadmin' }
+  })
+  if (!kgRes.ok) return { success: false, error: `KG fetch failed (${kgRes.status})` }
+  const kg = await kgRes.json()
+
+  const nodes = kg?.graphData?.nodes || kg?.nodes || []
+  const nodeId = 'template_' + template_key.replace(/[^a-zA-Z0-9]/g, '_')
+  const node = nodes.find(n => n.id === nodeId)
+  if (!node) return { success: false, error: `Node "${nodeId}" not found in backup graph. Available: ${nodes.map(n => n.id).join(', ')}` }
+
+  // Extract HTML: try fenced block first, fall back to raw HTML if fence is missing/broken
+  let html
+  const fenceMatch = node.info.match(/```html\n([\s\S]+?)\n```/)
+  if (fenceMatch) {
+    html = fenceMatch[1]
+  } else if (node.info.trim().startsWith('<!DOCTYPE') || node.info.trim().startsWith('<html')) {
+    html = node.info.trim()
+  } else {
+    // Last resort: strip any leading markdown prose (lines before the first '<') and use the rest
+    const htmlStart = node.info.indexOf('<')
+    if (htmlStart === -1) return { success: false, error: 'Could not extract HTML from node info — no fenced block and no raw HTML found.' }
+    html = node.info.slice(htmlStart)
+  }
+
+  await env.WORLD_TEMPLATES.put(template_key, html)
+
+  return {
+    success: true,
+    template_key,
+    restoredBytes: html.length,
+    graphId,
+    message: `Restored "${template_key}" from KG backup graph (${html.length} bytes). The template is now live in WORLD_TEMPLATES KV.`
+  }
 }
 
 async function executeCreateChallenge(input, env) {
