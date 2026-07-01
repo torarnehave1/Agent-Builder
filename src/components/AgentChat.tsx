@@ -437,11 +437,15 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
   const svgContent = extractSvgFromResult(tc);
   const canSvgPreview = !!svgContent;
 
-  // Vemotion: when a composition is saved OR refit-saved, embed the player.
-  // (refit returns a compositionId only in save-mode; inline-mode has no id.)
+  // Vemotion: when a composition is saved, refit-saved, or generated from a
+  // parametric structure, embed the player. All three return a compositionId +
+  // editorUrl on success. (refit returns a compositionId only in save-mode;
+  // generate always saves. The inline-composition JSON block below is skipped
+  // when the tool input has no `composition` — e.g. generate sends only params.)
   const isVemotionSave = (
     tc.tool === 'vemotion_save_composition'
     || tc.tool === 'vemotion_refit_composition'
+    || tc.tool === 'vemotion_generate_structure'
   ) && tc.status === 'success';
   const vemotionResult = (tc.result || {}) as Record<string, unknown>;
   const vemotionCompositionId = typeof vemotionResult.compositionId === 'string' ? vemotionResult.compositionId : '';
