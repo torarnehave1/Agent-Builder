@@ -7,7 +7,7 @@
 
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
-import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE } from './system-prompt.js'
+import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
 import { runKgSubagent } from './kg-subagent.js'
@@ -338,6 +338,23 @@ async function executePatchNodeMetadata(input, env) {
 }
 
 async function executeEditHtmlNode(input, env) {
+  // Superadmin gate — same caller resolution as executeRegisterWorldFounder. Structured
+  // error (not throw) so the agent narrates the reason.
+  const ac = input.authContext || {}
+  const callerUserId = input.userId || ac.userId || ac.profile?.user_id || ac.session?.id || null
+  let callerRole = String(ac.role || ac.profile?.role || ac.session?.role || '').trim()
+  let callerEmail = String(ac.email || ac.profile?.email || ac.session?.email || '').trim()
+  if ((!callerRole || !callerEmail) && callerUserId) {
+    try {
+      const p = await resolveUserProfile(callerUserId, env)
+      if (!callerRole) callerRole = String(p?.Role || p?.role || '').trim()
+      if (!callerEmail) callerEmail = String(p?.email || '').trim()
+    } catch (e) { /* fall through to role check */ }
+  }
+  if (callerRole.toLowerCase() !== 'superadmin') {
+    return { success: false, error: `Superadmin role required to edit an html-node. Resolved caller userId=${callerUserId || 'none'}, role=${callerRole || 'unknown'}.` }
+  }
+
   // 1. Read the current node content
   const readRes = await env.KG_WORKER.fetch(
     `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
@@ -410,8 +427,12 @@ async function executeEditHtmlNode(input, env) {
     newHtml = currentHtml.substring(0, idx) + newString + currentHtml.substring(idx + oldString.length)
   }
 
-  // 5. Patch the node with the edited content
-  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { info: newHtml })
+  // 5. Patch the node with the edited content (+ who/when attribution)
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml,
+    updatedAt: new Date().toISOString(),
+    updatedBy: callerEmail || null,
+  })
 
   const replacements = input.replace_all ? occurrences : 1
   return {
@@ -423,6 +444,193 @@ async function executeEditHtmlNode(input, env) {
     version: patchData.newVersion,
     message: `Edited node "${input.nodeId}": replaced ${replacements} occurrence(s). HTML ${newHtml.length > currentHtml.length ? 'grew' : 'shrank'} from ${currentHtml.length} to ${newHtml.length} chars.`,
     updatedHtml: newHtml,
+  }
+}
+
+// ---- Graph version tools (list / fetch / restore) ----------------------------
+// Thin wrappers over knowledge-graph-worker's existing history endpoints:
+//   GET /getknowgraphhistory?id=   -> { graphId, history: { results: [{version,timestamp}] } }
+//   GET /getknowgraphversion?id=&version= -> full graphData { metadata, nodes, edges }
+// Restores re-save via saveGraphWithHistory / patchNode, so a restore is itself a
+// new version — history is never destroyed.
+
+// Shared Superadmin gate for the restore tools (same caller resolution as
+// executeRegisterWorldFounder). Returns { ok, error, email } .
+async function resolveSuperadminCaller(input, env, action) {
+  const ac = input.authContext || {}
+  const callerUserId = input.userId || ac.userId || ac.profile?.user_id || ac.session?.id || null
+  let callerRole = String(ac.role || ac.profile?.role || ac.session?.role || '').trim()
+  let callerEmail = String(ac.email || ac.profile?.email || ac.session?.email || '').trim()
+  if ((!callerRole || !callerEmail) && callerUserId) {
+    try {
+      const p = await resolveUserProfile(callerUserId, env)
+      if (!callerRole) callerRole = String(p?.Role || p?.role || '').trim()
+      if (!callerEmail) callerEmail = String(p?.email || '').trim()
+    } catch (e) { /* fall through */ }
+  }
+  if (callerRole.toLowerCase() !== 'superadmin') {
+    return { ok: false, error: `Superadmin role required to ${action}. Resolved caller userId=${callerUserId || 'none'}, role=${callerRole || 'unknown'}.` }
+  }
+  return { ok: true, email: callerEmail || null }
+}
+
+// Create a subdomain (CNAME + route -> brand-worker) via api-worker's /create-custom-domain.
+// Superadmin only. Zone auto-resolves for the domains in api-worker's DOMAIN_ZONE_MAPPING;
+// other root domains need input.zone_id.
+async function executeCreateSubdomain(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'create a subdomain')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const subdomain = String(input.subdomain || '').trim().toLowerCase()
+  const rootDomain = String(input.root_domain || '').trim().toLowerCase()
+  const zoneId = String(input.zone_id || '').trim()
+  if (!subdomain || /[^a-z0-9-]/.test(subdomain)) {
+    return { success: false, error: "subdomain must be a bare label (a-z, 0-9, '-'), e.g. 'fonemer'" }
+  }
+  if (!rootDomain || !rootDomain.includes('.')) {
+    return { success: false, error: "root_domain must be a domain like 'vegvisr.org'" }
+  }
+
+  const body = JSON.stringify({ subdomain, rootDomain, ...(zoneId ? { zoneId } : {}) })
+  const doFetch = (target) => target.fetch('https://vegvisr-api-worker/create-custom-domain', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  })
+  let res
+  if (env.API_WORKER?.fetch) {
+    res = await doFetch(env.API_WORKER)
+  } else {
+    res = await fetch('https://api.vegvisr.org/create-custom-domain', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    })
+  }
+  const data = await res.json().catch(() => null)
+  if (!res.ok || !data?.overallSuccess) {
+    return {
+      success: false,
+      error: data?.error || `create-custom-domain failed (${res.status})`,
+      details: data,
+      hint: zoneId ? undefined : 'If the root domain is outside the built-in zone mapping (norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training), pass zone_id.',
+    }
+  }
+  const host = `${subdomain}.${rootDomain}`
+  return {
+    success: true,
+    host,
+    dns: { id: data?.dnsSetup?.result?.id, created: data?.dnsSetup?.success },
+    route: { id: data?.workerSetup?.result?.id, pattern: data?.workerSetup?.result?.pattern, script: data?.workerSetup?.result?.script },
+    createdBy: gate.email,
+    next: `https://${host} is provisioned (routes to brand-worker). Publish an html-node to it with the viewer's Publish button — the page will serve from html:${host}. DNS may take a minute to propagate.`,
+  }
+}
+
+async function executeListGraphVersions(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphhistory?id=${encodeURIComponent(input.graphId)}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `getknowgraphhistory failed (${res.status})`)
+  const versions = (data?.history?.results || []).map((r) => ({
+    version: Number(r.version),
+    timestamp: r.timestamp,
+  }))
+  return {
+    graphId: input.graphId,
+    versions,
+    count: versions.length,
+    note: 'Newest first. The history endpoint returns at most the 20 most recent versions.',
+  }
+}
+
+async function executeGetGraphVersion(input, env) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphversion?id=${encodeURIComponent(input.graphId)}&version=${encodeURIComponent(input.version)}`
+  )
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || `getknowgraphversion failed (${res.status})`)
+  const nodes = (data.nodes || []).map((n) => ({
+    id: n.id, label: n.label, type: n.type, infoLength: (n.info || '').length,
+  }))
+  return {
+    graphId: input.graphId,
+    version: Number(input.version),
+    metadata: data.metadata,
+    nodeSummaries: nodes,
+    graphData: data,
+    message: `Version ${input.version}: ${nodes.length} node(s). Full graphData included.`,
+  }
+}
+
+async function executeRestoreGraphVersion(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'restore a graph version')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphversion?id=${encodeURIComponent(input.graphId)}&version=${encodeURIComponent(input.version)}`
+  )
+  const old = await res.json()
+  if (!res.ok) throw new Error(old.error || `getknowgraphversion failed (${res.status})`)
+  if (!old?.nodes) throw new Error(`Version ${input.version} of graph ${input.graphId} has no graphData`)
+
+  const graphData = {
+    metadata: {
+      ...(old.metadata || {}),
+      restoredFrom: Number(input.version),
+      restoredBy: gate.email,
+      restoredAt: new Date().toISOString(),
+    },
+    nodes: old.nodes,
+    edges: old.edges || [],
+  }
+  const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: input.graphId, graphData, override: true }),
+  })
+  const saved = await saveRes.json()
+  if (!saveRes.ok) throw new Error(saved.error || `saveGraphWithHistory failed (${saveRes.status})`)
+  return {
+    success: true,
+    graphId: input.graphId,
+    restoredFrom: Number(input.version),
+    newVersion: saved.newVersion,
+    message: `Graph restored to the content of version ${input.version} (saved as new version ${saved.newVersion}; no history destroyed).`,
+  }
+}
+
+async function executeRestoreHtmlNodeVersion(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'restore an html-node version')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphversion?id=${encodeURIComponent(input.graphId)}&version=${encodeURIComponent(input.version)}`
+  )
+  const old = await res.json()
+  if (!res.ok) throw new Error(old.error || `getknowgraphversion failed (${res.status})`)
+  const oldNode = (old.nodes || []).find((n) => n.id === input.nodeId)
+  if (!oldNode) {
+    const ids = (old.nodes || []).map((n) => n.id).join(', ') || 'none'
+    throw new Error(`Node "${input.nodeId}" not found in version ${input.version}. Nodes in that version: ${ids}`)
+  }
+  if (oldNode.type !== 'html-node' && oldNode.type !== 'css-node') {
+    throw new Error(`restore_html_node_version only works on html-node/css-node. Node "${input.nodeId}" was type "${oldNode.type}" in version ${input.version}. Use restore_graph_version for full-graph restore.`)
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: oldNode.info || '',
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email,
+    restoredFromVersion: Number(input.version),
+  })
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    restoredFrom: Number(input.version),
+    newVersion: patchData.newVersion,
+    infoLength: (oldNode.info || '').length,
+    message: `Node "${input.nodeId}" rolled back to its content from version ${input.version} (saved as new version ${patchData.newVersion}). To update a LIVE published page, publish the node again.`,
   }
 }
 
@@ -3294,6 +3502,56 @@ async function executeVemotionGenerateStructure(input, env) {
     compositionId: savedId,
     updated: res.status === 200,
     structureType: data?.structureType || body.structureType,
+    summary,
+    editorUrl: data?.editorUrl || `https://vemotion.vegvisr.org/?compositionId=${savedId}`,
+  }
+}
+
+// Create an Instagram carousel — thin forwarder to POST /vemotion/generate/structure
+// with structureType "carousel". The Vemotion worker owns ALL layout math
+// (templates, brand palette, slide windows, meta.carousel capture markers);
+// the agent supplies content only. Same pattern as executeVemotionGenerateStructure.
+async function executeVemotionCreateCarousel(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) {
+    throw new Error('You must be logged in to create a carousel. Please refresh the page and try again.')
+  }
+  if (!env.VEMOTION_WORKER) {
+    throw new Error('VEMOTION_WORKER service binding is not configured')
+  }
+  const slides = Array.isArray(input?.slides) ? input.slides : []
+  if (slides.length === 0) throw new Error('Provide a non-empty `slides` array (see get_carousel_reference).')
+  if (slides.length > 10) throw new Error('Instagram carousels max out at 10 slides.')
+
+  const name = (typeof input?.name === 'string' && input.name.trim()) ? input.name.trim() : 'Instagram carousel'
+  const params = { name, slides }
+  if (typeof input?.description === 'string' && input.description.trim()) params.description = input.description.trim()
+  if (input?.brand && typeof input.brand === 'object' && !Array.isArray(input.brand)) params.brand = input.brand
+
+  const body = { structureType: 'carousel', name, params }
+  const requestedId = (typeof input?.compositionId === 'string' && input.compositionId.trim()) ? input.compositionId.trim() : ''
+  if (requestedId) body.compositionId = requestedId
+
+  const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/generate/structure', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Token': authToken },
+    body: JSON.stringify(body),
+  })
+  if (res.status !== 200 && res.status !== 201) {
+    const errText = await res.text().catch(() => '')
+    throw new Error(`Failed to create carousel (${res.status}): ${errText.slice(0, 300)}`)
+  }
+  const data = await res.json().catch(() => ({}))
+  const savedId = data?.id
+  if (!savedId) throw new Error(`Carousel create returned no id: ${JSON.stringify(data).slice(0, 200)}`)
+
+  const summary = data?.summary || {}
+  return {
+    message: `Instagram carousel "${name}" created — ${summary.slides ?? slides.length} slides at 1080×1350. Open the editor and click "Export slides (PNG set)" to download one PNG per slide, then post them to Instagram in order.`,
+    compositionId: savedId,
+    updated: res.status === 200,
+    slides: summary.slides ?? slides.length,
+    templates: summary.templates,
     summary,
     editorUrl: data?.editorUrl || `https://vemotion.vegvisr.org/?compositionId=${savedId}`,
   }
@@ -7916,6 +8174,16 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executePatchNodeMetadata(toolInput, env)
     case 'edit_html_node':
       return await executeEditHtmlNode(toolInput, env)
+    case 'create_subdomain':
+      return await executeCreateSubdomain(toolInput, env)
+    case 'list_graph_versions':
+      return await executeListGraphVersions(toolInput, env)
+    case 'get_graph_version':
+      return await executeGetGraphVersion(toolInput, env)
+    case 'restore_graph_version':
+      return await executeRestoreGraphVersion(toolInput, env)
+    case 'restore_html_node_version':
+      return await executeRestoreHtmlNodeVersion(toolInput, env)
     case 'patch_graph_metadata':
       return await executePatchGraphMetadata(toolInput, env)
     case 'list_graphs':
@@ -8025,6 +8293,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeVemotionRefitComposition(toolInput, env)
     case 'vemotion_generate_structure':
       return await executeVemotionGenerateStructure(toolInput, env)
+    case 'vemotion_create_carousel':
+      return await executeVemotionCreateCarousel(toolInput, env)
+    case 'get_carousel_reference':
+      return { reference: CAROUSEL_REFERENCE }
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
     case 'analyze_node':
@@ -8059,6 +8331,14 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeBackupChallengeTemplatesToKg(toolInput, env)
     case 'restore_challenge_template_from_kg':
       return await executeRestoreChallengeTemplateFromKg(toolInput, env)
+    case 'list_world_founder_templates':
+      return await executeListWorldFounderTemplates(toolInput, env)
+    case 'save_world_founder_template':
+      return await executeSaveWorldFounderTemplate(toolInput, env)
+    case 'backup_world_founder_templates_to_kg':
+      return await executeBackupWorldFounderTemplatesToKg(toolInput, env)
+    case 'restore_world_founder_template_from_kg':
+      return await executeRestoreWorldFounderTemplateFromKg(toolInput, env)
     case 'publish_challenge_page':
       return await executePublishChallengePage(toolInput, env)
     case 'create_challenge':
@@ -8726,6 +9006,161 @@ async function executeRestoreChallengeTemplateFromKg(input, env) {
     restoredBytes: html.length,
     graphId,
     message: `Restored "${template_key}" from KG backup graph (${html.length} bytes). The template is now live in WORLD_TEMPLATES KV.`
+  }
+}
+
+// ── World-Founder template tools ─────────────────────────────────────────────
+
+async function executeListWorldFounderTemplates(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
+
+  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-founder' })
+  const templates = []
+  for (const k of keys) {
+    const html = await env.WORLD_TEMPLATES.get(k.name)
+    templates.push({ key: k.name, length: html ? html.length : 0, preview_html: html ? html.slice(0, 500) : null, full_html: html })
+  }
+  return { success: true, count: templates.length, templates }
+}
+
+async function executeSaveWorldFounderTemplate(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
+
+  const { template_key, html } = input
+  if (!template_key) return { success: false, error: 'template_key is required (e.g. "template:world-founder-page").' }
+  if (!html) return { success: false, error: 'html is required — the full HTML string to save.' }
+  if (!template_key.startsWith('template:world-founder')) return { success: false, error: 'template_key must start with "template:world-founder" to prevent accidental overwrites.' }
+
+  await env.WORLD_TEMPLATES.put(template_key, html)
+  return {
+    success: true,
+    template_key,
+    savedBytes: html.length,
+    message: `Saved ${html.length} bytes to WORLD_TEMPLATES["${template_key}"]. Run publish_world_page or republish_all_world_pages to push the change live.`
+  }
+}
+
+async function executeBackupWorldFounderTemplatesToKg(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
+  const callerEmail = callerProfile?.email || 'torarnehave@gmail.com'
+
+  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-founder' })
+  if (!keys.length) return { success: false, error: 'No world-founder templates found in WORLD_TEMPLATES.' }
+
+  const graphId = 'graph_world_founder_templates_backup'
+  const nodes = []
+  const backedUp = []
+
+  for (const k of keys) {
+    const html = await env.WORLD_TEMPLATES.get(k.name)
+    if (!html) continue
+    const nodeId = 'template_' + k.name.replace(/[^a-zA-Z0-9]/g, '_')
+    nodes.push({
+      id: nodeId,
+      label: k.name,
+      type: 'fulltext',
+      color: '#0f2a43',
+      bibl: [],
+      position: {},
+      visible: true,
+      info: `## ${k.name}\n\n**Key:** \`${k.name}\`\n\n**Bytes:** ${html.length}\n\n---\n\n\`\`\`html\n${html}\n\`\`\``,
+      metadata: { templateKey: k.name, backedUpAt: new Date().toISOString() }
+    })
+    backedUp.push(k.name)
+  }
+
+  if (!nodes.length) return { success: false, error: 'Could not read HTML for any world-founder templates.' }
+
+  const graphData = {
+    metadata: {
+      title: 'World Founder Page Templates Backup',
+      description: 'Auto-backup of all world-founder page templates from WORLD_TEMPLATES KV. Restore with restore_world_founder_template_from_kg.',
+      createdBy: callerEmail,
+      metaArea: '#WorldFounderTemplates #Backup',
+      category: 'System',
+      version: 0
+    },
+    nodes,
+    edges: []
+  }
+
+  const kgRes = await fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-email': callerEmail, 'x-user-role': 'Superadmin' },
+    body: JSON.stringify({ id: graphId, graphData, override: true })
+  })
+  if (!kgRes.ok) return { success: false, error: `KG save failed: ${await kgRes.text()}` }
+  const kgData = await kgRes.json()
+  return {
+    success: true,
+    graphId,
+    backedUp,
+    nodeCount: nodes.length,
+    version: kgData.newVersion,
+    viewer: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+    message: `Backed up ${nodes.length} world-founder template(s) to KG graph "${graphId}" (version ${kgData.newVersion}).`
+  }
+}
+
+async function executeRestoreWorldFounderTemplateFromKg(input, env) {
+  const callerUserId = input.userId
+  if (!callerUserId) return { success: false, error: 'No user context available.' }
+  const callerProfile = await resolveUserProfile(callerUserId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
+  const callerEmail = callerProfile?.email || 'torarnehave@gmail.com'
+
+  const { template_key, graph_id } = input
+  if (!template_key) return { success: false, error: 'template_key is required (e.g. "template:world-founder-page").' }
+
+  const graphId = graph_id || 'graph_world_founder_templates_backup'
+  const kgRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, {
+    headers: { 'x-user-email': callerEmail, 'x-user-role': 'Superadmin' }
+  })
+  if (!kgRes.ok) return { success: false, error: `KG fetch failed (${kgRes.status})` }
+  const kg = await kgRes.json()
+
+  const nodes = kg?.graphData?.nodes || kg?.nodes || []
+  const nodeId = 'template_' + template_key.replace(/[^a-zA-Z0-9]/g, '_')
+  const node = nodes.find(n => n.id === nodeId)
+  if (!node) return { success: false, error: `Node "${nodeId}" not found. Available: ${nodes.map(n => n.id).join(', ')}` }
+
+  // Extract HTML: fenced block first, then raw HTML fallback
+  let html
+  const fenceMatch = node.info.match(/```html\n([\s\S]+?)\n```/)
+  if (fenceMatch) {
+    html = fenceMatch[1]
+  } else if (node.info.trim().startsWith('<!DOCTYPE') || node.info.trim().startsWith('<html')) {
+    html = node.info.trim()
+  } else {
+    const htmlStart = node.info.indexOf('<')
+    if (htmlStart === -1) return { success: false, error: 'Could not extract HTML from node info.' }
+    html = node.info.slice(htmlStart)
+  }
+
+  await env.WORLD_TEMPLATES.put(template_key, html)
+  return {
+    success: true,
+    template_key,
+    restoredBytes: html.length,
+    graphId,
+    message: `Restored "${template_key}" from KG backup (${html.length} bytes). Run publish_world_page or republish_all_world_pages to push live.`
   }
 }
 

@@ -32,7 +32,12 @@ interface PendingGraphContext {
 
 export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout, themeMode, resolvedTheme, onThemeChange }: Props) {
   const [graphId, setGraphId] = useState('');
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  // Chat persona for the main Chat tab. null = the default agent = FULL toolbox.
+  // Kept separate from `editingAgentId` so editing/creating a scoped bot in the
+  // Agents tab never silently rebinds the main chat to that bot's limited tools.
+  const [selectedAgentId] = useState<string | null>(null);
+  // Which agent the Agents tab is currently editing (independent of the chat).
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [view, setView] = useState<View>('context');
   const [activeContext, setActiveContext] = useState<WorkContext | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
@@ -170,11 +175,11 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       )}
       {view === 'agents' && (
         <AgentSettings
-          agentId={selectedAgentId}
+          agentId={editingAgentId}
           userId={userId}
           onSave={() => {}}
-          onCancel={() => setSelectedAgentId(null)}
-          onSelectAgent={setSelectedAgentId}
+          onCancel={() => setEditingAgentId(null)}
+          onSelectAgent={setEditingAgentId}
         />
       )}
       {view === 'data' && <DataExplorer />}

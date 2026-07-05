@@ -313,6 +313,67 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'create_subdomain',
+    description: "Create a new subdomain (CNAME + worker route -> brand-worker) so an html-node page can be published to it, e.g. fonemer.vegvisr.org. Wraps api-worker's /create-custom-domain. Zone is auto-resolved for norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training, vegr.ai and alivenesslab.org — pass zone_id ONLY for a root domain outside that list (found in the Cloudflare dashboard, domain Overview). Protected subdomains (api, www, admin, knowledge, auth, brand, ...) are rejected by the endpoint. After creation, publish content with the viewer's Publish button on an html-node (or the publish flow) — the new host serves html:<hostname> from brand-worker's HTML_PAGES KV. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        subdomain: { type: 'string', description: "The subdomain label only, e.g. 'fonemer' for fonemer.vegvisr.org" },
+        root_domain: { type: 'string', description: "The root domain, e.g. 'vegvisr.org'" },
+        zone_id: { type: 'string', description: 'Cloudflare Zone ID — required only for root domains outside the built-in mapping (norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training)' }
+      },
+      required: ['subdomain', 'root_domain']
+    }
+  },
+  {
+    name: 'list_graph_versions',
+    description: 'List the saved version history of a knowledge graph (up to the 20 most recent versions, newest first). Each entry has version and timestamp. Use this before get_graph_version / restore_graph_version / restore_html_node_version to pick a version. Code-hardcoded (not in registry).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID to list versions for' }
+      },
+      required: ['graphId']
+    }
+  },
+  {
+    name: 'get_graph_version',
+    description: 'Fetch a SPECIFIC historical version of a knowledge graph (full graphData: metadata, nodes, edges as they were at that version). Use list_graph_versions first to see which versions exist. Read-only — does not change anything. Code-hardcoded (not in registry).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        version: { type: 'number', description: 'The version number to fetch (from list_graph_versions)' }
+      },
+      required: ['graphId', 'version']
+    }
+  },
+  {
+    name: 'restore_graph_version',
+    description: 'Restore an ENTIRE knowledge graph to a prior version. Fetches the historical version and saves it back via saveGraphWithHistory, so the restore itself becomes a NEW version (no history is destroyed — you can restore forward again). metadata.restoredFrom records the source version. Superadmin only. For rolling back a single html-node without touching the rest of the graph, use restore_html_node_version instead. Code-hardcoded (not in registry).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID to restore' },
+        version: { type: 'number', description: 'The version number to restore the graph to' }
+      },
+      required: ['graphId', 'version']
+    }
+  },
+  {
+    name: 'restore_html_node_version',
+    description: "Roll back a SINGLE html-node (or css-node) to its content from a prior graph version, without touching any other node. Fetches the historical version, extracts the node's info, and patches it into the current graph (becomes a new version; nothing destroyed). Records restoredFromVersion + updatedBy on the node. Superadmin only. To make a LIVE published page show the restored content, publish the node afterwards (viewer Publish button or the publish flow). Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID containing the node' },
+        nodeId: { type: 'string', description: 'The html-node (or css-node) ID to roll back' },
+        version: { type: 'number', description: 'The graph version to take the node content FROM' }
+      },
+      required: ['graphId', 'nodeId', 'version']
+    }
+  },
+  {
     name: 'patch_node_metadata',
     description: "Set or update specific keys in a node's metadata WITHOUT clobbering the rest (merge-safe). Use this instead of patch_node when changing metadata: patch_node replaces the whole metadata object, this merges. Provide only the keys to change, e.g. metadata: { capabilities_summary: '...', highlights: ['...'] }. Reads current metadata, shallow-merges your keys, writes back.",
     input_schema: {
@@ -833,7 +894,9 @@ const TOOL_DEFINITIONS = [
           properties: {
             frequency: { type: 'number', description: '[geodesic-dome] Geodesic frequency (icosahedron subdivision, 1-8). Higher = more triangles / smoother. Default 4. A request for a very high frequency like "24V" should still use 4-6 here — the geometry stays visually equivalent at screen scale while remaining legible.' },
             diameterMeters: { type: 'number', description: '[geodesic-dome] Dome diameter in metres (default 8, i.e. ~50 m² footprint).' },
-            animationStyle: { type: 'string', enum: ['triangle-by-triangle', 'band', 'all-at-once'], description: '[geodesic-dome] How the dome builds on screen. "triangle-by-triangle" (default) reveals one triangle at a time; "band" reveals a whole latitude ring at once; "all-at-once" fades the full mesh in.' },
+            animationStyle: { type: 'string', enum: ['triangle-by-triangle', 'band', 'all-at-once'], description: '[geodesic-dome] How the dome builds on screen. "triangle-by-triangle" (default) reveals one triangle at a time; "band" reveals a whole latitude ring at once; "all-at-once" fades the full mesh in. Ignored when spin is true.' },
+            spin: { type: 'boolean', description: '[geodesic-dome] When true, renders a rotating 3D wireframe dome (a lat/long globe orbiting about its vertical axis) instead of the static icosahedron mesh. Use when the user wants to "see it in 3D", "rotate", "spin", or "orbit" the dome. The rotating mode has no strut-dimension tables. Default false.' },
+            orbitSeconds: { type: 'number', description: '[geodesic-dome, spin only] Seconds for one full revolution (2-60). Default 8. Sets the composition duration.' },
             gridN: { type: 'number', description: '[vastu-mandala] Grid size N (4-9). 8 = Manduka (64 padas, most common for temples), 9 = Paramasayika (81 padas). Default 8.' },
             sideMeters: { type: 'number', description: '[vastu-mandala] Temple side length in metres (default 9). Sets the pada size (side ÷ N) shown in mm.' },
             showEnclosures: { type: 'boolean', description: '[vastu-mandala] When true (default), draws the concentric zone belts (Paiśācika / Mānuṣa / Daivika / Brahma).' },
@@ -847,6 +910,44 @@ const TOOL_DEFINITIONS = [
         },
         authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client; omit unless calling manually.' }
       }
+    }
+  },
+  {
+    name: 'get_carousel_reference',
+    description: 'Get the Instagram-carousel cookbook — the slide templates supported by vemotion_create_carousel (cover / statement / word-parts / pronunciation / ritual / outro) with the content fields each template uses, the default "ponemer" brand profile (colors, fonts, @tor.arne.have handle, ponemer.vegvisr.org site), and authoring guidance (slide order, text lengths, Devanagari support). Call this BEFORE calling vemotion_create_carousel.',
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'vemotion_create_carousel',
+    description: 'Create an Instagram carousel as a Vemotion composition — a set of branded 1080×1350 (4:5) slides the user exports as a PNG set and posts as a carousel. The Vemotion worker lays every slide out DETERMINISTICALLY from templates server-side; you supply CONTENT only (headings, body text, word-part items, Devanagari strings) — never coordinates or layer JSON. Each slide becomes one second of the composition with meta.carousel capture markers; the user opens the editorUrl, reviews, and clicks "Export slides (PNG set)" to download one PNG per slide. Default brand profile is "ponemer" (Tor Arne\'s phoneme series: cream/sand/burnt-orange palette, Playfair Display + Poppins + Noto Sans Devanagari, byline "Tor Arne Håve", handle "@tor.arne.have", site "ponemer.vegvisr.org") — pass `brand` only to override parts of it. Call get_carousel_reference first for the template catalogue. Max 10 slides (Instagram limit). Pass `compositionId` to regenerate an existing carousel in place.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Composition title shown in the user\'s Vemotion list, also used (slugified) as the exported PNG filename base (e.g. "avahana-ha-lydreisen" → avahana-ha-lydreisen-01.png).' },
+        compositionId: { type: 'string', description: 'UPDATE mode: id of an existing carousel composition to overwrite in place. Omit to create a new one.' },
+        slides: {
+          type: 'array',
+          description: 'The carousel slides in order (1-10). Each slide picks a template and fills only that template\'s content fields — see get_carousel_reference. Fields: template ("cover"|"statement"|"word-parts"|"pronunciation"|"ritual"|"outro"), kicker (small uppercase label), heading, body, devanagari (Devanagari-script string), latin (transliteration, pronunciation template), phonetic (e.g. "aa-VAA-ha-na"), note (accent-colored aside), items (word-parts template: up to 4 of {term, gloss}).',
+          items: { type: 'object' }
+        },
+        description: { type: 'string', description: 'Optional composition meta.description (what the carousel is about, for future agents).' },
+        brand: {
+          type: 'object',
+          description: 'Optional partial override of the ponemer brand profile. Any field omitted keeps the default. colors: {bg, bgAlt, card, ink, body, accent, dark, light, lightBody, muted} hex strings. fonts: {serif, sans, devanagari} font family names. byline / handle / site: strings.',
+          properties: {
+            colors: { type: 'object' },
+            fonts: { type: 'object' },
+            byline: { type: 'string' },
+            handle: { type: 'string' },
+            site: { type: 'string' }
+          }
+        },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client; omit unless calling manually.' }
+      },
+      required: ['name', 'slides']
     }
   },
   {
@@ -2590,6 +2691,44 @@ const TOOL_DEFINITIONS = [
         template_key: { type: 'string', description: "Template key in WORLD_TEMPLATES. Default 'template:world-founder-page'." },
       },
       required: ['domain'],
+    },
+  },
+  {
+    name: 'list_world_founder_templates',
+    description:
+      "List all world-founder page templates in WORLD_TEMPLATES KV (keys starting with 'template:world-founder'). Returns the key, byte length, and full HTML for each. Use this to see what templates exist, read their current HTML, and decide what to edit. After editing, save with save_world_founder_template, then publish with publish_world_page or publish_all_world_pages. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'save_world_founder_template',
+    description:
+      "Save (create or overwrite) a world-founder page template in WORLD_TEMPLATES KV. Provide the template_key (must start with 'template:world-founder') and the full html string. Use this after editing a template retrieved via list_world_founder_templates. After saving, run publish_world_page or publish_all_world_pages to push the change live to all me.<domain> sites. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        template_key: { type: 'string', description: "KV key for the template, e.g. 'template:world-founder-page' or 'template:world-founder-page-v2'" },
+        html: { type: 'string', description: 'The full HTML string to save as the template.' },
+      },
+      required: ['template_key', 'html'],
+    },
+  },
+  {
+    name: 'backup_world_founder_templates_to_kg',
+    description:
+      "Backup all world-founder page templates from WORLD_TEMPLATES KV into knowledge graph graph_world_founder_templates_backup. Each template is stored as a fulltext node with its full HTML. Run before editing any template. Restore with restore_world_founder_template_from_kg. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+  {
+    name: 'restore_world_founder_template_from_kg',
+    description:
+      "Restore a world-founder page template from the KG backup graph back into WORLD_TEMPLATES KV. Specify template_key (e.g. 'template:world-founder-page'). Optionally specify graph_id to restore from a non-default graph (defaults to graph_world_founder_templates_backup). After restoring, run publish_world_page or publish_all_world_pages to push live. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        template_key: { type: 'string', description: "KV key of the template to restore, e.g. 'template:world-founder-page'" },
+        graph_id: { type: 'string', description: "KG graph ID to restore from (default: graph_world_founder_templates_backup)" },
+      },
+      required: ['template_key'],
     },
   },
   {
