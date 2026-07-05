@@ -94,6 +94,7 @@ interface Props {
   onHtmlChange?: (html: string) => void;
   graphId?: string | null;
   nodeId?: string | null;
+  userEmail?: string;
 }
 
 interface ConsoleEntry {
@@ -198,7 +199,7 @@ interface VersionEntry {
   timestamp: string;
 }
 
-export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId }: Props) {
+export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userEmail }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
@@ -334,13 +335,13 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
       let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
         body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
       });
       if (res.status === 409) {
         expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
           body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
         });
       }
@@ -368,7 +369,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       let expectedVersion = Number(g?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
@@ -376,7 +377,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         expectedVersion = Number(latest?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
@@ -433,7 +434,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
       const res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
         body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion }),
       });
 
@@ -444,7 +445,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         const retryVersion = Number(latestGraph?.metadata?.version || 0);
         const retryRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
+          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
           body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion: retryVersion }),
         });
         if (!retryRes.ok) return;
