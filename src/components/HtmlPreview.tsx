@@ -29,38 +29,12 @@ function setSectionInner(html: string, id: string, inner: string): string {
 }
 
 // --- Visual "click-on-the-page" text editing --------------------------------
-// The preview iframe runs same-origin, so we can make text blocks inside anchor
-// sections contentEditable and read the edited section back from the live DOM.
-// Block-level text elements only, so tab buttons and layout containers stay
-// untouched. Saving is still SECTION-SCOPED (only the edited section's inner HTML
-// is spliced into the source string) — never a whole-document re-serialize.
+// The preview iframe runs same-origin, so we make EVERY block-level text element
+// contentEditable on click. Save re-parses the stored source and applies only the
+// changed text blocks (matched by document order), so the page's structure, scripts,
+// styles and runtime state are preserved — only edited text changes. No anchors needed.
 const V_EDITABLE_SEL = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,figcaption';
 const V_ATTR = 'data-v-editable';
-
-// Serialize the live DOM content of one anchor section (nodes between the
-// start/end comment markers, which are siblings inside the section element).
-function getLiveSectionInner(doc: Document, id: string): string | null {
-  const walker = doc.createTreeWalker(doc.documentElement, NodeFilter.SHOW_COMMENT);
-  const startRe = new RegExp(`^\\s*edit:${id}:start\\s*$`);
-  const endRe = new RegExp(`^\\s*edit:${id}:end\\s*$`);
-  let startNode: Comment | null = null;
-  let n: Node | null;
-  while ((n = walker.nextNode())) {
-    const d = (n as Comment).data;
-    if (!startNode && startRe.test(d)) { startNode = n as Comment; continue; }
-    if (startNode && endRe.test(d)) {
-      let out = '';
-      let cur: Node | null = startNode.nextSibling;
-      while (cur && cur !== n) {
-        if (cur.nodeType === Node.ELEMENT_NODE) out += (cur as Element).outerHTML;
-        else if (cur.nodeType === Node.TEXT_NODE) out += (cur.textContent || '');
-        cur = cur.nextSibling;
-      }
-      return out;
-    }
-  }
-  return null;
-}
 
 // Strip the edit-only attributes we injected before saving, so node.info stays clean.
 function cleanInner(s: string): string {
@@ -232,7 +206,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   // Visual "click-on-the-page" edit mode
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const baselineRef = useRef<Record<string, string>>({}); // anchor id -> clean inner captured at load
+  const baselineRef = useRef<string[]>([]); // per text-block (document order) clean innerHTML at load
   const [visualEdit, setVisualEdit] = useState(false);
   const [visualSaving, setVisualSaving] = useState(false);
   const [visualMsg, setVisualMsg] = useState('');
@@ -259,35 +233,18 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       st.textContent = `[${V_ATTR}]{outline:1px dashed rgba(249,115,22,.55);outline-offset:2px;cursor:text}[${V_ATTR}]:hover{outline:2px solid rgba(249,115,22,.95)}[contenteditable="true"]{outline:2px solid #22c55e!important;background:rgba(34,197,94,.06)}`;
       doc.head?.appendChild(st);
     }
-    // Tag block-level text elements INSIDE each anchor section.
-    const walker = doc.createTreeWalker(doc.documentElement, NodeFilter.SHOW_COMMENT);
-    const startRe = /^\s*edit:([a-z0-9-]+):start\s*$/;
-    const endRe = /^\s*edit:([a-z0-9-]+):end\s*$/;
-    let n: Node | null;
-    while ((n = walker.nextNode())) {
-      const m = startRe.exec((n as Comment).data);
-      if (!m) continue;
-      const id = m[1];
-      let cur: Node | null = n.nextSibling;
-      while (cur) {
-        if (cur.nodeType === Node.COMMENT_NODE) {
-          const em = endRe.exec((cur as Comment).data);
-          if (em && em[1] === id) break;
-        }
-        if (cur.nodeType === Node.ELEMENT_NODE) {
-          const el = cur as Element;
-          if (el.matches(V_EDITABLE_SEL)) el.setAttribute(V_ATTR, id);
-          el.querySelectorAll(V_EDITABLE_SEL).forEach(b => b.setAttribute(V_ATTR, id));
-        }
-        cur = cur.nextSibling;
-      }
-    }
-    doc.addEventListener('click', handlersRef.current.click, true);
-    // Baseline of each section's clean inner HTML as loaded — save() compares the live
-    // DOM against this to detect real edits (robust; no dependence on keystroke events).
-    listAnchorIds(doc.documentElement.outerHTML).forEach(id => {
-      baselineRef.current[id] = cleanInner(getLiveSectionInner(doc, id) ?? '');
+    // Make EVERY block-level text element on the page editable (no anchors needed),
+    // and capture each one's clean innerHTML in document order as the baseline that
+    // save() diffs against. querySelectorAll order is stable and matches a re-parse of
+    // the source, so index i here == index i in the source document on save.
+    const els = Array.from(doc.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+    const base: string[] = [];
+    els.forEach((el, i) => {
+      el.setAttribute(V_ATTR, '1');
+      base[i] = cleanInner(el.innerHTML);
     });
+    baselineRef.current = base;
+    doc.addEventListener('click', handlersRef.current.click, true);
   }, []);
 
   const disableVisualEdit = useCallback((doc: Document | null | undefined) => {
@@ -304,7 +261,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   useEffect(() => {
     const doc = iframeRef.current?.contentDocument;
     if (visualEdit) enableVisualEdit(doc);
-    else { disableVisualEdit(doc); baselineRef.current = {}; setVisualMsg(''); }
+    else { disableVisualEdit(doc); baselineRef.current = []; setVisualMsg(''); }
   }, [visualEdit, enableVisualEdit, disableVisualEdit]);
 
   // Fired on every iframe (re)load — re-arm edit mode if it's on.
@@ -319,35 +276,41 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     setVisualSaving(true);
     setVisualMsg('');
     try {
-      // Diff the live DOM of each anchor section against its as-loaded baseline.
-      let working = html;
-      let changed = false;
-      for (const id of listAnchorIds(html)) {
-        const cur = cleanInner(getLiveSectionInner(doc, id) ?? '');
-        const base = baselineRef.current[id];
-        if (base !== undefined && cur !== base) {
-          working = setSectionInner(working, id, cur);
-          changed = true;
-        }
+      // Diff each live text block against its as-loaded baseline (document order), and
+      // apply ONLY the changed blocks onto a FRESH parse of the source. Re-parsing the
+      // stored source (not the runtime DOM) means the page's structure, scripts, styles
+      // and runtime state (active tab, inline display) are preserved — only edited text
+      // changes. All text is editable; nothing else is touched.
+      const liveEls = Array.from(doc.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+      const src = new DOMParser().parseFromString(html, 'text/html');
+      const srcEls = Array.from(src.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+      if (liveEls.length !== srcEls.length) {
+        setVisualMsg('Kan ikke lagre trygt — last siden på nytt'); setVisualSaving(false); return;
       }
-      if (!changed || working === html) { setVisualMsg('Ingen endring'); setVisualSaving(false); return; }
+      let changed = false;
+      for (let i = 0; i < liveEls.length; i++) {
+        const cur = cleanInner(liveEls[i].innerHTML);
+        if (cur !== baselineRef.current[i]) { srcEls[i].innerHTML = cur; changed = true; }
+      }
+      if (!changed) { setVisualMsg('Ingen endring'); setVisualSaving(false); return; }
+      const newHtml = '<!DOCTYPE html>\n' + src.documentElement.outerHTML;
       const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
       let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
-        body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
+        body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
         expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', 'X-API-Token': readAuthToken(), ...(userEmail ? { 'x-user-email': userEmail } : {}) },
-          body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
+          body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) { setVisualMsg(data?.error || `Lagring feilet (${res.status})`); setVisualSaving(false); return; }
-      onHtmlChange?.(working); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode + recaptures baseline
+      onHtmlChange?.(newHtml); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode + recaptures baseline
       setVisualMsg(`Lagret · v${data.newVersion}`);
     } catch (e) {
       setVisualMsg(e instanceof Error ? e.message : 'Lagringsfeil');
