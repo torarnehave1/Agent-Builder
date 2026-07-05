@@ -326,6 +326,20 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'publish_html_node',
+    description: "Publish an html-node (or css-node) to a LIVE host so it actually serves on the web, e.g. fonemer.vegvisr.org. This is the step AFTER editing: editing changes the node in the graph; publishing pushes that HTML to the live site. Reads the node's current HTML, signs a host-scoped token with agent-worker's HTML_PUBLISH_SECRET, and POSTs to https://<host>/__html/publish — writing html:<host> into brand-worker's HTML_PAGES KV (the same key the viewer's Publish button writes). Use this whenever the user says 'publish', 'push it live', 'make it live', or 'update the live site' for a page whose html-node you edited. The host must already route to brand-worker — run create_subdomain first if it doesn't exist. To refresh a live page after edits, just call this again (overwrite defaults true). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID containing the html-node' },
+        nodeId: { type: 'string', description: 'The html-node (or css-node) ID to publish' },
+        host: { type: 'string', description: "The live target host, e.g. 'fonemer.vegvisr.org'. Must already route to brand-worker (create_subdomain first)." },
+        overwrite: { type: 'boolean', description: 'Overwrite an existing published page at this host. Default true — republish in place after edits.' }
+      },
+      required: ['graphId', 'nodeId', 'host']
+    }
+  },
+  {
     name: 'list_graph_versions',
     description: 'List the saved version history of a knowledge graph (up to the 20 most recent versions, newest first). Each entry has version and timestamp. Use this before get_graph_version / restore_graph_version / restore_html_node_version to pick a version. Code-hardcoded (not in registry).',
     input_schema: {

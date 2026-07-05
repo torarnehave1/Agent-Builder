@@ -447,6 +447,117 @@ async function executeEditHtmlNode(input, env) {
   }
 }
 
+// Publish a graph html-node (or css-node) to a live host served by the shared brand-worker,
+// e.g. fonemer.vegvisr.org. Mirrors the World-Founder publish path (executePublishWorldPage):
+// signs a host-scoped token with agent-worker's own HTML_PUBLISH_SECRET and POSTs the node's
+// HTML to https://<host>/__html/publish, which writes html:<host> into the brand-worker's
+// HTML_PAGES KV — the SAME key the viewer's Publish button writes. This closes the gap where
+// the agent could edit the node in the graph but not push it to the live site. Superadmin only.
+// Code-hardcoded (not in registry).
+async function executePublishHtmlNode(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'publish an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const host = String(input.host || '').trim().toLowerCase()
+  if (!host || !host.includes('.')) {
+    return { success: false, error: "host is required — the live target, e.g. 'fonemer.vegvisr.org'. Create it first with create_subdomain if it doesn't exist." }
+  }
+  if (!input.graphId || !input.nodeId) {
+    return { success: false, error: 'graphId and nodeId are required (the html-node to publish).' }
+  }
+
+  // 1. Read the node's current HTML from the graph
+  const readRes = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
+  )
+  const graphData = await readRes.json()
+  if (!readRes.ok) return { success: false, error: graphData.error || `Failed to read graph (${readRes.status})` }
+
+  const node = graphData.nodes?.find(n => n.id === input.nodeId)
+  if (!node) {
+    const validIds = graphData.nodes?.filter(n => n.type === 'html-node').map(n => `"${n.id}" (${n.label})`).join(', ') || 'none'
+    return { success: false, error: `Node "${input.nodeId}" not found. html-nodes in this graph: ${validIds}` }
+  }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `publish_html_node only publishes html-node or css-node types. Node "${input.nodeId}" is type "${node.type}".` }
+  }
+  const html = node.info || ''
+  if (!html.trim()) return { success: false, error: `Node "${input.nodeId}" has no HTML content to publish.` }
+
+  // 2. Mint a host-scoped publish token via api-worker's canonical minter, NOT by signing locally.
+  //    The shared brand-worker verifies tokens against api-worker's HTML_PUBLISH_SECRET (tokens are
+  //    normally minted by api-worker's /api/html/publish-token — same path the viewer's Publish button
+  //    uses). agent-worker's own HTML_PUBLISH_SECRET differs from that, so a locally-signed token is
+  //    rejected 401. Minting through api-worker (reached via the API_WORKER service binding) needs no
+  //    secret parity: api-worker signs with the secret brand-worker trusts. The caller's own
+  //    emailVerificationToken authenticates the mint; Superadmin may publish to any host.
+  const ac = input.authContext || {}
+  const callerToken = String(ac.profile?.emailVerificationToken || ac.authToken || input.userToken || '').trim()
+  if (!callerToken) {
+    return { success: false, error: 'No caller API token available to mint a publish token. Sign in (or pass authToken) and retry.' }
+  }
+  if (!env.API_WORKER) {
+    return { success: false, error: 'API_WORKER service binding missing on agent-worker — cannot mint a publish token. Add it to wrangler.toml + redeploy.' }
+  }
+  let publishToken
+  try {
+    const mintRes = await env.API_WORKER.fetch('https://vegvisr-api-worker/api/html/publish-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Token': callerToken },
+      body: JSON.stringify({ appId: input.nodeId, hostname: host, ttlDays: 30 }),
+    })
+    const mintJson = await mintRes.json().catch(() => null)
+    if (!mintRes.ok || !mintJson?.success || !mintJson?.token) {
+      const detail = (mintJson && mintJson.error) || `HTTP ${mintRes.status}`
+      return { success: false, error: `Could not mint publish token via api-worker: ${detail}` }
+    }
+    publishToken = mintJson.token
+  } catch (e) {
+    return { success: false, error: `Publish-token mint failed: ${e.message}` }
+  }
+
+  // 3. POST the HTML to the brand-worker's publish endpoint.
+  //    Prefer the BRAND_WORKER service binding: agent-worker and vegvisr.org subdomains share the
+  //    vegvisr.org zone, so a public-hostname fetch loopback-fails with HTTP 522. The binding routes
+  //    worker→worker internally, bypassing DNS/zone entirely. brand-worker keys the KV entry off the
+  //    BODY hostname (not the request Host), so the internal URL host is irrelevant. Public fetch is
+  //    the fallback for a foreign host passed via proxy_url (e.g. a cross-zone domain).
+  const overwrite = input.overwrite !== false // default true — republish in place
+  const publishBody = JSON.stringify({ hostname: host, html, overwrite, graphId: input.graphId, nodeId: input.nodeId })
+  const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
+  const useBinding = env.BRAND_WORKER && !input.proxy_url
+  const proxyUrl = useBinding ? 'brand-worker service binding' : (input.proxy_url || `https://${host}/__html/publish`).trim()
+  let pubRes, pubJson
+  try {
+    pubRes = useBinding
+      ? await env.BRAND_WORKER.fetch('https://brand-worker/__html/publish', { method: 'POST', headers: publishHeaders, body: publishBody })
+      : await fetch(proxyUrl, { method: 'POST', headers: publishHeaders, body: publishBody })
+    pubJson = await pubRes.json().catch(() => null)
+  } catch (e) {
+    return { success: false, error: `Could not reach ${proxyUrl}: ${e.message}. If ${host} does not route to brand-worker yet, run create_subdomain first.` }
+  }
+  if (!pubRes.ok || !pubJson || !pubJson.ok) {
+    const detail = (pubJson && pubJson.error) || `HTTP ${pubRes.status}`
+    // 409 = a page already exists and overwrite was not set; surface it plainly.
+    if (pubRes.status === 409 || pubJson?.exists) {
+      return { success: false, error: `${host} already has a published page. Re-run with overwrite:true to replace it.` }
+    }
+    return { success: false, error: `Publish rejected by ${host}: ${detail}` }
+  }
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    host,
+    key: `html:${host}`,
+    url: `https://${host}/`,
+    html_bytes: html.length,
+    via: proxyUrl,
+    message: `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.`,
+  }
+}
+
 // ---- Graph version tools (list / fetch / restore) ----------------------------
 // Thin wrappers over knowledge-graph-worker's existing history endpoints:
 //   GET /getknowgraphhistory?id=   -> { graphId, history: { results: [{version,timestamp}] } }
@@ -8176,6 +8287,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeEditHtmlNode(toolInput, env)
     case 'create_subdomain':
       return await executeCreateSubdomain(toolInput, env)
+    case 'publish_html_node':
+      return await executePublishHtmlNode(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':

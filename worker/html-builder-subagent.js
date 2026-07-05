@@ -653,8 +653,8 @@ function getSubagentTools() {
 
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
-  const maxTurns = 12
-  const WALL_TIME_LIMIT_MS = 120_000  // 2 minutes max — bail out gracefully
+  const maxTurns = 20
+  const WALL_TIME_LIMIT_MS = 180_000  // 3 minutes — paired with maxTurns=20 so the turn budget is actually reachable
   const startTime = Date.now()
   const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
@@ -744,8 +744,11 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
       log(`wall-time limit reached (${(elapsed / 1000).toFixed(1)}s) after ${turn} turns | tokens in=${inputTokens} out=${outputTokens}`)
       progress('Time limit reached — returning partial result.')
       return {
-        success: actions.some(a => a.success),
-        summary: `HTML Builder stopped after ${turn} turns (${(elapsed / 1000).toFixed(0)}s wall time limit). ${actions.length} actions completed. The task may be partially done — check the result and retry with a more focused task if needed.`,
+        // A wall-time bail is not a completion — report failure so the parent
+        // re-reads and verifies instead of claiming the task is done.
+        success: false,
+        error: `Stopped after ${turn} turns at the ${(elapsed / 1000).toFixed(0)}s wall-time limit — task INCOMPLETE and UNVERIFIED.`,
+        summary: `HTML Builder stopped after ${turn} turns (${(elapsed / 1000).toFixed(0)}s wall-time limit). ${actions.length} actions ran but the task is INCOMPLETE and UNVERIFIED — re-read the node and check the result before reporting anything as done. Retry with a smaller, more focused task.`,
         turns: turn,
         actions,
         model,
@@ -771,7 +774,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
           userId: userId || 'html-builder-subagent',
           messages,
           model,
-          max_tokens: 4096,
+          max_tokens: 8192,
           temperature: 0.2,
           system: dynamicSystemPrompt,
           tools,
@@ -924,8 +927,25 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         { role: 'assistant', content: data.content },
         { role: 'user', content: toolResults },
       )
+    } else if (data.stop_reason === 'max_tokens') {
+      // The reply was cut off mid-output. If it contains a partial tool_use, that
+      // tool call is INCOMPLETE and must NOT be executed — its JSON is truncated.
+      // Telling the model to "continue" here corrupts the flow (a half-written
+      // edit_html_node silently never runs, burning a turn). Instead: drop the
+      // truncated turn and instruct the model to make a SMALLER edit.
+      const hadPartialTool = (data.content || []).some(c => c.type === 'tool_use')
+      log(`stop_reason: max_tokens (partialTool=${hadPartialTool}) — reply truncated, requesting smaller edit`)
+      progress('Reply too large — splitting the change...')
+      // Keep only completed text blocks from the truncated turn; discard the
+      // partial tool_use so the conversation stays well-formed.
+      const safeContent = (data.content || []).filter(c => c.type === 'text')
+      if (safeContent.length === 0) safeContent.push({ type: 'text', text: '(reply truncated)' })
+      messages.push(
+        { role: 'assistant', content: safeContent },
+        { role: 'user', content: 'Your previous reply was cut off because it exceeded the output limit — the edit was NOT applied. Do not repeat that large edit. Instead make a SMALLER change: edit_html_node with a shorter new_string, or split the work into several smaller edits (e.g. insert one section, then edit it in place). If you were replacing a big block, replace just the minimal part that must change.' },
+      )
     } else {
-      // max_tokens or unexpected — continue
+      // Unexpected stop reason — continue defensively
       log(`stop_reason: ${data.stop_reason}`)
       messages.push(
         { role: 'assistant', content: data.content },
@@ -936,8 +956,11 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
 
   log(`max turns reached (${maxTurns}) | tokens in=${inputTokens} out=${outputTokens}`)
   return {
-    success: actions.some(a => a.success),
-    summary: `HTML Builder completed ${actions.length} actions in ${turn} turns (max turns reached).`,
+    // Hitting the turn ceiling means the task did NOT finish cleanly — report
+    // failure so the parent agent re-reads and verifies instead of claiming done.
+    success: false,
+    error: `Ran out of turns (${maxTurns}) before finishing — task INCOMPLETE and UNVERIFIED.`,
+    summary: `HTML Builder ran out of turns (${maxTurns}) before finishing. ${actions.length} actions ran but the task is INCOMPLETE and UNVERIFIED — re-read the node and check the result before reporting anything as done. Retry with a smaller, more focused task if needed.`,
     turns: turn,
     actions,
     model,

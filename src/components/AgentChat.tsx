@@ -2069,6 +2069,37 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 })
                 .catch(() => {});
             }
+          } else if (toolName === 'read_node') {
+            // Auto-open preview when the user reads an html-node ("les html-node og vis
+            // den i preview"). read_node's SSE payload carries graphId but not the node's
+            // html or type, so pull nodeId from the running tool call's input and fetch the
+            // node — mirrors the delegate_to_html_builder branch. Only html-nodes preview;
+            // reading any other node type is a no-op here.
+            const readGraphId = (ev.data as Record<string, unknown>).graphId as string | undefined;
+            setCurrent(prev => {
+              if (!prev) return prev;
+              const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'read_node' && t.status === 'running');
+              if (tc) {
+                const inp = tc.input as Record<string, unknown>;
+                const gId = (readGraphId || inp.graphId) as string;
+                const nId = inp.nodeId as string;
+                if (gId && nId) {
+                  fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+                    .then(r => r.json())
+                    .then(graph => {
+                      const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
+                      if (node?.info && typeof node.info === 'string' && (node.type === 'html-node' || (node.info as string).includes('<html'))) {
+                        lastAgentGraphRef.current = gId;
+                        lastHtmlNodeIdRef.current = nId;
+                        onActiveHtmlNode?.(nId);
+                        setTimeout(() => onPreview(node.info as string), 0);
+                      }
+                    })
+                    .catch(() => {});
+                }
+              }
+              return prev;
+            });
           } else if (toolName === 'delegate_to_kg' || toolName === 'delegate_to_video') {
             // Track graphId from KG/video delegation results so the dropdown stays in sync
             const resultData = ev.data as Record<string, unknown>;
