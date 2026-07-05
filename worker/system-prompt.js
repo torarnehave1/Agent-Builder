@@ -1147,4 +1147,60 @@ Known limitations carried over from §12: math-shape and motionScenes formulas w
 \`\`\`
 `
 
-export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE }
+const CAROUSEL_REFERENCE = `## Instagram Carousel Reference (vemotion_create_carousel)
+
+One carousel = one Vemotion composition, 1080×1350 px (4:5 portrait), one slide per second.
+The worker lays slides out deterministically from templates — you provide CONTENT ONLY.
+The user opens the returned editorUrl, reviews, and clicks "Export slides (PNG set)" to get
+one PNG per slide (slide capture times live in meta.carousel.slideTimes). Max 10 slides.
+
+### Workflow
+1. Call get_carousel_reference (this document).
+2. Draft the slide contents with the user (language: match the user's — the ponemer series is Norwegian).
+3. Call vemotion_create_carousel with name + slides (+ description).
+4. Return the editorUrl and tell the user: open it → "Export slides (PNG set)" → upload the PNGs to Instagram in order.
+5. To revise, call again with the SAME compositionId — it regenerates in place.
+
+### Templates and their content fields
+| template | look | fields used |
+|---|---|---|
+| cover | dark bg, centered | kicker (uppercase orange), devanagari, heading (large serif), body (subtitle), byline+handle+site auto |
+| statement | cream bg, left-aligned | kicker, heading (bold statement, 1-2 sentences), body (2-4 sentences) |
+| word-parts | cream bg, stacked sand boxes | heading (serif title), items: up to 4 {term, gloss}, body (synthesis line under the boxes) |
+| pronunciation | warm sand bg, centered | devanagari (very large), latin (orange transliteration), phonetic (e.g. "aa-VAA-ha-na"), note (small hint) |
+| ritual | dark bg, left-aligned | heading (serif), body, note (orange aside) |
+| outro | dark bg, centered CTA | kicker, heading, body, handle+site rendered large automatically |
+
+Field lengths that fit the layout: kicker <= 30 chars; heading <= 90 chars (cover: one word/short phrase);
+body <= 260 chars; term <= 25; gloss <= 45; note <= 130. Devanagari strings render in a Devanagari font — pass real Devanagari, not transliteration.
+
+### Ponemer brand profile (defaults — override via brand only when asked)
+- colors: bg #FAF5E9 (cream), bgAlt #EDE2C4 (sand), card #F0E6CB, ink #2B2320, body #4A4238, accent #B85C2A (burnt orange), dark #17131F, light #F5EFE2, lightBody #C9C2B2, muted #8F897B
+- fonts: serif "Playfair Display" (dark-slide titles), sans "Poppins" (everything else), devanagari "Noto Sans Devanagari"
+- byline "Tor Arne Håve" · handle "@tor.arne.have" · site "ponemer.vegvisr.org" (appears as footer on every slide)
+
+### Typical ponemer word-journey shape (5 slides)
+cover (word + devanagari + series kicker) → statement (betydning) → word-parts (morphology) → pronunciation → ritual/context.
+Add an outro slide with a CTA when the user wants a 6th.
+
+### Example call (params for vemotion_create_carousel)
+name: "avahana-ha-lydreisen"
+slides:
+1. { "template": "cover", "kicker": "HA-lydreisen", "heading": "Āvāhana", "devanagari": "आवाहन",
+     "body": "En utforskende språkreise om fonemer — om ord som bærer HA-lyden i seg." }
+2. { "template": "statement", "kicker": "Betydning",
+     "heading": "Āvāhana betyr «å kalle frem», «påkallelse» eller «å invitere et nærvær».",
+     "body": "I denne HA-lydutforskningen kan du lytte etter hvordan det åpne pustet i «ha» finnes i et ord om å invitere nærvær." }
+3. { "template": "word-parts", "heading": "Inne i ordet",
+     "items": [ { "term": "ā- / आ-", "gloss": ": mot, nær, inn i" },
+                { "term": "√vah / वह्", "gloss": ": å bære, formidle, bringe" },
+                { "term": "-ana / -अन", "gloss": ": handling eller prosess" } ],
+     "body": "Ā-vāh-ana: handlingen å bringe eller invitere noe nærmere." }
+4. { "template": "pronunciation", "devanagari": "आवाहन", "latin": "Āvāhana",
+     "phonetic": "aa-VAA-ha-na", "note": "Lang ā = आ · HA finnes i den tredje stavelsen" }
+5. { "template": "ritual", "heading": "Hvordan det brukes i ritual",
+     "body": "I pūjā er āvāhana øyeblikket for invitasjon — å ønske det guddommelige nærværet velkommen med mantra, intensjon og offergave.",
+     "note": "Påkallelse er ikke bare tale; det er oppmerksomhet rettet med ærbødighet." }
+`
+
+export { CHAT_SYSTEM_PROMPT, FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE }
