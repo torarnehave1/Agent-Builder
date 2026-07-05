@@ -28,6 +28,47 @@ function setSectionInner(html: string, id: string, inner: string): string {
   return html.slice(0, s + startM.length) + '\n' + inner + '\n' + html.slice(e);
 }
 
+// --- Visual "click-on-the-page" text editing --------------------------------
+// The preview iframe runs same-origin, so we can make text blocks inside anchor
+// sections contentEditable and read the edited section back from the live DOM.
+// Block-level text elements only, so tab buttons and layout containers stay
+// untouched. Saving is still SECTION-SCOPED (only the edited section's inner HTML
+// is spliced into the source string) — never a whole-document re-serialize.
+const V_EDITABLE_SEL = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,figcaption';
+const V_ATTR = 'data-v-editable';
+
+// Serialize the live DOM content of one anchor section (nodes between the
+// start/end comment markers, which are siblings inside the section element).
+function getLiveSectionInner(doc: Document, id: string): string | null {
+  const walker = doc.createTreeWalker(doc.documentElement, NodeFilter.SHOW_COMMENT);
+  const startRe = new RegExp(`^\\s*edit:${id}:start\\s*$`);
+  const endRe = new RegExp(`^\\s*edit:${id}:end\\s*$`);
+  let startNode: Comment | null = null;
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const d = (n as Comment).data;
+    if (!startNode && startRe.test(d)) { startNode = n as Comment; continue; }
+    if (startNode && endRe.test(d)) {
+      let out = '';
+      let cur: Node | null = startNode.nextSibling;
+      while (cur && cur !== n) {
+        if (cur.nodeType === Node.ELEMENT_NODE) out += (cur as Element).outerHTML;
+        else if (cur.nodeType === Node.TEXT_NODE) out += (cur.textContent || '');
+        cur = cur.nextSibling;
+      }
+      return out;
+    }
+  }
+  return null;
+}
+
+// Strip the edit-only attributes we injected before saving, so node.info stays clean.
+function cleanInner(s: string): string {
+  return s
+    .replace(/\s*contenteditable="(?:true|false)"/gi, '')
+    .replace(new RegExp(`\\s*${V_ATTR}="[^"]*"`, 'gi'), '');
+}
+
 interface Props {
   html: string | null;
   onClose: () => void;
@@ -169,6 +210,128 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     if (id && id !== editAnchor) setEditAnchor(id);
     if (id) setEditValue(getSectionInner(html, id) ?? '');
   }, [editOpen, editAnchor, html, anchorIds]);
+
+  // Visual "click-on-the-page" edit mode
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const dirtyRef = useRef<Set<string>>(new Set());
+  const [visualEdit, setVisualEdit] = useState(false);
+  const [visualSaving, setVisualSaving] = useState(false);
+  const [visualMsg, setVisualMsg] = useState('');
+
+  // Stable delegated handlers (attached to the iframe document while in edit mode).
+  const handlersRef = useRef({
+    click: (e: Event) => {
+      const el = (e.target as Element)?.closest?.(`[${V_ATTR}]`) as HTMLElement | null;
+      if (!el) return; // clicks on non-text elements (tab buttons, etc.) pass through
+      e.preventDefault();
+      e.stopPropagation();
+      el.setAttribute('contenteditable', 'true');
+      el.focus();
+    },
+    input: (e: Event) => {
+      const el = (e.target as Element)?.closest?.(`[${V_ATTR}]`) as HTMLElement | null;
+      if (el) dirtyRef.current.add(el.getAttribute(V_ATTR) || '');
+    },
+  });
+
+  const enableVisualEdit = useCallback((doc: Document | null | undefined) => {
+    if (!doc || !doc.documentElement) return;
+    if (!doc.getElementById('__v_edit_style__')) {
+      const st = doc.createElement('style');
+      st.id = '__v_edit_style__';
+      st.textContent = `[${V_ATTR}]{outline:1px dashed rgba(249,115,22,.55);outline-offset:2px;cursor:text}[${V_ATTR}]:hover{outline:2px solid rgba(249,115,22,.95)}[contenteditable="true"]{outline:2px solid #22c55e!important;background:rgba(34,197,94,.06)}`;
+      doc.head?.appendChild(st);
+    }
+    // Tag block-level text elements INSIDE each anchor section.
+    const walker = doc.createTreeWalker(doc.documentElement, NodeFilter.SHOW_COMMENT);
+    const startRe = /^\s*edit:([a-z0-9-]+):start\s*$/;
+    const endRe = /^\s*edit:([a-z0-9-]+):end\s*$/;
+    let n: Node | null;
+    while ((n = walker.nextNode())) {
+      const m = startRe.exec((n as Comment).data);
+      if (!m) continue;
+      const id = m[1];
+      let cur: Node | null = n.nextSibling;
+      while (cur) {
+        if (cur.nodeType === Node.COMMENT_NODE) {
+          const em = endRe.exec((cur as Comment).data);
+          if (em && em[1] === id) break;
+        }
+        if (cur.nodeType === Node.ELEMENT_NODE) {
+          const el = cur as Element;
+          if (el.matches(V_EDITABLE_SEL)) el.setAttribute(V_ATTR, id);
+          el.querySelectorAll(V_EDITABLE_SEL).forEach(b => b.setAttribute(V_ATTR, id));
+        }
+        cur = cur.nextSibling;
+      }
+    }
+    doc.addEventListener('click', handlersRef.current.click, true);
+    doc.addEventListener('input', handlersRef.current.input, true);
+  }, []);
+
+  const disableVisualEdit = useCallback((doc: Document | null | undefined) => {
+    if (!doc) return;
+    doc.removeEventListener('click', handlersRef.current.click, true);
+    doc.removeEventListener('input', handlersRef.current.input, true);
+    doc.getElementById('__v_edit_style__')?.remove();
+    doc.querySelectorAll(`[${V_ATTR}]`).forEach(el => {
+      el.removeAttribute(V_ATTR);
+      el.removeAttribute('contenteditable');
+    });
+  }, []);
+
+  // Re-apply / remove edit mode whenever it toggles (on the current iframe doc).
+  useEffect(() => {
+    const doc = iframeRef.current?.contentDocument;
+    if (visualEdit) enableVisualEdit(doc);
+    else { disableVisualEdit(doc); dirtyRef.current.clear(); setVisualMsg(''); }
+  }, [visualEdit, enableVisualEdit, disableVisualEdit]);
+
+  // Fired on every iframe (re)load — re-arm edit mode if it's on.
+  const handleIframeLoad = () => {
+    if (visualEdit) enableVisualEdit(iframeRef.current?.contentDocument);
+  };
+
+  const saveVisual = async () => {
+    if (!graphId || !nodeId || !html) return;
+    const doc = iframeRef.current?.contentDocument;
+    if (!doc) return;
+    const dirty = [...dirtyRef.current].filter(Boolean);
+    if (dirty.length === 0) { setVisualMsg('Ingen endring'); return; }
+    setVisualSaving(true);
+    setVisualMsg('');
+    try {
+      let working = html;
+      for (const id of dirty) {
+        const liveInner = getLiveSectionInner(doc, id);
+        if (liveInner != null) working = setSectionInner(working, id, cleanInner(liveInner));
+      }
+      if (working === html) { setVisualMsg('Ingen endring'); dirtyRef.current.clear(); setVisualSaving(false); return; }
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
+      let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
+      let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
+      });
+      if (res.status === 409) {
+        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
+        res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
+        });
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) { setVisualMsg(data?.error || `Lagring feilet (${res.status})`); setVisualSaving(false); return; }
+      dirtyRef.current.clear();
+      onHtmlChange?.(working); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode
+      setVisualMsg(`Lagret · v${data.newVersion}`);
+    } catch (e) {
+      setVisualMsg(e instanceof Error ? e.message : 'Lagringsfeil');
+    } finally {
+      setVisualSaving(false);
+    }
+  };
 
   const saveSection = async () => {
     if (!graphId || !nodeId || !html || !editAnchor) return;
@@ -379,14 +542,24 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           )}
         </div>
         <div className="flex items-center gap-1">
+          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && (
+            <button
+              type="button"
+              onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); }}
+              className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${visualEdit ? 'bg-orange-500/40 text-orange-200' : 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/30'}`}
+              title="Rediger tekst ved å klikke direkte på siden (ingen agent)"
+            >
+              {visualEdit ? '● Rediger av' : '✎ Rediger'}
+            </button>
+          )}
           {graphId && nodeId && anchorIds.length > 0 && (
             <button
               type="button"
               onClick={() => setEditOpen(p => !p)}
               className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${editOpen ? 'bg-emerald-500/30 text-emerald-300' : 'text-white/40 hover:text-white hover:bg-white/10'}`}
-              title="Edit a section directly (no agent)"
+              title="Edit a section's raw HTML directly (no agent)"
             >
-              Edit
+              HTML
             </button>
           )}
           {graphId && nodeId && (
@@ -425,6 +598,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           </button>
         </div>
       </div>
+      {visualEdit && (
+        <div className="px-3 py-1.5 border-b border-white/10 bg-orange-950/30 flex-shrink-0 flex items-center gap-2">
+          <span className="text-[11px] text-orange-200/80">Klikk på en tekst i siden og skriv. Så:</span>
+          <button
+            type="button"
+            onClick={saveVisual}
+            disabled={visualSaving}
+            className="text-[11px] px-2.5 py-0.5 rounded bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+          >
+            {visualSaving ? 'Lagrer…' : 'Lagre'}
+          </button>
+          {visualMsg && <span className="text-[11px] text-white/60">{visualMsg}</span>}
+          <span className="ml-auto text-[9px] text-white/25">visuell redigering · ingen agent</span>
+        </div>
+      )}
       {editOpen && (
         <div className="px-3 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0 flex flex-col gap-2">
           <div className="flex items-center gap-2">
@@ -480,6 +668,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         </div>
       )}
       <iframe
+        ref={iframeRef}
+        onLoad={handleIframeLoad}
         srcDoc={injectBridge(versionHtml || html, graphId, nodeId)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
