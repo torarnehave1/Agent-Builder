@@ -69,6 +69,24 @@ function cleanInner(s: string): string {
     .replace(new RegExp(`\\s*${V_ATTR}="[^"]*"`, 'gi'), '');
 }
 
+// The logged-in user's X-API-Token, read the same way as the rest of the app
+// (localStorage.user.emailVerificationToken). Required — patchNode rejects
+// unauthenticated writes with "Authentication required".
+function readAuthToken(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const raw = window.localStorage.getItem('user');
+    if (raw) {
+      const t = JSON.parse(raw)?.emailVerificationToken;
+      if (typeof t === 'string' && t.trim()) return t.trim();
+    }
+  } catch { /* ignore */ }
+  for (const k of ['token', 'authToken']) {
+    try { const v = window.localStorage.getItem(k); if (v?.trim()) return v.trim(); } catch { /* ignore */ }
+  }
+  return '';
+}
+
 interface Props {
   html: string | null;
   onClose: () => void;
@@ -316,13 +334,13 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
       let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
         body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
       });
       if (res.status === 409) {
         expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
           body: JSON.stringify({ graphId, nodeId, fields: { info: working }, expectedVersion }),
         });
       }
@@ -350,7 +368,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       let expectedVersion = Number(g?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
@@ -358,7 +376,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         expectedVersion = Number(latest?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
@@ -415,7 +433,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
       const res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
         body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion }),
       });
 
@@ -426,7 +444,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         const retryVersion = Number(latestGraph?.metadata?.version || 0);
         const retryRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-API-Token': readAuthToken() },
           body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion: retryVersion }),
         });
         if (!retryRes.ok) return;
