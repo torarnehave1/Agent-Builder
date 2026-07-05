@@ -2120,6 +2120,32 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           }
         }
 
+        // DEFENSE-IN-DEPTH (L36): always refresh the preview from the REAL node after any
+        // html-builder/edit run, even when the tool reports failure. The builder can run
+        // out of turns AFTER its edit already landed (success:false); without this the
+        // preview stays stale and the user sees an old page while the node has changed —
+        // which reads as the agent lying. The success:true path is handled above; this
+        // covers the failure/partial path so the preview always shows the truth.
+        if (ev.type === 'tool_result' && !ev.data.success && onPreview &&
+            (ev.data.tool === 'delegate_to_html_builder' || ev.data.tool === 'replace_html_section' || ev.data.tool === 'edit_html_node')) {
+          const rd = ev.data as Record<string, unknown>;
+          const gId = (rd.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
+          const nId = (rd.nodeId || lastHtmlNodeIdRef.current) as string | undefined;
+          if (gId && nId) {
+            fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+              .then(r => r.json())
+              .then(graph => {
+                const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
+                if (node?.info && typeof node.info === 'string' && (node.type === 'html-node' || (node.info as string).includes('<html'))) {
+                  lastHtmlNodeIdRef.current = nId;
+                  onActiveHtmlNode?.(nId);
+                  setTimeout(() => onPreview(node.info as string), 0);
+                }
+              })
+              .catch(() => {});
+          }
+        }
+
         // Detect clientSideRequired from transcribe_audio tool result
         if (ev.type === 'tool_result' && ev.data.tool === 'transcribe_audio' && ev.data.clientSideRequired) {
           pendingClientTranscription = {

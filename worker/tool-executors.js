@@ -447,6 +447,119 @@ async function executeEditHtmlNode(input, env) {
   }
 }
 
+// ---- Anchor-based section replace (Lesson 34) ---------------------------------
+// Reliable HTML edits that don't depend on the model reproducing an exact text string.
+// Editable regions are delimited by HTML COMMENT markers:
+//   <!-- edit:<anchorId>:start -->  ...content...  <!-- edit:<anchorId>:end -->
+// To change a region the agent names the anchorId; the tool swaps everything between the
+// markers. Comments can't be confused with content, need no tag-balancing, and there is
+// exactly one of each marker — so the edit cannot "miss" the way exact-string match does.
+const ANCHOR_ID_RE = /^[a-z0-9][a-z0-9-]*$/
+
+function anchorMarkers(anchorId) {
+  return { start: `<!-- edit:${anchorId}:start -->`, end: `<!-- edit:${anchorId}:end -->` }
+}
+
+function listAnchorIds(html) {
+  const ids = []
+  const re = /<!--\s*edit:([a-z0-9][a-z0-9-]*):start\s*-->/gi
+  let m
+  while ((m = re.exec(html)) !== null) ids.push(m[1])
+  return ids
+}
+
+async function fetchHtmlNode(env, graphId, nodeId) {
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+  )
+  const graphData = await res.json()
+  if (!res.ok) throw new Error(graphData.error || `Failed to read graph (${res.status})`)
+  const node = (graphData.nodes || []).find(n => n.id === nodeId)
+  return { node, graphData }
+}
+
+async function executeListHtmlAnchors(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const html = (node.info || '').replace(/\r\n/g, '\n')
+  const anchors = listAnchorIds(html)
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    anchors,
+    count: anchors.length,
+    message: anchors.length
+      ? `Editable anchors in "${input.nodeId}": ${anchors.join(', ')}. Use replace_html_section(anchorId, html) to change one.`
+      : `No edit anchors found in "${input.nodeId}". Wrap a section once with <!-- edit:<id>:start --> … <!-- edit:<id>:end --> (via edit_html_node) to make it anchor-editable.`,
+  }
+}
+
+async function executeReplaceHtmlSection(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const anchorId = String(input.anchorId || input.anchor || '').trim().toLowerCase()
+  if (!ANCHOR_ID_RE.test(anchorId)) {
+    return { success: false, error: "anchorId must be a slug (a-z, 0-9, '-'), e.g. 'om-prosjektet'." }
+  }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const newInner = String(input.html ?? input.newHtml ?? input.content ?? '')
+  if (input.html === undefined && input.newHtml === undefined && input.content === undefined) {
+    return { success: false, error: 'html (the replacement content for the section) is required.' }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `replace_html_section only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  const { start, end } = anchorMarkers(anchorId)
+  const s = currentHtml.indexOf(start)
+  const e = currentHtml.indexOf(end)
+  if (s === -1 || e === -1 || e < s) {
+    const available = listAnchorIds(currentHtml)
+    return {
+      success: false,
+      error: `Anchor "${anchorId}" not found in "${input.nodeId}".${available.length ? ` Available anchors: ${available.join(', ')}.` : ' This page has no edit anchors yet — wrap the target section once with <!-- edit:' + anchorId + ':start --> … <!-- edit:' + anchorId + ':end --> using edit_html_node, then retry.'}`,
+      availableAnchors: available,
+    }
+  }
+
+  const innerStart = s + start.length
+  const before = currentHtml.slice(0, innerStart)
+  const after = currentHtml.slice(e)
+  const newHtml = `${before}\n${newInner}\n${after}`
+
+  if (newHtml === currentHtml) {
+    return { success: true, graphId: input.graphId, nodeId: input.nodeId, anchorId, changed: false, charDelta: 0, message: `Section "${anchorId}" already matched the given content — no change.` }
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml,
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email || null,
+  })
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    anchorId,
+    changed: true,
+    charDelta: newHtml.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    savedNotLive: true,
+    publishHostHints: Array.isArray(node.references) ? node.references : [],
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}", roll back any time with restore_html_node_version) AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
+    message: `Replaced section "${anchorId}" in "${input.nodeId}" (${newHtml.length > currentHtml.length ? '+' : ''}${newHtml.length - currentHtml.length} chars) — saved as v${patchData.newVersion}. Verified: content between the anchors was swapped. Tell the user "nå på v${patchData.newVersion}" and that it is saved in the graph, not live until published.`,
+  }
+}
+
 // Publish a graph html-node (or css-node) to a live host served by the shared brand-worker,
 // e.g. fonemer.vegvisr.org. Mirrors the World-Founder publish path (executePublishWorldPage):
 // signs a host-scoped token with agent-worker's own HTML_PUBLISH_SECRET and POSTs the node's
@@ -8289,6 +8402,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCreateSubdomain(toolInput, env)
     case 'publish_html_node':
       return await executePublishHtmlNode(toolInput, env)
+    case 'replace_html_section':
+      return await executeReplaceHtmlSection(toolInput, env)
+    case 'list_html_anchors':
+      return await executeListHtmlAnchors(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':
@@ -8684,9 +8801,65 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
           console.log(`[delegate_to_html_builder] pre-analysis failed: ${e.message}`)
         }
       }
+      // GROUND-TRUTH VERIFICATION GATE (Lesson 33): the subagent's free-text summary
+      // has repeatedly claimed "✅ edited/verified" for edits that never changed the
+      // node — a phantom success the parent then relays to the user. The model's word
+      // is NOT proof. Read the node content BEFORE and AFTER; if an edit was attempted
+      // but the bytes are identical, the edit did NOT land — force success:false no
+      // matter what the summary says.
+      const readNodeInfo = async (gId, nId) => {
+        if (!gId || !nId) return null
+        try {
+          const r = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(gId)}`)
+          if (!r.ok) return null
+          const g = await r.json()
+          const n = (g.nodes || []).find(x => x.id === nId)
+          return n ? String(n.info || '') : null
+        } catch { return null }
+      }
+      const beforeInfo = await readNodeInfo(toolInput.graphId, toolInput.nodeId)
+
       const result = await runHtmlBuilderSubagent(enrichedInput, env, progress, executeTool)
+
+      const verifyGraphId = result.graphId || toolInput.graphId
+      const verifyNodeId = result.nodeId || toolInput.nodeId
+      const afterInfo = await readNodeInfo(verifyGraphId, verifyNodeId)
+      const editAttempted = (result.actions || []).some(a =>
+        ['edit_html_node', 'create_html_node', 'create_html_from_template', 'rollback_html_node'].includes(a.tool))
+      const haveBothReads = beforeInfo !== null && afterInfo !== null
+      const contentChanged = haveBothReads ? (beforeInfo !== afterInfo) : null
+      const charDelta = haveBothReads ? (afterInfo.length - beforeInfo.length) : null
+      // Graph version AFTER the edit — surfaced so the agent can always report "now on vN"
+      // and the user knows exactly which version to roll back to.
+      let graphVersion = null
+      try { graphVersion = Number((await fetchGraphForVersion(verifyGraphId, env)).version) } catch { /* non-fatal */ }
+
+      // Phantom-success detection: subagent claims success + tried to edit, but the
+      // node is byte-identical → the change did not persist. Override to failure.
+      const phantomSuccess = result.success === true && editAttempted && contentChanged === false
+      // FALSE-NEGATIVE fix (L36): the subagent can run out of turns AFTER its edit
+      // already landed, returning success:false — but the bytes DID change. Reporting a
+      // flat failure then (a) lies the other way and (b) blocks the frontend from
+      // refreshing the preview (it only refreshes on success), so the user sees a STALE
+      // page and concludes nothing happened. Treat "changed but not cleanly finished" as
+      // a success WITH a verify-caveat, so the preview refreshes and the truth shows.
+      const landedButUnconfirmed = result.success === false && contentChanged === true
+      const finalSuccess = phantomSuccess ? false : (result.success || landedButUnconfirmed)
+
+      let message
+      if (phantomSuccess) {
+        message = `HTML Builder reported success but the node content DID NOT CHANGE (still ${afterInfo.length} chars, byte-identical). The edit did NOT land — do NOT tell the user it is done. Re-run with an exact old→new instruction (quote the precise text to replace), or the change genuinely made no difference.`
+      } else if (landedButUnconfirmed) {
+        message = `HTML Builder did NOT finish cleanly (${result.error || 'ran out of turns'}), BUT the node content DID change (${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}). The edit landed but was not fully confirmed by the builder — tell the user exactly what changed and to verify it matches the request, and re-run if it looks incomplete. Do NOT claim the preview auto-refreshed unless you know it did.`
+      } else if (finalSuccess) {
+        const proof = contentChanged === true ? ` [verified: content changed, ${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}]` : ''
+        message = `HTML Builder completed: ${(result.summary || '').slice(0, 500)}${proof}`
+      } else {
+        message = `HTML Builder failed: ${result.error || 'Unknown error'}`
+      }
+
       return {
-        success: result.success,
+        success: finalSuccess,
         summary: result.summary,
         graphId: result.graphId,
         nodeId: result.nodeId,
@@ -8694,21 +8867,61 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         model: result.model,
         inputTokens: result.inputTokens || 0,
         outputTokens: result.outputTokens || 0,
+        contentChanged,
+        charDelta,
+        version: graphVersion,
+        phantomSuccess,
+        savedNotLive: finalSuccess && contentChanged === true,
+        publishReminder: (finalSuccess && contentChanged === true)
+          ? `Change saved${graphVersion !== null ? ` as v${graphVersion}` : ''} in the graph, NOT live on any domain until published. Tell the user the new version${graphVersion !== null ? ` ("nå på v${graphVersion}", roll back any time with restore_html_node_version)` : ''} AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`
+          : undefined,
         actionsPerformed: (result.actions || []).map(a => ({
           tool: a.tool, success: a.success, summary: a.summary || a.error,
         })),
-        message: result.success
-          ? `HTML Builder completed: ${(result.summary || '').slice(0, 500)}`
-          : `HTML Builder failed: ${result.error || 'Unknown error'}`,
+        message,
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
       }
     }
     case 'delegate_to_kg': {
+      // GROUND-TRUTH VERIFICATION GATE (Lesson 33/35): the KG subagent has the same
+      // phantom-success pattern as the HTML builder — it can report "✅ Task completed"
+      // for a patch/edit that changed nothing. The existing in-subagent check only
+      // catches a NEW graph left with 0 nodes; it does NOT catch a no-op edit to an
+      // existing graph (the graph still has nodes, so it "passes"). Every real KG write
+      // bumps the graph version, so compare version BEFORE and AFTER: if a write was
+      // attempted on an existing graph but the version did not increase, nothing landed.
+      const KG_WRITE_TOOLS = new Set(['create_graph', 'create_node', 'patch_node', 'add_edge', 'remove_node', 'patch_graph_metadata', 'create_html_node', 'create_html_from_template'])
+      const readVersion = async (gId) => {
+        if (!gId) return null
+        try { return Number((await fetchGraphForVersion(gId, env)).version) } catch { return null }
+      }
+      const beforeVersion = await readVersion(toolInput.graphId)
+
       const result = await runKgSubagent(toolInput, env, progress, executeTool)
+
+      const sameGraph = result.graphId && toolInput.graphId && result.graphId === toolInput.graphId
+      const afterVersion = sameGraph ? await readVersion(result.graphId) : null
+      const writeAttempted = (result.actions || []).some(a => KG_WRITE_TOOLS.has(a.tool))
+      // Only judge phantom on an EXISTING graph we could version both sides of. A newly
+      // created graph is already covered by the subagent's own 0-nodes check.
+      const versionComparable = beforeVersion !== null && afterVersion !== null
+      const phantomSuccess = result.success === true && writeAttempted && versionComparable && afterVersion <= beforeVersion
+      const finalSuccess = phantomSuccess ? false : result.success
+
+      let message
+      if (phantomSuccess) {
+        message = `KG subagent reported success but the graph version did NOT advance (still v${afterVersion}) — no write landed. Do NOT tell the user it is done. Re-run with an exact instruction (which node, which field, exact new content).`
+      } else if (finalSuccess) {
+        const proof = versionComparable && afterVersion > beforeVersion ? ` [verified: graph v${beforeVersion}→v${afterVersion}]` : ''
+        message = `KG subagent completed: ${(result.summary || '').slice(0, 500)}${proof}`
+      } else {
+        message = `KG subagent failed: ${result.error || 'Unknown error'}`
+      }
+
       return {
-        success: result.success,
+        success: finalSuccess,
         summary: result.summary,
         graphId: result.graphId,
         nodeId: result.nodeId,
@@ -8716,12 +8929,13 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         model: result.model,
         inputTokens: result.inputTokens || 0,
         outputTokens: result.outputTokens || 0,
+        graphVersionBefore: beforeVersion,
+        graphVersionAfter: afterVersion,
+        phantomSuccess,
         actionsPerformed: (result.actions || []).map(a => ({
           tool: a.tool, success: a.success, summary: a.summary || a.error,
         })),
-        message: result.success
-          ? `KG subagent completed: ${(result.summary || '').slice(0, 500)}`
-          : `KG subagent failed: ${result.error || 'Unknown error'}`,
+        message,
         viewUrl: result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
