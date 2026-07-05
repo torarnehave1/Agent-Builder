@@ -29,12 +29,48 @@ function setSectionInner(html: string, id: string, inner: string): string {
 }
 
 // --- Visual "click-on-the-page" text editing --------------------------------
-// The preview iframe runs same-origin, so we make EVERY block-level text element
-// contentEditable on click. Save re-parses the stored source and applies only the
+// The preview iframe runs same-origin, so we make EVERY element that directly holds
+// text contentEditable on click. Save re-parses the stored source and applies only the
 // changed text blocks (matched by document order), so the page's structure, scripts,
 // styles and runtime state are preserved — only edited text changes. No anchors needed.
-const V_EDITABLE_SEL = 'h1,h2,h3,h4,h5,h6,p,li,blockquote,figcaption';
 const V_ATTR = 'data-v-editable';
+
+// Elements we never make editable even if they contain text (scripts/styles/head meta,
+// and interactive controls whose click must keep its behavior — tab buttons, inputs).
+const V_SKIP = new Set([
+  'SCRIPT', 'STYLE', 'NOSCRIPT', 'TITLE', 'TEMPLATE', 'HEAD', 'META', 'LINK',
+  'BUTTON', 'TEXTAREA', 'INPUT', 'SELECT', 'OPTION',
+]);
+
+// True if the element has a direct child text node with non-whitespace content.
+function hasDirectText(el: Element): boolean {
+  for (const n of Array.from(el.childNodes)) {
+    if (n.nodeType === 3 && (n.textContent ?? '').trim() !== '') return true;
+  }
+  return false;
+}
+
+// Every element that directly holds visible text — "all text is editable". A pure
+// layout wrapper (only element children, no direct text) is excluded, so a page never
+// collapses into one giant editable blob. When text-bearing elements nest (e.g. a link
+// inside a paragraph), only the OUTERMOST is returned, so editing it inline covers the
+// inner text and no element is diffed twice on save. Document order is stable and equal
+// between the live iframe DOM and a fresh re-parse of the source, so index i matches.
+function getEditableEls(root: Element | null | undefined): HTMLElement[] {
+  if (!root) return [];
+  const isCand = (el: Element) => !V_SKIP.has(el.tagName) && hasDirectText(el);
+  const out: HTMLElement[] = [];
+  for (const el of Array.from(root.querySelectorAll('*'))) {
+    if (!isCand(el)) continue;
+    let p = el.parentElement, nested = false;
+    while (p && p !== root) {
+      if (isCand(p)) { nested = true; break; }
+      p = p.parentElement;
+    }
+    if (!nested) out.push(el as HTMLElement);
+  }
+  return out;
+}
 
 // Strip the edit-only attributes we injected before saving, so node.info stays clean.
 function cleanInner(s: string): string {
@@ -224,7 +260,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     // and capture each one's clean innerHTML in document order as the baseline that
     // save() diffs against. querySelectorAll order is stable and matches a re-parse of
     // the source, so index i here == index i in the source document on save.
-    const els = Array.from(doc.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+    const els = getEditableEls(doc.body || doc.documentElement);
     const base: string[] = [];
     els.forEach((el, i) => {
       el.setAttribute(V_ATTR, '1');
@@ -268,9 +304,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       // stored source (not the runtime DOM) means the page's structure, scripts, styles
       // and runtime state (active tab, inline display) are preserved — only edited text
       // changes. All text is editable; nothing else is touched.
-      const liveEls = Array.from(doc.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+      const liveEls = getEditableEls(doc.body || doc.documentElement);
       const src = new DOMParser().parseFromString(html, 'text/html');
-      const srcEls = Array.from(src.querySelectorAll(V_EDITABLE_SEL)) as HTMLElement[];
+      const srcEls = getEditableEls(src.body || src.documentElement);
       if (liveEls.length !== srcEls.length) {
         setVisualMsg('Kan ikke lagre trygt — last siden på nytt'); setVisualSaving(false); return;
       }
