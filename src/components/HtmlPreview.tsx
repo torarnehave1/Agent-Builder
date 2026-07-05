@@ -213,12 +213,14 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   // Visual "click-on-the-page" edit mode
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const dirtyRef = useRef<Set<string>>(new Set());
+  const baselineRef = useRef<Record<string, string>>({}); // anchor id -> clean inner captured at load
   const [visualEdit, setVisualEdit] = useState(false);
   const [visualSaving, setVisualSaving] = useState(false);
   const [visualMsg, setVisualMsg] = useState('');
 
-  // Stable delegated handlers (attached to the iframe document while in edit mode).
+  // Stable click handler (attached to the iframe document while in edit mode).
+  // Change detection is NOT event-based — save() diffs the live DOM against a
+  // baseline captured at load, so any edit is caught regardless of keystroke events.
   const handlersRef = useRef({
     click: (e: Event) => {
       const el = (e.target as Element)?.closest?.(`[${V_ATTR}]`) as HTMLElement | null;
@@ -227,10 +229,6 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       e.stopPropagation();
       el.setAttribute('contenteditable', 'true');
       el.focus();
-    },
-    input: (e: Event) => {
-      const el = (e.target as Element)?.closest?.(`[${V_ATTR}]`) as HTMLElement | null;
-      if (el) dirtyRef.current.add(el.getAttribute(V_ATTR) || '');
     },
   });
 
@@ -266,13 +264,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       }
     }
     doc.addEventListener('click', handlersRef.current.click, true);
-    doc.addEventListener('input', handlersRef.current.input, true);
+    // Baseline of each section's clean inner HTML as loaded — save() compares the live
+    // DOM against this to detect real edits (robust; no dependence on keystroke events).
+    listAnchorIds(doc.documentElement.outerHTML).forEach(id => {
+      baselineRef.current[id] = cleanInner(getLiveSectionInner(doc, id) ?? '');
+    });
   }, []);
 
   const disableVisualEdit = useCallback((doc: Document | null | undefined) => {
     if (!doc) return;
     doc.removeEventListener('click', handlersRef.current.click, true);
-    doc.removeEventListener('input', handlersRef.current.input, true);
     doc.getElementById('__v_edit_style__')?.remove();
     doc.querySelectorAll(`[${V_ATTR}]`).forEach(el => {
       el.removeAttribute(V_ATTR);
@@ -284,7 +285,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   useEffect(() => {
     const doc = iframeRef.current?.contentDocument;
     if (visualEdit) enableVisualEdit(doc);
-    else { disableVisualEdit(doc); dirtyRef.current.clear(); setVisualMsg(''); }
+    else { disableVisualEdit(doc); baselineRef.current = {}; setVisualMsg(''); }
   }, [visualEdit, enableVisualEdit, disableVisualEdit]);
 
   // Fired on every iframe (re)load — re-arm edit mode if it's on.
@@ -296,17 +297,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     if (!graphId || !nodeId || !html) return;
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
-    const dirty = [...dirtyRef.current].filter(Boolean);
-    if (dirty.length === 0) { setVisualMsg('Ingen endring'); return; }
     setVisualSaving(true);
     setVisualMsg('');
     try {
+      // Diff the live DOM of each anchor section against its as-loaded baseline.
       let working = html;
-      for (const id of dirty) {
-        const liveInner = getLiveSectionInner(doc, id);
-        if (liveInner != null) working = setSectionInner(working, id, cleanInner(liveInner));
+      let changed = false;
+      for (const id of listAnchorIds(html)) {
+        const cur = cleanInner(getLiveSectionInner(doc, id) ?? '');
+        const base = baselineRef.current[id];
+        if (base !== undefined && cur !== base) {
+          working = setSectionInner(working, id, cur);
+          changed = true;
+        }
       }
-      if (working === html) { setVisualMsg('Ingen endring'); dirtyRef.current.clear(); setVisualSaving(false); return; }
+      if (!changed || working === html) { setVisualMsg('Ingen endring'); setVisualSaving(false); return; }
       const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
       let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
@@ -323,8 +328,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       }
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.ok) { setVisualMsg(data?.error || `Lagring feilet (${res.status})`); setVisualSaving(false); return; }
-      dirtyRef.current.clear();
-      onHtmlChange?.(working); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode
+      onHtmlChange?.(working); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode + recaptures baseline
       setVisualMsg(`Lagret · v${data.newVersion}`);
     } catch (e) {
       setVisualMsg(e instanceof Error ? e.message : 'Lagringsfeil');
