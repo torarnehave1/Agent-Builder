@@ -333,10 +333,37 @@ const TOOL_DEFINITIONS = [
       properties: {
         graphId: { type: 'string', description: 'The graph ID containing the html-node' },
         nodeId: { type: 'string', description: 'The html-node (or css-node) ID to publish' },
-        host: { type: 'string', description: "The live target host, e.g. 'fonemer.vegvisr.org'. Must already route to brand-worker (create_subdomain first)." },
-        overwrite: { type: 'boolean', description: 'Overwrite an existing published page at this host. Default true — republish in place after edits.' }
+        host: { type: 'string', description: "The live target host, e.g. 'fonemer.vegvisr.org'. Do NOT invent or guess this — use the host the node is already associated with (from its references, or a host you created/published earlier in the conversation). If unsure, ask the user rather than typing a host. Must already route to brand-worker (create_subdomain first)." },
+        overwrite: { type: 'boolean', description: 'Overwrite an existing published page at this host. Default true — republish in place after edits.' },
+        force: { type: 'boolean', description: "Override the wrong-host guard. By default publishing is REJECTED if the host does not match the node's associated host(s) (its references) — this catches typos like 'ponemer' for 'fonemer'. Only set force:true when you deliberately intend a new/different host." }
       },
       required: ['graphId', 'nodeId', 'host']
+    }
+  },
+  {
+    name: 'replace_html_section',
+    description: "RELIABLE way to edit a section of an html-node — prefer this over edit_html_node whenever the section is wrapped in an edit-anchor. Editable regions are delimited by HTML comment markers: <!-- edit:<anchorId>:start --> … <!-- edit:<anchorId>:end -->. Give the anchorId (e.g. 'om-prosjektet') and the new inner HTML; the tool swaps everything between the two markers. Unlike edit_html_node (which needs an exact old_string match and often misses on large pages), this matches on a unique named marker and cannot miss. Run list_html_anchors first to see which anchors exist. If the target section has no anchor yet, wrap it ONCE with the two markers via edit_html_node, then use this tool for every future edit. Returns changed + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        anchorId: { type: 'string', description: "The anchor slug between the markers, e.g. 'om-prosjektet' for <!-- edit:om-prosjektet:start -->" },
+        html: { type: 'string', description: 'The new inner HTML to place between the anchor markers (replaces whatever is currently there).' }
+      },
+      required: ['graphId', 'nodeId', 'anchorId', 'html']
+    }
+  },
+  {
+    name: 'list_html_anchors',
+    description: "List the edit-anchor ids present in an html-node (the <!-- edit:<id>:start --> markers). Use this BEFORE replace_html_section to see which sections are anchor-editable. Read-only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' }
+      },
+      required: ['graphId', 'nodeId']
     }
   },
   {

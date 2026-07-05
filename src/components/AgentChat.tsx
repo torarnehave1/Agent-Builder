@@ -2044,12 +2044,28 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               }
               return prev;
             });
-          } else if (toolName === 'edit_html_node') {
+          } else if (toolName === 'edit_html_node' || toolName === 'replace_html_section') {
             const resultData = ev.data as Record<string, unknown>;
             if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string); }
             const updatedHtml = resultData.updatedHtml as string;
             if (updatedHtml && updatedHtml.includes('<html')) {
               setTimeout(() => onPreview(updatedHtml), 0);
+            } else {
+              // updatedHtml not in the SSE payload — refetch the node so the preview always
+              // reflects the edit (replace_html_section landed but may not carry updatedHtml).
+              const gId = (resultData.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
+              const nId = (resultData.nodeId || lastHtmlNodeIdRef.current) as string | undefined;
+              if (gId && nId) {
+                fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+                  .then(r => r.json())
+                  .then(graph => {
+                    const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
+                    if (node?.info && typeof node.info === 'string' && (node.info as string).includes('<html')) {
+                      setTimeout(() => onPreview(node.info as string), 0);
+                    }
+                  })
+                  .catch(() => {});
+              }
             }
           } else if (toolName === 'delegate_to_html_builder') {
             const resultData = ev.data as Record<string, unknown>;

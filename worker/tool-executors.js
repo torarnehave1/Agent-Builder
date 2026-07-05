@@ -597,6 +597,21 @@ async function executePublishHtmlNode(input, env) {
   const html = node.info || ''
   if (!html.trim()) return { success: false, error: `Node "${input.nodeId}" has no HTML content to publish.` }
 
+  // WRONG-HOST GUARD (Lesson 37): the agent once invented "ponemer.vegvisr.org" (a typo of
+  // fonemer) and published there — a real host mistake that writes junk into brand-worker KV
+  // and can serve the wrong domain. If the node records the host(s) it belongs to (in
+  // `references`), reject a mismatched host unless force:true, and point at the right one.
+  const referencedHosts = (Array.isArray(node.references) ? node.references : [])
+    .map(r => { try { return new URL(String(r)).hostname.toLowerCase() } catch { return String(r).replace(/^https?:\/\//, '').split('/')[0].toLowerCase() } })
+    .filter(h => h && h.includes('.'))
+  if (referencedHosts.length && !referencedHosts.includes(host) && input.force !== true) {
+    return {
+      success: false,
+      error: `Refusing to publish "${input.nodeId}" to ${host} — this node is associated with ${referencedHosts.join(', ')}. Did you mean ${referencedHosts[0]}? Publish to that host, or pass force:true to override deliberately.`,
+      associatedHosts: referencedHosts,
+    }
+  }
+
   // 2. Mint a host-scoped publish token via api-worker's canonical minter, NOT by signing locally.
   //    The shared brand-worker verifies tokens against api-worker's HTML_PUBLISH_SECRET (tokens are
   //    normally minted by api-worker's /api/html/publish-token — same path the viewer's Publish button

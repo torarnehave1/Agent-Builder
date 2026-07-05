@@ -778,8 +778,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // Pass nodeId and graphId for tools that create or edit HTML nodes
             if (result.nodeId) ssePayload.nodeId = result.nodeId
             if (result.graphId) ssePayload.graphId = result.graphId
-            // Pass updatedHtml for edit_html_node so frontend can auto-preview
-            if (toolUse.name === 'edit_html_node' && result.updatedHtml) {
+            // Pass updatedHtml for edit_html_node / replace_html_section so frontend can auto-preview
+            if ((toolUse.name === 'edit_html_node' || toolUse.name === 'replace_html_section') && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
             }
             // Pass clientSideRequired data to frontend so it can handle transcription
