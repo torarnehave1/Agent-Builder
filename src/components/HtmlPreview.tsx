@@ -1,4 +1,32 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+
+// --- Direct anchor-section editing (no agent, no LLM) -------------------------
+// Editable regions are delimited by comment markers <!-- edit:<id>:start/end -->.
+// These helpers read/replace the inner content by NAME — a deterministic string
+// splice, the same operation the replace_html_section tool does server-side.
+function listAnchorIds(html: string): string[] {
+  const ids: string[] = [];
+  const re = /<!--\s*edit:([a-z0-9][a-z0-9-]*):start\s*-->/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) ids.push(m[1]);
+  return ids;
+}
+function getSectionInner(html: string, id: string): string | null {
+  const startM = `<!-- edit:${id}:start -->`;
+  const endM = `<!-- edit:${id}:end -->`;
+  const s = html.indexOf(startM);
+  const e = html.indexOf(endM);
+  if (s === -1 || e === -1 || e < s) return null;
+  return html.slice(s + startM.length, e).replace(/^\n/, '').replace(/\n$/, '');
+}
+function setSectionInner(html: string, id: string, inner: string): string {
+  const startM = `<!-- edit:${id}:start -->`;
+  const endM = `<!-- edit:${id}:end -->`;
+  const s = html.indexOf(startM);
+  const e = html.indexOf(endM);
+  if (s === -1 || e === -1 || e < s) return html;
+  return html.slice(0, s + startM.length) + '\n' + inner + '\n' + html.slice(e);
+}
 
 interface Props {
   html: string | null;
@@ -123,6 +151,60 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [versionHtml, setVersionHtml] = useState<string | null>(null);
   const [activeVersion, setActiveVersion] = useState<number | null>(null);
   const [loadingVersion, setLoadingVersion] = useState(false);
+
+  // Direct section editor (deterministic, no agent)
+  const [editOpen, setEditOpen] = useState(false);
+  const [editAnchor, setEditAnchor] = useState<string>('');
+  const [editValue, setEditValue] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string>('');
+
+  const anchorIds = useMemo(() => (html ? listAnchorIds(html) : []), [html]);
+
+  // When the editor opens or the selected anchor changes, load that section's
+  // current inner HTML into the textarea.
+  useEffect(() => {
+    if (!editOpen || !html) return;
+    const id = editAnchor || anchorIds[0] || '';
+    if (id && id !== editAnchor) setEditAnchor(id);
+    if (id) setEditValue(getSectionInner(html, id) ?? '');
+  }, [editOpen, editAnchor, html, anchorIds]);
+
+  const saveSection = async () => {
+    if (!graphId || !nodeId || !html || !editAnchor) return;
+    setSaving(true);
+    setSaveMsg('');
+    try {
+      const newHtml = setSectionInner(html, editAnchor, editValue);
+      if (newHtml === html) { setSaveMsg('No change'); setSaving(false); return; }
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      if (!gRes.ok) { setSaveMsg('Read failed'); setSaving(false); return; }
+      const g = await gRes.json();
+      let expectedVersion = Number(g?.metadata?.version || 0);
+      let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
+      });
+      if (res.status === 409) {
+        const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json();
+        expectedVersion = Number(latest?.metadata?.version || 0);
+        res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
+        });
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) { setSaveMsg(data?.error || `Save failed (${res.status})`); setSaving(false); return; }
+      onHtmlChange?.(newHtml); // refresh the preview from the new bytes — deterministic, no agent
+      setSaveMsg(`Saved · v${data.newVersion}`);
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : 'Save error');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const fetchVersions = async () => {
     if (!graphId) return;
@@ -297,6 +379,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           )}
         </div>
         <div className="flex items-center gap-1">
+          {graphId && nodeId && anchorIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setEditOpen(p => !p)}
+              className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${editOpen ? 'bg-emerald-500/30 text-emerald-300' : 'text-white/40 hover:text-white hover:bg-white/10'}`}
+              title="Edit a section directly (no agent)"
+            >
+              Edit
+            </button>
+          )}
           {graphId && nodeId && (
             <button
               type="button"
@@ -333,6 +425,40 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           </button>
         </div>
       </div>
+      {editOpen && (
+        <div className="px-3 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-white/40">Section</span>
+            <select
+              value={editAnchor}
+              onChange={e => setEditAnchor(e.target.value)}
+              className="text-[11px] bg-slate-800 text-white/80 border border-white/10 rounded px-1.5 py-0.5"
+            >
+              {anchorIds.map(id => (
+                <option key={id} value={id}>{id}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={saveSection}
+              disabled={saving}
+              className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/30 text-emerald-300 hover:bg-emerald-500/50 hover:text-white transition-colors disabled:opacity-40"
+              title="Write this section directly to the graph (no agent)"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+            {saveMsg && <span className="text-[10px] text-white/50">{saveMsg}</span>}
+            <span className="ml-auto text-[9px] text-white/25">direct edit · no agent</span>
+          </div>
+          <textarea
+            value={editValue}
+            onChange={e => setEditValue(e.target.value)}
+            spellCheck={false}
+            className="w-full h-40 bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y"
+            placeholder="HTML for this section…"
+          />
+        </div>
+      )}
       {versions && (
         <div className="flex gap-1 px-3 py-1.5 border-b border-white/10 bg-slate-900/30 overflow-x-auto flex-shrink-0">
           {versions.map(v => (
