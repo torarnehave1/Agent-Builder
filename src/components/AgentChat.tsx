@@ -2108,6 +2108,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                         lastAgentGraphRef.current = gId;
                         lastHtmlNodeIdRef.current = nId;
                         onActiveHtmlNode?.(nId);
+                        onGraphChange(gId); // set the graph context so the preview gets graphId → Versions/Edit buttons render
                         setTimeout(() => onPreview(node.info as string), 0);
                       }
                     })
