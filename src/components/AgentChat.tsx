@@ -2429,7 +2429,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   return (
     <div className="flex flex-1 min-h-0">
-      <div className="flex flex-col flex-1 min-h-0">
+      <div className="flex flex-col flex-1 min-w-0 min-h-0">
       {/* Graph selector bar + Sessions + Copy Log */}
       <div className="flex items-center justify-between px-3 sm:px-4 py-2 border-b app-border app-panel flex-wrap gap-2">
         <div className="flex-1 flex items-center gap-2">
@@ -2632,7 +2632,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
+      <div className="flex-1 min-w-0 overflow-y-auto px-3 sm:px-4 py-4 sm:py-5 flex flex-col gap-4">
         {!hasMessages && !(activeContext && activeContext.starterPrompts.length > 0) && (
           <div className="text-center py-10 sm:py-16 px-4 app-text-muted">
             <h2 className="app-text text-xl sm:text-2xl font-semibold mb-2 sm:mb-3">Agent Chat</h2>
@@ -2702,7 +2702,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               </div>
             )}
           <div
-            className={`px-3 sm:px-4 py-2.5 sm:py-3 rounded-[14px] text-[0.9rem] sm:text-[0.95rem] leading-relaxed break-words overflow-x-auto ${
+            className={`min-w-0 px-3 sm:px-4 py-2.5 sm:py-3 rounded-[14px] text-[0.9rem] sm:text-[0.95rem] leading-relaxed break-words overflow-x-auto ${
               msg.role === 'user'
                 ? 'bg-sky-400/[0.16] border border-sky-400/30 app-text'
                 : 'app-surface border app-border app-text'
@@ -2840,7 +2840,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 </div>
               )}
             </div>
-          <div className="px-4 py-3 rounded-[14px] app-surface border app-border app-text text-[0.95rem] leading-relaxed">
+          <div className="min-w-0 overflow-x-auto px-4 py-3 rounded-[14px] app-surface border app-border app-text text-[0.95rem] leading-relaxed">
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
               <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} onSend={sendMessage} />
