@@ -187,66 +187,18 @@ function buildConsoleBridge(graphId?: string | null, nodeId?: string | null): st
 </script>`;
 }
 
-// Auth bridge — hands the logged-in identity from the builder INTO the srcdoc iframe.
-// The iframe is `about:srcdoc`, so page JS cannot reach the builder's auth on its own
-// (wrong origin, different localStorage). The host injects it. Two things are exposed:
-//   window.__VEGVISR_USER  — { email, role } (the convention the editable/landing
-//                            templates already read to unlock edit UI)
-//   window.vegvisrPatchNode(nodeId, fields[, graphId]) — a ready-made, version-safe,
-//                            AUTHENTICATED patchNode. Page code calls THIS and never
-//                            touches tokens/headers. Auth = x-user-role + x-user-email,
-//                            NOT X-API-Token (which the KG worker rejects — see commit
-//                            512555f and the save-button pattern below).
+// Auth bridge — hands the builder's identity into the srcdoc iframe, then loads the SAME standard
+// auth component the published page uses (api.vegvisr.org/components/vegvisr-auth.js). One code path
+// for preview and live. The iframe is `about:srcdoc`, so page JS can't reach the builder's auth on
+// its own; we set window.__VEGVISR_USER (which the component reads first) so preview resolves the
+// current user with no login round-trip, plus window.__VEGVISR_GRAPH_ID. The component then defines
+// window.vegvisrPatchNode / window.vegvisrWhoAmI and the <vegvisr-auth> bar. Writes use
+// x-user-role + x-user-email (NOT X-API-Token — the KG worker rejects it; see commit 512555f).
 function buildAuthBridge(graphId?: string | null, userEmail?: string): string {
   const gId = graphId ? graphId.replace(/'/g, "\\'") : '';
   const email = userEmail ? userEmail.replace(/'/g, "\\'") : '';
-  return `<script>
-(function() {
-  var GRAPH_ID = '${gId}';
-  var EMAIL = '${email}';
-  window.__VEGVISR_USER = { email: EMAIL, role: 'Superadmin' };
-  window.__VEGVISR_GRAPH_ID = GRAPH_ID;
-  function authHeaders() {
-    var h = { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' };
-    if (EMAIL) h['x-user-email'] = EMAIL;
-    return h;
-  }
-  window.vegvisrAuthHeaders = authHeaders;
-  window.vegvisrPatchNode = async function(a, b, c) {
-    // Accept BOTH argument orders — (nodeId, fields[, graphId]) and (graphId, nodeId, fields).
-    // Generated pages have used both; disambiguate by which positional arg is the fields object.
-    var nodeId, fields, gId;
-    if (b && typeof b === 'object') { nodeId = a; fields = b; gId = c || GRAPH_ID; }
-    else if (c && typeof c === 'object') { gId = a || GRAPH_ID; nodeId = b; fields = c; }
-    else throw new Error('vegvisrPatchNode(nodeId, fields[, graphId])');
-    if (!gId) throw new Error('vegvisrPatchNode: no graphId');
-    if (!nodeId) throw new Error('vegvisrPatchNode: no nodeId');
-    async function currentVersion() {
-      var r = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(gId));
-      if (!r.ok) throw new Error('Could not read graph version (' + r.status + ')');
-      var g = await r.json();
-      return Number((g && g.metadata && g.metadata.version) || 0);
-    }
-    var expectedVersion = await currentVersion();
-    var res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-      method: 'POST', headers: authHeaders(),
-      body: JSON.stringify({ graphId: gId, nodeId: nodeId, fields: fields, expectedVersion: expectedVersion })
-    });
-    if (res.status === 409) {
-      expectedVersion = await currentVersion();
-      res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-        method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({ graphId: gId, nodeId: nodeId, fields: fields, expectedVersion: expectedVersion })
-      });
-    }
-    var data = null; try { data = await res.json(); } catch (e) {}
-    if (!res.ok || !data || !data.ok) {
-      throw new Error((data && data.error) || ('patchNode failed (' + res.status + ')'));
-    }
-    return data;
-  };
-})();
-</script>`;
+  return `<script>window.__VEGVISR_USER={email:'${email}',role:'Superadmin'};window.__VEGVISR_GRAPH_ID='${gId}';</script>` +
+    `<script src="https://api.vegvisr.org/components/vegvisr-auth.js"></script>`;
 }
 
 function injectBridge(html: string, graphId?: string | null, nodeId?: string | null, userEmail?: string): string {
