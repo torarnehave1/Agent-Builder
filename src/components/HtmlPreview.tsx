@@ -212,8 +212,13 @@ function buildAuthBridge(graphId?: string | null, userEmail?: string): string {
     return h;
   }
   window.vegvisrAuthHeaders = authHeaders;
-  window.vegvisrPatchNode = async function(nodeId, fields, graphId) {
-    var gId = graphId || GRAPH_ID;
+  window.vegvisrPatchNode = async function(a, b, c) {
+    // Accept BOTH argument orders — (nodeId, fields[, graphId]) and (graphId, nodeId, fields).
+    // Generated pages have used both; disambiguate by which positional arg is the fields object.
+    var nodeId, fields, gId;
+    if (b && typeof b === 'object') { nodeId = a; fields = b; gId = c || GRAPH_ID; }
+    else if (c && typeof c === 'object') { gId = a || GRAPH_ID; nodeId = b; fields = c; }
+    else throw new Error('vegvisrPatchNode(nodeId, fields[, graphId])');
     if (!gId) throw new Error('vegvisrPatchNode: no graphId');
     if (!nodeId) throw new Error('vegvisrPatchNode: no nodeId');
     async function currentVersion() {
