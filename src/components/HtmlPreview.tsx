@@ -187,8 +187,66 @@ function buildConsoleBridge(graphId?: string | null, nodeId?: string | null): st
 </script>`;
 }
 
-function injectBridge(html: string, graphId?: string | null, nodeId?: string | null): string {
-  const bridge = buildConsoleBridge(graphId, nodeId);
+// Auth bridge — hands the logged-in identity from the builder INTO the srcdoc iframe.
+// The iframe is `about:srcdoc`, so page JS cannot reach the builder's auth on its own
+// (wrong origin, different localStorage). The host injects it. Two things are exposed:
+//   window.__VEGVISR_USER  — { email, role } (the convention the editable/landing
+//                            templates already read to unlock edit UI)
+//   window.vegvisrPatchNode(nodeId, fields[, graphId]) — a ready-made, version-safe,
+//                            AUTHENTICATED patchNode. Page code calls THIS and never
+//                            touches tokens/headers. Auth = x-user-role + x-user-email,
+//                            NOT X-API-Token (which the KG worker rejects — see commit
+//                            512555f and the save-button pattern below).
+function buildAuthBridge(graphId?: string | null, userEmail?: string): string {
+  const gId = graphId ? graphId.replace(/'/g, "\\'") : '';
+  const email = userEmail ? userEmail.replace(/'/g, "\\'") : '';
+  return `<script>
+(function() {
+  var GRAPH_ID = '${gId}';
+  var EMAIL = '${email}';
+  window.__VEGVISR_USER = { email: EMAIL, role: 'Superadmin' };
+  window.__VEGVISR_GRAPH_ID = GRAPH_ID;
+  function authHeaders() {
+    var h = { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' };
+    if (EMAIL) h['x-user-email'] = EMAIL;
+    return h;
+  }
+  window.vegvisrAuthHeaders = authHeaders;
+  window.vegvisrPatchNode = async function(nodeId, fields, graphId) {
+    var gId = graphId || GRAPH_ID;
+    if (!gId) throw new Error('vegvisrPatchNode: no graphId');
+    if (!nodeId) throw new Error('vegvisrPatchNode: no nodeId');
+    async function currentVersion() {
+      var r = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(gId));
+      if (!r.ok) throw new Error('Could not read graph version (' + r.status + ')');
+      var g = await r.json();
+      return Number((g && g.metadata && g.metadata.version) || 0);
+    }
+    var expectedVersion = await currentVersion();
+    var res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+      method: 'POST', headers: authHeaders(),
+      body: JSON.stringify({ graphId: gId, nodeId: nodeId, fields: fields, expectedVersion: expectedVersion })
+    });
+    if (res.status === 409) {
+      expectedVersion = await currentVersion();
+      res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST', headers: authHeaders(),
+        body: JSON.stringify({ graphId: gId, nodeId: nodeId, fields: fields, expectedVersion: expectedVersion })
+      });
+    }
+    var data = null; try { data = await res.json(); } catch (e) {}
+    if (!res.ok || !data || !data.ok) {
+      throw new Error((data && data.error) || ('patchNode failed (' + res.status + ')'));
+    }
+    return data;
+  };
+})();
+</script>`;
+}
+
+function injectBridge(html: string, graphId?: string | null, nodeId?: string | null, userEmail?: string): string {
+  // Auth bridge FIRST so window.__VEGVISR_USER / vegvisrPatchNode exist before any page script runs.
+  const bridge = buildAuthBridge(graphId, userEmail) + buildConsoleBridge(graphId, nodeId);
   const headIdx = html.indexOf('<head>');
   if (headIdx !== -1) {
     return html.slice(0, headIdx + 6) + bridge + html.slice(headIdx + 6);
@@ -787,7 +845,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       <iframe
         ref={iframeRef}
         onLoad={handleIframeLoad}
-        srcDoc={injectBridge(versionHtml || html, graphId, nodeId)}
+        srcDoc={injectBridge(versionHtml || html, graphId, nodeId, userEmail)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
