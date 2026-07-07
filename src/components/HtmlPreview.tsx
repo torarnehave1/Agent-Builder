@@ -79,6 +79,26 @@ function cleanInner(s: string): string {
     .replace(new RegExp(`\\s*${V_ATTR}="[^"]*"`, 'gi'), '');
 }
 
+// --- Deterministic search & replace over the raw node HTML (no agent, no LLM) ------
+// The same class of operation edit_html_node does server-side: a raw string replace
+// over the stored HTML source. Literal mode is an exact split/join (no regex escaping
+// pitfalls); whole-word mode wraps the term in \b…\b. Runs entirely client-side.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function countMatches(html: string, find: string, wholeWord: boolean): number {
+  if (!find) return 0;
+  if (!wholeWord) return html.split(find).length - 1;
+  const m = html.match(new RegExp('\\b' + escapeRegExp(find) + '\\b', 'g'));
+  return m ? m.length : 0;
+}
+function replaceMatches(html: string, find: string, replace: string, wholeWord: boolean): string {
+  if (!find) return html;
+  if (!wholeWord) return html.split(find).join(replace);
+  // Function replacement so `$`-sequences in `replace` are inserted literally.
+  return html.replace(new RegExp('\\b' + escapeRegExp(find) + '\\b', 'g'), () => replace);
+}
+
 // KG writes authenticate with x-user-role + x-user-email (the pattern the rest of
 // the app uses). NOT X-API-Token — under impersonation the localStorage token is a
 // different account and the KG worker rejects it as "Invalid API token" (verified
@@ -215,6 +235,14 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [editValue, setEditValue] = useState<string>('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string>('');
+
+  // Deterministic search & replace panel state (no agent)
+  const [srOpen, setSrOpen] = useState(false);
+  const [srFind, setSrFind] = useState('');
+  const [srReplace, setSrReplace] = useState('');
+  const [srWholeWord, setSrWholeWord] = useState(false);
+  const [srSaving, setSrSaving] = useState(false);
+  const [srMsg, setSrMsg] = useState('');
 
   const anchorIds = useMemo(() => (html ? listAnchorIds(html) : []), [html]);
 
@@ -378,6 +406,40 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     }
   };
 
+  const replaceAllInNode = async () => {
+    if (!graphId || !nodeId || !html || !srFind) return;
+    setSrSaving(true);
+    setSrMsg('');
+    try {
+      const n = countMatches(html, srFind, srWholeWord);
+      if (n === 0) { setSrMsg('Ingen treff'); setSrSaving(false); return; }
+      const newHtml = replaceMatches(html, srFind, srReplace, srWholeWord);
+      if (newHtml === html) { setSrMsg('Ingen endring'); setSrSaving(false); return; }
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      if (!gRes.ok) { setSrMsg('Lesing feilet'); setSrSaving(false); return; }
+      let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
+      let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+        body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
+      });
+      if (res.status === 409) {
+        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
+        res = await fetch('https://knowledge.vegvisr.org/patchNode', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+          body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
+        });
+      }
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) { setSrMsg(data?.error || `Lagring feilet (${res.status})`); setSrSaving(false); return; }
+      onHtmlChange?.(newHtml); // refresh preview from new bytes — deterministic, no agent
+      setSrMsg(`Erstattet ${n} · v${data.newVersion}`);
+    } catch (e) {
+      setSrMsg(e instanceof Error ? e.message : 'Lagringsfeil');
+    } finally {
+      setSrSaving(false);
+    }
+  };
+
   const fetchVersions = async () => {
     if (!graphId) return;
     if (versions) { setVersions(null); setVersionHtml(null); setActiveVersion(null); return; }
@@ -503,6 +565,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   }
 
   const errorCount = entries.filter(e => e.level === 'error' || e.level === 'network').length;
+  const srCount = html ? countMatches(html, srFind, srWholeWord) : 0;
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -569,6 +632,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               title="Edit a section's raw HTML directly (no agent)"
             >
               HTML
+            </button>
+          )}
+          {graphId && nodeId && activeVersion === null && (
+            <button
+              type="button"
+              onClick={() => { setSrOpen(p => !p); setVisualEdit(false); setEditOpen(false); }}
+              className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${srOpen ? 'bg-sky-500/30 text-sky-300' : 'text-white/40 hover:text-white hover:bg-white/10'}`}
+              title="Søk og erstatt tekst direkte (ingen agent)"
+            >
+              Erstatt
             </button>
           )}
           {graphId && nodeId && (
@@ -654,6 +727,41 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             className="w-full h-40 bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y"
             placeholder="HTML for this section…"
           />
+        </div>
+      )}
+      {srOpen && (
+        <div className="px-3 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0 flex items-center gap-2 flex-wrap">
+          <input
+            value={srFind}
+            onChange={e => setSrFind(e.target.value)}
+            spellCheck={false}
+            placeholder="Finn…"
+            className="text-[11px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-0.5 font-mono w-40"
+          />
+          <span className="text-white/30 text-[11px]">→</span>
+          <input
+            value={srReplace}
+            onChange={e => setSrReplace(e.target.value)}
+            spellCheck={false}
+            placeholder="Erstatt med…"
+            className="text-[11px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-0.5 font-mono w-40"
+          />
+          <label className="flex items-center gap-1 text-[10px] text-white/50 select-none cursor-pointer">
+            <input type="checkbox" checked={srWholeWord} onChange={e => setSrWholeWord(e.target.checked)} />
+            Helt ord
+          </label>
+          <span className="text-[10px] text-white/40 w-16">{srFind ? `${srCount} treff` : ''}</span>
+          <button
+            type="button"
+            onClick={replaceAllInNode}
+            disabled={srSaving || !srFind || srCount === 0}
+            className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/30 text-emerald-300 hover:bg-emerald-500/50 hover:text-white transition-colors disabled:opacity-40"
+            title="Erstatt alle forekomster og lagre (ingen agent)"
+          >
+            {srSaving ? 'Lagrer…' : `Erstatt alle${srCount ? ` (${srCount})` : ''}`}
+          </button>
+          {srMsg && <span className="text-[10px] text-white/50">{srMsg}</span>}
+          <span className="ml-auto text-[9px] text-white/25">søk & erstatt · ingen agent</span>
         </div>
       )}
       {versions && (
