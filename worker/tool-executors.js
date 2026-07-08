@@ -651,38 +651,61 @@ async function fetchHtmlNode(env, graphId, nodeId) {
   return { node, graphData }
 }
 
-// Nesting-aware splice INSIDE a named element (Lesson 46 v7). target is a bare tag
-// ('nav','header','footer','main') → the FIRST such element, or '#id' → the element
-// with that id. Walks opens/closes of the tag to find the MATCHING close so nested
-// same-tag elements don't fool it. position 'end' (default) = just before the close;
-// 'start' = just after the open tag. Purely additive — nothing existing is removed.
-function spliceInElement(html, target, snippet, position) {
-  const t = String(target || '').trim()
-  let openStart = -1, tag = ''
-  if (t.startsWith('#')) {
-    const id = t.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const m = html.match(new RegExp('<([a-z][a-z0-9-]*)\\b[^>]*\\bid=["\\\']' + id + '["\\\'][^>]*>', 'i'))
-    if (!m) return { error: `No element with id "${t.slice(1)}" found.` }
-    openStart = m.index; tag = m[1].toLowerCase()
-  } else {
-    tag = t.replace(/[^a-z0-9-]/gi, '').toLowerCase()
-    if (!tag) return { error: "target must be a tag name (e.g. 'nav') or '#id'." }
-    const m = html.match(new RegExp('<' + tag + '\\b[^>]*>', 'i'))
-    if (!m) return { error: `No <${tag}> element found in this node.` }
-    openStart = m.index
+// Nesting-aware splice INSIDE an element chosen by a small CSS-ish selector
+// (Lesson 46 v7→v8). target supports: 'nav' (tag), '.card' (class), 'div.card'
+// (tag+class), '#id', 'section.hero#main' (combos). When several elements match,
+// `nth` (1-based) disambiguates; without it the FIRST is used and matchCount is
+// reported so the caller can retry with nth. Walks opens/closes of the matched
+// element's tag to find its MATCHING close (nested same-tag elements don't fool it).
+// position 'end' (default) = before the close; 'start' = after the open. Additive.
+const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+function parseSelector(t) {
+  const sel = { tag: null, id: null, classes: [] }
+  const idm = t.match(/#([\w-]+)/); if (idm) sel.id = idm[1]
+  sel.classes = [...t.matchAll(/\.([\w-]+)/g)].map(m => m[1])
+  const tagm = t.match(/^([a-z][a-z0-9-]*)/i); if (tagm) sel.tag = tagm[1].toLowerCase()
+  return sel
+}
+function matchesSelector(attrs, tag, sel) {
+  if (sel.tag && tag !== sel.tag) return false
+  if (sel.id) { const m = attrs.match(/\bid=["']([^"']+)["']/i); if (!m || m[1] !== sel.id) return false }
+  if (sel.classes.length) {
+    const m = attrs.match(/\bclass=["']([^"']+)["']/i)
+    const cls = m ? m[1].split(/\s+/) : []
+    if (!sel.classes.every(c => cls.includes(c))) return false
   }
-  const openTagEnd = html.indexOf('>', openStart) + 1
-  if (openTagEnd === 0) return { error: `Malformed <${tag}> open tag.` }
-  const re = new RegExp('<' + tag + '\\b[^>]*>|</' + tag + '\\s*>', 'gi')
-  re.lastIndex = openTagEnd
+  return true
+}
+function spliceInElement(html, target, snippet, position, nth) {
+  const t = String(target || '').trim()
+  const sel = parseSelector(t)
+  if (!sel.tag && !sel.id && !sel.classes.length) {
+    return { error: "target must be a tag ('nav'), class ('.card'), id ('#hero'), or combo ('div.card')." }
+  }
+  // Collect matching OPEN tags (skip self-closing).
+  const opens = []
+  const re = /<([a-z][a-z0-9-]*)\b([^>]*)>/gi
+  let m
+  while ((m = re.exec(html)) !== null) {
+    if (m[2].trimEnd().endsWith('/')) continue
+    const tag = m[1].toLowerCase()
+    if (matchesSelector(m[2], tag, sel)) opens.push({ tag, endOfOpen: re.lastIndex })
+  }
+  if (!opens.length) return { error: `No element matches "${t}" in this node.` }
+  const pick = (Number.isInteger(nth) && nth > 0) ? nth - 1 : 0
+  if (pick >= opens.length) return { error: `Only ${opens.length} element(s) match "${t}"; nth=${nth} is out of range.` }
+  const o = opens[pick]
+  if (VOID_TAGS.has(o.tag)) return { error: `<${o.tag}> is a void element — nothing can be inserted inside it.` }
+  const tre = new RegExp('<' + o.tag + '\\b[^>]*>|</' + o.tag + '\\s*>', 'gi')
+  tre.lastIndex = o.endOfOpen
   let depth = 1, closeStart = -1, m2
-  while ((m2 = re.exec(html)) !== null) {
+  while ((m2 = tre.exec(html)) !== null) {
     if (m2[0][1] === '/') { depth -= 1; if (depth === 0) { closeStart = m2.index; break } }
     else depth += 1
   }
-  if (closeStart === -1) return { error: `No matching </${tag}> for the ${t} element.` }
-  const idx = position === 'start' ? openTagEnd : closeStart
-  return { html: html.slice(0, idx) + '\n' + snippet + '\n' + html.slice(idx), tag }
+  if (closeStart === -1) return { error: `No matching </${o.tag}> for "${t}".` }
+  const idx = position === 'start' ? o.endOfOpen : closeStart
+  return { html: html.slice(0, idx) + '\n' + snippet + '\n' + html.slice(idx), tag: o.tag, matchCount: opens.length, picked: pick + 1 }
 }
 
 async function executeInsertInElement(input, env) {
@@ -701,19 +724,23 @@ async function executeInsertInElement(input, env) {
   if (node.type !== 'html-node' && node.type !== 'css-node') {
     return { success: false, error: `insert_in_element only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
   }
+  const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
   const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
-  const r = spliceInElement(currentHtml, target, snippet, where)
+  const r = spliceInElement(currentHtml, target, snippet, where, nth)
   if (r.error) return { success: false, error: r.error }
 
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
     info: r.html, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
   })
+  const ambiguity = r.matchCount > 1 ? ` NOTE: "${target}" matched ${r.matchCount} elements — inserted into #${r.picked} (${nth ? 'you chose nth=' + nth : 'the first; pass nth to pick another'}).` : ''
   return {
     success: true,
     graphId: input.graphId,
     nodeId: input.nodeId,
     target,
     matchedTag: r.tag,
+    matchCount: r.matchCount,
+    picked: r.picked,
     position: where,
     changed: true,
     charDelta: r.html.length - currentHtml.length,
@@ -721,7 +748,7 @@ async function executeInsertInElement(input, env) {
     updatedHtml: r.html,
     savedNotLive: true,
     publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
-    message: `Inserted ${snippet.length} chars at the ${where} of <${r.tag}> (${target}) in "${input.nodeId}" — additive, nothing removed. Saved as v${patchData.newVersion}, not live until published.`,
+    message: `Inserted ${snippet.length} chars at the ${where} of <${r.tag}> (${target}) in "${input.nodeId}" — additive, nothing removed.${ambiguity} Saved as v${patchData.newVersion}, not live until published.`,
   }
 }
 

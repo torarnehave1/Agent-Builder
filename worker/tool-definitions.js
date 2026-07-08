@@ -377,15 +377,16 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'insert_in_element',
-    description: "ADD content INSIDE a specific element chosen by tag or id — the placement-aware, loss-proof way to put a button in the <nav>, an item in a <ul>, a widget in '#header', etc. `target` is a bare tag name ('nav','header','footer','main') for the FIRST such element, or '#id' for the element with that id. position 'end' (default) splices just before the element's closing tag; 'start' just after its open tag. Nesting-aware (finds the MATCHING close), purely additive — nothing existing is removed, so no read is needed first. Use this together with read_html_head + insert_html_at to add a theme toggle with NO read_node: read_html_head for the CSS vars, insert_in_element('nav', button) for placement, insert_html_at('append_to_style', css) and ('before_body_end', script). Superadmin only. Code-hardcoded (not in registry).",
+    description: "ADD content INSIDE a specific element chosen by a small CSS-style selector — the placement-aware, loss-proof way to put a button in the <nav>, an item in a <ul>, a widget in '#header'. `target` accepts a tag ('nav'), a class ('.card'), a tag+class ('div.card'), an id ('#hero'), or a combo ('section.hero'). If several elements match, pass `nth` (1-based) to pick which one; otherwise the FIRST is used and the result reports matchCount so you can retry with nth. position 'end' (default) splices before the element's closing tag; 'start' just after its open tag. Nesting-aware (finds the MATCHING close), purely additive — nothing removed, no read needed first. Full theme toggle with NO read_node: read_html_head (CSS vars) → insert_in_element('nav', button) → insert_html_at('append_to_style', css) → insert_html_at('before_body_end', script). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
         graphId: { type: 'string', description: 'The graph ID' },
         nodeId: { type: 'string', description: 'The html-node ID' },
-        target: { type: 'string', description: "The element to insert into: a bare tag name like 'nav'/'header'/'footer'/'main' (first match), or '#id' for a specific element." },
+        target: { type: 'string', description: "Selector for the element to insert into: tag ('nav'), class ('.card'), tag+class ('div.card'), id ('#hero'), or combo ('section.hero#main')." },
         html: { type: 'string', description: 'The HTML to insert inside that element (e.g. a <button>).' },
-        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) inserts before the element's closing tag; 'start' just after its opening tag." }
+        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) inserts before the element's closing tag; 'start' just after its opening tag." },
+        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to insert into. Omit for the first; the result reports matchCount if there were more.' }
       },
       required: ['graphId', 'nodeId', 'target', 'html']
     }
