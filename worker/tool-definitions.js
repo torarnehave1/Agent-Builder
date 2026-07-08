@@ -335,28 +335,80 @@ const TOOL_DEFINITIONS = [
         nodeId: { type: 'string', description: 'The html-node (or css-node) ID to publish' },
         host: { type: 'string', description: "The live target host, e.g. 'fonemer.vegvisr.org'. Do NOT invent or guess this — use the host the node is already associated with (from its references, or a host you created/published earlier in the conversation). If unsure, ask the user rather than typing a host. Must already route to brand-worker (create_subdomain first)." },
         overwrite: { type: 'boolean', description: 'Overwrite an existing published page at this host. Default true — republish in place after edits.' },
-        force: { type: 'boolean', description: "Override the wrong-host guard. By default publishing is REJECTED if the host does not match the node's associated host(s) (its references) — this catches typos like 'ponemer' for 'fonemer'. Only set force:true when you deliberately intend a new/different host." }
+        force: { type: 'boolean', description: "Override the wrong-host guard. By default publishing is REJECTED if the host does not match the node's associated host(s) (its references) — this catches typos like 'ponemer' for 'fonemer'. Only set force:true when you deliberately intend a new/different host." },
+        gate: { type: 'boolean', description: "Publish the page login-GATED: a full-screen <vegvisr-auth require-auth> login card blocks the whole page until the visitor signs in (magic-link), then reveals it. Injected into the SERVED copy only — the node's stored HTML stays clean, so republishing WITHOUT gate reverts it. Use when the user wants a members-only / private page. Default false (public)." },
+        gateRole: { type: 'string', description: "With gate:true, restrict access to these roles (comma-separated, e.g. 'Admin,Superadmin'); signed-in users with another role see 'Ingen tilgang'. Omit to allow any signed-in user." },
+        gateAppName: { type: 'string', description: "With gate:true, the title shown on the login card (e.g. the app/world name)." },
+        gateLogo: { type: 'string', description: "With gate:true, an optional logo image URL for the login card." },
+        gateRegisterMode: { type: 'string', enum: ['invite', 'open'], description: "With gate:true, 'open' shows a Register button on the login card (email → creates a ViewOnly account → magic link) for self-signup; 'invite' (default) is login-only (new accounts provisioned elsewhere)." }
       },
       required: ['graphId', 'nodeId', 'host']
     }
   },
   {
     name: 'replace_html_section',
-    description: "RELIABLE way to edit a section of an html-node — prefer this over edit_html_node whenever the section is wrapped in an edit-anchor. Editable regions are delimited by HTML comment markers: <!-- edit:<anchorId>:start --> … <!-- edit:<anchorId>:end -->. Give the anchorId (e.g. 'om-prosjektet') and the new inner HTML; the tool swaps everything between the two markers. Unlike edit_html_node (which needs an exact old_string match and often misses on large pages), this matches on a unique named marker and cannot miss. Run list_html_anchors first to see which anchors exist. If the target section has no anchor yet, wrap it ONCE with the two markers via edit_html_node, then use this tool for every future edit. Returns changed + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
+    description: "OVERWRITES a whole anchored section of an html-node — the tool deletes EVERYTHING between <!-- edit:<anchorId>:start --> and <!-- edit:<anchorId>:end --> and puts your `html` there instead. Anything you do not retype is GONE (this is how a theme-toggle script+style once got silently deleted while 'adding a card'). THEREFORE: to ADD to a section, do NOT use this — use insert_html_at (additive). To CHANGE a section, FIRST call read_html_section(anchorId) to get the exact current bytes, keep everything you want to preserve, then send the full new region. The tool matches on the named marker so it cannot miss the target. It REFUSES the write if your new content drops a <script>/<style>/<video>/<iframe> block or shrinks the section hard — read the section and include what you dropped, or pass force:true to confirm an intentional removal. Run list_html_anchors first. Returns changed + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
         graphId: { type: 'string', description: 'The graph ID' },
         nodeId: { type: 'string', description: 'The html-node ID' },
         anchorId: { type: 'string', description: "The anchor slug between the markers, e.g. 'om-prosjektet' for <!-- edit:om-prosjektet:start -->" },
-        html: { type: 'string', description: 'The new inner HTML to place between the anchor markers (replaces whatever is currently there).' }
+        html: { type: 'string', description: 'The FULL new inner HTML for the whole region between the markers (it replaces everything currently there — include content you want to keep). Read it first with read_html_section.' },
+        force: { type: 'boolean', description: 'Set true ONLY to confirm a deliberate removal — bypasses the content-loss guard that blocks dropping a script/style/video/iframe block or a hard shrink. Default false.' }
       },
       required: ['graphId', 'nodeId', 'anchorId', 'html']
     }
   },
   {
+    name: 'append_to_section',
+    description: "ADD content INSIDE an edit-anchored section WITHOUT rewriting it — the loss-proof way to 'add a card / row / list item / episode to this section'. It splices your `html` in just before the anchor's :end marker (position:'end', default) or right after :start (position:'start'), so EVERYTHING already in the section — sibling cards, <style>, <script> — is preserved by construction. PREFER THIS over replace_html_section whenever you are ADDING to a section rather than rewriting it: no need to read or retype the existing content, so nothing can be dropped. Run list_html_anchors to find the anchorId. Returns version + charDelta + blocksPreserved (verified). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        anchorId: { type: 'string', description: "The anchor slug to add into, e.g. 'video-section' (run list_html_anchors to see anchors)." },
+        html: { type: 'string', description: 'The new HTML to add inside the section (e.g. one more card). It is inserted without removing anything already there.' },
+        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) appends after the last existing item; 'start' prepends before the first." }
+      },
+      required: ['graphId', 'nodeId', 'anchorId', 'html']
+    }
+  },
+  {
+    name: 'insert_html_at',
+    description: "RELIABLE way to ADD new HTML/CSS/JS to an existing page — use this instead of edit_html_node whenever you are INSERTING (not replacing) something: a new button, a <script>, extra CSS, a nav bar, a widget. It inserts at a named structural position keyed to the page's own <head>/<body>/<style> tags, so it CANNOT mismatch the way edit_html_node does on large pages. No anchor comments needed and it works on any existing page. Positions: 'before_body_end' (just before </body> — for scripts and body-level widgets/buttons), 'after_body_start' (right after <body> — for top-of-page bars), 'before_head_end' (just before </head> — for <link>/<meta>/<style> blocks), 'append_to_style' (just before the last </style> — to add CSS rules/variables to the existing stylesheet), 'after_head_start' (right after <head>). A multi-region change like a theme toggle is three calls: append_to_style for the CSS, before_body_end for the button, before_body_end for the script — no exact-string matching, no thrash. Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        position: {
+          type: 'string',
+          enum: ['before_body_end', 'after_body_start', 'before_head_end', 'append_to_style', 'after_head_start'],
+          description: "Where to insert. 'before_body_end' for scripts & body widgets; 'append_to_style' to add CSS to the existing <style>; 'before_head_end' for <link>/<meta>/<style>."
+        },
+        html: { type: 'string', description: 'The HTML/CSS/JS to insert at that position (for append_to_style, give raw CSS rules — no <style> wrapper).' }
+      },
+      required: ['graphId', 'nodeId', 'position', 'html']
+    }
+  },
+  {
+    name: 'read_html_section',
+    description: "Return the EXACT current inner HTML (verbatim bytes) between an anchor's <!-- edit:<id>:start --> / :end markers, plus a count of the script/style/video/iframe blocks it contains. ALWAYS call this before replace_html_section on a section you did not just write — replace_html_section overwrites the whole region, so you must see what is there to avoid deleting it. Read-only. Superadmin not required. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        anchorId: { type: 'string', description: "The anchor slug to read, e.g. 'video-section' (run list_html_anchors to see available anchors)." }
+      },
+      required: ['graphId', 'nodeId', 'anchorId']
+    }
+  },
+  {
     name: 'list_html_anchors',
-    description: "List the edit-anchor ids present in an html-node (the <!-- edit:<id>:start --> markers). Use this BEFORE replace_html_section to see which sections are anchor-editable. Read-only. Code-hardcoded (not in registry).",
+    description: "List the edit-anchor ids present in an html-node (the <!-- edit:<id>:start --> markers). Use this BEFORE replace_html_section to see which sections are anchor-editable, then read_html_section to see a section's content. Read-only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
@@ -827,7 +879,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_recordings',
-    description: 'List audio recordings from the current user\'s audio portfolio. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, and transcription status. Use this to find recordings before transcribing them.',
+    description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp.',
     input_schema: {
       type: 'object',
       properties: {
@@ -838,7 +890,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_realtime_videos',
-    description: 'List the current user\'s realtime video recordings (MP4 files from RealtimeKit video sessions). Use this when the user asks about their "realtime recording", "realtime video", or "video recording". DIFFERENT from list_recordings (which is for audio voice memos). Each user\'s videos are stored in their own R2 bucket — this tool automatically resolves the correct location based on the logged-in user.',
+    description: 'List the current user\'s video recordings from their R2 bucket. Returns TWO kinds, distinguished by the `type` field on each result: (1) `type:"realtime"` — MP4s from RealtimeKit video/meeting sessions (stored under recordings/); (2) `type:"stream"` — Cloudflare Stream LIVE BROADCAST recordings synced into the SAME bucket under stream-recordings/, each carrying `title` (the meeting title), `duration` (seconds), `streamVideoId`, and `liveInputId`. Use this tool when the user asks about their "realtime recording", "realtime video", "video recording", "stream recording", "live stream recording", or "broadcast recording" — it covers all of them. DIFFERENT from list_recordings (which is for audio voice memos). Each user\'s videos live in their own R2 bucket; this tool automatically resolves the correct bucket/path from the logged-in user\'s config row — do not ask the user for a path. Each returned video has a permanent public `playUrl` — use it EXACTLY as returned; never construct, guess, or modify a recording URL/key, and never combine a session id with a timestamp from another entry. To embed a recording in a graph, create a `video` node with `path` = that exact `playUrl`. Do NOT route these recordings to delegate_to_video / Cloudflare Stream (they already have a permanent URL), and never hand the user terminal/wrangler/curl commands.',
     input_schema: {
       type: 'object',
       properties: {
@@ -993,12 +1045,12 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'transcribe_audio',
-    description: 'Transcribe an audio file. Provide either a recordingId (to transcribe from the audio portfolio) or an audioUrl (direct R2/public URL). Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
+    description: 'Transcribe an audio file. PREFERRED: pass the `audioUrl` copied EXACTLY from a list_recordings result — this always works, including for Contact-app recordings. Alternatively pass a `recordingId`, but ONLY the exact string returned by list_recordings (e.g. an audio-portfolio id or a `contactlog:<id>` id) — NEVER construct, guess, or derive a recordingId from a filename or timestamp. Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
       type: 'object',
       properties: {
-        recordingId: { type: 'string', description: 'Portfolio recording ID (e.g. rec_1709123456_abc). If provided, fetches the audio URL from portfolio metadata.' },
-        audioUrl: { type: 'string', description: 'Direct URL to audio file (e.g. https://audio.vegvisr.org/audio/...). Use this for files not in the portfolio.' },
+        recordingId: { type: 'string', description: 'The EXACT recordingId string from a list_recordings result (audio-portfolio id or `contactlog:<id>`). Do NOT invent or derive one from a filename/timestamp. Prefer passing audioUrl instead.' },
+        audioUrl: { type: 'string', description: 'Direct URL to the audio file — copy the `audioUrl` field from a list_recordings result verbatim. This is the preferred, most reliable input.' },
         service: { type: 'string', enum: ['openai', 'cloudflare'], description: 'Transcription service. Default: openai (higher quality)' },
         language: { type: 'string', description: 'Language code hint (e.g. "en", "no"). Improves accuracy.' },
         saveToPortfolio: { type: 'boolean', description: 'If true and recordingId provided, save transcription text back to portfolio metadata. Default: false' },
@@ -2541,7 +2593,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delegate_to_video',
-    description: 'Delegate video and streaming tasks to the Video & Streaming subagent. Use this when the user asks to: upload/list/delete videos, create/manage live streams, create cloudflare-video or cloudflare-live nodes, get video playback URLs, set up RTMP streaming, or add video nodes to a graph. The subagent talks to the Cloudflare Stream API via videostream-worker and can create proper video/live node types in knowledge graphs.',
+    description: 'Delegate video and streaming tasks to the Video & Streaming subagent. Use this when the user asks to: upload/list/delete Cloudflare Stream videos, create/manage live streams, create cloudflare-video or cloudflare-live nodes, get Stream video playback URLs, or set up RTMP streaming. The subagent talks to the Cloudflare Stream API via videostream-worker. **DO NOT use this for realtime/meeting recordings** — those come from `list_realtime_videos`, already live in the user\'s R2 with a permanent `playUrl`, and are embedded directly as a `video` node. Never upload a realtime recording to Cloudflare Stream.',
     input_schema: {
       type: 'object',
       properties: {

@@ -18,7 +18,9 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 ## Your tools
 1. \`get_html_structure\` — Returns a zero-content map: line count, script blocks (line ranges + function names), style blocks, DOM IDs, event handlers, API calls. **Use this FIRST on every task** to understand the file before touching it.
 2. \`read_html_section\` — Read specific lines (startLine/endLine) or search by keyword. Returns "matchedLine" for use as edit_html_node old_string.
-3. \`edit_html_node\` — Find-and-replace exact text. old_string must match exactly (use matchedLine from reads).
+3. \`edit_html_node\` — Find-and-replace exact text. old_string must match exactly (use matchedLine from reads). BRITTLE on large pages — the exact string often mismatches, which burns turns. LAST RESORT only: use it for a small, exact, in-place text tweak you have just read. To ADD new content use \`insert_html_at\`; to CHANGE an anchored region use \`replace_html_section\`.
+3a. \`list_html_anchors\` / \`replace_html_section\` — the RELIABLE way to CHANGE an existing region. Editable regions are delimited by comment markers \`<!-- edit:<id>:start --> … <!-- edit:<id>:end -->\`. \`list_html_anchors\` shows which exist; \`replace_html_section(anchorId, html)\` swaps everything between the two markers by NAME — it cannot mismatch. To edit an existing section: if it has an anchor, use replace_html_section; if not, wrap it ONCE with the two markers via a single edit_html_node, then use replace_html_section from then on.
+3b. \`insert_html_at\` — the RELIABLE way to ADD new content (a button, a \`<script>\`, extra CSS, a nav bar, a widget) to an existing page. Inserts at a named position keyed to the page's own tags, so it CANNOT mismatch and needs no anchors: \`before_body_end\` (scripts & body-level buttons/widgets), \`after_body_start\` (top-of-page bars), \`before_head_end\` (\`<link>\`/\`<meta>\`/\`<style>\` blocks), \`append_to_style\` (add CSS rules/variables to the existing \`<style>\` — pass raw CSS, no \`<style>\` wrapper), \`after_head_start\`. A multi-region feature like a light/dark theme toggle is THREE calls: \`append_to_style\` for the CSS, \`before_body_end\` for the button, \`before_body_end\` for the toggle script — never reach for edit_html_node for this.
 4. \`validate_html_syntax\` — Counts brackets/braces/parentheses in all <script> blocks. Reports the EXACT line where nesting breaks. Runs automatically after every edit — check its output.
 5. \`rollback_html_node\` — Restore an HTML node to a previous version. Every edit creates a version. If you've broken something, roll back and try a surgical fix instead of rewriting.
 6. \`create_html_node\` / \`create_html_from_template\` — Create new HTML apps.
@@ -42,9 +44,10 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - Consider: will this break anything else? Are there other places with the same pattern?
 - For syntax errors: \`validate_html_syntax\` results are provided upfront — go straight to the reported line
 
-### Step 4: Make the change
-- Use \`edit_html_node\` with exact text from your reads
-- old_string: use matchedLine or text from raw — must match exactly
+### Step 4: Make the change — pick the RIGHT tool (this is what saves turns)
+- ADDING something new (button, script, CSS, section, widget)? → \`insert_html_at\` with a named position. Deterministic, never mismatches.
+- CHANGING an existing region that has an anchor? → \`replace_html_section\`.
+- Small exact in-place text tweak on content you just read? → \`edit_html_node\` (last resort; old_string must match exactly).
 - Make one edit per call. Multiple edits = multiple calls.
 - After each edit, \`validate_html_syntax\` runs automatically — check if brackets are still balanced
 
@@ -63,6 +66,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - Every edit_html_node creates a new version automatically. You always have a safety net.
 
 ## HTML creation rules
+- **Wrap every major editable content section in edit-anchors** so future edits are reliable: put \`<!-- edit:<id>:start -->\` immediately before the section and \`<!-- edit:<id>:end -->\` immediately after (e.g. \`hero\`, \`om-prosjektet\`, \`om-meg\`, \`footer\`). Use short kebab-case ids. This lets replace_html_section change a section by name instead of fragile string matching.
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
 - When you need API endpoints (Drizzle, Knowledge Graph, etc.), call \`get_system_registry\` to discover them dynamically. Do NOT guess or hardcode URLs.
@@ -634,7 +638,7 @@ async function executeRollbackHtmlNode(input, env) {
 
 // ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
-  'edit_html_node', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
+  'edit_html_node', 'replace_html_section', 'insert_html_at', 'list_html_anchors', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
   'get_system_registry', 'save_learning'
 ])
 
@@ -707,6 +711,8 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
     get_html_structure: ['Mapping the landscape...', 'Seeing the whole picture...', 'Understanding the architecture...'],
     read_html_section: ['Observing the code...', 'Seeing what is...', 'The code reveals itself...'],
     edit_html_node: ['Shaping the form...', 'The change flows in...', 'Transforming...'],
+    insert_html_at: ['Grafting something new...', 'The addition takes root...', 'Weaving it in...'],
+    replace_html_section: ['Reshaping the region...', 'The section transforms...'],
     create_html_node: ['Something new emerges...', 'From nothing, everything...'],
     create_html_from_template: ['A seed becomes a garden...', 'The template awakens...'],
     get_contract: ['Consulting the contract...'],
@@ -852,9 +858,12 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
           const cleanResult = { ...result }
           delete cleanResult.updatedHtml
 
-          // Auto-validate after every edit_html_node — free syntax check, no extra turn
+          // Auto-validate after any HTML-mutating edit — free syntax check, no extra
+          // turn. insert_html_at / replace_html_section can inject a broken <script>
+          // just as edit_html_node can, so validate all three.
           let autoValidation = null
-          if (toolUse.name === 'edit_html_node' && cleanResult.success !== false) {
+          const MUTATING_EDITS = toolUse.name === 'edit_html_node' || toolUse.name === 'insert_html_at' || toolUse.name === 'replace_html_section'
+          if (MUTATING_EDITS && cleanResult.success !== false) {
             try {
               const valInput = { graphId: toolUse.input.graphId, nodeId: toolUse.input.nodeId }
               autoValidation = await executeValidateHtmlSyntax(valInput, env)

@@ -427,6 +427,31 @@ async function executeEditHtmlNode(input, env) {
     newHtml = currentHtml.substring(0, idx) + newString + currentHtml.substring(idx + oldString.length)
   }
 
+  // 4b. CONTENT-LOSS GUARD (Lesson 46 — universal net across ALL html write paths).
+  // edit_html_node is find/replace, so a normal in-place text change keeps every
+  // structural block and is never blocked. But an edit whose new_string omits a
+  // <script>/<style>/<video>/<iframe> that was in old_string silently deletes a
+  // feature — this is the NONDETERMINISTIC loss seen via delegate_to_html_builder
+  // (the subagent routes edit_html_node through here). Reject that unless force:true.
+  if (input.force !== true) {
+    const oldBlocks = countHtmlBlocks(currentHtml)
+    const newBlocks = countHtmlBlocks(newHtml)
+    const dropped = Object.keys(oldBlocks)
+      .filter(k => newBlocks[k] < oldBlocks[k])
+      .map(k => `<${k}> (${oldBlocks[k]}→${newBlocks[k]})`)
+    if (dropped.length) {
+      return {
+        success: false,
+        blocked: 'content_loss_guard',
+        graphId: input.graphId,
+        nodeId: input.nodeId,
+        droppedBlocks: dropped,
+        charDelta: newHtml.length - currentHtml.length,
+        error: `Refusing this edit_html_node on "${input.nodeId}" — the replacement removes structural block(s) that exist now: ${dropped.join(', ')}. Your new_string dropped content that was in old_string. Narrow old_string/new_string to the exact text that must change (do not span a <script>/<style>/<video>/<iframe> you intend to keep), or use append_to_section/insert_html_at to ADD. If the removal is intentional, pass force:true.`,
+      }
+    }
+  }
+
   // 5. Patch the node with the edited content (+ who/when attribution)
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
     info: newHtml,
@@ -466,6 +491,62 @@ function listAnchorIds(html) {
   let m
   while ((m = re.exec(html)) !== null) ids.push(m[1])
   return ids
+}
+
+// Count structural blocks whose silent disappearance during a whole-region
+// overwrite means real feature loss (Lesson 38: replace_html_section dropped a
+// theme-toggle <script>+<style> that lived inside the anchor because the model
+// retyped the region from a lossy summary). Used by the shrink/loss guard.
+function countHtmlBlocks(html) {
+  const h = String(html || '')
+  const n = (re) => (h.match(re) || []).length
+  return {
+    script: n(/<script[\s>]/gi),
+    style: n(/<style[\s>]/gi),
+    video: n(/<video[\s>]/gi),
+    iframe: n(/<iframe[\s>]/gi),
+    form: n(/<form[\s>]/gi),
+    canvas: n(/<canvas[\s>]/gi),
+  }
+}
+
+// Read the EXACT bytes currently inside an edit-anchor so the model can replace a
+// section without editing blind. This is the main-agent counterpart of the
+// subagent's read_html_section — its absence is what forced the delegate-for-a-
+// -prose-summary → hand-rewrite → content-loss chain (Lesson 38).
+async function executeReadHtmlSection(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const anchorId = String(input.anchorId || input.anchor || '').trim().toLowerCase()
+  if (!ANCHOR_ID_RE.test(anchorId)) {
+    return { success: false, error: "anchorId must be a slug (a-z, 0-9, '-'), e.g. 'video-section'. Run list_html_anchors to see the available anchors." }
+  }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const html = (node.info || '').replace(/\r\n/g, '\n')
+  const { start, end } = anchorMarkers(anchorId)
+  const s = html.indexOf(start)
+  const e = html.indexOf(end)
+  if (s === -1 || e === -1 || e < s) {
+    const available = listAnchorIds(html)
+    return {
+      success: false,
+      error: `Anchor "${anchorId}" not found in "${input.nodeId}".${available.length ? ` Available anchors: ${available.join(', ')}.` : ' This page has no edit anchors yet.'}`,
+      availableAnchors: available,
+    }
+  }
+  const inner = html.slice(s + start.length, e)
+  const blocks = countHtmlBlocks(inner)
+  const notable = Object.entries(blocks).filter(([, c]) => c > 0).map(([k, c]) => `${c} <${k}>`)
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    anchorId,
+    html: inner,
+    charCount: inner.length,
+    blocks,
+    message: `Exact current content of anchor "${anchorId}" (${inner.length} chars${notable.length ? `, contains ${notable.join(', ')}` : ''}). replace_html_section OVERWRITES this whole region — include everything above that you want to keep, then add your changes.`,
+  }
 }
 
 async function fetchHtmlNode(env, graphId, nodeId) {
@@ -530,12 +611,44 @@ async function executeReplaceHtmlSection(input, env) {
   }
 
   const innerStart = s + start.length
+  const oldInner = currentHtml.slice(innerStart, e)
   const before = currentHtml.slice(0, innerStart)
   const after = currentHtml.slice(e)
   const newHtml = `${before}\n${newInner}\n${after}`
 
   if (newHtml === currentHtml) {
     return { success: true, graphId: input.graphId, nodeId: input.nodeId, anchorId, changed: false, charDelta: 0, message: `Section "${anchorId}" already matched the given content — no change.` }
+  }
+
+  // CONTENT-LOSS GUARD (Lesson 38): replace_html_section overwrites the ENTIRE
+  // region. If the caller reconstructed it from memory/a summary it silently drops
+  // whatever it forgot to retype — that is how a theme-toggle <script>+<style> was
+  // deleted while "adding two cards" (the section came back -495 chars). Refuse when
+  // the new content drops a structural block (<script>/<style>/<video>/<iframe>/…)
+  // or shrinks hard, unless the caller passes force:true to confirm the removal.
+  if (input.force !== true) {
+    const oldBlocks = countHtmlBlocks(oldInner)
+    const newBlocks = countHtmlBlocks(newInner)
+    const dropped = Object.keys(oldBlocks)
+      .filter(k => newBlocks[k] < oldBlocks[k])
+      .map(k => `<${k}> (${oldBlocks[k]}→${newBlocks[k]})`)
+    const charDelta = newInner.length - oldInner.length
+    const bigShrink = oldInner.length >= 200 && charDelta <= -Math.max(150, Math.round(oldInner.length * 0.25))
+    if (dropped.length || bigShrink) {
+      const reason = dropped.length
+        ? `it removes structural block(s) that exist now: ${dropped.join(', ')}`
+        : `it shrinks the section by ${-charDelta} chars (${oldInner.length}→${newInner.length})`
+      return {
+        success: false,
+        blocked: 'content_loss_guard',
+        graphId: input.graphId,
+        nodeId: input.nodeId,
+        anchorId,
+        charDelta,
+        droppedBlocks: dropped,
+        error: `Refusing to replace "${anchorId}" — ${reason}. replace_html_section OVERWRITES the whole region, so anything you did not retype is deleted. Read the exact current bytes with read_html_section("${anchorId}"), keep everything you want to preserve, then retry. To ADD without rewriting the region, use insert_html_at. If the removal is intentional, pass force:true.`,
+      }
+    }
   }
 
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
@@ -558,6 +671,229 @@ async function executeReplaceHtmlSection(input, env) {
     publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}", roll back any time with restore_html_node_version) AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
     message: `Replaced section "${anchorId}" in "${input.nodeId}" (${newHtml.length > currentHtml.length ? '+' : ''}${newHtml.length - currentHtml.length} chars) — saved as v${patchData.newVersion}. Verified: content between the anchors was swapped. Tell the user "nå på v${patchData.newVersion}" and that it is saved in the graph, not live until published.`,
   }
+}
+
+// ADD content INSIDE an edit-anchor without touching what is already there.
+// This is the loss-proof counterpart of replace_html_section (Lesson 46): "add a
+// card/row/item to this section" must NEVER rewrite the whole region, because a
+// rewrite drops whatever the model forgot to retype. append_to_section splices the
+// new HTML in just before the anchor's :end marker (or just after :start), so every
+// existing byte — scripts, styles, siblings — is preserved by construction.
+async function executeAppendToSection(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const anchorId = String(input.anchorId || input.anchor || '').trim().toLowerCase()
+  if (!ANCHOR_ID_RE.test(anchorId)) {
+    return { success: false, error: "anchorId must be a slug (a-z, 0-9, '-'), e.g. 'video-section'. Run list_html_anchors to see the anchors." }
+  }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const snippet = String(input.html ?? input.content ?? '')
+  if (input.html === undefined && input.content === undefined) {
+    return { success: false, error: 'html (the content to add inside the section) is required.' }
+  }
+  const where = String(input.position || 'end').trim().toLowerCase()
+  if (where !== 'end' && where !== 'start') {
+    return { success: false, error: "position must be 'end' (append, default) or 'start' (prepend)." }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `append_to_section only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  const { start, end } = anchorMarkers(anchorId)
+  const s = currentHtml.indexOf(start)
+  const e = currentHtml.indexOf(end)
+  if (s === -1 || e === -1 || e < s) {
+    const available = listAnchorIds(currentHtml)
+    return {
+      success: false,
+      error: `Anchor "${anchorId}" not found in "${input.nodeId}".${available.length ? ` Available anchors: ${available.join(', ')}.` : ' This page has no edit anchors yet — wrap the target section once via edit_html_node.'}`,
+      availableAnchors: available,
+    }
+  }
+
+  // Splice additively: before :end (append) or after :start (prepend). Nothing existing is removed.
+  const idx = where === 'end' ? e : s + start.length
+  const before = currentHtml.slice(0, idx)
+  const after = currentHtml.slice(idx)
+  const newHtml = `${before}\n${snippet}\n${after}`
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml,
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email || null,
+  })
+
+  // Prove additivity: the new content must be strictly larger and every prior block must survive.
+  const oldBlocks = countHtmlBlocks(currentHtml)
+  const newBlocks = countHtmlBlocks(newHtml)
+  const preserved = Object.keys(oldBlocks).every(k => newBlocks[k] >= oldBlocks[k])
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    anchorId,
+    changed: true,
+    position: where,
+    charDelta: newHtml.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    blocksPreserved: preserved,
+    savedNotLive: true,
+    publishHostHints: Array.isArray(node.references) ? node.references : [],
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}", roll back any time with restore_html_node_version) AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
+    message: `Added ${snippet.length} chars to the ${where} of anchor "${anchorId}" in "${input.nodeId}" — nothing existing was removed (additive splice, all ${Object.values(oldBlocks).reduce((a,b)=>a+b,0)} prior script/style/media blocks preserved). Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
+// Deterministic INSERTION at a named structural position, keyed to the page's own
+// <head>/<body>/<style> tags. Unlike edit_html_node it never needs an exact
+// old_string match, so "add a button + CSS + script" (e.g. a theme toggle) is a
+// few clean calls instead of a 20-turn exact-match thrash on a large page.
+async function executeInsertHtmlAt(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const position = String(input.position || '').trim().toLowerCase()
+  const VALID = ['before_body_end', 'after_body_start', 'before_head_end', 'append_to_style', 'after_head_start']
+  if (!VALID.includes(position)) {
+    return { success: false, error: `position must be one of: ${VALID.join(', ')}.` }
+  }
+  const snippet = String(input.html ?? input.content ?? '')
+  if (input.html === undefined && input.content === undefined) {
+    return { success: false, error: 'html (the content to insert) is required.' }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `insert_html_at only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+
+  // Resolve the insertion index deterministically off single-occurrence tags.
+  let idx = -1        // where the snippet is spliced in
+  let missing = ''    // tag we needed but couldn't find
+  if (position === 'before_body_end') {
+    idx = currentHtml.lastIndexOf('</body>'); if (idx === -1) missing = '</body>'
+  } else if (position === 'before_head_end') {
+    idx = currentHtml.lastIndexOf('</head>'); if (idx === -1) missing = '</head>'
+  } else if (position === 'append_to_style') {
+    idx = currentHtml.lastIndexOf('</style>'); if (idx === -1) missing = '</style>'
+  } else if (position === 'after_body_start') {
+    const m = currentHtml.match(/<body[^>]*>/i)
+    if (m) idx = m.index + m[0].length; else missing = '<body>'
+  } else if (position === 'after_head_start') {
+    const m = currentHtml.match(/<head[^>]*>/i)
+    if (m) idx = m.index + m[0].length; else missing = '<head>'
+  }
+
+  if (missing) {
+    // Give the model a usable fallback instead of a dead end.
+    const hasHead = /<\/head>/i.test(currentHtml)
+    const hasStyle = /<\/style>/i.test(currentHtml)
+    let hint = ''
+    if (position === 'append_to_style') {
+      hint = hasHead
+        ? " No <style> block exists — insert a full '<style>…</style>' with position 'before_head_end' instead."
+        : ' No <style> or <head> — this page may be a fragment; add a full <style> block with edit_html_node.'
+    } else {
+      hint = ' This page may be an HTML fragment without that tag — use replace_html_section on an existing anchor, or edit_html_node.'
+    }
+    return { success: false, error: `Could not find "${missing}" in "${input.nodeId}" for position "${position}".${hint}` }
+  }
+
+  const before = currentHtml.slice(0, idx)
+  const after = currentHtml.slice(idx)
+  const newHtml = `${before}\n${snippet}\n${after}`
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml,
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email || null,
+  })
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    position,
+    changed: true,
+    charDelta: newHtml.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    savedNotLive: true,
+    publishHostHints: Array.isArray(node.references) ? node.references : [],
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}", roll back any time with restore_html_node_version) AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
+    message: `Inserted ${snippet.length} chars at "${position}" in "${input.nodeId}" — saved as v${patchData.newVersion}. Verified by splice on the page's own tags (no string-match risk). Tell the user "nå på v${patchData.newVersion}" and that it is saved in the graph, not live until published.`,
+  }
+}
+
+// Auth for a PUBLISHED page (served from any domain by brand-worker / a client brand-proxy).
+// We inject the standard <vegvisr-auth> component from the components registry rather than an
+// inline bridge, so:
+//   - the auth/save logic updates CENTRALLY (change the component → all pages get it, no republish);
+//   - login (magic-link) + identity resolve from PER-ORIGIN localStorage, so it works on ANY domain
+//     (vegvisr.org subdomains, vegr.ai, client World-Founder domains) — not just *.vegvisr.org.
+// The component defines window.vegvisrPatchNode / window.vegvisrWhoAmI and the <vegvisr-auth> bar.
+// We only inject the SCRIPT (+ the page's graphId); the visible <vegvisr-auth> element is added by
+// the page/agent where it fits. Injected into the served copy only — node.info stays clean.
+const VEGVISR_AUTH_COMPONENT_URL = 'https://api.vegvisr.org/components/vegvisr-auth.js'
+function buildPublishedAuthBridge(graphId) {
+  const gid = graphId ? String(graphId).replace(/'/g, "\\'") : ''
+  return `<script>window.__VEGVISR_GRAPH_ID='${gid}';</script>` +
+    `<script src="${VEGVISR_AUTH_COMPONENT_URL}" defer></script>`
+}
+
+// Inject the published auth bridge right after <head> (before any page script runs), unless
+// the HTML already carries it. Returns the HTML unchanged if there is nowhere sane to inject.
+// Optional login GATE: when opts.gate is set, also inject a <vegvisr-auth require-auth …> element
+// into the SERVED copy so the whole page is login-gated. Injected at publish time only (node.info
+// stays clean) → reverting is just a republish without gate. gateRole restricts to roles; gateAppName
+// / gateLogo brand the login card.
+function buildGateElement(opts) {
+  if (!opts || !opts.gate) return ''
+  const clean = v => String(v == null ? '' : v).replace(/"/g, '&quot;')
+  let attrs = ' require-auth'
+  if (opts.gateRole) attrs += ` require-role="${clean(opts.gateRole)}"`
+  attrs += ` app-name="${clean(opts.gateAppName || 'Vegvisr')}"`
+  if (opts.gateLogo) attrs += ` logo="${clean(opts.gateLogo)}"`
+  if (String(opts.gateRegisterMode || '').toLowerCase() === 'open') attrs += ' register-mode="open"'
+  return `<vegvisr-auth${attrs}></vegvisr-auth>`
+}
+
+function injectPublishedAuthBridge(html, graphId, opts) {
+  if (!html) return html
+  // Idempotent: skip the head script if already present (republish reads clean node.info anyway).
+  let out = html
+  if (out.indexOf('components/vegvisr-auth.js') === -1) {
+    const bridge = buildPublishedAuthBridge(graphId)
+    const headIdx = out.indexOf('<head>')
+    if (headIdx !== -1) out = out.slice(0, headIdx + 6) + bridge + out.slice(headIdx + 6)
+    else {
+      const htmlIdx = out.indexOf('<html')
+      if (htmlIdx !== -1) {
+        const closeTag = out.indexOf('>', htmlIdx)
+        if (closeTag !== -1) out = out.slice(0, closeTag + 1) + '<head>' + bridge + '</head>' + out.slice(closeTag + 1)
+        else out = bridge + out
+      } else out = bridge + out
+    }
+  }
+  // Gate element (if requested) — one per page, before </body>.
+  if (opts && opts.gate && out.indexOf('require-auth') === -1) {
+    const gate = buildGateElement(opts)
+    const bodyClose = out.lastIndexOf('</body>')
+    if (bodyClose !== -1) out = out.slice(0, bodyClose) + gate + out.slice(bodyClose)
+    else out = out + gate
+  }
+  return out
 }
 
 // Publish a graph html-node (or css-node) to a live host served by the shared brand-worker,
@@ -601,9 +937,16 @@ async function executePublishHtmlNode(input, env) {
   // fonemer) and published there — a real host mistake that writes junk into brand-worker KV
   // and can serve the wrong domain. If the node records the host(s) it belongs to (in
   // `references`), reject a mismatched host unless force:true, and point at the right one.
-  const referencedHosts = (Array.isArray(node.references) ? node.references : [])
+  // The associated host is stored on the node — the KG worker persists create_html_node's
+  // `references` into the `bibl` field, so check BOTH (plus path) to find it.
+  const hostSources = [
+    ...(Array.isArray(node.references) ? node.references : []),
+    ...(Array.isArray(node.bibl) ? node.bibl : []),
+    ...(node.path ? [node.path] : []),
+  ]
+  const referencedHosts = [...new Set(hostSources
     .map(r => { try { return new URL(String(r)).hostname.toLowerCase() } catch { return String(r).replace(/^https?:\/\//, '').split('/')[0].toLowerCase() } })
-    .filter(h => h && h.includes('.'))
+    .filter(h => h && h.includes('.') && !h.includes(' ')))]
   if (referencedHosts.length && !referencedHosts.includes(host) && input.force !== true) {
     return {
       success: false,
@@ -651,7 +994,17 @@ async function executePublishHtmlNode(input, env) {
   //    BODY hostname (not the request Host), so the internal URL host is irrelevant. Public fetch is
   //    the fallback for a foreign host passed via proxy_url (e.g. a cross-zone domain).
   const overwrite = input.overwrite !== false // default true — republish in place
-  const publishBody = JSON.stringify({ hostname: host, html, overwrite, graphId: input.graphId, nodeId: input.nodeId })
+  // Inject the runtime auth bridge so in-page saves (window.vegvisrPatchNode) work on the
+  // live domain, same as in preview. Injected into the SERVED copy only — node.info in the
+  // graph stays clean, so republish never accumulates bridges.
+  const htmlToPublish = injectPublishedAuthBridge(html, input.graphId, {
+    gate: input.gate === true,
+    gateRole: input.gateRole || '',
+    gateAppName: input.gateAppName || '',
+    gateLogo: input.gateLogo || '',
+    gateRegisterMode: input.gateRegisterMode || '',
+  })
+  const publishBody = JSON.stringify({ hostname: host, html: htmlToPublish, overwrite, graphId: input.graphId, nodeId: input.nodeId })
   const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
   const useBinding = env.BRAND_WORKER && !input.proxy_url
   const proxyUrl = useBinding ? 'brand-worker service binding' : (input.proxy_url || `https://${host}/__html/publish`).trim()
@@ -862,6 +1215,24 @@ async function executeRestoreHtmlNodeVersion(input, env) {
     updatedBy: gate.email,
     restoredFromVersion: Number(input.version),
   })
+
+  // STATE-HONESTY (Lesson 38): a revert edits the GRAPH DRAFT only. Any live
+  // published page keeps serving the OLD snapshot until publish_html_node runs
+  // again. Surface the published host(s) so the agent cannot narrate "reverted!"
+  // as if the live site changed (it hadn't — the user "saw no change").
+  const hostSources = [
+    ...(Array.isArray(oldNode.references) ? oldNode.references : []),
+    ...(Array.isArray(oldNode.bibl) ? oldNode.bibl : []),
+    ...(oldNode.path ? [oldNode.path] : []),
+  ]
+  const publishedHosts = [...new Set(hostSources
+    .map(r => { try { return new URL(String(r)).hostname.toLowerCase() } catch { return String(r).replace(/^https?:\/\//, '').split('/')[0].toLowerCase() } })
+    .filter(h => h && h.includes('.') && !h.includes(' ')))]
+
+  const liveNote = publishedHosts.length
+    ? ` NOT YET LIVE: ${publishedHosts.join(', ')} still serves the OLD content — call publish_html_node(host:"${publishedHosts[0]}") to apply this rollback. Ask the user before publishing.`
+    : ` This node is not published to any known host; the change is saved in the graph only.`
+
   return {
     success: true,
     graphId: input.graphId,
@@ -869,7 +1240,9 @@ async function executeRestoreHtmlNodeVersion(input, env) {
     restoredFrom: Number(input.version),
     newVersion: patchData.newVersion,
     infoLength: (oldNode.info || '').length,
-    message: `Node "${input.nodeId}" rolled back to its content from version ${input.version} (saved as new version ${patchData.newVersion}). To update a LIVE published page, publish the node again.`,
+    savedNotLive: true,
+    publishedHosts,
+    message: `Node "${input.nodeId}" rolled back to its version ${input.version} content (saved as new version ${patchData.newVersion} — no history destroyed).${liveNote}`,
   }
 }
 
@@ -3388,6 +3761,48 @@ async function executeListRecordings(input, env) {
     }
   }
 
+  // Also include Contact Log recordings. The Contacts app stores each recording
+  // in R2 and attaches its URL to the contact's log entry in Drizzle (the
+  // authoritative store); it only registers the recording in audio-portfolio KV
+  // on a best-effort basis. When that registration fails, the recording is
+  // absent from KV above but still present in Drizzle — read it directly so the
+  // agent can always find it. (July 2026 incident: recordings existed but were
+  // invisible to list_recordings because KV registration had silently failed.)
+  try {
+    const rawUserId = input.userId
+    if (rawUserId && !String(rawUserId).includes('@')) {
+      const { logsTableId } = await resolveContactTableIds(rawUserId, env)
+        .catch(() => ({ logsTableId: null }))
+      if (logsTableId) {
+        const logData = await drizzleFetch(env, '/query', {
+          tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc'
+        })
+        const logs = logData.records || logData.rows || []
+        const seenUrls = new Set(allRecordings.map(r => r.r2Url).filter(Boolean))
+        for (const l of logs) {
+          const url = l.recording_url
+          if (!url || seenUrls.has(url)) continue
+          seenUrls.add(url)
+          allRecordings.push({
+            recordingId: `contactlog:${l.id}`,
+            displayName: `Contact Log — ${l.contact_name || 'Unknown'}`,
+            fileName: (url.split('/').pop() || '').split('?')[0],
+            duration: 0,
+            fileSize: 0,
+            tags: ['contacts', 'contact-log'],
+            category: 'Contacts',
+            transcriptionText: l.notes || '',
+            r2Url: url,
+            createdAt: l.logged_at || '',
+            source: 'Contact Log',
+          })
+        }
+      }
+    }
+  } catch (e) {
+    // Contact-log recordings are supplementary — never fail the whole listing
+  }
+
   // Client-side filtering if query provided (search-recordings endpoint also has broken index)
   if (query) {
     const q = query.toLowerCase().trim()
@@ -3472,24 +3887,43 @@ async function executeListRealtimeVideos(input, env) {
     // Per-user R2 ('r2-own') is not served by the public realtimevideos.vegvisr.org host.
     if (source === 'r2-own') return null
     const normalized = String(key).replace(/^\/+/, '')
-    const path = normalized.startsWith('recordings/') ? normalized : `recordings/${normalized}`
-    return `${REALTIME_VIDEO_BASE}/${path}`
+    // Already-prefixed keys (recordings/… or stream-recordings/…) pass through verbatim.
+    if (normalized.startsWith('recordings/') || normalized.startsWith('stream-recordings/')) {
+      return `${REALTIME_VIDEO_BASE}/${normalized}`
+    }
+    // Bare keys: stream broadcasts live under stream-recordings/, meeting recordings under recordings/.
+    const prefix = source === 'stream' ? 'stream-recordings/' : 'recordings/'
+    return `${REALTIME_VIDEO_BASE}/${prefix}${normalized}`
   }
 
-  const videos = sorted.slice(0, limit).map((r) => ({
-    name: r.name,
-    key: r.key,
-    size: r.size || 0,
-    uploaded: r.uploaded || null,
-    source: r.source || null,
-    // Prefer the playUrl the worker computed (presigned for r2-own, public for shared);
-    // fall back to legacy public-host construction for older worker versions.
-    playUrl: r.playUrl || buildPlayUrl(r.key, r.source),
-  }))
+  const videos = sorted.slice(0, limit).map((r) => {
+    const cm = r.customMetadata || {}
+    // type distinguishes RealtimeKit meeting recordings ('realtime') from Cloudflare Stream
+    // live broadcasts copied into R2 under stream-recordings/ ('stream').
+    const type = r.type || (r.source === 'stream' ? 'stream' : 'realtime')
+    return {
+      name: r.name,
+      key: r.key,
+      size: r.size || 0,
+      uploaded: r.uploaded || null,
+      source: r.source || null,
+      type,
+      // Stream broadcasts carry their human title + duration in customMetadata, not the R2 title field.
+      title: r.title || cm.meetingTitle || null,
+      duration: cm.duration != null ? Number(cm.duration) : (r.duration ?? null),
+      streamVideoId: cm.streamVideoId || null,
+      liveInputId: cm.liveInputId || null,
+      // Prefer the playUrl the worker computed (presigned for r2-own, public for shared);
+      // fall back to public-host construction for older worker versions.
+      playUrl: r.playUrl || buildPlayUrl(r.key, r.source),
+    }
+  })
 
+  const streamCount = videos.filter((v) => v.type === 'stream').length
   return {
-    message: `Found ${videos.length} realtime video(s). Use the exact playUrl field as the playback link — do not invent or modify URLs.`,
+    message: `Found ${videos.length} realtime video(s)${streamCount ? `, including ${streamCount} live stream broadcast(s) (type:'stream', stored under stream-recordings/)` : ''}. Use the exact playUrl field as the playback link — do not invent or modify URLs.`,
     total: videos.length,
+    streamCount,
     videos,
   }
 }
@@ -3974,21 +4408,79 @@ async function executeTranscribeAudio(input, env) {
   let resolvedUrl = audioUrl
   let resolvedRecordingId = recordingId
 
-  // 1. Resolve audio URL from portfolio if recordingId provided
-  if (recordingId && userEmail && !audioUrl) {
+  // 0. Resolve a Contact Log recording ("contactlog:<logId>") from Drizzle.
+  //    list_recordings surfaces contact-log recordings straight from the
+  //    contact_logs table (they are often absent from audio-portfolio KV), so a
+  //    transcription request can arrive with a "contactlog:" id that the KV
+  //    lookup below would never find. Resolve its URL from the same table.
+  if (recordingId && !resolvedUrl && String(recordingId).startsWith('contactlog:')) {
+    const logId = String(recordingId).slice('contactlog:'.length)
+    const rawUserId = input.userId
+    if (!rawUserId || String(rawUserId).includes('@')) {
+      throw new Error('Contact-log transcription requires the internal user id')
+    }
+    const { logsTableId } = await resolveContactTableIds(rawUserId, env)
+      .catch(() => ({ logsTableId: null }))
+    if (!logsTableId) throw new Error('No contact_logs table found for this user')
+    let row = null
+    try {
+      const byId = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { id: logId }, limit: 1 })
+      row = (byId.records || byId.rows || [])[0] || null
+    } catch { /* fall through to a full scan */ }
+    if (!row) {
+      const scan = await drizzleFetch(env, '/query', { tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc' })
+      row = (scan.records || scan.rows || []).find(r => String(r.id) === logId) || null
+    }
+    if (!row || !row.recording_url) throw new Error(`Contact log "${logId}" has no recording`)
+    resolvedUrl = row.recording_url
+    resolvedRecordingId = recordingId
+  }
+
+  // 1. Resolve audio URL from portfolio if recordingId provided (KV-indexed recordings)
+  if (recordingId && userEmail && !resolvedUrl) {
     const listRes = await env.AUDIO_PORTFOLIO.fetch(
       `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(userEmail)}&limit=200&userRole=Superadmin&ownerEmail=${encodeURIComponent(userEmail)}`
     )
     if (!listRes.ok) throw new Error('Failed to fetch recordings from portfolio')
     const listData = await listRes.json()
     const recording = (listData.recordings || []).find(r => r.recordingId === recordingId)
-    if (!recording) throw new Error(`Recording "${recordingId}" not found in portfolio`)
-    resolvedUrl = recording.r2Url
-    if (!resolvedUrl) throw new Error(`Recording "${recordingId}" has no audio URL`)
+    if (recording) {
+      resolvedUrl = recording.r2Url
+      if (!resolvedUrl) throw new Error(`Recording "${recordingId}" has no audio URL`)
+    }
+  }
+
+  // 1b. Still unresolved. Agents sometimes synthesise a "rec_<timestamp>_x" id from
+  //     a recording's filename instead of using the exact id/audioUrl (July 2026:
+  //     transcribe of the Olve contact-log recording was called with a fabricated
+  //     id and failed twice before falling back to audioUrl). The embedded
+  //     timestamp still identifies a contact-log recording — match it against the
+  //     contact_logs filenames so a fabricated id resolves deterministically.
+  if (recordingId && !resolvedUrl) {
+    const tsMatch = String(recordingId).match(/(\d{10,})/)
+    const rawUserId = input.userId
+    if (tsMatch && rawUserId && !String(rawUserId).includes('@')) {
+      const { logsTableId } = await resolveContactTableIds(rawUserId, env)
+        .catch(() => ({ logsTableId: null }))
+      if (logsTableId) {
+        const scan = await drizzleFetch(env, '/query', {
+          tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc'
+        })
+        const ts = tsMatch[1]
+        const row = (scan.records || scan.rows || [])
+          .find(r => r.recording_url && String(r.recording_url).includes(ts))
+        if (row) {
+          resolvedUrl = row.recording_url
+          resolvedRecordingId = `contactlog:${row.id}`
+        }
+      }
+    }
   }
 
   if (!resolvedUrl) {
-    throw new Error('Provide either recordingId + userEmail or audioUrl')
+    throw new Error(recordingId
+      ? `Could not resolve recording "${recordingId}". Pass the exact audioUrl from list_recordings instead of a recordingId.`
+      : 'Provide either recordingId + userEmail or audioUrl')
   }
 
   // 2. Always delegate transcription to the frontend browser.
@@ -8419,8 +8911,14 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executePublishHtmlNode(toolInput, env)
     case 'replace_html_section':
       return await executeReplaceHtmlSection(toolInput, env)
+    case 'insert_html_at':
+      return await executeInsertHtmlAt(toolInput, env)
     case 'list_html_anchors':
       return await executeListHtmlAnchors(toolInput, env)
+    case 'read_html_section':
+      return await executeReadHtmlSection(toolInput, env)
+    case 'append_to_section':
+      return await executeAppendToSection(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':
