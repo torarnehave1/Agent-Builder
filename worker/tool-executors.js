@@ -1063,6 +1063,30 @@ async function executePublishHtmlNode(input, env) {
     return { success: false, error: `Publish rejected by ${host}: ${detail}` }
   }
 
+  // RECORD THE HOST ON THE NODE (Lesson 46 v5): publishing must leave a durable link
+  // from the node to the host it went live on, so a later restore_html_node_version /
+  // edit can warn "LIVE at <host> still shows the old content — republish". Without
+  // this, the state-honest revert message can't name the host (found in the 10-version
+  // real-data test: after publishing to agent-test.vegvisr.org the rollback said "not
+  // published to any known host"). Best-effort: never fail a successful publish over
+  // bookkeeping. Written to BOTH references and bibl (the KG worker persists html-node
+  // host refs into bibl; restore reads references/bibl/path).
+  let hostRecorded = false
+  try {
+    const hostUrl = `https://${host}/`
+    const already = [
+      ...(Array.isArray(node.references) ? node.references : []),
+      ...(Array.isArray(node.bibl) ? node.bibl : []),
+      ...(node.path ? [node.path] : []),
+    ].some(r => { try { return new URL(String(r)).hostname.toLowerCase() === host } catch { return String(r).toLowerCase().includes(host) } })
+    if (!already) {
+      const references = [...(Array.isArray(node.references) ? node.references : []), hostUrl]
+      const bibl = [...(Array.isArray(node.bibl) ? node.bibl : []), hostUrl]
+      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { references, bibl })
+      hostRecorded = true
+    }
+  } catch (e) { /* bookkeeping only — publish already succeeded */ }
+
   return {
     success: true,
     graphId: input.graphId,
@@ -1072,7 +1096,8 @@ async function executePublishHtmlNode(input, env) {
     url: `https://${host}/`,
     html_bytes: html.length,
     via: proxyUrl,
-    message: `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.`,
+    hostRecorded,
+    message: `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`,
   }
 }
 
@@ -1253,14 +1278,22 @@ async function executeRestoreHtmlNodeVersion(input, env) {
     restoredFromVersion: Number(input.version),
   })
 
-  // STATE-HONESTY (Lesson 38): a revert edits the GRAPH DRAFT only. Any live
-  // published page keeps serving the OLD snapshot until publish_html_node runs
-  // again. Surface the published host(s) so the agent cannot narrate "reverted!"
-  // as if the live site changed (it hadn't — the user "saw no change").
+  // STATE-HONESTY (Lesson 38 + 46 v5): a revert edits the GRAPH DRAFT only. Any live
+  // published page keeps serving the OLD snapshot until publish_html_node runs again.
+  // Read the published host(s) from the CURRENT node, NOT the version being restored —
+  // the host is recorded at publish time (which happens AFTER the version being rolled
+  // back to), so the old snapshot has no host ref (found in the 10-version real-data
+  // test: restoring to v5 said "not published" even though the node was live on
+  // agent-test.vegvisr.org). Fall back to oldNode if the current read fails.
+  let hostNode = oldNode
+  try {
+    const cur = await fetchHtmlNode(env, input.graphId, input.nodeId)
+    if (cur.node) hostNode = cur.node
+  } catch (e) { /* fall back to oldNode */ }
   const hostSources = [
-    ...(Array.isArray(oldNode.references) ? oldNode.references : []),
-    ...(Array.isArray(oldNode.bibl) ? oldNode.bibl : []),
-    ...(oldNode.path ? [oldNode.path] : []),
+    ...(Array.isArray(hostNode.references) ? hostNode.references : []),
+    ...(Array.isArray(hostNode.bibl) ? hostNode.bibl : []),
+    ...(hostNode.path ? [hostNode.path] : []),
   ]
   const publishedHosts = [...new Set(hostSources
     .map(r => { try { return new URL(String(r)).hostname.toLowerCase() } catch { return String(r).replace(/^https?:\/\//, '').split('/')[0].toLowerCase() } })
