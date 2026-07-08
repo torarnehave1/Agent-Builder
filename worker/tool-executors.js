@@ -651,6 +651,80 @@ async function fetchHtmlNode(env, graphId, nodeId) {
   return { node, graphData }
 }
 
+// Nesting-aware splice INSIDE a named element (Lesson 46 v7). target is a bare tag
+// ('nav','header','footer','main') → the FIRST such element, or '#id' → the element
+// with that id. Walks opens/closes of the tag to find the MATCHING close so nested
+// same-tag elements don't fool it. position 'end' (default) = just before the close;
+// 'start' = just after the open tag. Purely additive — nothing existing is removed.
+function spliceInElement(html, target, snippet, position) {
+  const t = String(target || '').trim()
+  let openStart = -1, tag = ''
+  if (t.startsWith('#')) {
+    const id = t.slice(1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const m = html.match(new RegExp('<([a-z][a-z0-9-]*)\\b[^>]*\\bid=["\\\']' + id + '["\\\'][^>]*>', 'i'))
+    if (!m) return { error: `No element with id "${t.slice(1)}" found.` }
+    openStart = m.index; tag = m[1].toLowerCase()
+  } else {
+    tag = t.replace(/[^a-z0-9-]/gi, '').toLowerCase()
+    if (!tag) return { error: "target must be a tag name (e.g. 'nav') or '#id'." }
+    const m = html.match(new RegExp('<' + tag + '\\b[^>]*>', 'i'))
+    if (!m) return { error: `No <${tag}> element found in this node.` }
+    openStart = m.index
+  }
+  const openTagEnd = html.indexOf('>', openStart) + 1
+  if (openTagEnd === 0) return { error: `Malformed <${tag}> open tag.` }
+  const re = new RegExp('<' + tag + '\\b[^>]*>|</' + tag + '\\s*>', 'gi')
+  re.lastIndex = openTagEnd
+  let depth = 1, closeStart = -1, m2
+  while ((m2 = re.exec(html)) !== null) {
+    if (m2[0][1] === '/') { depth -= 1; if (depth === 0) { closeStart = m2.index; break } }
+    else depth += 1
+  }
+  if (closeStart === -1) return { error: `No matching </${tag}> for the ${t} element.` }
+  const idx = position === 'start' ? openTagEnd : closeStart
+  return { html: html.slice(0, idx) + '\n' + snippet + '\n' + html.slice(idx), tag }
+}
+
+async function executeInsertInElement(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const target = String(input.target || input.selector || '').trim()
+  if (!target) return { success: false, error: "target is required — a tag name (e.g. 'nav') or '#id'." }
+  const snippet = String(input.html ?? input.content ?? '')
+  if (input.html === undefined && input.content === undefined) return { success: false, error: 'html (the content to insert) is required.' }
+  const where = String(input.position || 'end').trim().toLowerCase()
+  if (where !== 'end' && where !== 'start') return { success: false, error: "position must be 'end' (default) or 'start'." }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `insert_in_element only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  const r = spliceInElement(currentHtml, target, snippet, where)
+  if (r.error) return { success: false, error: r.error }
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: r.html, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    target,
+    matchedTag: r.tag,
+    position: where,
+    changed: true,
+    charDelta: r.html.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: r.html,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Inserted ${snippet.length} chars at the ${where} of <${r.tag}> (${target}) in "${input.nodeId}" — additive, nothing removed. Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
 async function executeListHtmlAnchors(input, env) {
   if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
   const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
@@ -9039,6 +9113,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReadHtmlHead(toolInput, env)
     case 'append_to_section':
       return await executeAppendToSection(toolInput, env)
+    case 'insert_in_element':
+      return await executeInsertInElement(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':

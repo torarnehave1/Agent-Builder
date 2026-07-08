@@ -376,6 +376,21 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'insert_in_element',
+    description: "ADD content INSIDE a specific element chosen by tag or id — the placement-aware, loss-proof way to put a button in the <nav>, an item in a <ul>, a widget in '#header', etc. `target` is a bare tag name ('nav','header','footer','main') for the FIRST such element, or '#id' for the element with that id. position 'end' (default) splices just before the element's closing tag; 'start' just after its open tag. Nesting-aware (finds the MATCHING close), purely additive — nothing existing is removed, so no read is needed first. Use this together with read_html_head + insert_html_at to add a theme toggle with NO read_node: read_html_head for the CSS vars, insert_in_element('nav', button) for placement, insert_html_at('append_to_style', css) and ('before_body_end', script). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        target: { type: 'string', description: "The element to insert into: a bare tag name like 'nav'/'header'/'footer'/'main' (first match), or '#id' for a specific element." },
+        html: { type: 'string', description: 'The HTML to insert inside that element (e.g. a <button>).' },
+        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) inserts before the element's closing tag; 'start' just after its opening tag." }
+      },
+      required: ['graphId', 'nodeId', 'target', 'html']
+    }
+  },
+  {
     name: 'insert_html_at',
     description: "RELIABLE way to ADD new HTML/CSS/JS to an existing page — use this instead of edit_html_node whenever you are INSERTING (not replacing) something: a new button, a <script>, extra CSS, a nav bar, a widget. It inserts at a named structural position keyed to the page's own <head>/<body>/<style> tags, so it CANNOT mismatch the way edit_html_node does on large pages. No anchor comments needed and it works on any existing page. Positions: 'before_body_end' (just before </body> — for scripts and body-level widgets/buttons), 'after_body_start' (right after <body> — for top-of-page bars), 'before_head_end' (just before </head> — for <link>/<meta>/<style> blocks), 'append_to_style' (just before the last </style> — to add CSS rules/variables to the existing stylesheet), 'after_head_start' (right after <head>). A multi-region change like a theme toggle is three calls: append_to_style for the CSS, before_body_end for the button, before_body_end for the script — no exact-string matching, no thrash. Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
