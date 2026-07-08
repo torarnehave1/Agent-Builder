@@ -57,11 +57,11 @@ const MODELS = [
   {
     id: 'claude-opus-4-6',
     name: 'Opus 4.6',
-    description: 'Most powerful. Use for complex multi-step reasoning.',
+    description: 'Premium — ~19× Haiku / ~5× Sonnet per token. Reserve for hard multi-step reasoning the smaller models genuinely cannot do; not for routine build/edit work.',
     inputCost: 15.00,
     outputCost: 75.00,
-    badge: 'Powerful',
-    badgeColor: 'bg-violet-500/20 text-violet-300',
+    badge: 'Premium',
+    badgeColor: 'bg-amber-500/20 text-amber-300',
   },
   {
     id: '@cf/bytedance/stable-diffusion-xl-lightning',
