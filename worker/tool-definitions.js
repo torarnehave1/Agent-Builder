@@ -407,6 +407,18 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'read_html_head',
+    description: "Return ONLY an html-node's styling context — the <head> markup, every <style> block, the declared CSS custom properties (as a {name:value} map), and the existing <link> tags — WITHOUT the whole node. Call this (NOT read_node) before a theme-toggle / Google-font / icon / CSS edit: it gives you the existing variables, font-family, selectors and links you need to write MATCHING styles, in a few hundred bytes instead of dumping the entire page (cheap on large nodes). After it, insert_html_at your CSS/links/scripts. Read-only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' }
+      },
+      required: ['graphId', 'nodeId']
+    }
+  },
+  {
     name: 'list_html_anchors',
     description: "List the edit-anchor ids present in an html-node (the <!-- edit:<id>:start --> markers). Use this BEFORE replace_html_section to see which sections are anchor-editable, then read_html_section to see a section's content. Read-only. Code-hardcoded (not in registry).",
     input_schema: {

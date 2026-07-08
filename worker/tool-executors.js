@@ -593,6 +593,54 @@ async function executeReadHtmlSection(input, env) {
   }
 }
 
+// Cheap styling-context read (Lesson 46 v6): returns ONLY the <head> markup + every
+// <style> block + the declared CSS custom properties — NOT the whole node. Before a
+// theme-toggle / font / icon / CSS edit the agent needs to see existing variables,
+// font-family and selectors to write MATCHING styles; read_node would dump the entire
+// page (17KB+) for that. This gives the same styling context in a few hundred bytes.
+async function executeReadHtmlHead(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `read_html_head only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const html = (node.info || '').replace(/\r\n/g, '\n')
+
+  // <head> inner (links/meta/title/style); fall back to "" if the page is a fragment.
+  const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i)
+  const headInner = headMatch ? headMatch[1] : ''
+
+  // Every <style> block anywhere (head OR body) — this is where the theme lives.
+  const styleBlocks = [...html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/gi)].map(m => m[1])
+  const styleText = styleBlocks.join('\n')
+
+  // Declared CSS custom properties → { '--bg': '#0f1420', ... } (dedup, last wins).
+  const cssVariables = {}
+  for (const m of styleText.matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) {
+    cssVariables[m[1].trim()] = m[2].trim()
+  }
+  // The <link> tags already present (so the agent doesn't double-add a font/icon link).
+  const links = [...headInner.matchAll(/<link\b[^>]*>/gi)].map(m => m[0])
+  const bodyTag = (html.match(/<body[^>]*>/i) || [''])[0]
+  const cap = (s, n) => (s.length > n ? s.slice(0, n) + '\n… [truncated]' : s)
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    headInner: cap(headInner, 3000),
+    styleText: cap(styleText, 4000),
+    styleBlockCount: styleBlocks.length,
+    cssVariables,
+    existingLinks: links,
+    bodyTag,
+    hasThemeToggle: /data-theme|prefers-color-scheme|light-theme|toggleTheme/i.test(html),
+    fullNodeChars: html.length,
+    message: `Styling context for "${input.nodeId}" (${Object.keys(cssVariables).length} CSS vars, ${styleBlocks.length} <style> block(s), ${links.length} <link>(s)) — ${styleText.length} style chars vs ${html.length} full-node chars. Use these variables/selectors to write MATCHING theme/font CSS, then insert_html_at. Do NOT read_node.`,
+  }
+}
+
 async function fetchHtmlNode(env, graphId, nodeId) {
   const res = await env.KG_WORKER.fetch(
     `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
@@ -8987,6 +9035,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListHtmlAnchors(toolInput, env)
     case 'read_html_section':
       return await executeReadHtmlSection(toolInput, env)
+    case 'read_html_head':
+      return await executeReadHtmlHead(toolInput, env)
     case 'append_to_section':
       return await executeAppendToSection(toolInput, env)
     case 'list_graph_versions':
