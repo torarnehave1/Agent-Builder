@@ -481,7 +481,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'edit_html_node',
-    description: 'Surgically edit an html-node by finding and replacing an exact string in its HTML content. Unlike patch_node (which replaces the entire info field), this tool only changes the specific part you target — all other code stays untouched. Use this instead of patch_node when modifying existing HTML apps to avoid accidentally breaking working code. You can make multiple edits by calling this tool multiple times.',
+    description: 'Surgically edit an html-node by finding and replacing an exact string in its HTML content. Unlike patch_node (which replaces the entire info field), this tool only changes the specific part you target — all other code stays untouched. Use this instead of patch_node when modifying existing HTML apps to avoid accidentally breaking working code. You can make multiple edits by calling this tool multiple times. GUARDED: a content-loss check REJECTS an edit whose new_string drops a <script>/<style>/<video>/<iframe>, drops an HTML element (a card/div/section/list item), or hard-shrinks the node — i.e. when new_string deletes content that was inside old_string. A normal in-place text change keeps all blocks and elements and is never blocked. If the deletion is intentional (you really mean to remove that element), pass force:true. To ADD content, prefer append_to_section/insert_html_at over a big edit.',
     input_schema: {
       type: 'object',
       properties: {
@@ -504,6 +504,10 @@ const TOOL_DEFINITIONS = [
         replace_all: {
           type: 'boolean',
           description: 'If true, replace ALL occurrences of old_string. Default false (replaces only the first match).'
+        },
+        force: {
+          type: 'boolean',
+          description: 'Set true ONLY to confirm a deliberate removal — bypasses the content-loss guard that blocks dropping a script/style/video/iframe, an HTML element, or a hard shrink. Default false.'
         }
       },
       required: ['graphId', 'nodeId', 'old_string', 'new_string']

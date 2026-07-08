@@ -429,25 +429,23 @@ async function executeEditHtmlNode(input, env) {
 
   // 4b. CONTENT-LOSS GUARD (Lesson 46 — universal net across ALL html write paths).
   // edit_html_node is find/replace, so a normal in-place text change keeps every
-  // structural block and is never blocked. But an edit whose new_string omits a
-  // <script>/<style>/<video>/<iframe> that was in old_string silently deletes a
-  // feature — this is the NONDETERMINISTIC loss seen via delegate_to_html_builder
-  // (the subagent routes edit_html_node through here). Reject that unless force:true.
+  // structural block AND every element tag, and is never blocked. But an edit whose
+  // new_string drops a <script>/<style>/<video>/<iframe> OR an element (a card/div/
+  // /section/list item) that was in old_string silently deletes a feature — the
+  // NONDETERMINISTIC loss seen via delegate_to_html_builder (the subagent routes
+  // edit_html_node through here). Reject that unless force:true.
   if (input.force !== true) {
-    const oldBlocks = countHtmlBlocks(currentHtml)
-    const newBlocks = countHtmlBlocks(newHtml)
-    const dropped = Object.keys(oldBlocks)
-      .filter(k => newBlocks[k] < oldBlocks[k])
-      .map(k => `<${k}> (${oldBlocks[k]}→${newBlocks[k]})`)
-    if (dropped.length) {
+    const loss = detectHtmlContentLoss(currentHtml, newHtml)
+    if (loss.lost) {
       return {
         success: false,
         blocked: 'content_loss_guard',
         graphId: input.graphId,
         nodeId: input.nodeId,
-        droppedBlocks: dropped,
-        charDelta: newHtml.length - currentHtml.length,
-        error: `Refusing this edit_html_node on "${input.nodeId}" — the replacement removes structural block(s) that exist now: ${dropped.join(', ')}. Your new_string dropped content that was in old_string. Narrow old_string/new_string to the exact text that must change (do not span a <script>/<style>/<video>/<iframe> you intend to keep), or use append_to_section/insert_html_at to ADD. If the removal is intentional, pass force:true.`,
+        droppedBlocks: loss.droppedBlocks,
+        elementDelta: loss.elementDelta,
+        charDelta: loss.charDelta,
+        error: `Refusing this edit_html_node on "${input.nodeId}" — ${loss.reason}. Your new_string dropped content that was in old_string. Narrow old_string/new_string to the exact text that must change (don't span a block or element you intend to keep), or use append_to_section/insert_html_at to ADD. If the removal is intentional, pass force:true.`,
       }
     }
   }
@@ -508,6 +506,37 @@ function countHtmlBlocks(html) {
     form: n(/<form[\s>]/gi),
     canvas: n(/<canvas[\s>]/gi),
   }
+}
+
+// Total count of OPENING element tags (excludes comments, closing tags, doctype).
+// A text-only edit keeps this equal; removing a <div>/<p>/<li>/card drops it. That
+// makes it a low-false-positive net for the non-block content loss the block-count
+// check misses (Lesson 46 v3).
+function countHtmlElements(html) {
+  const m = String(html || '').match(/<[a-z][a-z0-9-]*[\s/>]/gi)
+  return m ? m.length : 0
+}
+
+// Shared content-loss detector for ALL html write paths (edit_html_node,
+// replace_html_section). Given the old and new strings, returns whether the write
+// deletes content the caller almost certainly did not mean to drop:
+//   - a structural block (<script>/<style>/<video>/<iframe>/<form>/<canvas>), or
+//   - one or more element tags (a card/div/p/li/section), or
+//   - a hard char shrink on a non-trivial region.
+// Text-only in-place edits keep block + element counts equal → never flagged.
+function detectHtmlContentLoss(oldStr, newStr) {
+  const ob = countHtmlBlocks(oldStr), nb = countHtmlBlocks(newStr)
+  const droppedBlocks = Object.keys(ob).filter(k => nb[k] < ob[k]).map(k => `<${k}> (${ob[k]}→${nb[k]})`)
+  const oe = countHtmlElements(oldStr), ne = countHtmlElements(newStr)
+  const elementDelta = ne - oe
+  const charDelta = newStr.length - oldStr.length
+  const hardShrink = oldStr.length >= 200 && charDelta <= -Math.max(150, Math.round(oldStr.length * 0.25))
+  const lost = droppedBlocks.length > 0 || elementDelta < 0 || hardShrink
+  let reason = ''
+  if (droppedBlocks.length) reason = `it removes structural block(s): ${droppedBlocks.join(', ')}`
+  else if (elementDelta < 0) reason = `it removes ${-elementDelta} HTML element(s) (${oe}→${ne} tags) — e.g. a card/div/section/list item`
+  else if (hardShrink) reason = `it shrinks the content by ${-charDelta} chars (${oldStr.length}→${newStr.length})`
+  return { lost, reason, droppedBlocks, elementDelta, charDelta }
 }
 
 // Read the EXACT bytes currently inside an edit-anchor so the model can replace a
@@ -627,26 +656,18 @@ async function executeReplaceHtmlSection(input, env) {
   // the new content drops a structural block (<script>/<style>/<video>/<iframe>/…)
   // or shrinks hard, unless the caller passes force:true to confirm the removal.
   if (input.force !== true) {
-    const oldBlocks = countHtmlBlocks(oldInner)
-    const newBlocks = countHtmlBlocks(newInner)
-    const dropped = Object.keys(oldBlocks)
-      .filter(k => newBlocks[k] < oldBlocks[k])
-      .map(k => `<${k}> (${oldBlocks[k]}→${newBlocks[k]})`)
-    const charDelta = newInner.length - oldInner.length
-    const bigShrink = oldInner.length >= 200 && charDelta <= -Math.max(150, Math.round(oldInner.length * 0.25))
-    if (dropped.length || bigShrink) {
-      const reason = dropped.length
-        ? `it removes structural block(s) that exist now: ${dropped.join(', ')}`
-        : `it shrinks the section by ${-charDelta} chars (${oldInner.length}→${newInner.length})`
+    const loss = detectHtmlContentLoss(oldInner, newInner)
+    if (loss.lost) {
       return {
         success: false,
         blocked: 'content_loss_guard',
         graphId: input.graphId,
         nodeId: input.nodeId,
         anchorId,
-        charDelta,
-        droppedBlocks: dropped,
-        error: `Refusing to replace "${anchorId}" — ${reason}. replace_html_section OVERWRITES the whole region, so anything you did not retype is deleted. Read the exact current bytes with read_html_section("${anchorId}"), keep everything you want to preserve, then retry. To ADD without rewriting the region, use insert_html_at. If the removal is intentional, pass force:true.`,
+        charDelta: loss.charDelta,
+        droppedBlocks: loss.droppedBlocks,
+        elementDelta: loss.elementDelta,
+        error: `Refusing to replace "${anchorId}" — ${loss.reason}. replace_html_section OVERWRITES the whole region, so anything you did not retype is deleted. Read the exact current bytes with read_html_section("${anchorId}"), keep everything you want to preserve, then retry. To ADD without rewriting the region, use insert_html_at/append_to_section. If the removal is intentional, pass force:true.`,
       }
     }
   }
