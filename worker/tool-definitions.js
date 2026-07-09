@@ -1977,6 +1977,22 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'list_layouts',
+    description: 'List the verified page LAYOUTS in the Component Registry (skeletons with named slots — e.g. holy-grail, app-shell, two-column, left/right sidebar, single/two column). Each is real-browser-verified for render + slots + responsive reflow. When building a NEW full page, call this first to pick a layout instead of hand-writing page structure.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_layout',
+    description: 'Fetch one verified page layout by name (e.g. "holy-grail"). Returns its schema (named slots + responsive rules), its vetted implementation HTML (impl — a CSS-grid skeleton with <div data-slot="NAME"> containers; insert intact), and its real-browser proof. After inserting, fill each data-slot with content or a component (get_component). Call list_layouts first to see what exists.',
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Layout name, e.g. "holy-grail". Case-insensitive.' }
+      }
+    }
+  },
+  {
     name: 'get_secure_worker_template',
     description: 'Return the canonical Vegvisr server-side auth pattern and worker template for new Cloudflare Workers. ALWAYS call this before deploy_worker when creating or modifying a privileged worker that updates data, deletes data, reads private user data, or deploys infrastructure. Includes secure admin and user-scoped templates plus mandatory rules.',
     input_schema: {

@@ -6725,25 +6725,23 @@ function registryNodesByType(graph, type) {
 // no graph_system_registry indirection). Change this constant if the registry graph moves.
 const COMPONENT_REGISTRY_GRAPH_ID = '4072b898-f111-42a9-b5ca-0d901bb17d26'
 
-async function fetchComponentRegistry(env) {
+// Read the registry graph once and return nodes of one type ('component' | 'layout').
+async function fetchRegistryItems(env, type) {
   const graphId = COMPONENT_REGISTRY_GRAPH_ID
   const kg = env.KG_WORKER
-  if (!kg) return { graphId, components: [], error: 'KG_WORKER binding unavailable' }
+  if (!kg) return { graphId, items: [], error: 'KG_WORKER binding unavailable' }
   const res = await kg.fetch(`https://knowledge-graph-worker/getknowgraph?id=${graphId}`)
-  if (!res.ok) return { graphId, components: [], error: `registry graph ${graphId} unreachable (${res.status})` }
+  if (!res.ok) return { graphId, items: [], error: `registry graph ${graphId} unreachable (${res.status})` }
   const g = await res.json()
-  const components = (g.nodes || []).filter(n => n.type === 'component')
-  return { graphId, components }
+  return { graphId, items: (g.nodes || []).filter(n => n.type === type) }
 }
 
 async function executeListComponents(input, env) {
-  const { graphId, components, error } = await fetchComponentRegistry(env)
+  const { graphId, items, error } = await fetchRegistryItems(env, 'component')
   if (error) return { success: false, error: `Component registry unavailable: ${error}` }
   return {
-    success: true,
-    graphId,
-    count: components.length,
-    components: components.map(n => {
+    success: true, graphId, count: items.length,
+    components: items.map(n => {
       const m = n.metadata || {}
       return {
         name: n.label,
@@ -6760,20 +6758,52 @@ async function executeListComponents(input, env) {
 async function executeGetComponent(input, env) {
   const name = (input.name || '').trim()
   if (!name) return { success: false, error: 'name is required (e.g. "theme-toggle"). Call list_components to see what exists.' }
-  const { graphId, components, error } = await fetchComponentRegistry(env)
+  const { graphId, items, error } = await fetchRegistryItems(env, 'component')
   if (error) return { success: false, error: `Component registry unavailable: ${error}` }
-  const node = components.find(n => (n.label || '').toLowerCase() === name.toLowerCase())
-  if (!node) return { success: false, error: `Component "${name}" not found. Available: ${components.map(n => n.label).join(', ') || '(none)'}.` }
+  const node = items.find(n => (n.label || '').toLowerCase() === name.toLowerCase())
+  if (!node) return { success: false, error: `Component "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
   const m = node.metadata || {}
   if (!m.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
   return {
-    success: true,
-    name: node.label,
-    graphId,
-    schema: m.schema || null,
-    impl: m.impl,
-    verify: m.verify || null,
+    success: true, name: node.label, graphId,
+    schema: m.schema || null, impl: m.impl, verify: m.verify || null,
     instructions: 'Insert the impl HTML intact (it carries its own <style>, markup, and <script>). Parameterize per schema props if needed. This component was verified in a real browser — do not rewrite its wiring.',
+  }
+}
+
+async function executeListLayouts(input, env) {
+  const { graphId, items, error } = await fetchRegistryItems(env, 'layout')
+  if (error) return { success: false, error: `Layout registry unavailable: ${error}` }
+  return {
+    success: true, graphId, count: items.length,
+    layouts: items.map(n => {
+      const m = n.metadata || {}
+      return {
+        name: n.label,
+        description: (m.schema && m.schema.description) || (n.info || '').split('\n')[0],
+        slots: (m.schema && m.schema.slots) || [],
+        responsive: (m.schema && m.schema.responsive) || null,
+        verified: m.verify?.verdict === 'PASS',
+        verifiedDate: m.verify?.verifiedDate || null,
+      }
+    }),
+    usage: 'Call get_layout(name) to fetch a layout\'s verified skeleton, insert its impl intact, then fill each <div data-slot="..."> with get_component(...) and KG content.',
+  }
+}
+
+async function executeGetLayout(input, env) {
+  const name = (input.name || '').trim()
+  if (!name) return { success: false, error: 'name is required (e.g. "holy-grail"). Call list_layouts to see what exists.' }
+  const { graphId, items, error } = await fetchRegistryItems(env, 'layout')
+  if (error) return { success: false, error: `Layout registry unavailable: ${error}` }
+  const node = items.find(n => (n.label || '').toLowerCase() === name.toLowerCase())
+  if (!node) return { success: false, error: `Layout "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
+  const m = node.metadata || {}
+  if (!m.impl) return { success: false, error: `Layout "${name}" has no stored impl.` }
+  return {
+    success: true, name: node.label, graphId,
+    schema: m.schema || null, impl: m.impl, verify: m.verify || null,
+    instructions: 'Insert the impl HTML intact (its own <style> + grid skeleton). Then fill each <div data-slot="NAME"> with content or a component (get_component). Do not rewrite the grid — it was verified responsive in a real browser.',
   }
 }
 
@@ -9526,6 +9556,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListComponents(toolInput, env)
     case 'get_component':
       return await executeGetComponent(toolInput, env)
+    case 'list_layouts':
+      return await executeListLayouts(toolInput, env)
+    case 'get_layout':
+      return await executeGetLayout(toolInput, env)
     case 'get_secure_worker_template':
       return await executeGetSecureWorkerTemplate(toolInput, env)
     case 'create_capability_blueprint':

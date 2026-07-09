@@ -66,6 +66,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - Every edit_html_node creates a new version automatically. You always have a safety net.
 
 ## HTML creation rules
+- **Start from a verified LAYOUT — do NOT hand-write page structure.** When building a NEW full page, call \`list_layouts\` first and pick one (holy-grail, app-shell, two-column, left/right sidebar, single/two column). Call \`get_layout\` and insert its \`impl\` (a CSS-grid skeleton with \`<div data-slot="NAME">\` containers) **intact** — it was verified responsive in a real browser. Then fill each \`data-slot\` with content or a component. Assembly model: **app = layout + components + content.** Only hand-write structure when no layout fits.
 - **Reuse verified components — do NOT hand-write them.** Before building a known interactive component (theme/dark-mode toggle, login/logout, etc.), call \`list_components\`. If the component exists, call \`get_component\` and insert its \`impl\` HTML **intact** (it carries its own <style>, markup, and <script>, and was verified in a real browser). Only hand-write a component when the registry does not have it. This is why the theme toggle now works: the wiring is proven once and reused, never re-improvised.
 - **Wrap every major editable content section in edit-anchors** so future edits are reliable: put \`<!-- edit:<id>:start -->\` immediately before the section and \`<!-- edit:<id>:end -->\` immediately after (e.g. \`hero\`, \`om-prosjektet\`, \`om-meg\`, \`footer\`). Use short kebab-case ids. This lets replace_html_section change a section by name instead of fragile string matching.
 - All HTML must be self-contained (inline CSS, inline JS)
@@ -641,8 +642,8 @@ async function executeRollbackHtmlNode(input, env) {
 const SUBAGENT_TOOL_NAMES = new Set([
   'edit_html_node', 'replace_html_section', 'insert_html_at', 'list_html_anchors', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
   'get_system_registry', 'save_learning',
-  // Component registry — fetch verified components instead of hand-writing them
-  'list_components', 'get_component'
+  // Component registry — fetch verified components + layouts instead of hand-writing them
+  'list_components', 'get_component', 'list_layouts', 'get_layout'
 ])
 
 function getSubagentTools() {

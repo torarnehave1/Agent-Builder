@@ -45,8 +45,8 @@ const READ_ONLY_TOOLS = new Set([
   // Identity / discovery / status
   'who_am_i', 'onboarding_status', 'describe_capabilities',
   'get_system_registry', 'get_secure_worker_template', 'read_worker',
-  // Component registry (verified reusable UI components)
-  'list_components', 'get_component',
+  // Component registry (verified reusable UI components + page layouts)
+  'list_components', 'get_component', 'list_layouts', 'get_layout',
   // Capability planning (classifies + returns a plan; mutates nothing)
   'create_capability_blueprint',
   // Calendar reads
