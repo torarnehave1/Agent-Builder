@@ -116,6 +116,14 @@ AgentChat.tsx (React) → POST /chat → agent-worker (SSE) → Claude (anthropi
 
 ## Knowledge Graph API (knowledge.vegvisr.org)
 
+**SOURCE OF TRUTH — read the spec first:** `curl https://knowledge.vegvisr.org/openapi.json`
+and read the relevant path's description/parameters/security + the `Node` schema BEFORE using
+any endpoint or node shape. Don't reverse-engineer by copying a live node (that's how the
+image-node detour happened). The notes below are a convenience summary, not the authority.
+The KG worker has **no image-upload endpoint** — uploads belong to the **photos-worker**
+(`vegvisr-photos-worker`, `POST https://photos-api.vegvisr.org/upload`); agent-worker's
+`/upload-image` only proxies to it.
+
 Source: `vegvisr-frontend/dev-worker/index.js`
 
 ### Graph CRUD
@@ -124,7 +132,7 @@ Source: `vegvisr-frontend/dev-worker/index.js`
 - **getknowgraph**: `GET ?id=<graphId>` — Full graph (nodes, edges, metadata)
 - **getknowgraphsummaries**: `GET ?offset=0&limit=80&metaArea=TERM` — List graphs (metaArea is SQL LIKE filter)
 - **searchGraphs**: `GET ?q=text&nodeType=type&limit=20&offset=0` — Search graphs
-- **deleteknowgraph**: `POST { graphId }`
+- **deleteknowgraph**: `POST { id }` (NOT `{ graphId }` — the `{graphId}` form returns "Graph ID is required")
 
 ### Node CRUD
 - **addNode**: `POST { graphId, node: { id, label, type, info, path, color, metadata, bibl } }`
@@ -139,7 +147,7 @@ Source: `vegvisr-frontend/dev-worker/index.js`
 
 - **fulltext**: Markdown content in `info` field. Label prefixed with `#` for discovery.
 - **html-node**: Full HTML page in `info` field. GRAPH_ID and NODE_ID injected.
-- **markdown-image**: Image reference. URL in `path` field, alt text in `info`.
+- **Images**: the simplest, spec-compliant way to show an image is a **`fulltext`** node with the image markdown in its `info`: `![Header|width:800px;object-fit:contain](https://vegvisr.imgix.net/<key>.png)` (Header/Leftside/Rightside for placement). The OpenAPI `Node` schema documents `info` as "Node content (markdown for fulltext)" and does NOT list a `markdown-image` type (types: fulltext/image/link/video/audio). The viewer's `markdown-image` node renders from the `![…](url)` markdown in its **`label`** field (not `path`) — awkward; prefer fulltext-with-inline-image unless you have a specific reason.
 - **mermaid-diagram**: Mermaid syntax in `info` field (raw, NO markdown fencing).
 - **css-node**: CSS in `info` field, linked to html-node via `styles` edge.
 - **video/audio/link**: Media types.
@@ -199,7 +207,7 @@ Source: `vegvisr-frontend/dev-worker/index.js`
 ### Knowledge Graph Conventions
 - **NEVER filter paginated results client-side**. Add server-side SQL filtering.
 - Response field is `data.results` (NOT `data.graphs`). Metadata is nested: `g.metadata.title`.
-- Image nodes use type `markdown-image` with URL in `path` field (NOT type `image`).
+- To show an image, prefer a `fulltext` node with the image markdown in `info` (`![Header|…](imgix-url)`) — spec-compliant and simplest. (`markdown-image` renders from markdown in `label`, not `path`; don't default to it.)
 - Images are served via `https://vegvisr.imgix.net/{key}` — append `?w=800&h=400&fit=crop` for resizing.
 
 ### Memory & Session Recovery
