@@ -6720,6 +6720,63 @@ function registryNodesByType(graph, type) {
   return (graph.nodes || []).filter(n => n.type === type)
 }
 
+// ── Component Registry (verified UI components) — DIRECT call ──
+// The registry is read DIRECTLY by its graphId (architect's decision: fewer moving parts,
+// no graph_system_registry indirection). Change this constant if the registry graph moves.
+const COMPONENT_REGISTRY_GRAPH_ID = '4072b898-f111-42a9-b5ca-0d901bb17d26'
+
+async function fetchComponentRegistry(env) {
+  const graphId = COMPONENT_REGISTRY_GRAPH_ID
+  const kg = env.KG_WORKER
+  if (!kg) return { graphId, components: [], error: 'KG_WORKER binding unavailable' }
+  const res = await kg.fetch(`https://knowledge-graph-worker/getknowgraph?id=${graphId}`)
+  if (!res.ok) return { graphId, components: [], error: `registry graph ${graphId} unreachable (${res.status})` }
+  const g = await res.json()
+  const components = (g.nodes || []).filter(n => n.type === 'component')
+  return { graphId, components }
+}
+
+async function executeListComponents(input, env) {
+  const { graphId, components, error } = await fetchComponentRegistry(env)
+  if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+  return {
+    success: true,
+    graphId,
+    count: components.length,
+    components: components.map(n => {
+      const m = n.metadata || {}
+      return {
+        name: n.label,
+        description: (m.schema && m.schema.description) || (n.info || '').split('\n')[0],
+        props: m.schema ? Object.keys(m.schema.props || {}) : [],
+        verified: m.verify?.verdict === 'PASS',
+        verifiedDate: m.verify?.verifiedDate || null,
+      }
+    }),
+    usage: 'Call get_component(name) to fetch a component\'s verified impl and insert it intact. Do NOT hand-write a component that exists here.',
+  }
+}
+
+async function executeGetComponent(input, env) {
+  const name = (input.name || '').trim()
+  if (!name) return { success: false, error: 'name is required (e.g. "theme-toggle"). Call list_components to see what exists.' }
+  const { graphId, components, error } = await fetchComponentRegistry(env)
+  if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+  const node = components.find(n => (n.label || '').toLowerCase() === name.toLowerCase())
+  if (!node) return { success: false, error: `Component "${name}" not found. Available: ${components.map(n => n.label).join(', ') || '(none)'}.` }
+  const m = node.metadata || {}
+  if (!m.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
+  return {
+    success: true,
+    name: node.label,
+    graphId,
+    schema: m.schema || null,
+    impl: m.impl,
+    verify: m.verify || null,
+    instructions: 'Insert the impl HTML intact (it carries its own <style>, markup, and <script>). Parameterize per schema props if needed. This component was verified in a real browser — do not rewrite its wiring.',
+  }
+}
+
 async function fetchWorkerSpec(fetcher, baseUrl) {
   try {
     let res = await fetcher.fetch(`${baseUrl}/openapi.json`)
@@ -6763,6 +6820,7 @@ async function executeGetSystemRegistry(input, env) {
   const regDatabases   = registryNodesByType(registry, 'system-database')
   const regApps        = registryNodesByType(registry, 'system-app')
   const regCredentials = registryNodesByType(registry, 'system-credential')
+  const regComponentRegistries = registryNodesByType(registry, 'system-component-registry')
 
   // ── 1. Workers: health + OpenAPI from graph-defined bindings ──
   let workers = []
@@ -6995,8 +7053,20 @@ async function executeGetSystemRegistry(input, env) {
   }
 
   // ── Build sections + discover available filters dynamically ──
+  // Component registries: the system KNOWS these exist (pointer only). The HTML builder
+  // fetches components via a DIRECT call (list_components/get_component), not through here.
+  const componentRegistries = regComponentRegistries.map(n => ({
+    name: n.label,
+    graphId: n.metadata?.graphId || null,
+    listTool: n.metadata?.listTool || 'list_components',
+    fetchTool: n.metadata?.fetchTool || 'get_component',
+    components: n.metadata?.components || [],
+    note: 'Pointer only. Fetch components with a DIRECT call (get_component), not via get_system_registry.',
+  }))
+
   const sections = {
     workers:         need('workers') ? workers : undefined,
+    componentRegistries: need('componentRegistries') ? componentRegistries : undefined,
     subagents:       need('subagents') ? subagents : undefined,
     tools:           need('tools') ? { count: tools.length, list: tools } : undefined,
     nodeTypes:       need('nodeTypes') ? nodeTypes : undefined,
@@ -7040,10 +7110,11 @@ async function executeGetSystemRegistry(input, env) {
     ecosystemApps: ecosystemApps?.apps?.length || regApps.length,
     credentialsConfigured: credentials ? credentials.filter(c => c.configured).length : 0,
     credentialsTotal: credentials?.length || regCredentials.length,
+    componentRegistries: componentRegistries.length,
     registrySource: 'graph_system_registry',
   }
 
-  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.ecosystemApps} ecosystem apps (read-only), ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
+  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.ecosystemApps} ecosystem apps (read-only), ${summary.componentRegistries} component registr${summary.componentRegistries === 1 ? 'y' : 'ies'} (fetched via direct get_component), ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
 
   // Apply filter
   if (filter !== 'all') {
@@ -9451,6 +9522,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDescribeCapabilities(toolInput, env)
     case 'get_system_registry':
       return await executeGetSystemRegistry(toolInput, env)
+    case 'list_components':
+      return await executeListComponents(toolInput, env)
+    case 'get_component':
+      return await executeGetComponent(toolInput, env)
     case 'get_secure_worker_template':
       return await executeGetSecureWorkerTemplate(toolInput, env)
     case 'create_capability_blueprint':

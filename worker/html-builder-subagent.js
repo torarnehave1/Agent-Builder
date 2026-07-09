@@ -66,6 +66,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - Every edit_html_node creates a new version automatically. You always have a safety net.
 
 ## HTML creation rules
+- **Reuse verified components — do NOT hand-write them.** Before building a known interactive component (theme/dark-mode toggle, login/logout, etc.), call \`list_components\`. If the component exists, call \`get_component\` and insert its \`impl\` HTML **intact** (it carries its own <style>, markup, and <script>, and was verified in a real browser). Only hand-write a component when the registry does not have it. This is why the theme toggle now works: the wiring is proven once and reused, never re-improvised.
 - **Wrap every major editable content section in edit-anchors** so future edits are reliable: put \`<!-- edit:<id>:start -->\` immediately before the section and \`<!-- edit:<id>:end -->\` immediately after (e.g. \`hero\`, \`om-prosjektet\`, \`om-meg\`, \`footer\`). Use short kebab-case ids. This lets replace_html_section change a section by name instead of fragile string matching.
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
@@ -639,7 +640,9 @@ async function executeRollbackHtmlNode(input, env) {
 // ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
   'edit_html_node', 'replace_html_section', 'insert_html_at', 'list_html_anchors', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
-  'get_system_registry', 'save_learning'
+  'get_system_registry', 'save_learning',
+  // Component registry — fetch verified components instead of hand-writing them
+  'list_components', 'get_component'
 ])
 
 function getSubagentTools() {
@@ -649,6 +652,54 @@ function getSubagentTools() {
   tools.push(VALIDATE_HTML_SYNTAX_TOOL)
   tools.push(ROLLBACK_HTML_NODE_TOOL)
   return tools
+}
+
+// ---------------------------------------------------------------------------
+// FUNCTIONAL COHERENCE GATE (Lesson 48 / the verify loop)
+// Static "does it actually work" check — catches features that are PRESENT but
+// not WIRED (the dead theme toggle, the loaded-but-unapplied font). Runs when the
+// subagent thinks it is done; any gap loops it back to fix before finishing. This
+// is the deterministic (no-browser) half of Claude Code's run→observe→fix loop.
+// ---------------------------------------------------------------------------
+async function fetchNodeHtmlForGate(env, graphId, nodeId) {
+  const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+  const g = await res.json()
+  if (!res.ok) throw new Error(g.error || 'getknowgraph failed')
+  return (g.nodes || []).find(n => n.id === nodeId)?.info || ''
+}
+
+function detectFunctionalGaps(html) {
+  const h = String(html || '')
+  const gaps = []
+
+  // 1. Theme toggle: a toggle control + a light-mode CSS override must be WIRED by JS.
+  const hasToggle = /<button[^>]*(theme|toggle)[^>]*>/i.test(h) || /id=["'][^"']*(theme|toggle)[^"']*["']/i.test(h)
+  const dataThemeCss = /\[data-theme\s*[=~|]?\s*["']?light/i.test(h)
+  const classCssM = h.match(/\.([a-z][\w-]*)\s*\{[^{}]*--[a-z-]+\s*:/i) // a class that redefines CSS vars (light-theme override)
+  if (hasToggle && (dataThemeCss || classCssM)) {
+    let wired = false, mech = ''
+    if (dataThemeCss) { mech = 'data-theme'; wired = /setAttribute\(\s*["']data-theme/.test(h) }
+    else { const c = classCssM[1]; mech = '.' + c; wired = new RegExp('classList\\.(toggle|add|remove)\\(\\s*["\'`]' + c).test(h) }
+    const clickWired = /addEventListener\(\s*["']click/.test(h) && /(getElementById|querySelector)\([^)]*(theme|toggle|tbtn)/i.test(h)
+    if (!wired || !clickWired) {
+      gaps.push(`Theme toggle is PRESENT but NOT WIRED: there is a toggle button and light-mode CSS (${mech}), but the JavaScript never applies ${mech} on click, so the button does nothing. Add a click handler on the button that toggles ${mech} and persists to localStorage.`)
+    }
+  }
+
+  // 2. Google font loaded but never applied to any element.
+  const fontM = h.match(/fonts\.googleapis\.com\/css2?\?[^"'\s>]*family=([^:&"'\s>]+)/i)
+  if (fontM) {
+    const fam = decodeURIComponent(fontM[1]).replace(/\+/g, ' ')
+    const famRe = new RegExp('font-family\\s*:[^;}]*' + fam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
+    if (!famRe.test(h)) gaps.push(`Google font "${fam}" is LOADED (the <link> is there) but never APPLIED — no element has font-family: '${fam}'. Add font-family:'${fam}' to the target element (e.g. the heading) or it renders in the default font.`)
+  }
+
+  // 3. Icon font loaded but no glyph element uses it.
+  const iconLink = /fonts\.googleapis\.com\/(?:icon|css2)[^"'\s>]*[Mm]aterial[+ ]?(?:Symbols|Icons)/i.test(h)
+  if (iconLink && !/class=["'][^"']*material-(symbols|icons)/i.test(h)) {
+    gaps.push('Material Icons/Symbols stylesheet is LOADED but no element uses it (no `class="material-symbols-outlined"`/`material-icons` glyph). Add the icon spans, or the icons will not show.')
+  }
+  return gaps
 }
 
 // ---------------------------------------------------------------------------
@@ -682,6 +733,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   let turn = 0
   const actions = []
   let consecutiveFailedEdits = 0
+  let functionalRetries = 0
 
   // Friendly progress messages instead of "turn X/20"
   // Mystical progress messages — no time, just presence
@@ -813,10 +865,28 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
       outputTokens += data.usage.output_tokens || 0
     }
 
-    // End turn — return summary
+    // End turn — but FIRST run the functional coherence gate. If the agent thinks
+    // it is done yet a feature is present-but-not-wired (dead toggle, unused font),
+    // loop it back to fix — don't report success on a broken feature (Lesson 48).
     if (data.stop_reason === 'end_turn') {
       const text = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
-      log(`end_turn — summary: ${text.slice(0, 200)} | tokens in=${inputTokens} out=${outputTokens}`)
+      const effNodeId = nodeId || actions.find(a => a.nodeId)?.nodeId
+      let gaps = []
+      if (effNodeId) {
+        try { gaps = detectFunctionalGaps(await fetchNodeHtmlForGate(env, graphId, effNodeId)) }
+        catch (e) { log(`functional gate read failed: ${e.message}`) }
+      }
+      if (gaps.length && functionalRetries < 2) {
+        functionalRetries++
+        log(`functional gate: ${gaps.length} gap(s) — looping to fix (retry ${functionalRetries})`)
+        progress('Checking it actually works…')
+        messages.push(
+          { role: 'assistant', content: data.content },
+          { role: 'user', content: `Not done yet — a functional check found feature(s) that are PRESENT but do NOT WORK. Fix each on the node, then finish:\n${gaps.map(g => '- ' + g).join('\n')}\nMake the actual change so the feature functions — do not just reply that it is done.` },
+        )
+        continue
+      }
+      log(`end_turn — summary: ${text.slice(0, 200)} | gaps=${gaps.length} | tokens in=${inputTokens} out=${outputTokens}`)
       return {
         success: true,
         summary: text,
@@ -824,7 +894,8 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         actions,
         model,
         graphId,
-        nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
+        nodeId: effNodeId,
+        functionalGapsRemaining: gaps,
         inputTokens,
         outputTokens,
       }
@@ -981,4 +1052,4 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   }
 }
 
-export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode }
+export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, fetchNodeHtmlForGate }

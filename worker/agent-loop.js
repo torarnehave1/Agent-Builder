@@ -9,6 +9,7 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
+import { detectFunctionalGaps, fetchNodeHtmlForGate } from './html-builder-subagent.js'
 
 /**
  * PLAN MODE — read-only allowlist (fail-closed).
@@ -44,6 +45,8 @@ const READ_ONLY_TOOLS = new Set([
   // Identity / discovery / status
   'who_am_i', 'onboarding_status', 'describe_capabilities',
   'get_system_registry', 'get_secure_worker_template', 'read_worker',
+  // Component registry (verified reusable UI components)
+  'list_components', 'get_component',
   // Capability planning (classifies + returns a plan; mutates nothing)
   'create_capability_blueprint',
   // Calendar reads
@@ -413,6 +416,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const authContext = options?.authContext || null
   const planMode = options.mode === 'plan'
   let turn = 0
+  let functionalGateRetries = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
   const latestUserRequest = getLatestUserText(messages)
@@ -547,6 +551,27 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             { role: 'user', content: 'This calendar answer is not grounded yet. Call the appropriate calendar_ tool now for the requested date or follow-up date and answer from that result only.' }
           )
           continue
+        }
+
+        // FUNCTIONAL COHERENCE GATE (Lesson 48) — direct-edit path counterpart of the
+        // subagent's gate. If the active html-node has a feature that is PRESENT but not
+        // WIRED (dead theme toggle, loaded-but-unapplied font, unused icon font), block
+        // end_turn and force the agent to fix it before finishing. Only fires when this
+        // turn actually touched an html-node tool, so it never nags on non-HTML chats.
+        if (options.graphId && options.activeHtmlNodeId && functionalGateRetries < 2 &&
+            stats.toolCalls.some(t => /html|append_to_section|insert_in_element|insert_html_at/i.test(t))) {
+          let gaps = []
+          try { gaps = detectFunctionalGaps(await fetchNodeHtmlForGate(env, options.graphId, options.activeHtmlNodeId)) }
+          catch (e) { log(`functional gate read failed: ${e.message}`) }
+          if (gaps.length) {
+            functionalGateRetries++
+            log(`functional gate: ${gaps.length} gap(s) on ${options.activeHtmlNodeId} — forcing continuation (retry ${functionalGateRetries})`)
+            messages.push(
+              { role: 'assistant', content: data.content },
+              { role: 'user', content: `Not done — a functional check found feature(s) that are PRESENT but do NOT WORK on "${options.activeHtmlNodeId}". Fix each on the node, then finish:\n${gaps.map(g => '- ' + g).join('\n')}\nMake the actual change so the feature functions (wire the handler / apply the font / add the glyphs) — do not just reply that it is done.` }
+            )
+            continue
+          }
         }
 
         const textBlocks = (data.content || []).filter(c => c.type === 'text')

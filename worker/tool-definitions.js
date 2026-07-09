@@ -1961,6 +1961,22 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'list_components',
+    description: 'List the verified UI components available in the Component Registry (a KG registry discovered via graph_system_registry). Each entry is a reusable, real-browser-verified component (e.g. a theme toggle) with a schema and a vetted implementation. ALWAYS call this before hand-writing a known interactive component (theme toggle, login/logout, etc.) — if it exists here, use get_component and insert its impl intact instead of re-implementing it (reuse over re-implement).',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'get_component',
+    description: 'Fetch one verified component from the Component Registry by name (e.g. "theme-toggle"). Returns its schema (contract/props), its vetted implementation HTML (impl — contains its own <style>, markup and <script>; insert intact), and its real-browser verification proof. Use this instead of hand-writing components that exist in the registry. Call list_components first to see what exists.',
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'Component name, e.g. "theme-toggle". Case-insensitive.' }
+      }
+    }
+  },
+  {
     name: 'get_secure_worker_template',
     description: 'Return the canonical Vegvisr server-side auth pattern and worker template for new Cloudflare Workers. ALWAYS call this before deploy_worker when creating or modifying a privileged worker that updates data, deletes data, reads private user data, or deploys infrastructure. Includes secure admin and user-scoped templates plus mandatory rules.',
     input_schema: {
