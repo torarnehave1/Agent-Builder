@@ -40,6 +40,8 @@ const READ_ONLY_TOOLS = new Set([
   'get_album_images', 'album_list', 'album_get', 'photos_list', 'analyze_image',
   // Recordings / video reads
   'list_recordings', 'list_realtime_videos', 'vemotion_get_composition', 'vemotion_list_compositions',
+  // Audio upload (writes bytes to voice-worker R2 / the audio portfolio R2)
+  'upload_audio', 'upload_portfolio_recording',
   // Analysis (read-only — reasons over existing content, writes nothing)
   'analyze_node', 'analyze_graph', 'analyze_transcription',
   // Identity / discovery / status

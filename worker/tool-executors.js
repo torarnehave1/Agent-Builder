@@ -6725,6 +6725,97 @@ function registryNodesByType(graph, type) {
 // no graph_system_registry indirection). Change this constant if the registry graph moves.
 const COMPONENT_REGISTRY_GRAPH_ID = '4072b898-f111-42a9-b5ca-0d901bb17d26'
 
+// Upload a sound file to voice-worker (R2 hallo-vegvisr-voice) → returns a permanent audioUrl.
+async function executeUploadAudio(input, env) {
+  if (!env.VOICE_WORKER) return { success: false, error: 'VOICE_WORKER service binding is not configured' }
+  const { base64, sourceUrl, mediaType, filename, chatId, messageId } = input || {}
+  if (!base64 && !sourceUrl) return { success: false, error: 'Provide base64 (audio bytes) OR sourceUrl (a URL to fetch the audio from).' }
+  let bytes
+  try {
+    if (base64) {
+      bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+    } else {
+      const r = await fetch(sourceUrl)
+      if (!r.ok) return { success: false, error: `Could not fetch sourceUrl (${r.status})` }
+      bytes = new Uint8Array(await r.arrayBuffer())
+    }
+  } catch (e) {
+    return { success: false, error: `Could not read audio bytes: ${e.message}` }
+  }
+  if (!bytes || bytes.byteLength === 0) return { success: false, error: 'Empty audio.' }
+  const headers = {
+    'Content-Type': mediaType || 'audio/mpeg',
+    'X-File-Name': filename || 'agent-audio.m4a',
+    'X-Chat-Id': chatId || 'agent',
+  }
+  if (messageId) headers['X-Message-Id'] = messageId
+  // Service binding (worker→worker) — avoids the 522 public-loopback trap.
+  const res = await env.VOICE_WORKER.fetch('https://voice-worker/upload', { method: 'POST', headers, body: bytes })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.success === false) return { success: false, error: data.error || `voice-worker /upload failed (${res.status})` }
+  return { success: true, objectKey: data.objectKey, audioUrl: data.audioUrl, size: data.size, contentType: data.contentType }
+}
+
+// Upload a recording to the Audio Portfolio — mirrors the frontend AudioPortfolio.vue direct-upload:
+// (1) bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2) -> {r2Key, audioUrl};
+// (2) audio-portfolio-worker /save-recording metadata. Then it shows in the portfolio view + list_recordings.
+async function executeUploadPortfolioRecording(input, env) {
+  if (!env.NORWEGIAN_AUDIO) return { success: false, error: 'NORWEGIAN_AUDIO service binding is not configured' }
+  if (!env.AUDIO_PORTFOLIO) return { success: false, error: 'AUDIO_PORTFOLIO service binding is not configured' }
+  const { base64, sourceUrl, filename, displayName, category, tags, duration } = input || {}
+  if (!base64 && !sourceUrl) return { success: false, error: 'Provide base64 (audio bytes) OR sourceUrl (a URL to fetch the audio from).' }
+  // Resolve the logged-in user's email (same as executeListRecordings).
+  let userEmail = input.userEmail || input.userId
+  if (!userEmail) return { success: false, error: 'Could not resolve user identity (no userEmail/userId).' }
+  if (!userEmail.includes('@')) {
+    const profile = await resolveUserProfile(userEmail, env)
+    if (profile?.email) userEmail = profile.email
+    else return { success: false, error: 'Could not resolve user identity to an email.' }
+  }
+  const fname = filename || 'agent-recording.m4a'
+  // 1. bytes
+  let bytes
+  try {
+    if (base64) bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+    else {
+      const r = await fetch(sourceUrl)
+      if (!r.ok) return { success: false, error: `Could not fetch sourceUrl (${r.status})` }
+      bytes = new Uint8Array(await r.arrayBuffer())
+    }
+  } catch (e) {
+    return { success: false, error: `Could not read audio bytes: ${e.message}` }
+  }
+  if (!bytes || bytes.byteLength === 0) return { success: false, error: 'Empty audio.' }
+  // 2. upload bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2)
+  const up = await env.NORWEGIAN_AUDIO.fetch('https://norwegian-transcription-worker/upload', {
+    method: 'POST', headers: { 'X-File-Name': encodeURIComponent(fname) }, body: bytes,
+  })
+  const upData = await up.json().catch(() => ({}))
+  if (!up.ok || !upData.audioUrl) return { success: false, error: upData.error || `audio upload failed (${up.status})` }
+  // 3. register metadata -> audio-portfolio-worker /save-recording (same payload shape as the frontend)
+  const rec = {
+    userEmail, fileName: fname,
+    displayName: displayName || fname.replace(/\.[^/.]+$/, ''),
+    fileSize: upData.size || bytes.byteLength,
+    duration: duration || 0,
+    r2Key: upData.r2Key, r2Url: upData.audioUrl,
+    transcriptionText: '', category: category || 'other',
+    tags: ['audio-only', 'agent-upload', ...(Array.isArray(tags) ? tags : [])],
+    audioFormat: (upData.contentType || '').split('/')[1] || 'unknown',
+    aiService: 'none', aiModel: 'none', processingTime: 0,
+  }
+  const sv = await env.AUDIO_PORTFOLIO.fetch('https://audio-portfolio-worker/save-recording', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-User-Email': userEmail }, body: JSON.stringify(rec),
+  })
+  const svData = await sv.json().catch(() => ({}))
+  if (!sv.ok || svData.success === false) return { success: false, error: svData.error || `save-recording failed (${sv.status})` }
+  return {
+    success: true, savedToPortfolio: true,
+    recordingId: svData.recordingId || svData.id || null,
+    audioUrl: upData.audioUrl, r2Key: upData.r2Key, fileName: fname, userEmail,
+  }
+}
+
 // Read the registry graph once and return nodes of one type ('component' | 'layout').
 async function fetchRegistryItems(env, type) {
   const graphId = COMPONENT_REGISTRY_GRAPH_ID
@@ -9552,6 +9643,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDescribeCapabilities(toolInput, env)
     case 'get_system_registry':
       return await executeGetSystemRegistry(toolInput, env)
+    case 'upload_audio':
+      return await executeUploadAudio(toolInput, env)
+    case 'upload_portfolio_recording':
+      return await executeUploadPortfolioRecording(toolInput, env)
     case 'list_components':
       return await executeListComponents(toolInput, env)
     case 'get_component':

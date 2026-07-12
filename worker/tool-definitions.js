@@ -1076,6 +1076,37 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'upload_audio',
+    description: 'Upload a sound/audio file to the user\'s voice storage (R2 hallo-vegvisr-voice via voice-worker) and get back a permanent audioUrl. Accepts base64 audio bytes OR a sourceUrl to fetch the bytes from. Supported: WAV, MP3, M4A, FLAC, OGG, WebM. Returns { objectKey, audioUrl, size, contentType }. Use the returned audioUrl to embed the sound (an `audio` node), transcribe it (transcribe_audio), or send it as a voice chat message. NOT for images (use /upload-image) or realtime/meeting recordings (those already have permanent playUrls).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        base64: { type: 'string', description: 'Base64-encoded audio bytes. Provide this OR sourceUrl.' },
+        sourceUrl: { type: 'string', description: 'HTTPS URL to fetch the audio bytes from. Provide this OR base64.' },
+        mediaType: { type: 'string', description: "Audio MIME type, e.g. 'audio/mpeg', 'audio/mp4', 'audio/wav'. Default: audio/mpeg." },
+        filename: { type: 'string', description: 'Original file name, e.g. note.m4a.' },
+        chatId: { type: 'string', description: 'Optional grouping id (becomes the object-key prefix). Default: "agent".' },
+        messageId: { type: 'string', description: 'Optional id. Default: a random uuid.' }
+      }
+    }
+  },
+  {
+    name: 'upload_portfolio_recording',
+    description: 'Upload a sound recording to the user\'s Audio Portfolio (the one shown in the vegvisr-frontend AudioPortfolio view). Does the same 2-step the frontend does: (1) uploads the bytes to audio.vegvisr.org (R2), (2) registers the metadata via audio-portfolio-worker /save-recording. After this, the recording appears in the Audio Portfolio and via list_recordings. Accepts base64 audio bytes OR a sourceUrl. Supported: WAV, MP3, M4A, FLAC. This is DIFFERENT from upload_audio (which is chat-voice / voice-worker) — use THIS one for the audio portfolio.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        base64: { type: 'string', description: 'Base64-encoded audio bytes. Provide this OR sourceUrl.' },
+        sourceUrl: { type: 'string', description: 'HTTPS URL to fetch the audio bytes from. Provide this OR base64.' },
+        filename: { type: 'string', description: 'File name incl. extension, e.g. interview.m4a. Determines the audio format.' },
+        displayName: { type: 'string', description: 'Optional display name (defaults to filename without extension).' },
+        category: { type: 'string', description: "Optional category, e.g. 'Norwegian Transcription', 'Interview'. Default 'other'." },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Optional extra tags.' },
+        duration: { type: 'number', description: 'Optional duration in seconds.' }
+      }
+    }
+  },
+  {
     name: 'transcribe_audio',
     description: 'Transcribe an audio file. PREFERRED: pass the `audioUrl` copied EXACTLY from a list_recordings result — this always works, including for Contact-app recordings. Alternatively pass a `recordingId`, but ONLY the exact string returned by list_recordings (e.g. an audio-portfolio id or a `contactlog:<id>` id) — NEVER construct, guess, or derive a recordingId from a filename or timestamp. Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
