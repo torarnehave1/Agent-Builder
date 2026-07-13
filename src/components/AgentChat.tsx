@@ -45,7 +45,7 @@ interface Props {
   onPreview?: (html: string) => void;
   consoleErrors?: string[] | null;
   onConsoleErrorsHandled?: () => void;
-  onActiveHtmlNode?: (nodeId: string | null) => void;
+  onActiveHtmlNode?: (nodeId: string | null, graphId?: string | null) => void;
   model?: string;
   pendingGraphContext?: { id: string; title: string } | null;
   onPendingGraphContextProcessed?: () => void;
@@ -414,7 +414,7 @@ function extractSvgFromResult(tc: ToolCall): string | null {
 
 // ---------- Tool Call Card ----------
 
-function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null) => void; onSend?: (text: string) => void }) {
+function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null, graphId?: string | null) => void; onSend?: (text: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   const [svgOpen, setSvgOpen] = useState(false);
@@ -512,7 +512,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
               const html = (input.htmlContent || input.content || input.info || fields.info || '') as string;
               const result = (tc.result || {}) as Record<string, unknown>;
               const nId = (input.nodeId || input.node_id || result.nodeId || '') as string;
-              if (nId) onActiveHtmlNode?.(nId);
+              if (nId) onActiveHtmlNode?.(nId, (input.graphId as string) || (result.graphId as string) || null);
               if (html) onPreview(html);
             }}
               className="px-2 py-1 text-xs rounded bg-sky-600/20 text-sky-300 hover:bg-sky-600/30 border border-sky-500/20">
@@ -869,6 +869,12 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Theme picker cards — populated from a list_theme_graphs tool_result (themeOptions payload)
+  const [themeOptions, setThemeOptions] = useState<{
+    graphId: string | null;
+    themes: { nodeId: string; name: string; palette: string[] }[];
+  } | null>(null);
 
   // Subagent progress badge — shown above input while active
   const [subagentProgress, setSubagentProgress] = useState<string | null>(null);
@@ -1617,6 +1623,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
     setInput('');
     setSuggestions([]);
+    setThemeOptions(null);
     setPendingImages([]);
     setPendingFiles([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -2019,13 +2026,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           if (toolName === 'create_html_node' || toolName === 'create_html_from_template') {
             // Read nodeId from result first (executor may auto-generate it), fall back to input
             const resultNodeId = (ev.data as Record<string, unknown>).nodeId as string | undefined;
-            if (resultNodeId) { lastHtmlNodeIdRef.current = resultNodeId; onActiveHtmlNode?.(resultNodeId); }
+            const resultGraphId = ((ev.data as Record<string, unknown>).graphId as string) || lastAgentGraphRef.current || null;
+            if (resultNodeId) { lastHtmlNodeIdRef.current = resultNodeId; onActiveHtmlNode?.(resultNodeId, resultGraphId); }
             setCurrent(prev => {
               if (!prev) return prev;
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === toolName && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
-                if (!resultNodeId && inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
+                if (!resultNodeId && inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string, (inp.graphId as string) || lastAgentGraphRef.current || null); }
                 const html = (inp.htmlContent || inp.content || inp.info || '') as string;
                 if (html) setTimeout(() => onPreview(html), 0);
               }
@@ -2037,7 +2045,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               const tc = [...prev.toolCalls].reverse().find(t => t.tool === 'patch_node' && t.status === 'running');
               if (tc) {
                 const inp = tc.input as Record<string, unknown>;
-                if (inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string); }
+                if (inp.nodeId) { lastHtmlNodeIdRef.current = inp.nodeId as string; onActiveHtmlNode?.(inp.nodeId as string, (inp.graphId as string) || lastAgentGraphRef.current || null); }
                 const flds = (inp.fields || {}) as Record<string, unknown>;
                 const html = flds.info as string;
                 if (html && html.includes('<html')) setTimeout(() => onPreview(html), 0);
@@ -2046,7 +2054,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             });
           } else if (toolName === 'edit_html_node' || toolName === 'replace_html_section') {
             const resultData = ev.data as Record<string, unknown>;
-            if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string); }
+            if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string, (resultData.graphId as string) || lastAgentGraphRef.current || null); }
             const updatedHtml = resultData.updatedHtml as string;
             if (updatedHtml && updatedHtml.includes('<html')) {
               setTimeout(() => onPreview(updatedHtml), 0);
@@ -2071,7 +2079,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             const resultData = ev.data as Record<string, unknown>;
             const subNodeId = resultData.nodeId as string;
             const subGraphId = resultData.graphId as string;
-            if (subNodeId) { lastHtmlNodeIdRef.current = subNodeId; onActiveHtmlNode?.(subNodeId); }
+            if (subNodeId) { lastHtmlNodeIdRef.current = subNodeId; onActiveHtmlNode?.(subNodeId, subGraphId || null); }
             if (subGraphId) { lastAgentGraphRef.current = subGraphId; onGraphChange(subGraphId); }
             // Fetch the updated HTML from the node to show in preview
             if (subGraphId && subNodeId) {
@@ -2107,7 +2115,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                       if (node?.info && typeof node.info === 'string' && (node.type === 'html-node' || (node.info as string).includes('<html'))) {
                         lastAgentGraphRef.current = gId;
                         lastHtmlNodeIdRef.current = nId;
-                        onActiveHtmlNode?.(nId);
+                        onActiveHtmlNode?.(nId, gId);
                         onGraphChange(gId); // set the graph context so the preview gets graphId → Versions/Edit buttons render
                         setTimeout(() => onPreview(node.info as string), 0);
                       }
@@ -2155,7 +2163,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
                 if (node?.info && typeof node.info === 'string' && (node.type === 'html-node' || (node.info as string).includes('<html'))) {
                   lastHtmlNodeIdRef.current = nId;
-                  onActiveHtmlNode?.(nId);
+                  onActiveHtmlNode?.(nId, gId ?? null);
                   setTimeout(() => onPreview(node.info as string), 0);
                 }
               })
@@ -2265,6 +2273,15 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         // Handle suggestions event outside setCurrent (separate state)
         if (ev.type === 'suggestions' && Array.isArray(ev.data.suggestions)) {
           setSuggestions(ev.data.suggestions as string[]);
+        }
+
+        // Theme picker: list_theme_graphs (graph) tool_result carries themeOptions → render cards
+        if (ev.type === 'tool_result' && ev.data.themeOptions) {
+          const to = ev.data.themeOptions as {
+            graphId: string | null;
+            themes: { nodeId: string; name: string; palette: string[] }[];
+          };
+          if (Array.isArray(to.themes) && to.themes.length > 0) setThemeOptions(to);
         }
       });
 
@@ -2546,9 +2563,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     if (nodes.length === 1) {
                       lastAgentGraphRef.current = targetGraph;
                       lastHtmlNodeIdRef.current = nodes[0].id;
-                      onActiveHtmlNode?.(nodes[0].id);
+                      onActiveHtmlNode?.(nodes[0].id, targetGraph);
                       onPreview(nodes[0].info);
                     } else {
+                      lastAgentGraphRef.current = targetGraph; // pin the picker's source graph so a pick saves to the right graph
                       setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
                     }
                   } catch { /* ignore */ }
@@ -2564,7 +2582,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { lastAgentGraphRef.current = lastAgentGraphRef.current || graphId; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id); onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { const g = lastAgentGraphRef.current || graphId; lastAgentGraphRef.current = g; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id, g); onPreview(n.info); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs app-text-muted app-hover-surface-strong app-hover-text"
                     >
                       {n.label}
@@ -2927,6 +2945,37 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Theme picker cards — click a card to choose a visual theme */}
+      {themeOptions && themeOptions.themes.length > 0 && !streaming && (
+        <div className="px-4 py-3 border-t app-border app-panel flex-shrink-0">
+          <div className="max-w-[900px] mx-auto">
+            <p className="app-text-faint text-xs font-medium mb-2">Velg et tema</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-[280px] overflow-y-auto">
+              {themeOptions.themes.map((t) => (
+                <button
+                  key={t.nodeId}
+                  type="button"
+                  onClick={() => sendMessage(`Bruk temaet "${t.name}"`)}
+                  className="text-left app-surface border app-border rounded-lg p-2.5 app-hover-surface-strong transition-colors"
+                  title={t.name}
+                >
+                  <div className="app-text text-sm font-medium mb-1.5 truncate">{t.name}</div>
+                  <div className="flex gap-1 flex-wrap">
+                    {t.palette.slice(0, 6).map((c, i) => (
+                      <span
+                        key={i}
+                        className="w-4 h-4 rounded-sm border app-border"
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                  </div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}
