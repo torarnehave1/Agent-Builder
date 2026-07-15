@@ -28,6 +28,31 @@ function setSectionInner(html: string, id: string, inner: string): string {
   return html.slice(0, s + startM.length) + '\n' + inner + '\n' + html.slice(e);
 }
 
+// --- Email-template preview fill --------------------------------------------
+// Email bodies carry send-time {placeholders} (brand + system vars). For the PREVIEW iframe only,
+// fill them with sample values so the founder sees a rendered email instead of a broken {brandLogo}
+// image and an unstyled {brandAccent} button. Editing (section HTML / Erstatt) still reads the RAW
+// `html`, so the placeholders are preserved. Visual "Rediger" is hidden for emails because it edits
+// the (filled) iframe DOM, which would overwrite the placeholders on save.
+const PREVIEW_SAMPLE_VARS: Record<string, string> = {
+  brandName: 'Your Brand',
+  brandLogo: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="160" height="48"><rect width="160" height="48" rx="6" fill="%23e2e8f0"/><text x="80" y="30" font-family="Arial" font-size="13" fill="%230f2a43" text-anchor="middle">LOGO</text></svg>',
+  brandAccent: '#0f2a43',
+  brandFromName: 'Your Brand',
+  brandFooter: 'Your Brand · example.com',
+  magicLink: '#',
+  expiryMinutes: '30',
+  meetingId: 'DEMO-123',
+};
+function isEmailTemplateHtml(h: string | null): boolean {
+  return !!h && /\{(brandName|brandLogo|brandAccent|magicLink)\}/.test(h);
+}
+function fillPreviewSampleVars(h: string): string {
+  let out = h;
+  for (const [k, v] of Object.entries(PREVIEW_SAMPLE_VARS)) out = out.split('{' + k + '}').join(v);
+  return out;
+}
+
 // --- Visual "click-on-the-page" text editing --------------------------------
 // The preview iframe runs same-origin, so we make EVERY element that directly holds
 // text contentEditable on click. Save re-parses the stored source and applies only the
@@ -231,6 +256,16 @@ interface VersionEntry {
   timestamp: string;
 }
 
+// Guard (L53): a Save can only succeed if the node actually lives in the target graph.
+// The preview's graphId is now pinned to the node's origin graph, but this belt-and-suspenders
+// check turns any remaining mismatch into a clear message instead of a raw KG "not found" error.
+function nodeMissingMsg(g: { nodes?: Array<{ id?: string }> } | null, nodeId: string, graphId: string): string | null {
+  if (!g || !Array.isArray(g.nodes)) return null; // read already failed elsewhere — don't block
+  return g.nodes.some((n) => n?.id === nodeId)
+    ? null
+    : `Noden «${nodeId}» finnes ikke i grafen ${graphId} — åpne siden på nytt fra riktig graf`;
+}
+
 export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userEmail }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
@@ -260,6 +295,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [srMsg, setSrMsg] = useState('');
 
   const anchorIds = useMemo(() => (html ? listAnchorIds(html) : []), [html]);
+  const isEmailTpl = useMemo(() => isEmailTemplateHtml(html), [html]);
 
   // When the editor opens or the selected anchor changes, load that section's
   // current inner HTML into the textarea.
@@ -362,7 +398,10 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       const newHtml = '<!DOCTYPE html>\n' + src.documentElement.outerHTML;
       const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
-      let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
+      const g0 = await gRes.json();
+      const miss0 = nodeMissingMsg(g0, nodeId, graphId);
+      if (miss0) { setVisualMsg(miss0); setVisualSaving(false); return; }
+      let expectedVersion = Number(g0?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
@@ -395,6 +434,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
       if (!gRes.ok) { setSaveMsg('Read failed'); setSaving(false); return; }
       const g = await gRes.json();
+      const miss = nodeMissingMsg(g, nodeId, graphId);
+      if (miss) { setSaveMsg(miss); setSaving(false); return; }
       let expectedVersion = Number(g?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
@@ -432,7 +473,10 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (newHtml === html) { setSrMsg('Ingen endring'); setSrSaving(false); return; }
       const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
       if (!gRes.ok) { setSrMsg('Lesing feilet'); setSrSaving(false); return; }
-      let expectedVersion = Number((await gRes.json())?.metadata?.version || 0);
+      const gSr = await gRes.json();
+      const missSr = nodeMissingMsg(gSr, nodeId, graphId);
+      if (missSr) { setSrMsg(missSr); setSrSaving(false); return; }
+      let expectedVersion = Number(gSr?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
@@ -629,7 +673,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           )}
         </div>
         <div className="flex items-center gap-1">
-          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && (
+          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && !isEmailTpl && (
             <button
               type="button"
               onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); }}
@@ -802,7 +846,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       <iframe
         ref={iframeRef}
         onLoad={handleIframeLoad}
-        srcDoc={injectBridge(versionHtml || html, graphId, nodeId, userEmail)}
+        srcDoc={injectBridge(isEmailTpl ? fillPreviewSampleVars(versionHtml || html) : (versionHtml || html), graphId, nodeId, userEmail)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
