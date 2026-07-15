@@ -2039,6 +2039,15 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               }
               return prev;
             });
+          } else if (toolName === 'set_world_email_template') {
+            // Email templates reuse the html-node editor: open the email BODY in HtmlPreview,
+            // pinned to the email-template node so an edit saves back to node.info (the body).
+            const rd = ev.data as Record<string, unknown>;
+            const nId = rd.nodeId as string | undefined;
+            const gId = (rd.graphId as string) || lastAgentGraphRef.current || null;
+            const html = rd.html as string | undefined;
+            if (nId) { lastHtmlNodeIdRef.current = nId; onActiveHtmlNode?.(nId, gId); }
+            if (html) setTimeout(() => onPreview(html), 0);
           } else if (toolName === 'patch_node') {
             setCurrent(prev => {
               if (!prev) return prev;
