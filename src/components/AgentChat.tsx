@@ -2567,8 +2567,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(targetGraph)}`);
                     if (!res.ok) return;
                     const data = await res.json();
-                    const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node');
-                    if (nodes.length === 0) { alert('No HTML app nodes found in this graph.'); return; }
+                    // html-node = a page; email-template = an email whose `info` is the body HTML.
+                    // Both open in HtmlPreview (info → preview, pinned to the node for save).
+                    const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node' || n.type === 'email-template');
+                    if (nodes.length === 0) { alert('No HTML app or email-template nodes found in this graph.'); return; }
                     if (nodes.length === 1) {
                       lastAgentGraphRef.current = targetGraph;
                       lastHtmlNodeIdRef.current = nodes[0].id;
