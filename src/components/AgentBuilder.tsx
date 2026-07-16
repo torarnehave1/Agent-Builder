@@ -41,8 +41,14 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [view, setView] = useState<View>('context');
   const [activeContext, setActiveContext] = useState<WorkContext | null>(null);
   const [previewHtml, setPreviewHtml] = useState<string | null>(null);
+  // Real brand values for an email-template preview (from the World's email-brand node), so the
+  // preview renders with the actual logo/name/colour instead of generic sample values.
+  const [previewVars, setPreviewVars] = useState<Record<string, string> | null>(null);
   const [consoleErrors, setConsoleErrors] = useState<string[] | null>(null);
   const [activeHtmlNodeId, setActiveHtmlNodeId] = useState<string | null>(null);
+  // The graph the previewed html-node was opened FROM — pinned with the node so the preview's
+  // Save always targets the node's origin graph, not the chat's live (drifting) graphId. (L53)
+  const [activeHtmlGraphId, setActiveHtmlGraphId] = useState<string | null>(null);
   const [model, setModel] = useState(getStoredModel);
   const [pendingGraphContext, setPendingGraphContext] = useState<PendingGraphContext | null>(null);
 
@@ -138,10 +144,10 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               onGraphChange={setGraphId}
               agentId={selectedAgentId}
               agentAvatarUrl={null}
-              onPreview={setPreviewHtml}
+              onPreview={(html, vars) => { setPreviewHtml(html); setPreviewVars(vars ?? null); }}
               consoleErrors={consoleErrors}
               onConsoleErrorsHandled={() => setConsoleErrors(null)}
-              onActiveHtmlNode={setActiveHtmlNodeId}
+              onActiveHtmlNode={(nodeId, gId) => { setActiveHtmlNodeId(nodeId); if (gId) setActiveHtmlGraphId(gId); }}
               model={model}
               pendingGraphContext={pendingGraphContext}
               onPendingGraphContextProcessed={() => setPendingGraphContext(null)}
@@ -152,11 +158,12 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
             <div className="flex-1 flex min-w-0">
               <HtmlPreview
                 html={previewHtml}
-                onClose={() => { setPreviewHtml(null); setActiveHtmlNodeId(null); }}
+                onClose={() => { setPreviewHtml(null); setPreviewVars(null); setActiveHtmlNodeId(null); setActiveHtmlGraphId(null); }}
                 onConsoleErrors={setConsoleErrors}
                 onHtmlChange={setPreviewHtml}
-                graphId={graphId}
+                graphId={activeHtmlGraphId ?? graphId}
                 nodeId={activeHtmlNodeId}
+                previewVars={previewVars}
                 userEmail={userEmail}
               />
             </div>

@@ -47,9 +47,9 @@ const PREVIEW_SAMPLE_VARS: Record<string, string> = {
 function isEmailTemplateHtml(h: string | null): boolean {
   return !!h && /\{(brandName|brandLogo|brandAccent|magicLink)\}/.test(h);
 }
-function fillPreviewSampleVars(h: string): string {
+function fillPreviewSampleVars(h: string, vars: Record<string, string>): string {
   let out = h;
-  for (const [k, v] of Object.entries(PREVIEW_SAMPLE_VARS)) out = out.split('{' + k + '}').join(v);
+  for (const [k, v] of Object.entries(vars)) out = out.split('{' + k + '}').join(v);
   return out;
 }
 
@@ -137,6 +137,9 @@ interface Props {
   graphId?: string | null;
   nodeId?: string | null;
   userEmail?: string;
+  // Real brand values (brandName/brandLogo/brandAccent/…) for an email-template preview; merged over
+  // the generic sample values so the preview renders with the World's actual brand.
+  previewVars?: Record<string, string> | null;
 }
 
 interface ConsoleEntry {
@@ -266,7 +269,7 @@ function nodeMissingMsg(g: { nodes?: Array<{ id?: string }> } | null, nodeId: st
     : `Noden «${nodeId}» finnes ikke i grafen ${graphId} — åpne siden på nytt fra riktig graf`;
 }
 
-export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userEmail }: Props) {
+export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userEmail, previewVars }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
@@ -296,6 +299,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   const anchorIds = useMemo(() => (html ? listAnchorIds(html) : []), [html]);
   const isEmailTpl = useMemo(() => isEmailTemplateHtml(html), [html]);
+  // Real brand vars (from the World's email-brand node) win over the generic samples.
+  const effPreviewVars = useMemo(() => ({ ...PREVIEW_SAMPLE_VARS, ...(previewVars || {}) }), [previewVars]);
 
   // When the editor opens or the selected anchor changes, load that section's
   // current inner HTML into the textarea.
@@ -846,7 +851,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       <iframe
         ref={iframeRef}
         onLoad={handleIframeLoad}
-        srcDoc={injectBridge(isEmailTpl ? fillPreviewSampleVars(versionHtml || html) : (versionHtml || html), graphId, nodeId, userEmail)}
+        srcDoc={injectBridge(isEmailTpl ? fillPreviewSampleVars(versionHtml || html, effPreviewVars) : (versionHtml || html), graphId, nodeId, userEmail)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"

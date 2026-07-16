@@ -42,7 +42,7 @@ interface Props {
   onGraphChange: (graphId: string) => void;
   agentId?: string | null;
   agentAvatarUrl?: string | null;
-  onPreview?: (html: string) => void;
+  onPreview?: (html: string, previewVars?: Record<string, string>) => void;
   consoleErrors?: string[] | null;
   onConsoleErrorsHandled?: () => void;
   onActiveHtmlNode?: (nodeId: string | null, graphId?: string | null) => void;
@@ -414,7 +414,7 @@ function extractSvgFromResult(tc: ToolCall): string | null {
 
 // ---------- Tool Call Card ----------
 
-function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc: ToolCall; userId: string; onPreview?: (html: string) => void; onActiveHtmlNode?: (nodeId: string | null, graphId?: string | null) => void; onSend?: (text: string) => void }) {
+function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc: ToolCall; userId: string; onPreview?: (html: string, previewVars?: Record<string, string>) => void; onActiveHtmlNode?: (nodeId: string | null, graphId?: string | null) => void; onSend?: (text: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [savedAsTemplate, setSavedAsTemplate] = useState(false);
   const [svgOpen, setSvgOpen] = useState(false);
@@ -921,6 +921,9 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   // --- Manual fix: user clicks "Fix" button in HtmlPreview to send errors to agent ---
   const lastHtmlNodeIdRef = useRef<string | null>(null);
+  // Real brand vars from the graph's email-brand node, stashed when opening an email preview so the
+  // preview renders the World's actual brand (html-nodes ignore them — they lack {brand*} tokens).
+  const lastBrandVarsRef = useRef<Record<string, string> | undefined>(undefined);
 
   useEffect(() => {
     if (!consoleErrors || consoleErrors.length === 0 || streaming) return;
@@ -2571,11 +2574,19 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     // Both open in HtmlPreview (info → preview, pinned to the node for save).
                     const nodes = (data.nodes || []).filter((n: { type?: string }) => n.type === 'html-node' || n.type === 'email-template');
                     if (nodes.length === 0) { alert('No HTML app or email-template nodes found in this graph.'); return; }
+                    // Real brand vars from the email-brand node (if any) — so an email preview renders
+                    // the World's actual logo/name/colour, not the generic samples.
+                    const brandNode = (data.nodes || []).find((n: { type?: string }) => n.type === 'email-brand');
+                    const bm = (brandNode?.metadata || {}) as Record<string, string>;
+                    lastBrandVarsRef.current = brandNode ? {
+                      brandName: bm.name || '', brandLogo: bm.logo || '', brandAccent: bm.accent || '',
+                      brandFromName: bm.fromName || '', brandFooter: bm.footer || '',
+                    } : undefined;
                     if (nodes.length === 1) {
                       lastAgentGraphRef.current = targetGraph;
                       lastHtmlNodeIdRef.current = nodes[0].id;
                       onActiveHtmlNode?.(nodes[0].id, targetGraph);
-                      onPreview(nodes[0].info);
+                      onPreview(nodes[0].info, lastBrandVarsRef.current);
                     } else {
                       lastAgentGraphRef.current = targetGraph; // pin the picker's source graph so a pick saves to the right graph
                       setHtmlNodePicker(nodes.map((n: { id: string; label?: string; info: string }) => ({ id: n.id, label: n.label || n.id, info: n.info })));
@@ -2593,7 +2604,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                     <button
                       key={n.id}
                       type="button"
-                      onClick={() => { const g = lastAgentGraphRef.current || graphId; lastAgentGraphRef.current = g; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id, g); onPreview(n.info); setHtmlNodePicker(null); }}
+                      onClick={() => { const g = lastAgentGraphRef.current || graphId; lastAgentGraphRef.current = g; lastHtmlNodeIdRef.current = n.id; onActiveHtmlNode?.(n.id, g); onPreview(n.info, lastBrandVarsRef.current); setHtmlNodePicker(null); }}
                       className="w-full px-3 py-2 text-left text-xs app-text-muted app-hover-surface-strong app-hover-text"
                     >
                       {n.label}
