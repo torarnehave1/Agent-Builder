@@ -678,7 +678,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           )}
         </div>
         <div className="flex items-center gap-1">
-          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && !isEmailTpl && (
+          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && (
             <button
               type="button"
               onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); }}
@@ -851,7 +851,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       <iframe
         ref={iframeRef}
         onLoad={handleIframeLoad}
-        srcDoc={injectBridge(isEmailTpl ? fillPreviewSampleVars(versionHtml || html, effPreviewVars) : (versionHtml || html), graphId, nodeId, userEmail)}
+        srcDoc={injectBridge(isEmailTpl && !visualEdit ? fillPreviewSampleVars(versionHtml || html, effPreviewVars) : (versionHtml || html), graphId, nodeId, userEmail)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
