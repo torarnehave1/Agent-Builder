@@ -121,13 +121,24 @@ async function runAction(cfg, ctx) {
   }
 }
 
+// "me"/empty recipient means "send to whoever runs this automation".
+const SELF_REFS = new Set(['me', 'myself', 'self', 'my email', 'the user', 'my inbox', 'user'])
+export function resolveRecipient(rawTo, callerEmail) {
+  const to = (rawTo || '').trim()
+  // Empty, a self-word, or an RFC-2606 placeholder domain → the caller's own address.
+  if (!to || SELF_REFS.has(to.toLowerCase()) || /@example\.(com|org|net)$/i.test(to)) {
+    return callerEmail || ''
+  }
+  return to
+}
+
 async function runNotify(cfg, ctx) {
   const channel = cfg.channel || 'email'
   const message = cfg.message || ''
   if (ctx.dryRun) return { status: 'simulated', detail: `Would notify via ${channel}: ${message}` }
   if (channel === 'email') {
-    const to = cfg.to
-    if (!to) return { status: 'error', detail: 'Notify (email) has no "to" recipient configured' }
+    const to = resolveRecipient(cfg.to, ctx.callerEmail)
+    if (!to) return { status: 'error', detail: 'Notify (email) has no recipient (and no caller email to default to)' }
     const fromEmail = cfg.fromEmail || DEFAULT_NOTIFY_FROM
     const subject = cfg.subject || 'Automation notification'
     try {
@@ -151,7 +162,7 @@ async function runNotify(cfg, ctx) {
  * @returns run result: { success, dryRun, steps, summary }
  */
 export async function runAutomation(graph, opts) {
-  const { dryRun = true, userId = null, authContext = null, env, operationMap = {} } = opts || {}
+  const { dryRun = true, userId = null, authContext = null, env, operationMap = {}, callerEmail = null } = opts || {}
 
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
   // Only automation-step nodes participate; run-history / other nodes are ignored.
@@ -191,7 +202,7 @@ export async function runAutomation(graph, opts) {
     else if (status === 'error') errors += 1
   }
 
-  const ctx = { dryRun, userId, authContext, env, operationMap }
+  const ctx = { dryRun, userId, authContext, env, operationMap, callerEmail }
   // Per-step outputs, so downstream {{stepId.result...}} refs resolve to live data.
   const outputs = {}
 
@@ -255,11 +266,11 @@ export async function runAutomation(graph, opts) {
  * @returns {{success:boolean, step:object|null, error?:string}}
  */
 export async function runSingleStep(graph, stepId, opts = {}) {
-  const { userId = null, authContext = null, env, operationMap = {} } = opts
+  const { userId = null, authContext = null, env, operationMap = {}, callerEmail = null } = opts
   const node = (graph?.nodes || []).find((n) => n.id === stepId && n.type === 'automation-step')
   if (!node) return { success: false, step: null, error: 'Step not found' }
   // Isolated test: no upstream outputs, so {{refs}} resolve to '' rather than leak literally.
-  const eff = await executeStepEffect(withResolvedConfig(node, {}), { dryRun: false, userId, authContext, env, operationMap })
+  const eff = await executeStepEffect(withResolvedConfig(node, {}), { dryRun: false, userId, authContext, env, operationMap, callerEmail })
   const step = {
     nodeId: node.id,
     stepType: node?.metadata?.stepType || 'note',

@@ -2010,7 +2010,9 @@ export default {
         try {
           const authContext = await resolveAuthorizedCaller(request, env)
           const effectiveUserId = authContext?.userId || body.userId || null
-          const spec = await buildAutomationSpec({ prompt, tools, userId: effectiveUserId, env })
+          const callerEmail = authContext?.email
+            || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
+          const spec = await buildAutomationSpec({ prompt, tools, userId: effectiveUserId, callerEmail, env })
           return new Response(JSON.stringify(spec), { headers: corsHeaders })
         } catch (err) {
           return new Response(JSON.stringify({ error: err.message }), {
@@ -2036,6 +2038,9 @@ export default {
         try {
           const authContext = await resolveAuthorizedCaller(request, env)
           const effectiveUserId = authContext?.userId || body.userId || null
+          // Caller's email — used to default a "me"/empty notify recipient.
+          const callerEmail = authContext?.email
+            || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
 
           // Load the automation graph.
           const graphRes = await env.KG_WORKER.fetch(
@@ -2055,7 +2060,7 @@ export default {
           // Single-step "Test" path: run just one step, for real. No history node.
           if (body.stepId) {
             const single = await runSingleStep(graph, body.stepId, {
-              userId: effectiveUserId, authContext, env, operationMap,
+              userId: effectiveUserId, authContext, env, operationMap, callerEmail,
             })
             return new Response(JSON.stringify(single), {
               status: single.step ? 200 : 404, headers: corsHeaders
@@ -2068,6 +2073,7 @@ export default {
             authContext,
             env,
             operationMap,
+            callerEmail,
           })
 
           // Append a run-history node (does not rewrite the graph, so canvas steps are untouched).

@@ -7,20 +7,21 @@
  * executes it later, on demand.
  */
 import { MODELS } from './models.js'
+import { resolveRecipient } from './automation-runner.js'
 
 const STEP_VOCAB = `Step types and their "config" shape:
 - start   → config: {}                                   (exactly ONE; the entry point)
 - action  → config: { toolName, params }                 (toolName MUST be one of the AVAILABLE TOOLS below; params is a best-effort object of that tool's arguments)
 - delay   → config: { amount: number, unit: "seconds"|"minutes"|"hours" }
 - loop    → config: { times: number, over?: string }     (repeats its downstream steps)
-- notify  → config: { channel: "email"|"chat"|"webhook", message: string, to?: string, subject?: string, fromEmail?: string }  (for channel "email": set "to" to the recipient address if the description names one, a short "subject", and leave fromEmail unset to default to noreply@vegr.ai)
+- notify  → config: { channel: "email"|"chat"|"webhook", message: string, to?: string, subject?: string, fromEmail?: string }  (for channel "email": set "to" to the recipient address ONLY if the description gives a real one. If it means the user themselves ("email me", "notify me"), set "to" to exactly "me" — the platform fills in their real address. NEVER invent an address like me@example.com. Add a short "subject"; leave fromEmail unset to default to noreply@vegr.ai)
 - note    → config: { text: string }                     (documentation only, not executed)`
 
 /**
  * @param {{prompt:string, tools:Array<{name:string,description:string}>, userId:string, env:any}} opts
  * @returns {Promise<{title:string, description:string, steps:Array, edges:Array}>}
  */
-export async function buildAutomationSpec({ prompt, tools, userId, env }) {
+export async function buildAutomationSpec({ prompt, tools, userId, callerEmail, env }) {
   const toolList = (tools || [])
     .map((t) => `- ${t.name} — ${t.description}`)
     .join('\n')
@@ -68,7 +69,7 @@ OUTPUT FORMAT (exactly this shape):
   const text = (data.content || []).find((c) => c.type === 'text')?.text || ''
 
   const spec = parseSpec(text)
-  return normalizeSpec(spec, tools)
+  return normalizeSpec(spec, tools, callerEmail)
 }
 
 function parseSpec(text) {
@@ -85,7 +86,7 @@ function parseSpec(text) {
 const VALID_STEP_TYPES = new Set(['start', 'action', 'delay', 'loop', 'notify', 'note'])
 
 /** Validate/repair the model output and assign canvas positions. */
-function normalizeSpec(spec, tools) {
+function normalizeSpec(spec, tools, callerEmail = null) {
   const allowed = new Set((tools || []).map((t) => t.name))
   const rawSteps = Array.isArray(spec?.steps) ? spec.steps : []
 
@@ -96,6 +97,10 @@ function normalizeSpec(spec, tools) {
       // Drop action toolNames the platform doesn't support.
       if (s.stepType === 'action' && config.toolName && allowed.size && !allowed.has(config.toolName)) {
         config.toolName = ''
+      }
+      // Default a "me"/empty email recipient to the caller's own address, so the saved value is real.
+      if (s.stepType === 'notify' && (config.channel || 'email') === 'email' && callerEmail) {
+        config.to = resolveRecipient(config.to, callerEmail)
       }
       return {
         id: String(s.id || `${s.stepType}-${i}`),
