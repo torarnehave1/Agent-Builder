@@ -8,6 +8,24 @@
  */
 import { MODELS } from './models.js'
 import { resolveRecipient } from './automation-runner.js'
+import { TOOL_DEFINITIONS } from './tool-definitions.js'
+
+const DEF_BY_NAME = new Map(TOOL_DEFINITIONS.map((t) => [t.name, t]))
+
+// Compact, accurate param spec for a tool so the agent uses the REAL param names/enums
+// (e.g. create_node wants label + nodeType:"fulltext", not title + type:"text").
+function paramHint(name) {
+  const props = DEF_BY_NAME.get(name)?.input_schema?.properties
+  if (!props) return ''
+  const req = new Set(DEF_BY_NAME.get(name)?.input_schema?.required || [])
+  return Object.entries(props)
+    .map(([k, v]) => {
+      let s = k + (req.has(k) ? '*' : '')
+      if (Array.isArray(v.enum)) s += ` (${v.enum.slice(0, 8).join('|')}${v.enum.length > 8 ? '|…' : ''})`
+      return s
+    })
+    .join(', ')
+}
 
 const STEP_VOCAB = `Step types and their "config" shape:
 - start   → config: {}                                   (exactly ONE; the entry point)
@@ -23,7 +41,10 @@ const STEP_VOCAB = `Step types and their "config" shape:
  */
 export async function buildAutomationSpec({ prompt, tools, userId, callerEmail, env }) {
   const toolList = (tools || [])
-    .map((t) => `- ${t.name} — ${t.description}`)
+    .map((t) => {
+      const params = paramHint(t.name)
+      return `- ${t.name} — ${t.description}${params ? `\n    params: ${params}` : ''}`
+    })
     .join('\n')
 
   const system = `You design AUTOMATIONS as a directed graph of steps for the Vegvisr platform.
@@ -36,6 +57,8 @@ DATA PASSING — reference an earlier step's output inside a later step's config
 - {{a1.summary}}         → step a1's one-line summary
 - {{a1.result.content | html}} → same value, converted from markdown to HTML. USE THE "| html" FILTER whenever you insert markdown (like perplexity content) into an email "message".
 Use these so steps chain — e.g. a "create_node" after a "perplexity_search" sets params.content to "{{a1.result.content}}".
+
+IDs FROM EARLIER STEPS — when a param needs the graphId/nodeId of something an EARLIER step created, you MUST reference it, never write a literal id. create_graph assigns its OWN id, so a later create_node MUST set params.graphId to "{{<create_graph step id>.result.graphId}}" (e.g. "{{a2.result.graphId}}"). Never invent an id like "km-tools-research".
 
 LINKS — to link to a knowledge graph a step created, the ONLY correct viewer URL is:
   https://www.vegvisr.org/gnew-viewer?graphId={{<the create_graph step id>.result.graphId}}
@@ -52,7 +75,7 @@ RULES:
 - Keep it minimal — only the steps the description actually implies.
 - "label" is a short human title for the step.
 
-AVAILABLE TOOLS (use ONLY these toolNames for action steps):
+AVAILABLE TOOLS (use ONLY these toolNames for action steps). Each lists its "params" — use those EXACT param names (a * marks required) and pick enum values only from the listed options. Do NOT invent params (e.g. create_node needs label + nodeType:"fulltext" + content — NOT title/type/"text"):
 ${toolList}
 
 OUTPUT FORMAT (exactly this shape):
@@ -121,6 +144,20 @@ function normalizeSpec(spec, tools, callerEmail = null) {
   // Ensure exactly one start step at the front.
   if (!steps.some((s) => s.stepType === 'start')) {
     steps.unshift({ id: 's0', stepType: 'start', label: 'Start', config: {}, position: { x: 320, y: 80 } })
+  }
+
+  // Deterministic rewiring: a graphId param on any step AFTER a create_graph step must
+  // reference that step's output (create_graph assigns its own UUID). The model tends to
+  // write a literal id here — force the reference so the graph actually resolves at run time.
+  const cgIndex = steps.findIndex((s) => s.stepType === 'action' && s.config?.toolName === 'create_graph')
+  if (cgIndex !== -1) {
+    const gref = `{{${steps[cgIndex].id}.result.graphId}}`
+    steps.forEach((s, i) => {
+      const g = s.config?.params?.graphId
+      if (i > cgIndex && typeof g === 'string' && !/\{\{[\s\S]*\}\}/.test(g)) {
+        s.config.params.graphId = gref
+      }
+    })
   }
 
   const stepIds = new Set(steps.map((s) => s.id))
