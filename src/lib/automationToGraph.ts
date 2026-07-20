@@ -54,12 +54,13 @@ export async function buildAutomation(
   prompt: string,
   userId: string,
   tools: Array<{ name: string; description: string }>,
+  callerEmail?: string,
 ): Promise<AutomationSpec> {
   const res = await fetch(`${AGENT_API}/automation/build`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, userId, tools }),
+    body: JSON.stringify({ prompt, userId, tools, callerEmail }),
   });
   const data = (await res.json()) as AutomationSpec;
   if (!res.ok) throw new Error(data.error || `Build failed: ${res.status}`);
@@ -89,12 +90,13 @@ export async function testStep(
   graphId: string,
   stepId: string,
   userId: string,
+  callerEmail?: string,
 ): Promise<{ success: boolean; step: RunStep | null; error?: string }> {
   const res = await fetch(`${AGENT_API}/automation/run`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, stepId, userId }),
+    body: JSON.stringify({ graphId, stepId, userId, callerEmail }),
   });
   const data = (await res.json()) as { success: boolean; step: RunStep | null; error?: string };
   if (!res.ok && !data.step) throw new Error(data.error || `Test failed: ${res.status}`);
@@ -106,12 +108,13 @@ export async function runAutomation(
   graphId: string,
   dryRun: boolean,
   userId: string,
+  callerEmail?: string,
 ): Promise<RunResult> {
   const res = await fetch(`${AGENT_API}/automation/run`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, dryRun, userId }),
+    body: JSON.stringify({ graphId, dryRun, userId, callerEmail }),
   });
   const data = (await res.json()) as RunResult;
   if (!res.ok) throw new Error(data.error || `Run failed: ${res.status}`);

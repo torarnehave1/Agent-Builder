@@ -192,7 +192,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           onSelectAgent={setEditingAgentId}
         />
       )}
-      {view === 'automation' && <AutomationTab userEmail={userEmail} />}
+      {view === 'automation' && <AutomationTab userEmail={userEmail} userId={userId} />}
       {view === 'data' && <DataExplorer />}
       {view === 'usage' && <UsageDashboard userId={userId} />}
       {view === 'settings' && (

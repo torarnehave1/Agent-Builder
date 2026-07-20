@@ -29,6 +29,7 @@ import {
 
 interface Props {
   userEmail: string;
+  userId: string; // the caller's user_id (UUID) — the identity tools/keys are stored under
 }
 
 const AUTOMATION_NODE_TYPES: NodeTypes = {
@@ -49,7 +50,7 @@ function seedNodes(): Node[] {
   return [createAutomationNode('start', { x: 320, y: 80 })];
 }
 
-export default function AutomationTab({ userEmail }: Props) {
+export default function AutomationTab({ userEmail, userId }: Props) {
   const [nodes, setNodes] = useState<Node[]>(seedNodes);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -142,7 +143,7 @@ export default function AutomationTab({ userEmail }: Props) {
       const id = automationId || crypto.randomUUID();
       await saveAutomation(id, nodes, edges, { title, description, createdBy: userEmail });
       setAutomationId(id);
-      const result = await runAutomation(id, !runForReal, userEmail);
+      const result = await runAutomation(id, !runForReal, userId, userEmail);
       setRunResult(result);
       setStatus(
         `Ran ${result.dryRun ? '(dry)' : '(live)'} · ${result.summary.executed} run / ${result.summary.simulated} sim / ${result.summary.errors} err`
@@ -152,7 +153,7 @@ export default function AutomationTab({ userEmail }: Props) {
     } finally {
       setRunning(false);
     }
-  }, [automationId, nodes, edges, title, description, userEmail, runForReal]);
+  }, [automationId, nodes, edges, title, description, userId, userEmail, runForReal]);
 
   const handleTestStep = useCallback(async (nodeId: string) => {
     setTestStates((prev) => ({ ...prev, [nodeId]: { status: 'testing' } }));
@@ -161,7 +162,7 @@ export default function AutomationTab({ userEmail }: Props) {
       const id = automationId || crypto.randomUUID();
       await saveAutomation(id, nodesRef.current, edges, { title, description, createdBy: userEmail });
       setAutomationId(id);
-      const { step, success } = await testStep(id, nodeId, userEmail);
+      const { step, success } = await testStep(id, nodeId, userId, userEmail);
       setTestStates((prev) => ({
         ...prev,
         [nodeId]: { status: success ? 'passed' : 'failed', detail: step?.detail },
@@ -172,7 +173,7 @@ export default function AutomationTab({ userEmail }: Props) {
         [nodeId]: { status: 'failed', detail: err instanceof Error ? err.message : 'Test failed' },
       }));
     }
-  }, [automationId, edges, title, description, userEmail]);
+  }, [automationId, edges, title, description, userId, userEmail]);
 
   const handleBuild = useCallback(async () => {
     const prompt = describePrompt.trim();
@@ -181,7 +182,7 @@ export default function AutomationTab({ userEmail }: Props) {
     setStatus(null);
     setRunResult(null);
     try {
-      const spec = await buildAutomation(prompt, userEmail, TOOL_CATALOG);
+      const spec = await buildAutomation(prompt, userId, TOOL_CATALOG, userEmail);
       const { nodes: builtNodes, edges: builtEdges } = specToReactFlow(spec);
       // Replace the canvas with the built draft (unsaved — user refines, then Save/Run).
       setNodes(builtNodes.length ? builtNodes : seedNodes());
@@ -197,7 +198,7 @@ export default function AutomationTab({ userEmail }: Props) {
     } finally {
       setBuilding(false);
     }
-  }, [describePrompt, userEmail]);
+  }, [describePrompt, userId, userEmail]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);

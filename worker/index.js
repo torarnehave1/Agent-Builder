@@ -2010,7 +2010,7 @@ export default {
         try {
           const authContext = await resolveAuthorizedCaller(request, env)
           const effectiveUserId = authContext?.userId || body.userId || null
-          const callerEmail = authContext?.email
+          const callerEmail = authContext?.email || body.callerEmail
             || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
           const spec = await buildAutomationSpec({ prompt, tools, userId: effectiveUserId, callerEmail, env })
           return new Response(JSON.stringify(spec), { headers: corsHeaders })
@@ -2039,7 +2039,7 @@ export default {
           const authContext = await resolveAuthorizedCaller(request, env)
           const effectiveUserId = authContext?.userId || body.userId || null
           // Caller's email — used to default a "me"/empty notify recipient.
-          const callerEmail = authContext?.email
+          const callerEmail = authContext?.email || body.callerEmail
             || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
 
           // Load the automation graph.
