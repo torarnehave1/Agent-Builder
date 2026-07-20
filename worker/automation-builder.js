@@ -1,158 +1,202 @@
 /**
- * NL → automation builder. Turns a plain-language description into an automation spec
- * (steps + edges) using a one-shot Claude call. The frontend renders the spec onto the
- * canvas so the user can refine it before saving/running.
+ * NL → automation builder (unified path).
  *
- * Scope: this only AUTHORS the graph — it never runs anything. The runner (automation-runner.js)
- * executes it later, on demand.
+ * Instead of asking Claude to hand-write JSON params (which made it GUESS param names),
+ * this PLANS the automation with native tool-use — the SAME mechanism the chat agent uses.
+ * Claude "calls" the real tools; the Anthropic API validates each call's arguments against
+ * that tool's input_schema, so params come out correct (create_node → label + nodeType, not
+ * title + type). We never execute the calls — we record each as an automation step and hand
+ * Claude back the step's id so later steps can reference earlier outputs ({{aN.result.field}}).
+ *
+ * Authoring only. The runner (automation-runner.js) executes the saved automation later.
  */
 import { MODELS } from './models.js'
 import { resolveRecipient } from './automation-runner.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 
 const DEF_BY_NAME = new Map(TOOL_DEFINITIONS.map((t) => [t.name, t]))
+const MAX_TURNS = 12
+const MAX_STEPS = 24
 
-// Compact, accurate param spec for a tool so the agent uses the REAL param names/enums
-// (e.g. create_node wants label + nodeType:"fulltext", not title + type:"text").
-function paramHint(name) {
-  const props = DEF_BY_NAME.get(name)?.input_schema?.properties
-  if (!props) return ''
-  const req = new Set(DEF_BY_NAME.get(name)?.input_schema?.required || [])
-  return Object.entries(props)
-    .map(([k, v]) => {
-      let s = k + (req.has(k) ? '*' : '')
-      if (Array.isArray(v.enum)) s += ` (${v.enum.slice(0, 8).join('|')}${v.enum.length > 8 ? '|…' : ''})`
-      return s
-    })
-    .join(', ')
-}
+// Flow-control steps modeled as tools, so Claude plans them the same way (schema-validated).
+const FLOW_TOOLS = [
+  {
+    name: 'flow_notify',
+    description: 'Send a notification to the user (usually email). Use this to "email me / notify me" steps.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', enum: ['email', 'chat', 'webhook'] },
+        to: { type: 'string', description: 'Recipient. Use exactly "me" for the user themselves.' },
+        subject: { type: 'string' },
+        message: { type: 'string', description: 'Body. For markdown from an earlier step use the html filter, e.g. {{a1.result.content | html}}.' },
+      },
+      required: ['channel', 'message'],
+    },
+  },
+  {
+    name: 'flow_delay',
+    description: 'Wait before the next step runs.',
+    input_schema: {
+      type: 'object',
+      properties: { amount: { type: 'number' }, unit: { type: 'string', enum: ['seconds', 'minutes', 'hours'] } },
+      required: ['amount', 'unit'],
+    },
+  },
+  {
+    name: 'flow_loop',
+    description: 'Repeat the following steps a number of times.',
+    input_schema: {
+      type: 'object',
+      properties: { times: { type: 'number' }, over: { type: 'string' } },
+      required: ['times'],
+    },
+  },
+  {
+    name: 'flow_note',
+    description: 'A non-executing note documenting the flow.',
+    input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  },
+  {
+    name: 'set_automation_meta',
+    description: 'Set the automation title and description. Call this FIRST, once.',
+    input_schema: {
+      type: 'object',
+      properties: { title: { type: 'string' }, description: { type: 'string' } },
+      required: ['title'],
+    },
+  },
+]
+const FLOW_MAP = { flow_notify: 'notify', flow_delay: 'delay', flow_loop: 'loop', flow_note: 'note' }
 
-const STEP_VOCAB = `Step types and their "config" shape:
-- start   → config: {}                                   (exactly ONE; the entry point)
-- action  → config: { toolName, params }                 (toolName MUST be one of the AVAILABLE TOOLS below; params is a best-effort object of that tool's arguments)
-- delay   → config: { amount: number, unit: "seconds"|"minutes"|"hours" }
-- loop    → config: { times: number, over?: string }     (repeats its downstream steps)
-- notify  → config: { channel: "email"|"chat"|"webhook", message: string, to?: string, subject?: string, fromEmail?: string }  (for channel "email": set "to" to the recipient address ONLY if the description gives a real one. If it means the user themselves ("email me", "notify me"), set "to" to exactly "me" — the platform fills in their real address. NEVER invent an address like me@example.com. Add a short "subject"; leave fromEmail unset to default to noreply@vegr.ai)
-- note    → config: { text: string }                     (documentation only, not executed)`
+const titleCase = (s) => String(s || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+
+const PLAN_SYSTEM = `You PLAN a reusable automation for the Vegvisr platform by CALLING TOOLS in the exact order the steps should run — one tool call per step. Do NOT write prose; only call tools.
+
+CRITICAL — you are building a TEMPLATE that runs LATER, not doing the work now:
+- Do NOT write real/factual content from your own knowledge into any argument. The live data comes from the tool steps AT RUN TIME.
+- When a step needs another step's output (e.g. a node's content should be the search findings), set that argument to a reference like {{a1.result.content}} — NEVER type the actual findings yourself.
+- Keep the plan MINIMAL: for "summarize findings into a graph", that's usually ONE create_node whose content is "{{a1.result.content}}" — not one node per item. Only add more steps if the user explicitly asks.
+
+- First call set_automation_meta once (a short title + description).
+- Then call the real action tools (perplexity_search, create_graph, create_node, ...) to do the work. Their arguments are enforced by each tool's schema — fill them correctly.
+- Use flow_notify / flow_delay / flow_loop / flow_note for control steps. For "email me / notify me", call flow_notify with channel:"email" and to:"me".
+- You are PLANNING, not executing — you will NOT see real results. To pass an earlier ACTION step's output into a later argument, write a template string {{aN.result.FIELD}}, where aN is the step id I report back after each action call. Common fields: perplexity_search → result.content (markdown) ; create_graph → result.graphId ; create_node → result.nodeId.
+- When you put markdown (like a perplexity summary) inside an email body, use the html filter: {{a1.result.content | html}}.
+- To link to a graph a step created, the ONLY correct URL is: https://www.vegvisr.org/gnew-viewer?graphId={{aN.result.graphId}}  (never vegvisr.app or other paths).
+- Keep it minimal — only the steps the description implies. When the plan is complete, stop calling tools.`
 
 /**
- * @param {{prompt:string, tools:Array<{name:string,description:string}>, userId:string, env:any}} opts
+ * @param {{prompt:string, tools:Array<{name:string,description:string}>, userId:string, callerEmail?:string, env:any}} opts
  * @returns {Promise<{title:string, description:string, steps:Array, edges:Array}>}
  */
 export async function buildAutomationSpec({ prompt, tools, userId, callerEmail, env }) {
-  const toolList = (tools || [])
-    .map((t) => {
-      const params = paramHint(t.name)
-      return `- ${t.name} — ${t.description}${params ? `\n    params: ${params}` : ''}`
-    })
-    .join('\n')
-
-  const system = `You design AUTOMATIONS as a directed graph of steps for the Vegvisr platform.
-Given a user's plain-language description, output an automation as STRICT JSON — no markdown, no prose, no code fences.
-
-${STEP_VOCAB}
-
-DATA PASSING — reference an earlier step's output inside a later step's config with {{stepId.result...}}:
-- {{a1.result.<field>}}  → a SPECIFIC field. Common fields: perplexity_search → result.content (answer text, markdown); create_graph → result.graphId; create_node → result.nodeId. NEVER put a whole {{a1.result}} into human-facing text — it's a JSON object and dumps ugly. Always name the field.
-- {{a1.summary}}         → step a1's one-line summary
-- {{a1.result.content | html}} → same value, converted from markdown to HTML. USE THE "| html" FILTER whenever you insert markdown (like perplexity content) into an email "message".
-Use these so steps chain — e.g. a "create_node" after a "perplexity_search" sets params.content to "{{a1.result.content}}".
-
-IDs FROM EARLIER STEPS — when a param needs the graphId/nodeId of something an EARLIER step created, you MUST reference it, never write a literal id. create_graph assigns its OWN id, so a later create_node MUST set params.graphId to "{{<create_graph step id>.result.graphId}}" (e.g. "{{a2.result.graphId}}"). Never invent an id like "km-tools-research".
-
-LINKS — to link to a knowledge graph a step created, the ONLY correct viewer URL is:
-  https://www.vegvisr.org/gnew-viewer?graphId={{<the create_graph step id>.result.graphId}}
-Never invent other hosts/paths (no vegvisr.app, no /graph/...).
-
-EMAIL BODIES — for a notify email "message", write a short plain-text OR simple-HTML body. Insert dynamic markdown (e.g. the search summary) with the "| html" filter: e.g.
-  "Here is the summary:\n\n{{a1.result.content | html}}\n\nView the graph: https://www.vegvisr.org/gnew-viewer?graphId={{a2.result.graphId}}"
-
-RULES:
-- Start with exactly one "start" step.
-- Order steps by connecting them with edges (source → target) in the intended flow. The flow begins at the start step.
-- For "action" steps, choose the single best toolName from AVAILABLE TOOLS. Fill "params" with your best guess of the tool's arguments from the description; use {} if unsure.
-- Use short ids: s1 (start), a1/a2 (actions), d1 (delay), l1 (loop), n1 (notify), c1 (note).
-- Keep it minimal — only the steps the description actually implies.
-- "label" is a short human title for the step.
-
-AVAILABLE TOOLS (use ONLY these toolNames for action steps). Each lists its "params" — use those EXACT param names (a * marks required) and pick enum values only from the listed options. Do NOT invent params (e.g. create_node needs label + nodeType:"fulltext" + content — NOT title/type/"text"):
-${toolList}
-
-OUTPUT FORMAT (exactly this shape):
-{"title":"...","description":"...","steps":[{"id":"s1","stepType":"start","label":"Start","config":{}},{"id":"a1","stepType":"action","label":"...","config":{"toolName":"...","params":{}}}],"edges":[{"source":"s1","target":"a1"}]}`
-
-  const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      userId,
-      apiKey: env.ANTHROPIC_API_KEY || undefined,
-      system,
-      messages: [{ role: 'user', content: prompt }],
-      model: MODELS.SONNET,
-      max_tokens: 1800,
-      temperature: 0.2,
-    }),
-  })
-  if (!res.ok) throw new Error(`Claude call failed (${res.status}): ${await res.text()}`)
-  const data = await res.json()
-  const text = (data.content || []).find((c) => c.type === 'text')?.text || ''
-
-  const spec = parseSpec(text)
-  return normalizeSpec(spec, tools, callerEmail)
-}
-
-function parseSpec(text) {
-  // Grab the first {...} block (tolerate stray prose / fences the model may add).
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('Model did not return JSON')
-  try {
-    return JSON.parse(match[0])
-  } catch (e) {
-    throw new Error(`Could not parse automation JSON: ${e.message}`)
-  }
-}
-
-const VALID_STEP_TYPES = new Set(['start', 'action', 'delay', 'loop', 'notify', 'note'])
-
-/** Validate/repair the model output and assign canvas positions. */
-function normalizeSpec(spec, tools, callerEmail = null) {
   const allowed = new Set((tools || []).map((t) => t.name))
-  const rawSteps = Array.isArray(spec?.steps) ? spec.steps : []
+  // Real action tools (full input_schema) that this automation may use.
+  const actionTools = (tools || [])
+    .map((t) => DEF_BY_NAME.get(t.name))
+    .filter(Boolean)
+    .map((d) => ({ name: d.name, description: d.description, input_schema: d.input_schema }))
+  const claudeTools = [...FLOW_TOOLS, ...actionTools]
 
-  const steps = rawSteps
-    .filter((s) => s && VALID_STEP_TYPES.has(s.stepType))
-    .map((s, i) => {
-      const config = s.config && typeof s.config === 'object' ? s.config : {}
-      // Drop action toolNames the platform doesn't support.
-      if (s.stepType === 'action' && config.toolName && allowed.size && !allowed.has(config.toolName)) {
-        config.toolName = ''
-      }
-      // Default a "me"/empty email recipient to the caller's own address, so the saved value is real.
-      if (s.stepType === 'notify' && (config.channel || 'email') === 'email' && callerEmail) {
-        config.to = resolveRecipient(config.to, callerEmail)
-      }
-      return {
-        id: String(s.id || `${s.stepType}-${i}`),
-        stepType: s.stepType,
-        label: String(s.label || s.stepType),
-        config,
-        position: { x: 320, y: 80 + i * 150 },
-      }
+  const messages = [{ role: 'user', content: prompt }]
+  const steps = []
+  const counters = { action: 0, delay: 0, notify: 0, loop: 0, note: 0 }
+  let title = ''
+  let description = ''
+
+  for (let turn = 0; turn < MAX_TURNS && steps.length < MAX_STEPS; turn += 1) {
+    const res = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userId,
+        apiKey: env.ANTHROPIC_API_KEY || undefined,
+        system: PLAN_SYSTEM,
+        messages,
+        model: MODELS.SONNET,
+        max_tokens: 2000,
+        temperature: 0.2,
+        tools: claudeTools,
+        tool_choice: turn === 0 ? { type: 'any' } : { type: 'auto' },
+      }),
     })
+    if (!res.ok) throw new Error(`Planning call failed (${res.status}): ${await res.text()}`)
+    const data = await res.json()
+    const toolUses = (data.content || []).filter((c) => c.type === 'tool_use')
+    if (!toolUses.length) break
 
-  // Ensure exactly one start step at the front.
-  if (!steps.some((s) => s.stepType === 'start')) {
-    steps.unshift({ id: 's0', stepType: 'start', label: 'Start', config: {}, position: { x: 320, y: 80 } })
+    messages.push({ role: 'assistant', content: data.content })
+    const results = []
+    for (const tu of toolUses) {
+      const input = tu.input || {}
+      if (tu.name === 'set_automation_meta') {
+        title = title || String(input.title || '')
+        description = description || String(input.description || '')
+        results.push({ type: 'tool_result', tool_use_id: tu.id, content: 'ok' })
+        continue
+      }
+      let id
+      let stepType
+      let config
+      if (FLOW_MAP[tu.name]) {
+        stepType = FLOW_MAP[tu.name]
+        if (stepType === 'notify') {
+          id = `n${(counters.notify += 1)}`
+          config = {
+            label: 'Notify',
+            channel: input.channel || 'email',
+            to: input.to,
+            subject: input.subject,
+            message: input.message,
+            fromEmail: 'noreply@vegr.ai',
+          }
+        } else if (stepType === 'delay') {
+          id = `d${(counters.delay += 1)}`
+          config = { label: 'Delay', amount: Number(input.amount) || 5, unit: input.unit || 'minutes' }
+        } else if (stepType === 'loop') {
+          id = `l${(counters.loop += 1)}`
+          config = { label: 'Loop', times: Number(input.times) || 2, over: input.over || '' }
+        } else {
+          id = `c${(counters.note += 1)}`
+          config = { text: input.text || '' }
+        }
+      } else if (allowed.has(tu.name)) {
+        stepType = 'action'
+        id = `a${(counters.action += 1)}`
+        config = { label: titleCase(tu.name), toolName: tu.name, params: input }
+      } else {
+        // Unknown tool — acknowledge and skip (don't create a broken step).
+        results.push({ type: 'tool_result', tool_use_id: tu.id, content: `Unknown tool "${tu.name}" — skipped.` })
+        continue
+      }
+      steps.push({ id, stepType, config })
+      const hint = stepType === 'action'
+        ? `Recorded as step ${id}. Reference its output later as {{${id}.result.<field>}}.`
+        : `Recorded as step ${id}.`
+      results.push({ type: 'tool_result', tool_use_id: tu.id, content: hint })
+    }
+    messages.push({ role: 'user', content: results })
   }
 
-  // Deterministic rewiring: a graphId param on any step AFTER a create_graph step must
-  // reference that step's output (create_graph assigns its own UUID). The model tends to
-  // write a literal id here — force the reference so the graph actually resolves at run time.
-  const cgIndex = steps.findIndex((s) => s.stepType === 'action' && s.config?.toolName === 'create_graph')
+  return assembleSpec(steps, { title, description, prompt, callerEmail })
+}
+
+/** Turn recorded steps into a canvas-ready spec (start anchor, positions, linear edges, fixups). */
+function assembleSpec(recorded, { title, description, prompt, callerEmail }) {
+  // Default a "me"/placeholder notify recipient to the caller's real email.
+  for (const s of recorded) {
+    if (s.stepType === 'notify' && (s.config.channel || 'email') === 'email' && callerEmail) {
+      s.config.to = resolveRecipient(s.config.to, callerEmail)
+    }
+  }
+
+  // Deterministic graphId rewire: any step after a create_graph whose graphId is a literal
+  // must reference that step's output (create_graph assigns its own UUID).
+  const cgIndex = recorded.findIndex((s) => s.stepType === 'action' && s.config.toolName === 'create_graph')
   if (cgIndex !== -1) {
-    const gref = `{{${steps[cgIndex].id}.result.graphId}}`
-    steps.forEach((s, i) => {
+    const gref = `{{${recorded[cgIndex].id}.result.graphId}}`
+    recorded.forEach((s, i) => {
       const g = s.config?.params?.graphId
       if (i > cgIndex && typeof g === 'string' && !/\{\{[\s\S]*\}\}/.test(g)) {
         s.config.params.graphId = gref
@@ -160,15 +204,29 @@ function normalizeSpec(spec, tools, callerEmail = null) {
     })
   }
 
-  const stepIds = new Set(steps.map((s) => s.id))
-  const edges = (Array.isArray(spec?.edges) ? spec.edges : [])
-    .filter((e) => e && stepIds.has(e.source) && stepIds.has(e.target))
-    .map((e) => ({ source: String(e.source), target: String(e.target) }))
+  const start = { id: 's0', stepType: 'start', label: 'Start', config: { label: 'Start' } }
+  const ordered = [start, ...recorded].map((s, i) => ({
+    ...s,
+    label: s.config.label || s.label || titleCase(s.stepType),
+    position: { x: 320, y: 80 + i * 150 },
+  }))
+
+  // Linear edges through the executable chain (notes are floating docs — not connected).
+  const chain = ordered.filter((s) => s.stepType !== 'note')
+  const edges = []
+  for (let i = 0; i < chain.length - 1; i += 1) {
+    edges.push({ source: chain[i].id, target: chain[i + 1].id })
+  }
 
   return {
-    title: String(spec?.title || 'New automation'),
-    description: String(spec?.description || ''),
-    steps,
+    title: title || deriveTitle(prompt),
+    description: description || '',
+    steps: ordered.map(({ id, stepType, label, config, position }) => ({ id, stepType, label, config, position })),
     edges,
   }
+}
+
+function deriveTitle(prompt) {
+  const words = String(prompt || 'New automation').trim().split(/\s+/).slice(0, 6).join(' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
 }
