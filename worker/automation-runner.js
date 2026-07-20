@@ -42,20 +42,55 @@ function resolveRef(ref, outputs) {
   return rest ? getByPath(entry, rest) : entry
 }
 
+function applyFilter(value, filter) {
+  if (filter === 'html') return markdownToHtml(typeof value === 'string' ? value : String(value ?? ''))
+  return value
+}
+
 function resolveString(s, outputs) {
-  // A whole-string single ref returns the RAW value (keeps objects intact).
+  // A whole-string single ref (no filter) returns the RAW value (keeps objects intact).
   const whole = s.match(/^\{\{\s*([\w.]+)\s*\}\}$/)
   if (whole) {
     const v = resolveRef(whole[1], outputs)
     return v === undefined ? '' : v
   }
-  // Embedded refs are stringified into the surrounding text.
-  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, ref) => {
-    const v = resolveRef(ref, outputs)
+  // Embedded refs — support an optional filter: {{ref | html}}.
+  return s.replace(/\{\{\s*([\w.]+)\s*(?:\|\s*(\w+)\s*)?\}\}/g, (_, ref, filter) => {
+    let v = resolveRef(ref, outputs)
     if (v === undefined) return ''
+    if (filter) return applyFilter(v, filter)
     return typeof v === 'string' ? v : JSON.stringify(v)
   })
 }
+
+// Lightweight markdown → HTML, enough for perplexity output in an email body.
+function markdownToHtml(md) {
+  const esc = (t) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const inline = (t) =>
+    esc(t)
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+  const lines = String(md).replace(/\r\n/g, '\n').split('\n')
+  const html = []
+  let inList = false
+  const closeList = () => { if (inList) { html.push('</ul>'); inList = false } }
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) { closeList(); continue }
+    let m
+    if ((m = line.match(/^###\s+(.*)/))) { closeList(); html.push(`<h3>${inline(m[1])}</h3>`) }
+    else if ((m = line.match(/^##\s+(.*)/))) { closeList(); html.push(`<h2>${inline(m[1])}</h2>`) }
+    else if ((m = line.match(/^#\s+(.*)/))) { closeList(); html.push(`<h1>${inline(m[1])}</h1>`) }
+    else if ((m = line.match(/^[-*]\s+(.*)/))) { if (!inList) { html.push('<ul>'); inList = true } html.push(`<li>${inline(m[1])}</li>`) }
+    else { closeList(); html.push(`<p>${inline(line)}</p>`) }
+  }
+  closeList()
+  return html.join('\n')
+}
+
+const hasHtmlTags = (s) => /<(p|div|h[1-6]|ul|ol|li|br|table|html|body|a|strong|em)\b/i.test(s || '')
 
 function resolveTemplates(value, outputs) {
   if (typeof value === 'string') return resolveString(value, outputs)
@@ -141,9 +176,12 @@ async function runNotify(cfg, ctx) {
     if (!to) return { status: 'error', detail: 'Notify (email) has no recipient (and no caller email to default to)' }
     const fromEmail = cfg.fromEmail || DEFAULT_NOTIFY_FROM
     const subject = cfg.subject || 'Automation notification'
+    // Plain-text / markdown bodies (e.g. a pasted perplexity summary) render as raw text in an
+    // HTML email — convert them. Bodies the agent already wrote as HTML are left as-is.
+    const html = hasHtmlTags(message) ? message : markdownToHtml(message || subject)
     try {
       const result = await executeTool('send_email', {
-        fromEmail, to, subject, html: message || subject,
+        fromEmail, to, subject, html,
         userId: ctx.userId, authContext: ctx.authContext,
       }, ctx.env, ctx.operationMap)
       const ok = !result || result.success !== false

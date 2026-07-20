@@ -32,10 +32,17 @@ Given a user's plain-language description, output an automation as STRICT JSON �
 ${STEP_VOCAB}
 
 DATA PASSING — reference an earlier step's output inside a later step's config with {{stepId.result...}}:
-- {{a1.result}}          → step a1's whole tool result
-- {{a1.result.<field>}}  → a field of it. Common fields: perplexity_search → result.content (answer text); create_node/create_graph → result.nodeId / result.graphId; who_am_i → result fields.
+- {{a1.result.<field>}}  → a SPECIFIC field. Common fields: perplexity_search → result.content (answer text, markdown); create_graph → result.graphId; create_node → result.nodeId. NEVER put a whole {{a1.result}} into human-facing text — it's a JSON object and dumps ugly. Always name the field.
 - {{a1.summary}}         → step a1's one-line summary
-Use these so steps chain — e.g. a "create_node" after a "perplexity_search" should set params.content to "{{a1.result.content}}", and an email notify should put "{{a1.result.content}}" in its "message".
+- {{a1.result.content | html}} → same value, converted from markdown to HTML. USE THE "| html" FILTER whenever you insert markdown (like perplexity content) into an email "message".
+Use these so steps chain — e.g. a "create_node" after a "perplexity_search" sets params.content to "{{a1.result.content}}".
+
+LINKS — to link to a knowledge graph a step created, the ONLY correct viewer URL is:
+  https://www.vegvisr.org/gnew-viewer?graphId={{<the create_graph step id>.result.graphId}}
+Never invent other hosts/paths (no vegvisr.app, no /graph/...).
+
+EMAIL BODIES — for a notify email "message", write a short plain-text OR simple-HTML body. Insert dynamic markdown (e.g. the search summary) with the "| html" filter: e.g.
+  "Here is the summary:\n\n{{a1.result.content | html}}\n\nView the graph: https://www.vegvisr.org/gnew-viewer?graphId={{a2.result.graphId}}"
 
 RULES:
 - Start with exactly one "start" step.
