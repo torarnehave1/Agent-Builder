@@ -18,7 +18,9 @@ import {
   saveAutomation,
   loadAutomation,
   listAutomations,
+  runAutomation,
   type AutomationSummary,
+  type RunResult,
 } from '../lib/automationToGraph';
 
 interface Props {
@@ -55,6 +57,9 @@ export default function AutomationTab({ userEmail }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [summaries, setSummaries] = useState<AutomationSummary[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [runForReal, setRunForReal] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<RunResult | null>(null);
 
   // Latest nodes, read (not subscribed) by add handlers so we don't nest setState.
   const nodesRef = useRef(nodes);
@@ -119,6 +124,27 @@ export default function AutomationTab({ userEmail }: Props) {
       setSaving(false);
     }
   }, [automationId, nodes, edges, title, description, userEmail]);
+
+  const handleRun = useCallback(async () => {
+    setRunning(true);
+    setStatus(null);
+    setRunResult(null);
+    try {
+      // Always persist the current canvas first, so the run reflects what's on screen.
+      const id = automationId || crypto.randomUUID();
+      await saveAutomation(id, nodes, edges, { title, description, createdBy: userEmail });
+      setAutomationId(id);
+      const result = await runAutomation(id, !runForReal, userEmail);
+      setRunResult(result);
+      setStatus(
+        `Ran ${result.dryRun ? '(dry)' : '(live)'} · ${result.summary.executed} run / ${result.summary.simulated} sim / ${result.summary.errors} err`
+      );
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Run failed');
+    } finally {
+      setRunning(false);
+    }
+  }, [automationId, nodes, edges, title, description, userEmail, runForReal]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);
@@ -185,6 +211,29 @@ export default function AutomationTab({ userEmail }: Props) {
           >
             New
           </button>
+          <div className="mx-1 h-5 w-px bg-white/10" />
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={running}
+            className={`rounded-md border px-3 py-1 text-[12px] font-semibold disabled:opacity-50 ${
+              runForReal
+                ? 'border-rose-500/50 bg-rose-500/20 text-rose-200 hover:bg-rose-500/30'
+                : 'border-emerald-500/50 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+            }`}
+            title={runForReal ? 'Execute steps for real' : 'Simulate — no side effects'}
+          >
+            {running ? 'Running…' : runForReal ? '▶ Run for real' : '▶ Run (dry)'}
+          </button>
+          <label className="flex items-center gap-1.5 text-[11px] text-white/60 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={runForReal}
+              onChange={(e) => setRunForReal(e.target.checked)}
+              className="w-3.5 h-3.5 accent-rose-500"
+            />
+            Run for real
+          </label>
           {status && <span className="text-[11px] text-white/50">{status}</span>}
           {automationId && (
             <a
@@ -242,6 +291,31 @@ export default function AutomationTab({ userEmail }: Props) {
               className="w-full rounded bg-slate-950/60 border border-white/8 px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-purple-500/50"
             />
           </section>
+          {runResult && (
+            <>
+              <div className="border-t border-white/8" />
+              <section>
+                <SectionLabel>
+                  RUN LOG {runResult.dryRun ? '(dry-run)' : '(live)'}
+                </SectionLabel>
+                <div className="text-[10px] text-white/50 mb-2">
+                  {runResult.summary.executed} run · {runResult.summary.simulated} sim · {runResult.summary.errors} err
+                  {runResult.summary.capped && ' · capped'}
+                </div>
+                <div className="space-y-1">
+                  {runResult.steps.map((s, i) => (
+                    <div key={`${s.nodeId}-${i}`} className="rounded border border-white/8 bg-slate-950/50 px-2 py-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`text-[9px] font-semibold uppercase ${statusColor(s.status)}`}>{s.status}</span>
+                        <span className="text-[11px] text-white/80 truncate">{s.label}</span>
+                      </div>
+                      <div className="text-[10px] text-white/45 truncate">{s.detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          )}
         </div>
       </div>
 
@@ -276,4 +350,13 @@ export default function AutomationTab({ userEmail }: Props) {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-[11px] font-semibold text-gray-500 tracking-[0.05em] mb-2">{children}</div>;
+}
+
+function statusColor(status: string): string {
+  switch (status) {
+    case 'ok': return 'text-emerald-400';
+    case 'simulated': return 'text-sky-400';
+    case 'error': return 'text-rose-400';
+    default: return 'text-slate-500';
+  }
 }

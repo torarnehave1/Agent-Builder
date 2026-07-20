@@ -15,6 +15,7 @@ import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
+import { runAutomation } from './automation-runner.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
@@ -1994,6 +1995,93 @@ export default {
         }
       }
 
+      // POST /automation/run — Execute an automation graph (Phase 1: synchronous, run-now).
+      // Body: { graphId, dryRun=true, userId }. dryRun simulates action steps (no side effects).
+      // Appends an 'automation-run' node to the same graph as run history.
+      if (pathname === '/automation/run' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { graphId } = body
+        const dryRun = body.dryRun !== false // default true (safe)
+
+        if (!graphId) {
+          return new Response(JSON.stringify({ error: 'graphId required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+
+        try {
+          const authContext = await resolveAuthorizedCaller(request, env)
+          const effectiveUserId = authContext?.userId || body.userId || null
+
+          // Load the automation graph.
+          const graphRes = await env.KG_WORKER.fetch(
+            `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
+          )
+          const graph = await graphRes.json()
+          if (!graphRes.ok) {
+            return new Response(JSON.stringify({ error: graph.error || `Failed to load graph (${graphRes.status})` }), {
+              status: 404, headers: corsHeaders
+            })
+          }
+
+          // OpenAPI/registry tools need an operationMap; built-ins ignore it.
+          let operationMap = {}
+          try { operationMap = (await loadOpenAPITools(env)).operationMap } catch { /* built-ins still work */ }
+
+          const run = await runAutomation(graph, {
+            dryRun,
+            userId: effectiveUserId,
+            authContext,
+            env,
+            operationMap,
+          })
+
+          // Append a run-history node (does not rewrite the graph, so canvas steps are untouched).
+          const runNodeId = `run_${Date.now()}`
+          const runLabel = `Run ${dryRun ? '(dry)' : ''} — ${run.summary.errors ? 'errors' : 'ok'}`.trim()
+          const runInfo = [
+            `**Automation run** ${dryRun ? '(dry-run)' : '(live)'}`,
+            `Steps: ${run.summary.total} · executed ${run.summary.executed} · simulated ${run.summary.simulated} · errors ${run.summary.errors}`,
+            '',
+            ...run.steps.map((s) => `- [${s.status}] ${s.label}: ${s.detail}`),
+          ].join('\n')
+          try {
+            await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                graphId,
+                node: {
+                  id: runNodeId,
+                  label: runLabel,
+                  type: 'automation-run',
+                  info: runInfo,
+                  visible: true,
+                  position: { x: 0, y: 0 },
+                  metadata: {
+                    kind: 'automation-run',
+                    dryRun,
+                    ranAt: new Date().toISOString(),
+                    ranBy: effectiveUserId,
+                    summary: run.summary,
+                    steps: run.steps,
+                  },
+                },
+              }),
+            })
+          } catch (e) {
+            // History is best-effort; the run result still returns.
+            console.error('Failed to append run-history node:', e)
+          }
+
+          return new Response(JSON.stringify({ ...run, graphId, runNodeId }), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), {
+            status: 500, headers: corsHeaders
+          })
+        }
+      }
+
       // GET /template-version — Return current template version(s)
       if (pathname === '/template-version' && request.method === 'GET') {
         const templateId = url.searchParams.get('templateId')
@@ -3188,6 +3276,7 @@ export default {
           timestamp: new Date().toISOString()
         }), { headers: corsHeaders })
       }
+
 
       // POST /generate-image — direct SDXL Lightning call, no AI SDK involved
       if (pathname === '/generate-image' && request.method === 'POST') {

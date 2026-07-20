@@ -12,7 +12,44 @@ import type { StepData, StepType } from './automation';
 import { stepSummary } from './automation';
 
 export const KG_API = 'https://knowledge.vegvisr.org';
+export const AGENT_API = 'https://agent.vegvisr.org';
 export const AUTOMATION_META_AREA = '#automation';
+
+export interface RunStep {
+  nodeId: string;
+  stepType: string;
+  label: string;
+  status: 'ok' | 'simulated' | 'skipped' | 'error';
+  detail: string;
+  toolName?: string;
+}
+
+export interface RunResult {
+  success: boolean;
+  dryRun: boolean;
+  steps: RunStep[];
+  summary: { total: number; executed: number; simulated: number; errors: number; capped: boolean };
+  graphId?: string;
+  runNodeId?: string;
+  error?: string;
+}
+
+/** Execute an automation on the worker. dryRun (default) simulates action steps. */
+export async function runAutomation(
+  graphId: string,
+  dryRun: boolean,
+  userId: string,
+): Promise<RunResult> {
+  const res = await fetch(`${AGENT_API}/automation/run`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graphId, dryRun, userId }),
+  });
+  const data = (await res.json()) as RunResult;
+  if (!res.ok) throw new Error(data.error || `Run failed: ${res.status}`);
+  return data;
+}
 
 const EDGE_STYLE = { stroke: 'rgba(124,58,237,0.4)', strokeWidth: 1.5 };
 
@@ -84,16 +121,19 @@ export function reactFlowToAutomationGraph(
  * KG graphData → React Flow. Restores nodes (with position + config) and edges.
  */
 export function automationToReactFlow(graphData: KgGraphData): { nodes: Node[]; edges: Edge[] } {
-  const nodes: Node[] = (graphData.nodes || []).map((kn) => {
-    const stepType = (kn.metadata?.stepType || 'note') as StepType;
-    const config = kn.metadata?.config || {};
-    return {
-      id: kn.id,
-      type: stepType,
-      position: kn.position || { x: 0, y: 0 },
-      data: config as Record<string, unknown>,
-    };
-  });
+  const nodes: Node[] = (graphData.nodes || [])
+    // Only builder steps land on the canvas — run-history / other nodes are ignored.
+    .filter((kn) => kn.type === 'automation-step')
+    .map((kn) => {
+      const stepType = (kn.metadata?.stepType || 'note') as StepType;
+      const config = kn.metadata?.config || {};
+      return {
+        id: kn.id,
+        type: stepType,
+        position: kn.position || { x: 0, y: 0 },
+        data: config as Record<string, unknown>,
+      };
+    });
 
   const edges: Edge[] = (graphData.edges || []).map((ke) => ({
     id: ke.id || `${ke.source}_${ke.target}`,
@@ -115,6 +155,22 @@ export async function saveAutomation(
   meta: AutomationMeta,
 ): Promise<{ id: string; newVersion?: number }> {
   const graphData = reactFlowToAutomationGraph(nodes, edges, meta);
+
+  // Preserve any non-step nodes already on the graph (run-history), since
+  // saveGraphWithHistory(override) replaces the whole nodes array.
+  try {
+    const existingRes = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(id)}`, {
+      headers: { 'x-user-role': 'Superadmin' },
+    });
+    if (existingRes.ok) {
+      const existing = (await existingRes.json()) as KgGraphData;
+      const preserved = (existing.nodes || []).filter((n) => n.type !== 'automation-step');
+      if (preserved.length) graphData.nodes = [...graphData.nodes, ...preserved];
+    }
+  } catch {
+    // First save (graph doesn't exist yet) — nothing to preserve.
+  }
+
   const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
