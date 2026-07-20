@@ -87,6 +87,7 @@ function ActionInspector({ id, data, onUpdate }: { id: string; data: ActionData;
       </select>
       <div className="text-[10px] text-gray-500">{TOOL_CATALOG.find((t) => t.name === data.toolName)?.description}</div>
       <FieldLabel label="PARAMS (JSON)" />
+      <RefHint />
       <textarea
         value={paramsText}
         onChange={(e) => {
@@ -173,6 +174,7 @@ function NotifyInspector({ id, data, onUpdate }: { id: string; data: NotifyData;
         </>
       )}
       <FieldLabel label={data.channel === 'email' ? 'BODY' : 'MESSAGE'} />
+      <RefHint />
       <textarea
         value={data.message}
         onChange={(e) => onUpdate(id, { ...data, message: e.target.value })}
@@ -200,6 +202,14 @@ function NoteInspector({ id, data, onUpdate }: { id: string; data: NoteData; onU
 
 function FieldLabel({ label }: { label: string }) {
   return <div className="text-[10px] font-semibold text-gray-500 mt-2">{label}</div>;
+}
+
+function RefHint() {
+  return (
+    <div className="text-[9px] text-sky-400/70 mb-1">
+      Insert a previous step's output: <code className="text-sky-300">{'{{a1.result.content}}'}</code>
+    </div>
+  );
 }
 
 function FieldInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {

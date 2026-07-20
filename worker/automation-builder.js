@@ -30,6 +30,12 @@ Given a user's plain-language description, output an automation as STRICT JSON �
 
 ${STEP_VOCAB}
 
+DATA PASSING — reference an earlier step's output inside a later step's config with {{stepId.result...}}:
+- {{a1.result}}          → step a1's whole tool result
+- {{a1.result.<field>}}  → a field of it. Common fields: perplexity_search → result.content (answer text); create_node/create_graph → result.nodeId / result.graphId; who_am_i → result fields.
+- {{a1.summary}}         → step a1's one-line summary
+Use these so steps chain — e.g. a "create_node" after a "perplexity_search" should set params.content to "{{a1.result.content}}", and an email notify should put "{{a1.result.content}}" in its "message".
+
 RULES:
 - Start with exactly one "start" step.
 - Order steps by connecting them with edges (source → target) in the intended flow. The flow begins at the start step.

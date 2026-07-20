@@ -22,6 +22,58 @@ const MAX_STEPS = 200
 
 const DEFAULT_NOTIFY_FROM = 'noreply@vegr.ai'
 
+// --- Step-to-step data passing -------------------------------------------------
+// Templates in a step's config reference an earlier step's output:
+//   {{stepId.result}}          → that step's whole tool result (object)
+//   {{stepId.result.<field>}}  → a nested field (e.g. {{a1.result.content}})
+//   {{stepId.summary}}         → the step's one-line summary
+// Unknown refs resolve to '' (e.g. when testing a step in isolation).
+
+function getByPath(root, path) {
+  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), root)
+}
+
+function resolveRef(ref, outputs) {
+  const dot = ref.indexOf('.')
+  const stepId = dot === -1 ? ref : ref.slice(0, dot)
+  const rest = dot === -1 ? '' : ref.slice(dot + 1)
+  const entry = outputs[stepId]
+  if (entry === undefined) return undefined
+  return rest ? getByPath(entry, rest) : entry
+}
+
+function resolveString(s, outputs) {
+  // A whole-string single ref returns the RAW value (keeps objects intact).
+  const whole = s.match(/^\{\{\s*([\w.]+)\s*\}\}$/)
+  if (whole) {
+    const v = resolveRef(whole[1], outputs)
+    return v === undefined ? '' : v
+  }
+  // Embedded refs are stringified into the surrounding text.
+  return s.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, ref) => {
+    const v = resolveRef(ref, outputs)
+    if (v === undefined) return ''
+    return typeof v === 'string' ? v : JSON.stringify(v)
+  })
+}
+
+function resolveTemplates(value, outputs) {
+  if (typeof value === 'string') return resolveString(value, outputs)
+  if (Array.isArray(value)) return value.map((v) => resolveTemplates(v, outputs))
+  if (value && typeof value === 'object') {
+    const out = {}
+    for (const [k, v] of Object.entries(value)) out[k] = resolveTemplates(v, outputs)
+    return out
+  }
+  return value
+}
+
+/** Return a copy of the node with its config's {{refs}} resolved against prior outputs. */
+function withResolvedConfig(node, outputs) {
+  const cfg = node?.metadata?.config || {}
+  return { ...node, metadata: { ...node.metadata, config: resolveTemplates(cfg, outputs) } }
+}
+
 /**
  * Execute a single step's OWN effect (no graph traversal). Shared by the full-graph
  * runner and the single-step "Test" path. Returns { status, detail, extra? }.
@@ -140,11 +192,14 @@ export async function runAutomation(graph, opts) {
   }
 
   const ctx = { dryRun, userId, authContext, env, operationMap }
+  // Per-step outputs, so downstream {{stepId.result...}} refs resolve to live data.
+  const outputs = {}
 
   const runStep = async (node) => {
     if (log.length >= MAX_STEPS) return
-    const eff = await executeStepEffect(node, ctx)
+    const eff = await executeStepEffect(withResolvedConfig(node, outputs), ctx)
     record(node, eff.status, eff.detail, eff.extra || {})
+    outputs[node.id] = { result: eff.extra?.result ?? null, summary: eff.detail }
 
     // Loop repeats its downstream subtree `times` times; everything else walks children once.
     if (stepTypeOf(node) === 'loop') {
@@ -203,7 +258,8 @@ export async function runSingleStep(graph, stepId, opts = {}) {
   const { userId = null, authContext = null, env, operationMap = {} } = opts
   const node = (graph?.nodes || []).find((n) => n.id === stepId && n.type === 'automation-step')
   if (!node) return { success: false, step: null, error: 'Step not found' }
-  const eff = await executeStepEffect(node, { dryRun: false, userId, authContext, env, operationMap })
+  // Isolated test: no upstream outputs, so {{refs}} resolve to '' rather than leak literally.
+  const eff = await executeStepEffect(withResolvedConfig(node, {}), { dryRun: false, userId, authContext, env, operationMap })
   const step = {
     nodeId: node.id,
     stepType: node?.metadata?.stepType || 'note',
