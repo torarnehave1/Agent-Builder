@@ -391,7 +391,8 @@ export default function AutomationTab({ userEmail }: Props) {
                         <span className={`text-[9px] font-semibold uppercase ${statusColor(s.status)}`}>{s.status}</span>
                         <span className="text-[11px] text-white/80 truncate">{s.label}</span>
                       </div>
-                      <div className="text-[10px] text-white/45 truncate">{s.detail}</div>
+                      {/* Errors show in full (they carry the actionable fix); others stay compact. */}
+                      <div className={s.status === 'error' ? 'text-[10px] text-rose-300/80 break-words' : 'text-[10px] text-white/45 truncate'}>{s.detail}</div>
                     </div>
                   ))}
                 </div>
