@@ -2,18 +2,26 @@ import type { Node } from '@xyflow/react';
 import { TOOL_CATALOG } from '../lib/toolCatalog';
 import type { ActionData, DelayData, LoopData, NotifyData, NoteData } from '../lib/automation';
 
+export interface StepTestState {
+  status: 'testing' | 'passed' | 'failed';
+  detail?: string;
+}
+
 interface Props {
   selectedNode: Node | null;
   onUpdateNode: (id: string, data: Record<string, unknown>) => void;
   onDeleteNode: (id: string) => void;
+  onTestStep?: (id: string) => void;
+  testState?: StepTestState;
 }
 
-export default function AutomationInspector({ selectedNode, onUpdateNode, onDeleteNode }: Props) {
+export default function AutomationInspector({ selectedNode, onUpdateNode, onDeleteNode, onTestStep, testState }: Props) {
   if (!selectedNode) {
     return <div className="text-xs text-white/40 italic">Click a step on the canvas to configure it</div>;
   }
 
   const { id, type, data } = selectedNode;
+  const testable = type === 'action' || type === 'notify';
 
   return (
     <div className="rounded-xl border border-purple-600/30 bg-slate-900/50 p-4 space-y-3">
@@ -23,6 +31,31 @@ export default function AutomationInspector({ selectedNode, onUpdateNode, onDele
       {type === 'loop' && <LoopInspector id={id} data={data as LoopData} onUpdate={onUpdateNode} />}
       {type === 'notify' && <NotifyInspector id={id} data={data as NotifyData} onUpdate={onUpdateNode} />}
       {type === 'note' && <NoteInspector id={id} data={data as NoteData} onUpdate={onUpdateNode} />}
+
+      {testable && onTestStep && (
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => onTestStep(id)}
+            disabled={testState?.status === 'testing'}
+            className="w-full rounded-lg border border-sky-500/40 bg-sky-500/15 px-3 py-1.5 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/25 disabled:opacity-50 transition-colors"
+            title="Run just this step, for real"
+          >
+            {testState?.status === 'testing' ? 'Testing…' : '✓ Test this step'}
+          </button>
+          {testState && testState.status !== 'testing' && (
+            <div className={`mt-2 rounded border px-2 py-1.5 text-[10px] ${
+              testState.status === 'passed'
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                : 'border-rose-500/30 bg-rose-500/10 text-rose-300'
+            }`}>
+              <span className="font-semibold uppercase">{testState.status}</span>
+              {testState.detail ? ` — ${testState.detail}` : ''}
+            </div>
+          )}
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => onDeleteNode(id)}
@@ -129,7 +162,17 @@ function NotifyInspector({ id, data, onUpdate }: { id: string; data: NotifyData;
         <option value="chat">chat</option>
         <option value="webhook">webhook</option>
       </select>
-      <FieldLabel label="MESSAGE" />
+      {data.channel === 'email' && (
+        <>
+          <FieldLabel label="TO" />
+          <FieldInput value={data.to || ''} onChange={(v) => onUpdate(id, { ...data, to: v })} />
+          <FieldLabel label="SUBJECT" />
+          <FieldInput value={data.subject || ''} onChange={(v) => onUpdate(id, { ...data, subject: v })} />
+          <FieldLabel label="FROM" />
+          <FieldInput value={data.fromEmail || 'noreply@vegr.ai'} onChange={(v) => onUpdate(id, { ...data, fromEmail: v })} />
+        </>
+      )}
+      <FieldLabel label={data.channel === 'email' ? 'BODY' : 'MESSAGE'} />
       <textarea
         value={data.message}
         onChange={(e) => onUpdate(id, { ...data, message: e.target.value })}

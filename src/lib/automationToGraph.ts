@@ -84,6 +84,23 @@ export function specToReactFlow(spec: AutomationSpec): { nodes: Node[]; edges: E
   return { nodes, edges };
 }
 
+/** Test ONE step in isolation, for real (Zapier-style). Returns the step result. */
+export async function testStep(
+  graphId: string,
+  stepId: string,
+  userId: string,
+): Promise<{ success: boolean; step: RunStep | null; error?: string }> {
+  const res = await fetch(`${AGENT_API}/automation/run`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graphId, stepId, userId }),
+  });
+  const data = (await res.json()) as { success: boolean; step: RunStep | null; error?: string };
+  if (!res.ok && !data.step) throw new Error(data.error || `Test failed: ${res.status}`);
+  return data;
+}
+
 /** Execute an automation on the worker. dryRun (default) simulates action steps. */
 export async function runAutomation(
   graphId: string,
@@ -135,14 +152,17 @@ export function reactFlowToAutomationGraph(
     const data = n.data as StepData;
     const label = (data as { label?: string }).label
       || (stepType === 'note' ? 'Note' : stepType.charAt(0).toUpperCase() + stepType.slice(1));
+    // Drop transient UI-only fields (e.g. _test badge state) so they never persist.
+    const config = Object.fromEntries(
+      Object.entries(data as Record<string, unknown>).filter(([k]) => !k.startsWith('_'))
+    );
     return {
       id: n.id,
       label,
       type: 'automation-step',
       info: stepSummary(stepType, data),
       position: n.position,
-      // config = the full node data (authoritative machine config for a future runner)
-      metadata: { stepType, config: data as Record<string, unknown> },
+      metadata: { stepType, config },
     } as KgNode & { visible: boolean };
   });
 

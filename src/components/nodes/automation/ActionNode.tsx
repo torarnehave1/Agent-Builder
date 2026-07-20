@@ -1,10 +1,12 @@
 import { Handle, Position } from '@xyflow/react';
 import type { ActionData } from '../../../lib/automation';
+import TestBadge from './TestBadge';
 
-export default function ActionNode({ data }: { data: ActionData }) {
+export default function ActionNode({ data }: { data: ActionData & { _test?: string } }) {
   const paramCount = data.params ? Object.keys(data.params).length : 0;
   return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 min-w-[150px] backdrop-blur-sm">
+    <div className="relative rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 min-w-[150px] backdrop-blur-sm">
+      <TestBadge status={data._test} />
       <Handle type="target" position={Position.Top} className="!bg-amber-400 !w-1.5 !h-1.5" />
       <div className="text-[9px] uppercase tracking-wide text-amber-500/70">Action</div>
       <div className="text-[12px] text-amber-200 truncate">{data.label || 'Action'}</div>

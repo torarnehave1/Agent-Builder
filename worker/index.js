@@ -15,7 +15,7 @@ import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
-import { runAutomation } from './automation-runner.js'
+import { runAutomation, runSingleStep } from './automation-runner.js'
 import { buildAutomationSpec } from './automation-builder.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
@@ -2051,6 +2051,16 @@ export default {
           // OpenAPI/registry tools need an operationMap; built-ins ignore it.
           let operationMap = {}
           try { operationMap = (await loadOpenAPITools(env)).operationMap } catch { /* built-ins still work */ }
+
+          // Single-step "Test" path: run just one step, for real. No history node.
+          if (body.stepId) {
+            const single = await runSingleStep(graph, body.stepId, {
+              userId: effectiveUserId, authContext, env, operationMap,
+            })
+            return new Response(JSON.stringify(single), {
+              status: single.step ? 200 : 404, headers: corsHeaders
+            })
+          }
 
           const run = await runAutomation(graph, {
             dryRun,

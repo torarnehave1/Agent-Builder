@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider, type Node, type Edge, type NodeTypes } from '@xyflow/react';
 import ContractCanvas from './ContractCanvas';
 import AutomationNodePalette from './AutomationNodePalette';
-import AutomationInspector from './AutomationInspector';
+import AutomationInspector, { type StepTestState } from './AutomationInspector';
 import StartNode from './nodes/automation/StartNode';
 import ActionNode from './nodes/automation/ActionNode';
 import DelayNode from './nodes/automation/DelayNode';
@@ -22,6 +22,7 @@ import {
   runAutomation,
   buildAutomation,
   specToReactFlow,
+  testStep,
   type AutomationSummary,
   type RunResult,
 } from '../lib/automationToGraph';
@@ -65,6 +66,7 @@ export default function AutomationTab({ userEmail }: Props) {
   const [runResult, setRunResult] = useState<RunResult | null>(null);
   const [describePrompt, setDescribePrompt] = useState('');
   const [building, setBuilding] = useState(false);
+  const [testStates, setTestStates] = useState<Record<string, StepTestState>>({});
 
   // Latest nodes, read (not subscribed) by add handlers so we don't nest setState.
   const nodesRef = useRef(nodes);
@@ -105,6 +107,7 @@ export default function AutomationTab({ userEmail }: Props) {
     setNodes(seedNodes());
     setEdges([]);
     setSelectedNode(null);
+    setTestStates({});
     setAutomationId(null);
     setTitle('Untitled automation');
     setDescription('');
@@ -151,6 +154,26 @@ export default function AutomationTab({ userEmail }: Props) {
     }
   }, [automationId, nodes, edges, title, description, userEmail, runForReal]);
 
+  const handleTestStep = useCallback(async (nodeId: string) => {
+    setTestStates((prev) => ({ ...prev, [nodeId]: { status: 'testing' } }));
+    try {
+      // Persist current canvas so the test runs the on-screen config.
+      const id = automationId || crypto.randomUUID();
+      await saveAutomation(id, nodesRef.current, edges, { title, description, createdBy: userEmail });
+      setAutomationId(id);
+      const { step, success } = await testStep(id, nodeId, userEmail);
+      setTestStates((prev) => ({
+        ...prev,
+        [nodeId]: { status: success ? 'passed' : 'failed', detail: step?.detail },
+      }));
+    } catch (err) {
+      setTestStates((prev) => ({
+        ...prev,
+        [nodeId]: { status: 'failed', detail: err instanceof Error ? err.message : 'Test failed' },
+      }));
+    }
+  }, [automationId, edges, title, description, userEmail]);
+
   const handleBuild = useCallback(async () => {
     const prompt = describePrompt.trim();
     if (!prompt) return;
@@ -164,6 +187,7 @@ export default function AutomationTab({ userEmail }: Props) {
       setNodes(builtNodes.length ? builtNodes : seedNodes());
       setEdges(builtEdges);
       setSelectedNode(null);
+      setTestStates({});
       setAutomationId(null); // a fresh draft; Save mints a new id
       if (spec.title) setTitle(spec.title);
       if (spec.description) setDescription(spec.description);
@@ -195,6 +219,7 @@ export default function AutomationTab({ userEmail }: Props) {
       setNodes(loaded.nodes.length ? loaded.nodes : seedNodes());
       setEdges(loaded.edges);
       setSelectedNode(null);
+      setTestStates({});
       setAutomationId(id);
       setTitle(loaded.meta.title);
       setDescription(loaded.meta.description || '');
@@ -205,6 +230,12 @@ export default function AutomationTab({ userEmail }: Props) {
   }, []);
 
   const nodeTypes = useMemo(() => AUTOMATION_NODE_TYPES, []);
+
+  // Inject transient test-badge status into node data for rendering (stripped on save).
+  const displayNodes = useMemo(
+    () => nodes.map((n) => ({ ...n, data: { ...n.data, _test: testStates[n.id]?.status } })),
+    [nodes, testStates]
+  );
 
   return (
     <div className="flex flex-1 min-h-0">
@@ -299,7 +330,7 @@ export default function AutomationTab({ userEmail }: Props) {
         <ReactFlowProvider>
           <div className="flex flex-1 min-h-0 relative">
             <ContractCanvas
-              initialNodes={nodes}
+              initialNodes={displayNodes}
               initialEdges={edges}
               nodeTypes={nodeTypes}
               minimapNodeColor={minimapColor}
@@ -327,6 +358,8 @@ export default function AutomationTab({ userEmail }: Props) {
               selectedNode={selectedNode}
               onUpdateNode={handleUpdateNode}
               onDeleteNode={handleDeleteNode}
+              onTestStep={handleTestStep}
+              testState={selectedNode ? testStates[selectedNode.id] : undefined}
             />
           </section>
           <div className="border-t border-white/8" />

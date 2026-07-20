@@ -13,7 +13,7 @@ const STEP_VOCAB = `Step types and their "config" shape:
 - action  → config: { toolName, params }                 (toolName MUST be one of the AVAILABLE TOOLS below; params is a best-effort object of that tool's arguments)
 - delay   → config: { amount: number, unit: "seconds"|"minutes"|"hours" }
 - loop    → config: { times: number, over?: string }     (repeats its downstream steps)
-- notify  → config: { channel: "email"|"chat"|"webhook", message: string }
+- notify  → config: { channel: "email"|"chat"|"webhook", message: string, to?: string, subject?: string, fromEmail?: string }  (for channel "email": set "to" to the recipient address if the description names one, a short "subject", and leave fromEmail unset to default to noreply@vegr.ai)
 - note    → config: { text: string }                     (documentation only, not executed)`
 
 /**

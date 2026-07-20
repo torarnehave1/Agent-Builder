@@ -18,7 +18,7 @@ export interface StartData { label: string; [key: string]: unknown }
 export interface ActionData { label: string; toolName: string; params: Record<string, unknown>; [key: string]: unknown }
 export interface DelayData { label: string; amount: number; unit: 'seconds' | 'minutes' | 'hours'; [key: string]: unknown }
 export interface LoopData { label: string; over: string; times: number; [key: string]: unknown }
-export interface NotifyData { label: string; channel: string; message: string; [key: string]: unknown }
+export interface NotifyData { label: string; channel: string; message: string; to?: string; subject?: string; fromEmail?: string; [key: string]: unknown }
 export interface NoteData { text: string; [key: string]: unknown }
 
 export type StepData = StartData | ActionData | DelayData | LoopData | NotifyData | NoteData;
@@ -76,7 +76,7 @@ export function createAutomationNode(
     case 'loop':
       return { id, type: 'loop', position, data: { label: 'Loop', over: '', times: 3 } satisfies LoopData };
     case 'notify':
-      return { id, type: 'notify', position, data: { label: 'Notify', channel: 'email', message: '' } satisfies NotifyData };
+      return { id, type: 'notify', position, data: { label: 'Notify', channel: 'email', message: '', to: '', subject: '', fromEmail: 'noreply@vegr.ai' } satisfies NotifyData };
     case 'note':
       return { id, type: 'note', position, data: { text: 'Note…' } satisfies NoteData };
     default:
@@ -104,7 +104,8 @@ export function stepSummary(stepType: StepType, data: StepData): string {
     }
     case 'notify': {
       const d = data as NotifyData;
-      return `Notify via ${d.channel}: ${d.message}`;
+      const target = d.channel === 'email' && d.to ? ` → ${d.to}` : '';
+      return `Notify via ${d.channel}${target}: ${d.message}`;
     }
     case 'note':
       return (data as NoteData).text || 'Note';
