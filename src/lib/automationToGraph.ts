@@ -1,0 +1,173 @@
+/**
+ * Convert an automation canvas (React Flow nodes/edges) ↔ a Knowledge Graph.
+ * "The automation IS the graph" — one KG graph per automation.
+ *
+ * KG graph shape follows the app-wide convention used by saveGraphWithHistory:
+ *   { id, graphData: { nodes, edges, metadata }, override: true }
+ * Each React Flow node → a KG node of type 'automation-step' whose machine-config lives in
+ * metadata.config, mirroring the email-template / data-node precedent for typed app nodes.
+ */
+import type { Node, Edge } from '@xyflow/react';
+import type { StepData, StepType } from './automation';
+import { stepSummary } from './automation';
+
+export const KG_API = 'https://knowledge.vegvisr.org';
+export const AUTOMATION_META_AREA = '#automation';
+
+const EDGE_STYLE = { stroke: 'rgba(124,58,237,0.4)', strokeWidth: 1.5 };
+
+export interface AutomationMeta {
+  title: string;
+  description?: string;
+  createdBy?: string;
+  version?: number;
+}
+
+// Minimal shape of a KG node/edge we read back from getknowgraph.
+interface KgNode {
+  id: string;
+  label?: string;
+  type?: string;
+  info?: string;
+  position?: { x: number; y: number };
+  metadata?: { stepType?: StepType; config?: Record<string, unknown> } | null;
+}
+interface KgEdge { id?: string; source: string; target: string; label?: string }
+interface KgGraphData { nodes: KgNode[]; edges: KgEdge[]; metadata?: Record<string, unknown> }
+
+/**
+ * React Flow → KG graphData (ready to POST to saveGraphWithHistory as `graphData`).
+ */
+export function reactFlowToAutomationGraph(
+  nodes: Node[],
+  edges: Edge[],
+  meta: AutomationMeta,
+): KgGraphData {
+  const kgNodes: KgNode[] = nodes.map((n) => {
+    const stepType = (n.type || 'note') as StepType;
+    const data = n.data as StepData;
+    const label = (data as { label?: string }).label
+      || (stepType === 'note' ? 'Note' : stepType.charAt(0).toUpperCase() + stepType.slice(1));
+    return {
+      id: n.id,
+      label,
+      type: 'automation-step',
+      info: stepSummary(stepType, data),
+      position: n.position,
+      // config = the full node data (authoritative machine config for a future runner)
+      metadata: { stepType, config: data as Record<string, unknown> },
+    } as KgNode & { visible: boolean };
+  });
+
+  const kgEdges: KgEdge[] = edges.map((e) => ({
+    id: e.id || `${e.source}_${e.target}`,
+    source: e.source,
+    target: e.target,
+    label: (e.label as string) || 'next',
+  }));
+
+  return {
+    nodes: kgNodes,
+    edges: kgEdges,
+    metadata: {
+      title: meta.title,
+      description: meta.description || '',
+      category: 'Automation',
+      metaArea: AUTOMATION_META_AREA,
+      createdBy: meta.createdBy || '',
+      version: meta.version ?? 0,
+    },
+  };
+}
+
+/**
+ * KG graphData → React Flow. Restores nodes (with position + config) and edges.
+ */
+export function automationToReactFlow(graphData: KgGraphData): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = (graphData.nodes || []).map((kn) => {
+    const stepType = (kn.metadata?.stepType || 'note') as StepType;
+    const config = kn.metadata?.config || {};
+    return {
+      id: kn.id,
+      type: stepType,
+      position: kn.position || { x: 0, y: 0 },
+      data: config as Record<string, unknown>,
+    };
+  });
+
+  const edges: Edge[] = (graphData.edges || []).map((ke) => ({
+    id: ke.id || `${ke.source}_${ke.target}`,
+    source: ke.source,
+    target: ke.target,
+    label: ke.label && ke.label !== 'next' ? ke.label : undefined,
+    style: EDGE_STYLE,
+    animated: true,
+  }));
+
+  return { nodes, edges };
+}
+
+/** Persist an automation. New automations pass a fresh UUID as `id`. */
+export async function saveAutomation(
+  id: string,
+  nodes: Node[],
+  edges: Edge[],
+  meta: AutomationMeta,
+): Promise<{ id: string; newVersion?: number }> {
+  const graphData = reactFlowToAutomationGraph(nodes, edges, meta);
+  const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+    body: JSON.stringify({ id, graphData, override: true }),
+  });
+  if (!res.ok) throw new Error(`Save failed: ${res.status} ${await res.text()}`);
+  const data = (await res.json()) as { id?: string; newVersion?: number };
+  return { id: data.id || id, newVersion: data.newVersion };
+}
+
+/** Load an automation graph and map it back onto the canvas. */
+export async function loadAutomation(
+  id: string,
+): Promise<{ nodes: Node[]; edges: Edge[]; meta: AutomationMeta }> {
+  const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(id)}`, {
+    headers: { 'x-user-role': 'Superadmin' },
+  });
+  if (!res.ok) throw new Error(`Load failed: ${res.status}`);
+  const graph = (await res.json()) as KgGraphData;
+  const { nodes, edges } = automationToReactFlow(graph);
+  const m = graph.metadata || {};
+  return {
+    nodes,
+    edges,
+    meta: {
+      title: (m.title as string) || 'Untitled automation',
+      description: (m.description as string) || '',
+      version: (m.version as number) ?? 0,
+    },
+  };
+}
+
+export interface AutomationSummary {
+  id: string;
+  title: string;
+  description: string;
+  updated?: string;
+}
+
+/**
+ * List saved automations via server-side metaArea filter (never client-filter — project rule).
+ */
+export async function listAutomations(): Promise<AutomationSummary[]> {
+  const params = new URLSearchParams({ offset: '0', limit: '100', metaArea: 'automation' });
+  const res = await fetch(`${KG_API}/getknowgraphsummaries?${params}`, {
+    headers: { 'x-user-role': 'Superadmin' },
+  });
+  if (!res.ok) throw new Error(`List failed: ${res.status}`);
+  const data = (await res.json()) as { results?: Array<{ id: string; metadata?: Record<string, unknown> }> };
+  return (data.results || []).map((g) => ({
+    id: g.id,
+    title: (g.metadata?.title as string) || g.id,
+    description: (g.metadata?.description as string) || '',
+    updated: (g.metadata?.updatedAt as string) || undefined,
+  }));
+}

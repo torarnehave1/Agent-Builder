@@ -9,9 +9,10 @@ import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel, isWorkersAIModel } from './ModelSettings';
 import UsageDashboard from './UsageDashboard';
 import WorkContextTab, { type WorkContext } from './WorkContextTab';
+import AutomationTab from './AutomationTab';
 import type { ResolvedTheme, ThemeMode } from '../lib/theme';
 
-type View = 'context' | 'chat' | 'graphs' | 'data' | 'agents' | 'settings' | 'usage';
+type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'usage';
 
 interface Props {
   userId: string;
@@ -61,7 +62,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['context', 'chat', 'graphs', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
+            {(['context', 'chat', 'graphs', 'automation', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -82,6 +83,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                       )}
                     </>
                   )
+                  : tab === 'automation' ? 'Automation'
                   : tab === 'agents' ? 'Agents'
                   : tab === 'data' ? 'Data'
                   : tab === 'usage' ? 'Usage'
@@ -190,6 +192,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           onSelectAgent={setEditingAgentId}
         />
       )}
+      {view === 'automation' && <AutomationTab userEmail={userEmail} />}
       {view === 'data' && <DataExplorer />}
       {view === 'usage' && <UsageDashboard userId={userId} />}
       {view === 'settings' && (

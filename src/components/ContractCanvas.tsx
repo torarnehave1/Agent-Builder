@@ -33,6 +33,33 @@ interface Props {
   onNodeDragStop?: () => void;
   onDropNode?: (type: string, position: { x: number; y: number }) => void;
   onDeleteNodes?: (nodes: Node[]) => void;
+  // Optional overrides so this canvas can host other node vocabularies (e.g. automations).
+  // Defaults preserve the original contract-editor behaviour.
+  nodeTypes?: NodeTypes;
+  minimapNodeColor?: (node: Node) => string;
+}
+
+const CONTRACT_NODE_TYPES: NodeTypes = {
+  contractRoot: ContractRootNode,
+  category: CategoryNode,
+  token: TokenNode,
+  toggle: ToggleNode,
+  section: SectionNode,
+  tool: ToolNode,
+  template: TemplateNode,
+};
+
+function contractMinimapColor(node: Node): string {
+  switch (node.type) {
+    case 'contractRoot': return '#7c3aed';
+    case 'category': return '#3b82f6';
+    case 'token': return '#60a5fa';
+    case 'toggle': return '#22c55e';
+    case 'section': return '#3b82f6';
+    case 'tool': return '#f59e0b';
+    case 'template': return '#f43f5e';
+    default: return '#6b7280';
+  }
 }
 
 export default function ContractCanvas({
@@ -44,6 +71,8 @@ export default function ContractCanvas({
   onNodeDragStop,
   onDropNode,
   onDeleteNodes,
+  nodeTypes: nodeTypesProp,
+  minimapNodeColor,
 }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -51,6 +80,13 @@ export default function ContractCanvas({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const onDropNodeRef = useRef(onDropNode);
   onDropNodeRef.current = onDropNode;
+  // Latest committed nodes/edges, so we can notify the parent WITHOUT calling the
+  // parent's setState from inside our own state updater (which React flags as a
+  // "setState while rendering another component" error). Assigned during render.
+  const nodesRef = useRef(nodes);
+  nodesRef.current = nodes;
+  const edgesRef = useRef(edges);
+  edgesRef.current = edges;
 
   // Sync when parent adds/removes nodes (e.g. drop from palette, contract change)
   useEffect(() => {
@@ -91,26 +127,21 @@ export default function ContractCanvas({
     };
   }, [screenToFlowPosition]);
 
-  const nodeTypes: NodeTypes = useMemo(() => ({
-    contractRoot: ContractRootNode,
-    category: CategoryNode,
-    token: TokenNode,
-    toggle: ToggleNode,
-    section: SectionNode,
-    tool: ToolNode,
-    template: TemplateNode,
-  }), []);
+  const nodeTypes: NodeTypes = useMemo(
+    () => nodeTypesProp ?? CONTRACT_NODE_TYPES,
+    [nodeTypesProp]
+  );
 
   const onConnect: OnConnect = useCallback(
     (params) => {
-      setEdges((eds) => {
-        const newEdges = addEdge(
+      setEdges((eds) =>
+        addEdge(
           { ...params, style: { stroke: 'rgba(124,58,237,0.4)', strokeWidth: 1.5 }, animated: true },
           eds
-        );
-        onEdgesChangeCallback(newEdges);
-        return newEdges;
-      });
+        )
+      );
+      // Notify the parent after the commit, from the latest edges ref.
+      requestAnimationFrame(() => onEdgesChangeCallback(edgesRef.current));
     },
     [setEdges, onEdgesChangeCallback]
   );
@@ -126,20 +157,14 @@ export default function ContractCanvas({
     onNodeSelect(null);
   }, [onNodeSelect]);
 
-  // Sync nodes/edges to parent on every change
+  // Sync nodes to parent on every change. Notify AFTER the commit via a ref, so we
+  // never call the parent's setState from inside a state updater (React warns on that).
   const handleNodesChange = useCallback(
     (changes: Parameters<typeof onNodesChange>[0]) => {
       onNodesChange(changes);
-      // We need to pass the latest nodes after the change
-      // React Flow's setNodes is async, so we schedule it
-      setTimeout(() => {
-        setNodes((current) => {
-          onNodesChangeCallback(current);
-          return current;
-        });
-      }, 0);
+      requestAnimationFrame(() => onNodesChangeCallback(nodesRef.current));
     },
-    [onNodesChange, setNodes, onNodesChangeCallback]
+    [onNodesChange, onNodesChangeCallback]
   );
 
   return (
@@ -177,18 +202,7 @@ export default function ContractCanvas({
           className="!bg-slate-900/80 !border-white/10 !rounded-lg [&>button]:!bg-slate-800 [&>button]:!border-white/10 [&>button]:!text-white/60 [&>button:hover]:!bg-slate-700"
         />
         <MiniMap
-          nodeColor={(node) => {
-            switch (node.type) {
-              case 'contractRoot': return '#7c3aed';
-              case 'category': return '#3b82f6';
-              case 'token': return '#60a5fa';
-              case 'toggle': return '#22c55e';
-              case 'section': return '#3b82f6';
-              case 'tool': return '#f59e0b';
-              case 'template': return '#f43f5e';
-              default: return '#6b7280';
-            }
-          }}
+          nodeColor={minimapNodeColor ?? contractMinimapColor}
           maskColor="rgba(0,0,0,0.7)"
           className="!bg-slate-900/80 !border-white/10 !rounded-lg"
         />
