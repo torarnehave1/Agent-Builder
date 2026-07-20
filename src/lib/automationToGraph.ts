@@ -34,6 +34,56 @@ export interface RunResult {
   error?: string;
 }
 
+export interface AutomationSpecStep {
+  id: string;
+  stepType: string;
+  label: string;
+  config: Record<string, unknown>;
+  position?: { x: number; y: number };
+}
+export interface AutomationSpec {
+  title: string;
+  description: string;
+  steps: AutomationSpecStep[];
+  edges: Array<{ source: string; target: string }>;
+  error?: string;
+}
+
+/** NL → automation spec via the worker (agent authors it; nothing runs). */
+export async function buildAutomation(
+  prompt: string,
+  userId: string,
+  tools: Array<{ name: string; description: string }>,
+): Promise<AutomationSpec> {
+  const res = await fetch(`${AGENT_API}/automation/build`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, userId, tools }),
+  });
+  const data = (await res.json()) as AutomationSpec;
+  if (!res.ok) throw new Error(data.error || `Build failed: ${res.status}`);
+  return data;
+}
+
+/** Map a built spec onto React Flow nodes/edges for the canvas. */
+export function specToReactFlow(spec: AutomationSpec): { nodes: Node[]; edges: Edge[] } {
+  const nodes: Node[] = (spec.steps || []).map((s, i) => ({
+    id: s.id,
+    type: s.stepType,
+    position: s.position || { x: 320, y: 80 + i * 150 },
+    data: { ...(s.config || {}), label: s.label },
+  }));
+  const edges: Edge[] = (spec.edges || []).map((e) => ({
+    id: `${e.source}_${e.target}`,
+    source: e.source,
+    target: e.target,
+    style: EDGE_STYLE,
+    animated: true,
+  }));
+  return { nodes, edges };
+}
+
 /** Execute an automation on the worker. dryRun (default) simulates action steps. */
 export async function runAutomation(
   graphId: string,

@@ -14,11 +14,14 @@ import {
   STEP_COLORS,
   type StepType,
 } from '../lib/automation';
+import { TOOL_CATALOG } from '../lib/toolCatalog';
 import {
   saveAutomation,
   loadAutomation,
   listAutomations,
   runAutomation,
+  buildAutomation,
+  specToReactFlow,
   type AutomationSummary,
   type RunResult,
 } from '../lib/automationToGraph';
@@ -60,6 +63,8 @@ export default function AutomationTab({ userEmail }: Props) {
   const [runForReal, setRunForReal] = useState(false);
   const [running, setRunning] = useState(false);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [describePrompt, setDescribePrompt] = useState('');
+  const [building, setBuilding] = useState(false);
 
   // Latest nodes, read (not subscribed) by add handlers so we don't nest setState.
   const nodesRef = useRef(nodes);
@@ -145,6 +150,30 @@ export default function AutomationTab({ userEmail }: Props) {
       setRunning(false);
     }
   }, [automationId, nodes, edges, title, description, userEmail, runForReal]);
+
+  const handleBuild = useCallback(async () => {
+    const prompt = describePrompt.trim();
+    if (!prompt) return;
+    setBuilding(true);
+    setStatus(null);
+    setRunResult(null);
+    try {
+      const spec = await buildAutomation(prompt, userEmail, TOOL_CATALOG);
+      const { nodes: builtNodes, edges: builtEdges } = specToReactFlow(spec);
+      // Replace the canvas with the built draft (unsaved — user refines, then Save/Run).
+      setNodes(builtNodes.length ? builtNodes : seedNodes());
+      setEdges(builtEdges);
+      setSelectedNode(null);
+      setAutomationId(null); // a fresh draft; Save mints a new id
+      if (spec.title) setTitle(spec.title);
+      if (spec.description) setDescription(spec.description);
+      setStatus(`Built ${builtNodes.length} step${builtNodes.length === 1 ? '' : 's'} — review, then Save/Run`);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Build failed');
+    } finally {
+      setBuilding(false);
+    }
+  }, [describePrompt, userEmail]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);
@@ -245,6 +274,26 @@ export default function AutomationTab({ userEmail }: Props) {
               View graph ↗
             </a>
           )}
+        </div>
+
+        {/* Describe-it bar: plain language → the agent builds the automation onto the canvas */}
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0">
+          <span className="text-[11px] text-white/40 flex-shrink-0">✨ Describe</span>
+          <input
+            value={describePrompt}
+            onChange={(e) => setDescribePrompt(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !building) handleBuild(); }}
+            placeholder="e.g. Search the web for AI news, then create a graph node summarizing it"
+            className="flex-1 rounded bg-slate-950/60 border border-white/8 px-3 py-1.5 text-[12px] text-white focus:outline-none focus:border-purple-500/50"
+          />
+          <button
+            type="button"
+            onClick={handleBuild}
+            disabled={building || !describePrompt.trim()}
+            className="rounded-md border border-purple-500/40 bg-purple-500/20 px-3 py-1.5 text-[12px] font-semibold text-purple-200 hover:bg-purple-500/30 disabled:opacity-50 flex-shrink-0"
+          >
+            {building ? 'Building…' : 'Build'}
+          </button>
         </div>
 
         <ReactFlowProvider>

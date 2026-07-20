@@ -16,6 +16,7 @@ import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { runAutomation } from './automation-runner.js'
+import { buildAutomationSpec } from './automation-builder.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
@@ -1988,6 +1989,29 @@ export default {
           }, env)
 
           return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), {
+            status: 500, headers: corsHeaders
+          })
+        }
+      }
+
+      // POST /automation/build — Turn a plain-language description into an automation spec
+      // (steps + edges) via a one-shot Claude call. Authors only; does NOT run anything.
+      // Body: { prompt, userId, tools:[{name,description}] }.
+      if (pathname === '/automation/build' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { prompt, tools } = body
+        if (!prompt || typeof prompt !== 'string') {
+          return new Response(JSON.stringify({ error: 'prompt required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+        try {
+          const authContext = await resolveAuthorizedCaller(request, env)
+          const effectiveUserId = authContext?.userId || body.userId || null
+          const spec = await buildAutomationSpec({ prompt, tools, userId: effectiveUserId, env })
+          return new Response(JSON.stringify(spec), { headers: corsHeaders })
         } catch (err) {
           return new Response(JSON.stringify({ error: err.message }), {
             status: 500, headers: corsHeaders
