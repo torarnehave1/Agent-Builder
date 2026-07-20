@@ -1,5 +1,6 @@
 import type { Node } from '@xyflow/react';
 import { TOOL_CATALOG } from '../lib/toolCatalog';
+import ActionToolPicker from './ActionToolPicker';
 import type { ActionData, DelayData, LoopData, NotifyData, NoteData } from '../lib/automation';
 
 export interface StepTestState {
@@ -73,18 +74,10 @@ function ActionInspector({ id, data, onUpdate }: { id: string; data: ActionData;
     <>
       <div className="text-sm font-bold text-white">⚙ Action</div>
       <FieldLabel label="TOOL" />
-      <select
+      <ActionToolPicker
         value={data.toolName}
-        onChange={(e) => {
-          const tool = TOOL_CATALOG.find((t) => t.name === e.target.value);
-          onUpdate(id, { ...data, toolName: e.target.value, label: tool?.displayName || e.target.value });
-        }}
-        className="w-full rounded bg-slate-950/60 border border-white/8 px-2 py-1.5 text-[11px] text-white focus:outline-none focus:border-purple-500/50"
-      >
-        {TOOL_CATALOG.map((t) => (
-          <option key={t.name} value={t.name}>{t.displayName}</option>
-        ))}
-      </select>
+        onChange={(toolName, displayName) => onUpdate(id, { ...data, toolName, label: displayName })}
+      />
       <div className="text-[10px] text-gray-500">{TOOL_CATALOG.find((t) => t.name === data.toolName)?.description}</div>
       <FieldLabel label="PARAMS (JSON)" />
       <RefHint />
