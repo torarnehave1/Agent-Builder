@@ -75,7 +75,7 @@ const MODELS = [
   {
     id: 'openai/gpt-5.6-sol',
     name: 'GPT-5.6 Sol',
-    description: 'OpenAI flagship tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    description: 'OpenAI flagship tier. AgentChat supports an expanded curated toolbox for graphs, HTML, media, data, calendar, email, subagents, and capability workers.',
     inputCost: 0,
     outputCost: 0,
     badge: 'OpenAI',
@@ -84,7 +84,7 @@ const MODELS = [
   {
     id: 'openai/gpt-5.6-terra',
     name: 'GPT-5.6 Terra',
-    description: 'OpenAI balanced tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    description: 'OpenAI balanced tier. AgentChat supports an expanded curated toolbox for graphs, HTML, media, data, calendar, email, subagents, and capability workers.',
     inputCost: 0,
     outputCost: 0,
     badge: 'OpenAI',
@@ -93,7 +93,7 @@ const MODELS = [
   {
     id: 'openai/gpt-5.6-luna',
     name: 'GPT-5.6 Luna',
-    description: 'OpenAI fast/lower-cost tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    description: 'OpenAI fast/lower-cost tier. AgentChat supports an expanded curated toolbox for graphs, HTML, media, data, calendar, email, subagents, and capability workers.',
     inputCost: 0,
     outputCost: 0,
     badge: 'OpenAI',

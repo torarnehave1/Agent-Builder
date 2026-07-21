@@ -99,7 +99,58 @@ function calculateCost(model, inputTokens, outputTokens) {
 }
 
 const OPENAI_MODEL_PREFIX = 'openai/'
-const OPENAI_AGENT_TOOLS = new Set(['read_graph', 'read_node', 'list_graphs', 'generate_with_ai'])
+const OPENAI_AGENT_TOOL_NAMES = [
+  // Knowledge graph core
+  'read_graph', 'read_graph_content', 'read_node', 'list_graphs', 'list_meta_areas', 'search_graphs',
+  'create_graph', 'create_node', 'create_html_node', 'create_html_from_template',
+  'patch_node', 'patch_graph_metadata', 'add_edge', 'reorder_nodes',
+  // References and HTML node work
+  'get_contract', 'get_formatting_reference', 'get_node_types_reference',
+  'get_html_builder_reference', 'get_vemotion_reference', 'get_carousel_reference',
+  'read_html_section', 'read_html_head', 'list_html_anchors',
+  'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
+  'publish_html_node', 'list_graph_versions', 'get_graph_version',
+  'restore_graph_version', 'restore_html_node_version',
+  // Search, media, albums, photos
+  'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash', 'analyze_image',
+  'get_album_images', 'photos_list', 'photos_upload_from_url',
+  'album_list', 'album_get', 'album_create_or_update', 'album_add_images',
+  'album_remove_images', 'album_publish',
+  // Audio, analysis, generation
+  'transcribe_audio', 'list_recordings', 'analyze_transcription',
+  'upload_audio', 'upload_portfolio_recording',
+  'analyze_node', 'analyze_graph', 'generate_with_ai', 'generate_image',
+  // Vemotion
+  'vemotion_list_compositions', 'vemotion_get_composition', 'vemotion_save_composition',
+  'vemotion_refit_composition', 'vemotion_generate_structure', 'vemotion_create_carousel',
+  // Data/app tables
+  'query_data_nodes', 'get_app_table_schema', 'query_app_table',
+  'create_app_table', 'insert_app_record', 'delete_app_records', 'add_app_table_column',
+  // Identity, discovery, components, capability workers
+  'who_am_i', 'onboarding_status', 'describe_capabilities', 'get_system_registry',
+  'list_components', 'get_component', 'list_layouts', 'get_layout',
+  'get_secure_worker_template', 'create_capability_blueprint',
+  'build_capability_worker_scaffold', 'deploy_worker', 'register_deployed_worker',
+  'register_capability_worker', 'read_worker', 'delete_worker', 'invoke_registry_worker',
+  // Calendar and email
+  'calendar_get_settings', 'calendar_check_availability', 'calendar_list_bookings',
+  'calendar_create_booking', 'calendar_reschedule_booking', 'calendar_delete_booking',
+  'calendar_get_status',
+  'list_email_accounts', 'send_email', 'add_email_account', 'set_email_password',
+  'add_email_destination',
+  // Challenges
+  'list_challenge_templates', 'create_challenge', 'list_challenge_participants',
+  'get_participant_graph', 'publish_challenge_page',
+  // Subagents
+  'delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_albums', 'delegate_to_video',
+  'delegate_to_youtube_graph', 'delegate_to_contact', 'delegate_to_chat',
+  'delegate_to_bot', 'delegate_to_agent_builder',
+  // Norwegian business registry
+  'proff_search_companies', 'proff_get_financials', 'proff_get_company_details',
+  'proff_get_public_company_info', 'proff_search_persons', 'proff_get_person_details',
+  'proff_find_business_network',
+]
+const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
 
 function isOpenAIModel(model) {
   return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
@@ -438,13 +489,55 @@ function hasGraphWriteCompletion(messages) {
   return countGraphWriteCompletions(messages) > 0
 }
 
+function sanitizeOpenAIJsonSchema(schema, depth = 0) {
+  if (!schema || typeof schema !== 'object') return { type: 'object', properties: {} }
+  if (Array.isArray(schema)) return schema.map((item) => sanitizeOpenAIJsonSchema(item, depth + 1))
+
+  const allowedKeys = new Set([
+    'type', 'description', 'properties', 'required', 'items', 'enum',
+    'additionalProperties', 'minimum', 'maximum', 'minLength', 'maxLength',
+    'minItems', 'maxItems',
+  ])
+  const out = {}
+  for (const [key, value] of Object.entries(schema)) {
+    if (value === undefined) continue
+    if (!allowedKeys.has(key)) continue
+    if (key === 'properties' && value && typeof value === 'object' && !Array.isArray(value)) {
+      out.properties = {}
+      for (const [propName, propSchema] of Object.entries(value)) {
+        out.properties[propName] = sanitizeOpenAIJsonSchema(propSchema, depth + 1)
+      }
+      continue
+    }
+    if (key === 'items') {
+      out.items = sanitizeOpenAIJsonSchema(value, depth + 1)
+      continue
+    }
+    if (key === 'additionalProperties' && value && typeof value === 'object') {
+      out.additionalProperties = sanitizeOpenAIJsonSchema(value, depth + 1)
+      continue
+    }
+    out[key] = value
+  }
+
+  if (depth === 0) {
+    out.type = 'object'
+    if (!out.properties || typeof out.properties !== 'object' || Array.isArray(out.properties)) out.properties = {}
+    if (Array.isArray(out.required)) {
+      const props = new Set(Object.keys(out.properties))
+      out.required = out.required.filter((name) => props.has(name))
+    }
+  }
+  return out
+}
+
 function toOpenAITool(tool) {
   return {
     type: 'function',
     function: {
       name: tool.name,
       description: tool.description || tool.name,
-      parameters: tool.input_schema || { type: 'object', properties: {} },
+      parameters: sanitizeOpenAIJsonSchema(tool.input_schema || { type: 'object', properties: {} }),
     },
   }
 }
@@ -487,16 +580,17 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
     let { allTools, operationMap } = await loadAllTools(env)
     allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
+    const openAIAllowedTools = new Set(allTools.map((tool) => tool.name))
     const openAITools = allTools.map(toOpenAITool)
 
-    const pilotPrompt =
+    const openAIToolPrompt =
       `${systemPrompt}\n\n` +
-      `## OpenAI AgentChat Pilot\n` +
-      `You are running through the OpenAI provider path. This pilot intentionally exposes only these tools: ${Array.from(OPENAI_AGENT_TOOLS).join(', ')}.\n` +
-      `If the user asks for a tool or action outside that list, explain that this OpenAI pilot cannot perform it yet and offer to switch to a Claude model for the full toolbox.`
+      `## OpenAI AgentChat Tooling\n` +
+      `You are running through the OpenAI provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
+      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this OpenAI tool list, say that this OpenAI path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.`
 
     const openAIMessages = [
-      { role: 'system', content: pilotPrompt },
+      { role: 'system', content: openAIToolPrompt },
       ...messages.map(toOpenAIMessage).filter((m) => m.content && m.content.trim()),
     ]
 
@@ -562,8 +656,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         const input = parseOpenAIToolArgs(functionCall.arguments)
         stats.toolCalls.push(toolName)
 
-        if (!OPENAI_AGENT_TOOLS.has(toolName)) {
-          const message = `The OpenAI AgentChat pilot does not expose "${toolName}" yet. Available tools: ${Array.from(OPENAI_AGENT_TOOLS).join(', ')}.`
+        if (!openAIAllowedTools.has(toolName)) {
+          const message = `The OpenAI AgentChat path did not expose "${toolName}" in this request. Available OpenAI tools include: ${Array.from(openAIAllowedTools).slice(0, 40).join(', ')}${openAIAllowedTools.size > 40 ? ', ...' : ''}.`
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
           continue
@@ -613,10 +707,31 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
           const ssePayload = { tool: toolName, success: !toolFailed, summary }
           if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
+          const capabilityPayload = buildCapabilityToolPayload(toolName, result)
+          if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
           if (result.nodeId) ssePayload.nodeId = result.nodeId
           if (result.graphId) ssePayload.graphId = result.graphId
+          if ((toolName === 'edit_html_node' || toolName === 'replace_html_section') && result.updatedHtml) {
+            ssePayload.updatedHtml = result.updatedHtml
+          }
+          if (toolName === 'set_world_email_template' && result.html) {
+            ssePayload.html = result.html
+          }
+          if (result.clientSideRequired) {
+            ssePayload.clientSideRequired = true
+            ssePayload.audioUrl = result.audioUrl
+            ssePayload.language = result.language
+            ssePayload.recordingId = result.recordingId
+            ssePayload.saveToGraph = result.saveToGraph || false
+            ssePayload.graphTitle = result.graphTitle || null
+          }
+          if (toolName === 'list_challenge_templates' && Array.isArray(result.templates)) {
+            ssePayload.templates = result.templates
+          }
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
-          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: truncateResult(result) })
+          const resultForOpenAI = { ...result }
+          delete resultForOpenAI.updatedHtml
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: truncateResult(resultForOpenAI) })
         } catch (error) {
           const toolDuration = Date.now() - toolStart
           if (env.STATS_DB) {
