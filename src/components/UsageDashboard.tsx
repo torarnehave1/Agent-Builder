@@ -37,6 +37,7 @@ const MODEL_LABELS: Record<string, string> = {
   '@cf/bytedance/stable-diffusion-xl-lightning': 'SDXL Lightning',
   '@cf/leonardo/lucid-origin': 'Lucid Origin',
   '@cf/meta/llama-3.1-8b-instruct': 'Llama 3.1 8B',
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast': 'Llama 3.3 70B',
   '@cf/nvidia/nemotron-3-120b-a12b': 'Nemotron-3 120B',
 };
 

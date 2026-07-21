@@ -28,6 +28,15 @@ const MODELS = [
     badgeColor: 'bg-green-600/20 text-green-300',
   },
   {
+    id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+    name: 'Llama 3.3 70B',
+    description: 'Cloudflare Workers AI. Larger Llama with strong reasoning + function calling. Free tier included, then billed per neuron.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Workers AI',
+    badgeColor: 'bg-orange-500/20 text-orange-300',
+  },
+  {
     id: 'ollama/gemma4:e2b',
     name: 'Gemma 4 2B (Edge)',
     description: 'Free, lightweight. Optimized for laptops. Lower resource usage.',
