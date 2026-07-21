@@ -167,6 +167,9 @@ Source: `vegvisr-frontend/dev-worker/index.js`
 3. **Follow existing patterns**: The codebase has working patterns for everything. Never invent new approaches.
 4. **Test with curl**: After API changes, verify with curl. Log curls in `vegvisr-frontend/cursl.md`.
 5. **Deploy only when asked**: NEVER deploy or push without the user explicitly asking.
+6. **Decision options**: When asking the user to choose between approaches, present clear options labeled `A`, `B`, `C`, and `Other` so the user can select quickly.
+7. **Suggest next steps**: After completing or reporting on work, suggest practical next steps so the user can decide what to do next.
+8. **Test in production**: Do not start local dev servers or test UI changes locally unless the user explicitly asks. The user prefers testing against deployed production surfaces. For Pages apps, push to trigger production deployment when asked; for Workers, deploy with `wrangler` when asked.
 
 ### Deployment
 - **Workers**: `cd worker && wrangler deploy` — ALL workers, including those in other repos.

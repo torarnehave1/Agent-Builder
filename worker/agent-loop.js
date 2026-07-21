@@ -75,6 +75,7 @@ const READ_ONLY_TOOLS = new Set([
  * Cache tokens cost 10% of input price — we don't distinguish here, so this is a conservative estimate.
  */
 function calculateCost(model, inputTokens, outputTokens) {
+  if (typeof model === 'string' && model.startsWith('openai/')) return 0
   const PRICES = {
     // Haiku 4.5
     'claude-haiku-4-5-20251001': { in: 0.80, out: 4.00 },
@@ -95,6 +96,19 @@ function calculateCost(model, inputTokens, outputTokens) {
   }
   const price = PRICES[model] || PRICES[MODELS.HAIKU]
   return ((inputTokens / 1_000_000) * price.in) + ((outputTokens / 1_000_000) * price.out)
+}
+
+const OPENAI_MODEL_PREFIX = 'openai/'
+const OPENAI_AGENT_TOOLS = new Set(['read_graph', 'read_node', 'list_graphs', 'generate_with_ai'])
+
+function isOpenAIModel(model) {
+  return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
+}
+
+function stripOpenAIModelPrefix(model) {
+  return String(model || '').startsWith(OPENAI_MODEL_PREFIX)
+    ? String(model).slice(OPENAI_MODEL_PREFIX.length)
+    : String(model || '')
 }
 
 /**
@@ -424,12 +438,247 @@ function hasGraphWriteCompletion(messages) {
   return countGraphWriteCompletions(messages) > 0
 }
 
+function toOpenAITool(tool) {
+  return {
+    type: 'function',
+    function: {
+      name: tool.name,
+      description: tool.description || tool.name,
+      parameters: tool.input_schema || { type: 'object', properties: {} },
+    },
+  }
+}
+
+function toOpenAIMessage(message) {
+  const content = getTextContent(message.content)
+  if (message.role === 'assistant') return { role: 'assistant', content }
+  return { role: message.role === 'user' ? 'user' : 'user', content }
+}
+
+function parseOpenAIToolArgs(raw) {
+  if (!raw) return {}
+  if (typeof raw === 'object') return raw
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
+  const maxTurns = options.maxTurns || 6
+  const selectedModel = options.model || `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
+  const openAIModel = stripOpenAIModelPrefix(selectedModel)
+  const authContext = options?.authContext || null
+  const planMode = options.mode === 'plan'
+  const startTime = Date.now()
+  const sessionId = crypto.randomUUID()
+  let turn = 0
+  const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
+
+  const log = (msg) => {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+    console.log(`[openai-agent-loop +${elapsed}s] ${msg}`)
+  }
+
+  try {
+    if (!env.OPENAI_WORKER) throw new Error('OPENAI_WORKER service binding is not configured.')
+
+    let { allTools, operationMap } = await loadAllTools(env)
+    allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
+    const openAITools = allTools.map(toOpenAITool)
+
+    const pilotPrompt =
+      `${systemPrompt}\n\n` +
+      `## OpenAI AgentChat Pilot\n` +
+      `You are running through the OpenAI provider path. This pilot intentionally exposes only these tools: ${Array.from(OPENAI_AGENT_TOOLS).join(', ')}.\n` +
+      `If the user asks for a tool or action outside that list, explain that this OpenAI pilot cannot perform it yet and offer to switch to a Claude model for the full toolbox.`
+
+    const openAIMessages = [
+      { role: 'system', content: pilotPrompt },
+      ...messages.map(toOpenAIMessage).filter((m) => m.content && m.content.trim()),
+    ]
+
+    log(`started | model=${selectedModel} providerModel=${openAIModel} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length}`)
+
+    while (turn < maxTurns) {
+      turn++
+      writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
+
+      const response = await env.OPENAI_WORKER.fetch('https://openai.vegvisr.org/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          model: openAIModel,
+          messages: openAIMessages,
+          max_completion_tokens: 4096,
+          temperature: 0.3,
+          tools: openAITools,
+          tool_choice: 'auto',
+        }),
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (data.usage) {
+        stats.inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0
+        stats.outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0
+      }
+
+      if (!response.ok) {
+        const detail = typeof data.error === 'string' ? data.error : JSON.stringify(data.error || data)
+        stats.success = false
+        stats.error = detail || 'OpenAI API error'
+        writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: `The OpenAI provider returned an error: ${stats.error}` })}\n\n`))
+        writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: stats.error })}\n\n`))
+        writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, error: true })}\n\n`))
+        break
+      }
+
+      const choice = data.choices?.[0] || {}
+      const message = choice.message || {}
+      const assistantText = typeof message.content === 'string' ? message.content : ''
+      const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : []
+
+      if (assistantText.trim()) {
+        writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: assistantText })}\n\n`))
+      }
+
+      openAIMessages.push({
+        role: 'assistant',
+        content: assistantText || null,
+        ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+      })
+
+      if (!toolCalls.length) {
+        writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn })}\n\n`))
+        break
+      }
+
+      for (const call of toolCalls) {
+        const functionCall = call.function || {}
+        const toolName = functionCall.name
+        const input = parseOpenAIToolArgs(functionCall.arguments)
+        stats.toolCalls.push(toolName)
+
+        if (!OPENAI_AGENT_TOOLS.has(toolName)) {
+          const message = `The OpenAI AgentChat pilot does not expose "${toolName}" yet. Available tools: ${Array.from(OPENAI_AGENT_TOOLS).join(', ')}.`
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
+          continue
+        }
+
+        if (planMode && !READ_ONLY_TOOLS.has(toolName)) {
+          const message = `PLAN MODE is active (read-only). The "${toolName}" tool was not executed. Present a concise plan instead.`
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: 'Blocked — Plan mode (read-only).' })}\n\n`))
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ blocked: true, planMode: true, message }) })
+          continue
+        }
+
+        const toolStart = Date.now()
+        writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolName, input })}\n\n`))
+        const onProgress = (msg) => {
+          writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ tool: toolName, message: msg })}\n\n`))
+        }
+
+        try {
+          const result = await executeTool(toolName, { ...input, userId, authContext }, env, operationMap, onProgress)
+          if (result.inputTokens) stats.inputTokens += result.inputTokens
+          if (result.outputTokens) stats.outputTokens += result.outputTokens
+
+          const toolFailed = !!(result && result.success === false)
+          const summary = (typeof result.message === 'string' && result.message.trim())
+            ? result.message
+            : (typeof result.summary === 'string' && result.summary.trim())
+              ? result.summary
+              : (toolFailed && typeof result.error === 'string' && result.error.trim())
+                ? result.error
+                : `${toolName} ${toolFailed ? 'failed' : 'completed'}`
+
+          if (env.STATS_DB) {
+            const toolDuration = Date.now() - toolStart
+            env.STATS_DB.prepare(
+              `INSERT INTO session_tools (id, session_id, tool_name, subagent, template_id, graph_id, node_id, success, duration_ms, occurred_at, model)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            ).bind(
+              crypto.randomUUID(), sessionId, toolName,
+              null, null,
+              result.graphId || input.graphId || null,
+              result.nodeId || input.nodeId || null,
+              toolFailed ? 0 : 1,
+              toolDuration, new Date().toISOString(), selectedModel,
+            ).run().catch(e => console.error('[stats] openai tool insert failed:', e.message))
+          }
+
+          const ssePayload = { tool: toolName, success: !toolFailed, summary }
+          if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
+          if (result.nodeId) ssePayload.nodeId = result.nodeId
+          if (result.graphId) ssePayload.graphId = result.graphId
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: truncateResult(result) })
+        } catch (error) {
+          const toolDuration = Date.now() - toolStart
+          if (env.STATS_DB) {
+            env.STATS_DB.prepare(
+              `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at, model)
+               VALUES (?, ?, ?, ?, 0, ?, ?, ?)`
+            ).bind(
+              crypto.randomUUID(), sessionId, toolName, null,
+              toolDuration, new Date().toISOString(), selectedModel,
+            ).run().catch(e => console.error('[stats] openai tool insert failed:', e.message))
+          }
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, error: error.message })}\n\n`))
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error.message }) })
+        }
+      }
+    }
+
+    if (turn >= maxTurns) {
+      stats.maxTurnsReached = true
+      writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
+    }
+  } catch (err) {
+    stats.success = false
+    stats.error = err.message
+    log(`FATAL ERROR: ${err.message}`)
+    writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
+  } finally {
+    const durationMs = Date.now() - startTime
+    if (env.STATS_DB) {
+      const now = new Date().toISOString()
+      await env.STATS_DB.prepare(
+        `INSERT INTO sessions (id, user_id, started_at, ended_at, duration_ms, turns, fast_path, model,
+          input_tokens, output_tokens, tool_calls, success, error, agent_id, max_turns_reached, version, version_note, cost_usd)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        sessionId, userId || 'unknown',
+        new Date(startTime).toISOString(), now, durationMs,
+        turn, selectedModel,
+        stats.inputTokens, stats.outputTokens,
+        JSON.stringify(stats.toolCalls),
+        stats.success ? 1 : 0,
+        stats.error || null,
+        options.agentId || null,
+        stats.maxTurnsReached ? 1 : 0,
+        options.version || null,
+        options.versionNote || null,
+        calculateCost(selectedModel, stats.inputTokens, stats.outputTokens),
+      ).run()
+    }
+    writer.close()
+  }
+}
+
 /**
  * Streaming agent loop — writes SSE events to a TransformStream writer
  */
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
   const model = options.model || DEFAULT_MODEL
+  if (isOpenAIModel(model)) {
+    return streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options)
+  }
   const authContext = options?.authContext || null
   const planMode = options.mode === 'plan'
   let turn = 0

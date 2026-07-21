@@ -73,6 +73,33 @@ const MODELS = [
     badgeColor: 'bg-amber-500/20 text-amber-300',
   },
   {
+    id: 'openai/gpt-5.6-sol',
+    name: 'GPT-5.6 Sol',
+    description: 'OpenAI flagship tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'OpenAI',
+    badgeColor: 'bg-teal-500/20 text-teal-300',
+  },
+  {
+    id: 'openai/gpt-5.6-terra',
+    name: 'GPT-5.6 Terra',
+    description: 'OpenAI balanced tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'OpenAI',
+    badgeColor: 'bg-teal-500/20 text-teal-300',
+  },
+  {
+    id: 'openai/gpt-5.6-luna',
+    name: 'GPT-5.6 Luna',
+    description: 'OpenAI fast/lower-cost tier. AgentChat pilot supports text plus limited tools: read_graph, read_node, list_graphs, generate_with_ai.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'OpenAI',
+    badgeColor: 'bg-teal-500/20 text-teal-300',
+  },
+  {
     id: '@cf/bytedance/stable-diffusion-xl-lightning',
     name: 'SDXL Lightning',
     description: 'Stable Diffusion XL Lightning. Every message becomes an image prompt.',
@@ -140,7 +167,7 @@ export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' 
       <div className="max-w-xl mx-auto">
         <h2 className={`text-base font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>Model</h2>
         <p className={`text-xs mb-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
-          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude models use the SSE chat path.
+          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude and OpenAI models use the SSE chat path.
         </p>
 
         <div className="flex flex-col gap-3">
@@ -168,7 +195,7 @@ export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' 
                     </span>
                   </div>
                   <span className={`text-[11px] font-mono ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
-                    {m.badge === 'Workers AI' || m.badge === 'Image Gen' ? 'Free tier / per neuron' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
+                    {m.badge === 'Workers AI' || m.badge === 'Image Gen' ? 'Free tier / per neuron' : m.badge === 'OpenAI' ? 'OpenAI billing' : m.inputCost === 0 && m.outputCost === 0 ? 'Free (local)' : `$${m.inputCost.toFixed(2)} / $${m.outputCost.toFixed(2)} per MTok`}
                   </span>
                 </div>
                 <p className={`text-xs ml-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>{m.description}</p>
