@@ -19,7 +19,7 @@
 
 import { AIChatAgent } from '@cloudflare/ai-chat'
 import { createWorkersAI } from 'workers-ai-provider'
-import { streamText, tool, jsonSchema, convertToModelMessages, pruneMessages, stepCountIs } from 'ai'
+import { streamText, tool, jsonSchema, convertToModelMessages, pruneMessages, stepCountIs, wrapLanguageModel, simulateStreamingMiddleware } from 'ai'
 import { getCurrentAgent } from 'agents'
 import { z } from 'zod'
 import { executeTool } from './tool-executors.js'
@@ -273,7 +273,14 @@ export class VegvisrAgent extends AIChatAgent {
       : await resolveAuthorizedCallerWithCredentials({ authToken: bodyAuthToken }, env).catch(() => requestAuthContext)
 
     const workersai = createWorkersAI({ binding: this.env.AI })
-    const model = workersai(modelId)
+    // Workers AI models return tool_calls only via the NON-streaming (doGenerate) path;
+    // the provider's doStream never surfaces them (tools leak as text / hallucinate). L59.
+    // simulateStreamingMiddleware makes streamText's doStream call doGenerate under the hood,
+    // so tool calls fire correctly. Trade-off: response arrives as a block, not token-by-token.
+    const model = wrapLanguageModel({
+      model: workersai(modelId),
+      middleware: simulateStreamingMiddleware(),
+    })
 
     const workersAiPrompt = `
 ## WORKERS AI TOOLING
@@ -304,6 +311,7 @@ This conversation is running on the Workers AI tool path. Use only the tools tha
         const toolCalls = (steps || []).flatMap(s => s.toolCalls || []).map(tc => tc.toolName)
         const WORKERS_AI_PRICES = {
           '@cf/nvidia/nemotron-3-120b-a12b': { in: 0.50, out: 1.50 },
+          '@cf/meta/llama-3.3-70b-instruct-fp8-fast': { in: 0.29, out: 2.25 },
         }
         const waiPrice = WORKERS_AI_PRICES[modelId]
         const inputTokens = usage?.promptTokens || 0
