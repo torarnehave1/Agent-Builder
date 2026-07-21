@@ -1269,7 +1269,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'add_email_account',
-    description: 'Add a new sender email account to the user\'s profile so it can be used by send_email. For @vegvisr.org addresses, no password is needed — the email is sent via Cloudflare Email Service automatically. For Gmail addresses, an app password is required (the user generates one at https://myaccount.google.com/apppasswords). Use this when the user asks to add, register, or configure a new From address. Dedupes by email — fails clearly if the address is already configured.',
+    description: 'Add a new sender email account to the user\'s profile so it can be used by send_email. For @vegvisr.org addresses, no password is needed — the email is sent via Cloudflare Email Service automatically. For Gmail addresses, an app password is required (the user generates one at https://myaccount.google.com/apppasswords). For a domain that lives in a DIFFERENT Cloudflare account (e.g. a customer domain onboarded for Cloudflare Email Sending in their own account), use accountType "cf-email-service" with cfAccountId + a Cloudflare API token (Email Sending: Edit) passed as appPassword. Use this when the user asks to add, register, or configure a new From address. Dedupes by email — fails clearly if the address is already configured (use set_email_password to change an existing one).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1287,12 +1287,16 @@ const TOOL_DEFINITIONS = [
         },
         accountType: {
           type: 'string',
-          enum: ['smtp', 'gmail'],
-          description: 'Sender backend. "smtp" routes through Cloudflare Email Service (vegvisr.org and any other CF-verified domain — no password needed). "gmail" routes through Gmail SMTP (requires appPassword). If omitted, defaults to "gmail" for @gmail.com addresses and "smtp" otherwise.'
+          enum: ['smtp', 'gmail', 'cf-email-service'],
+          description: 'Sender backend. "smtp" routes through the Cloudflare Email Service binding (vegvisr.org and other domains in THIS Cloudflare account — no password needed). "gmail" routes through Gmail SMTP (requires appPassword). "cf-email-service" routes through the Cloudflare Email Service REST API for a domain onboarded in a DIFFERENT Cloudflare account (requires cfAccountId + an Email Sending API token in appPassword). If omitted, defaults to "gmail" for @gmail.com addresses and "smtp" otherwise.'
+        },
+        cfAccountId: {
+          type: 'string',
+          description: 'REQUIRED for accountType "cf-email-service": the Cloudflare account id that owns the sending domain (e.g. the customer account where the domain is onboarded for Email Sending). Ignored for other account types.'
         },
         appPassword: {
           type: 'string',
-          description: 'Gmail app password. REQUIRED if accountType is "gmail". Never needed for "smtp". Stored server-side and never returned to clients.'
+          description: 'The account secret, stored server-side and never returned. For "gmail": a Gmail app password (required). For "cf-email-service": a Cloudflare API token with "Email Sending: Edit" permission on the cfAccountId account (required). Never needed for "smtp".'
         },
         forUserEmail: {
           type: 'string',
@@ -1304,17 +1308,26 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_email_password',
-    description: 'Set or update the Gmail app password on an EXISTING sender email account in the user\'s profile. Use this when the user pastes an app password for an address that is ALREADY configured (add_email_account refuses to touch an existing account; this updates it in place). Finds the account by email and stores the new app password server-side (never returned). After this, send_email from that address works.',
+    description: 'Set or update the secret (and optionally the backend) on an EXISTING sender email account in the user\'s profile. Use this when the user pastes a secret for an address that is ALREADY configured (add_email_account refuses to touch an existing account; this updates it in place). Finds the account by email and stores the new secret server-side (never returned). Can also CONVERT the sender to another backend in the same call — e.g. upgrade an "smtp" sender to "cf-email-service" by passing accountType="cf-email-service" + cfAccountId + the Cloudflare Email Sending API token as appPassword. After this, send_email from that address works.',
     input_schema: {
       type: 'object',
       properties: {
         email: {
           type: 'string',
-          description: 'The existing sender email address to set the app password on (required). E.g. "msneeggen@gmail.com".'
+          description: 'The existing sender email address to set the secret on (required). E.g. "post@universi.no".'
         },
         appPassword: {
           type: 'string',
-          description: 'The Gmail app password to store (required). Generated at https://myaccount.google.com/apppasswords. Stored server-side, never returned.'
+          description: 'The secret to store (required). For gmail: a Gmail app password (https://myaccount.google.com/apppasswords). For cf-email-service: a Cloudflare API token with "Email Sending: Edit". Stored server-side, never returned.'
+        },
+        accountType: {
+          type: 'string',
+          enum: ['smtp', 'gmail', 'cf-email-service'],
+          description: 'Optional. Change the sender backend at the same time. Omit to keep the current type. Set to "cf-email-service" to route the sender through the Cloudflare Email Service REST API (requires cfAccountId).'
+        },
+        cfAccountId: {
+          type: 'string',
+          description: 'Required when setting accountType to "cf-email-service": the Cloudflare account id that owns the sending domain.'
         },
         forUserEmail: {
           type: 'string',
@@ -1322,6 +1335,32 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['email', 'appPassword']
+    }
+  },
+  {
+    name: 'set_world_email_template',
+    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — under the deterministic graph id "email-templates-<domain>", which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "universi.no". Determines both the sender World and the KG graph id (email-templates-<domain>).' },
+        purpose: { type: 'string', description: 'Which email this template is for, e.g. "login" (magic-link sign-in) or "meeting" (meeting invite).' },
+        language: { type: 'string', description: 'ISO language code, e.g. "no" or "en". Defaults to "no".' },
+        subject: { type: 'string', description: 'Email subject line (required). May contain {placeholders}.' },
+        body: { type: 'string', description: 'Email body as HTML (required) with {placeholders}. Reference the link via {magicLink} and brand via {brandName}/{brandLogo}/{brandAccent}.' },
+        brand: {
+          type: 'object',
+          description: 'Optional. The World\'s email brand — upserts an email-brand node that templates pull from.',
+          properties: {
+            name: { type: 'string', description: 'Brand/World display name, e.g. "Universi".' },
+            logo: { type: 'string', description: 'Logo image URL.' },
+            accent: { type: 'string', description: 'Accent color, hex e.g. "#0f2a43".' },
+            fromName: { type: 'string', description: 'Display From name.' },
+            footer: { type: 'string', description: 'Footer line, e.g. "Universi AS · universi.no".' }
+          }
+        }
+      },
+      required: ['domain', 'purpose', 'subject', 'body']
     }
   },
   {
@@ -2011,6 +2050,29 @@ const TOOL_DEFINITIONS = [
     name: 'list_layouts',
     description: 'List the verified page LAYOUTS in the Component Registry (skeletons with named slots — e.g. holy-grail, app-shell, two-column, left/right sidebar, single/two column). Each is real-browser-verified for render + slots + responsive reflow. When building a NEW full page, call this first to pick a layout instead of hand-writing page structure.',
     input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_theme_graphs',
+    description: "List the CSS THEME catalog. Theme graphs are knowledge graphs flagged metadata.isThemeGraph (the same signal aichat's Theme Studio uses); each holds one html-node per named theme (e.g. \"Nordic Light\", \"Coastal Blue\", \"cocoa\") carrying that theme's full CSS. Call with NO args to list the available theme graphs; call with graphId to list the themes (html-nodes) inside one. Use in the homepage BUILD wizard's theme step to offer the user real, existing themes instead of inventing colors. Read-only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'Optional. A theme graph id — returns the themes (html-nodes) inside it. Omit to list all theme graphs.' }
+      }
+    }
+  },
+  {
+    name: 'get_theme',
+    description: "Fetch ONE theme's design tokens so you can apply it when building a page. Returns css_root (the theme's :root{…} block of CSS variables — colors/fonts/radii), detected fonts, uses_google_fonts, and the full theme HTML. APPLY a theme by injecting css_root into the composed page's <style> and building with its var(--…) tokens — the registry layouts/components are theme-aware and consume these. Look up by name (theme label, case-insensitive) or nodeId, within a theme graph (graphId from list_theme_graphs). Do NOT link external CDN fonts.",
+    input_schema: {
+      type: 'object',
+      required: ['graphId'],
+      properties: {
+        graphId: { type: 'string', description: 'The theme graph id (from list_theme_graphs).' },
+        name: { type: 'string', description: 'Theme name / label, e.g. "Nordic Light" (case-insensitive). Provide name or nodeId.' },
+        nodeId: { type: 'string', description: 'The theme html-node id, if known instead of name.' }
+      }
+    }
   },
   {
     name: 'get_layout',
@@ -2882,6 +2944,23 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'setup_world_homepage',
+    description:
+      "Set up a World's PUBLIC homepage (the site at the apex domain + www) in ONE step. This is the intent to use when the user wants a World's own website/landing page live at <domain> and www.<domain> — NOT the founder console (me.<domain>). Does everything: (1) writes the page into the brand proxy's KV as html:<apex> — POSTed through me.<domain> which already routes, so it works even before apex/www exist (no chicken-and-egg); (2) attaches BOTH <apex> and www.<apex> as Workers custom domains so both resolve to the proxy; (3) reads the key back to verify. ONE html:<apex> key serves www too (the proxy falls back www→apex) — never a separate www key. Pass the page as inline `html`, or a `template_key` in WORLD_TEMPLATES. Superadmin only; needs the founder's stored token (set_world_credentials) with Workers Routes/Domains edit + Zone read, and the brand proxy must already exist + hold the publish secret (deploy_world_proxy / provision_world_kv). Idempotent. A newly attached custom domain can take ~a minute for DNS/cert.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain / apex, e.g. universi.no. The page serves at this apex and at www.<domain>." },
+        html: { type: 'string', description: 'The full HTML of the homepage (inline). Provide this OR template_key.' },
+        template_key: { type: 'string', description: 'A key in WORLD_TEMPLATES to read the HTML from, instead of inline html.' },
+        founder_email: { type: 'string', description: 'Optional — resolved from the domain via world_founders if omitted.' },
+        worker_name: { type: 'string', description: 'Override the brand-proxy worker name (default <stem>-brand-proxy).' },
+        proxy_url: { type: 'string', description: 'Override the publish endpoint (default https://me.<domain>/__html/publish). Use the brand proxy workers.dev URL if me.<domain> is not routed yet.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
     name: 'list_world_founder_templates',
     description:
       "List all world-founder page templates in WORLD_TEMPLATES KV (keys starting with 'template:world-founder'). Returns the key, byte length, and full HTML for each. Use this to see what templates exist, read their current HTML, and decide what to edit. After editing, save with save_world_founder_template, then publish with publish_world_page or publish_all_world_pages. Superadmin only. Code-hardcoded (not in registry).",
@@ -2989,6 +3068,40 @@ const TOOL_DEFINITIONS = [
         title: { type: 'string', description: "KV namespace title. Default 'HTML_PAGES'." },
       },
       required: [],
+    },
+  },
+  {
+    name: 'provision_world_photos',
+    description:
+      "Provision a World Founder's OWN isolated photo storage in ONE step, inside the founder's OWN Cloudflare account (Superadmin only): (1) create/find a dedicated R2 bucket world-photos-<stem>, (2) create/find a per-world PHOTO_ALBUMS-<stem> KV namespace, (3) deploy the <stem>-photos-proxy worker from WORLD_TEMPLATES (key template:world-photos-proxy) bound to that bucket, and (4) attach cdn.<domain> as its Workers custom domain for delivery. Records photos_bucket_name / photos_proxy_worker / photos_delivery_base / photos_albums_kv_id / photos_status on the founder's config row. Idempotent (find-or-create; pass force=true to redeploy the worker). This replaces the shared imgix/blog-pictures path with per-founder, physically-isolated, Cloudflare-native storage + delivery. Requires the founder's stored token (set_world_credentials) to have Workers R2 Storage edit + Workers KV Storage edit + Workers Scripts edit + Workers Routes edit + DNS edit + SSL edit scope, and agent-worker to have HTML_PUBLISH_SECRET set (stamped as the upload secret). Phase 1: delivery serves original bytes; resize (?w=&h=) is a deferred v2.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. universi.no (resolves the founder)." },
+        founder_email: { type: 'string', description: 'Override the founder email (else resolved from the domain via world_founders).' },
+        cf_account_id: { type: 'string', description: "Override the founder's Cloudflare account id (else from config)." },
+        bucket_name: { type: 'string', description: 'R2 bucket name. Default world-photos-<stem>.' },
+        worker_name: { type: 'string', description: 'Photos-proxy worker name. Default <stem>-photos-proxy.' },
+        delivery_host: { type: 'string', description: 'Delivery hostname to attach. Default cdn.<domain>.' },
+        force: { type: 'boolean', description: 'Redeploy the photos-proxy worker even if it already exists.' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'upload_world_image',
+    description:
+      "Copy an image into a World Founder's OWN photo storage (their isolated R2 bucket) and return its cdn.<domain> URL. Fetches source_url and stores it via the World's photos-proxy, so the image lives in the founder's OWN Cloudflare account (world-photos-<stem>), NOT the shared blog-pictures/imgix path. The World must be photo-provisioned first (provision_world_photos). Superadmin only. Use this to bring an external image (a pexels/unsplash result, or any HTTPS image) into a World's own Cloudflare-native storage; the returned url (https://cdn.<domain>/photos/<key>) is what to embed in that World's nodes.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. universi.no (resolves the founder + their photo storage)." },
+        source_url: { type: 'string', description: 'HTTPS URL of the image to copy into the World storage.' },
+        founder_email: { type: 'string', description: 'Override the founder (else resolved from the domain via world_founders).' },
+        key: { type: 'string', description: 'Optional object key/filename. Default a timestamped name with the right extension.' },
+        album: { type: 'string', description: 'Optional album name (reserved for album grouping).' },
+      },
+      required: ['domain', 'source_url'],
     },
   },
   {

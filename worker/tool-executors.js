@@ -1089,6 +1089,34 @@ function injectPublishedAuthBridge(html, graphId, opts) {
 // HTML_PAGES KV — the SAME key the viewer's Publish button writes. This closes the gap where
 // the agent could edit the node in the graph but not push it to the live site. Superadmin only.
 // Code-hardcoded (not in registry).
+// Probe the backend URLs a page will call and return any that DO NOT EXIST (invented/guessed).
+// Signal: Cloudflare 530 (origin has no DNS) or a hard connection failure = host does not exist.
+// PASS everything else — 200/401/403/405, worker→same-zone 522 loopback, 404, and slow/timeout
+// (AbortError) — so real endpoints never false-positive. Deterministic host-existence check.
+async function probeDeadBackendUrls(html) {
+  const h = String(html || '')
+  const urlRe = /https?:\/\/[a-z0-9.-]*(?:vegvisr\.org|vegr\.ai|workers\.dev)\/[^\s"'`)<>]*/gi
+  const found = new Set()
+  let m
+  while ((m = urlRe.exec(h)) !== null) {
+    const u = m[0].replace(/[.,;'")]+$/, '')
+    if (/\.(js|mjs|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|mp3|mp4|wav|m4a|webm)(\?|#|$)/i.test(u)) continue
+    if (/\/components\/[a-z0-9-]+\.js/i.test(u)) continue
+    found.add(u)
+  }
+  const results = await Promise.all([...found].slice(0, 10).map(async (u) => {
+    try {
+      const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 5000)
+      let res; try { res = await fetch(u, { method: 'GET', signal: ctrl.signal }) } finally { clearTimeout(t) }
+      // 530 = host has no DNS (nonexistent host); 404 = path not found (nonexistent route).
+      // Both are the "invented endpoint" shapes. PASS 200/401/403/405 and 522 (worker→same-zone
+      // loopback on a REAL host) and AbortError (slow) so real endpoints never false-positive.
+      return (res.status === 530 || res.status === 404) ? u : null
+    } catch (e) { return (e && e.name === 'AbortError') ? null : u }
+  }))
+  return results.filter(Boolean)
+}
+
 async function executePublishHtmlNode(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'publish an html-node')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -1179,6 +1207,21 @@ async function executePublishHtmlNode(input, env) {
   //    worker→worker internally, bypassing DNS/zone entirely. brand-worker keys the KV entry off the
   //    BODY hostname (not the request Host), so the internal URL host is irrelevant. Public fetch is
   //    the fallback for a foreign host passed via proxy_url (e.g. a cross-zone domain).
+  // GATE (fail-closed, NO override): never publish a page that fetches a backend host that does
+  // not exist — an invented/guessed endpoint (Cloudflare 530 / connection failure). A nonexistent
+  // backend is never a legitimate publish, so the agent CANNOT force past this. Deterministic stop
+  // for "agent guessed a URL and shipped a broken page." (Real endpoints — 200/401/403, worker
+  // 522 loopback, 404, slow/timeout — all pass; only a truly nonexistent host is blocked.)
+  {
+    const dead = await probeDeadBackendUrls(html)
+    if (dead.length) {
+      return {
+        success: false,
+        error: `Refusing to publish ${host}: the page calls ${dead.length} backend URL(s) that DO NOT EXIST (invented/guessed endpoints — the page would fail live). Resolve the real URL from get_system_registry (a worker's public domain + its /openapi.json path) or a data tool's returned URL, then republish. This CANNOT be overridden — a nonexistent backend host is never a valid publish.`,
+        deadEndpoints: dead,
+      }
+    }
+  }
   const overwrite = input.overwrite !== false // default true — republish in place
   // Inject the runtime auth bridge so in-page saves (window.vegvisrPatchNode) work on the
   // live domain, same as in preview. Injected into the SERVED copy only — node.info in the
@@ -1503,6 +1546,130 @@ async function executeListGraphs(input, env) {
     offset,
     limit,
     graphs: results,
+  }
+}
+
+// v2 theme integration — discover the CSS "theme catalog". Theme graphs are ordinary KGs flagged
+// metadata.isThemeGraph === true (the SAME signal aichat's Theme Studio uses, see
+// aichat-vegvisr/functions/api/graph/theme-graphs.js); each holds one html-node per named theme
+// (e.g. "Nordic Light", "Coastal Blue"), carrying that theme's full CSS. With NO graphId this lists
+// the available theme graphs; WITH graphId it lists the themes (html-nodes) inside one, so the
+// homepage wizard can offer them. Read-only; scans the first 500 graph summaries.
+async function executeListThemeGraphs(input, env) {
+  const graphId = String(input.graphId || '').trim()
+  if (graphId) {
+    const res = await env.KG_WORKER.fetch(
+      `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`,
+      { headers: { 'x-user-role': 'Superadmin' } },
+    )
+    if (!res.ok) throw new Error(`Failed to fetch theme graph ${graphId}`)
+    const g = await res.json()
+    const meta = g.metadata || {}
+    const themes = (g.nodes || [])
+      .filter((n) => n.type === 'html-node')
+      .map((n) => {
+        const info = n.info || ''
+        // Swatch colours for the picker card — distinct hex/rgba, capped.
+        const palette = [...new Set((info.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g) || []).map((c) => c.trim()))].slice(0, 8)
+        return { nodeId: n.id, name: n.label || n.id, bytes: info.length, palette }
+      })
+    return {
+      graphId,
+      title: meta.title || graphId,
+      isThemeGraph: meta.isThemeGraph === true,
+      themeCount: themes.length,
+      themes,
+      note: meta.isThemeGraph === true ? undefined : 'This graph is NOT flagged metadata.isThemeGraph — the html-nodes may not be themes.',
+    }
+  }
+
+  // The summaries endpoint caps at 250 per page, so paginate through `total` (mirrors
+  // aichat's theme-graphs.js) — a single big-limit call would silently miss theme graphs
+  // once the graph count grows past one page.
+  const PAGE = 250
+  const all = []
+  let offset = 0
+  let total = Infinity
+  for (let i = 0; i < 40 && offset < total; i++) {
+    const res = await env.KG_WORKER.fetch(
+      `https://knowledge-graph-worker/getknowgraphsummaries?offset=${offset}&limit=${PAGE}`,
+      { headers: { 'x-user-role': 'Superadmin' } },
+    )
+    if (!res.ok) throw new Error('Failed to fetch graph summaries')
+    const data = await res.json()
+    const page = data.results || []
+    all.push(...page)
+    total = Number(data.total || all.length)
+    if (page.length === 0) break
+    offset += PAGE
+  }
+  const themeGraphs = all
+    .filter((g) => (g.metadata || {}).isThemeGraph === true)
+    .map((g) => ({
+      id: g.id,
+      title: (g.metadata || {}).title || g.title || g.id,
+      updatedAt: (g.metadata || {}).updatedAt || g.updatedAt || '',
+    }))
+  return {
+    total: themeGraphs.length,
+    scanned: all.length,
+    themeGraphs,
+    note: themeGraphs.length
+      ? 'Pass graphId to list the themes (html-nodes) inside a theme graph.'
+      : `No theme graphs found (metadata.isThemeGraph) across ${all.length} graphs.`,
+  }
+}
+
+// v2 — fetch ONE theme's design tokens so the homepage wizard can apply it. A theme is an html-node
+// in a theme graph; its :root{...} block holds the tokens (--bg/--text/--accent/--radius/…). Returns
+// the extracted :root block(s) + detected fonts + the full node HTML. "Applying" a theme = inject its
+// css_root into the composed page's <style> and build with its var(--…) tokens (our registry layouts
+// are theme-aware). Look up by name (case-insensitive label) or nodeId within graphId. Read-only.
+async function executeGetTheme(input, env) {
+  const graphId = String(input.graphId || '').trim()
+  if (!graphId) return { success: false, error: 'graphId is required (a theme graph — see list_theme_graphs).' }
+  const name = String(input.name || '').trim().toLowerCase()
+  const nodeId = String(input.nodeId || '').trim()
+  if (!name && !nodeId) return { success: false, error: 'Provide name (theme label) or nodeId.' }
+
+  const res = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`,
+    { headers: { 'x-user-role': 'Superadmin' } },
+  )
+  if (!res.ok) throw new Error(`Failed to fetch theme graph ${graphId}`)
+  const g = await res.json()
+  const nodes = (g.nodes || []).filter((n) => n.type === 'html-node')
+  const node = nodeId
+    ? nodes.find((n) => n.id === nodeId)
+    : nodes.find((n) => String(n.label || '').trim().toLowerCase() === name)
+  if (!node) {
+    return { success: false, error: `Theme not found in ${graphId}. Available: ${nodes.map((n) => n.label || n.id).join(', ')}` }
+  }
+
+  const html = node.info || ''
+  const roots = html.match(/:root\s*\{[^}]*\}/g) || []
+  const cssRoot = roots.join('\n\n') || null
+  const themeId = (html.match(/data-(?:v-)?theme(?:-id)?=["']([^"']+)["']/) || [])[1] || null
+  const fonts = [...new Set((html.match(/font-family\s*:\s*([^;}{]+)/gi) || []).map((s) => s.split(':')[1].trim()))].slice(0, 6)
+  const usesGoogleFonts = /fonts\.googleapis\.com/.test(html)
+  // Not every theme uses :root tokens — some are fully hand-styled pages (hardcoded colors). Always
+  // return a palette (distinct hex/rgba colors) so the theme is applicable even when css_root is null.
+  const palette = [...new Set((html.match(/#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g) || []).map((c) => c.trim()))].slice(0, 16)
+  return {
+    success: true,
+    graphId,
+    nodeId: node.id,
+    name: node.label || node.id,
+    themeId,
+    css_root: cssRoot,
+    palette,
+    fonts,
+    uses_google_fonts: usesGoogleFonts,
+    bytes: html.length,
+    full_html: html,
+    apply_note: cssRoot
+      ? "Apply = inject css_root into the composed page's <style> and build with its var(--…) tokens; the registry layouts/components are theme-aware and consume these. Do NOT link external CDN fonts — if uses_google_fonts is true, substitute a system font stack."
+      : "This theme has NO :root token block — it is a hand-styled page. Apply = replicate its look on the composed page from full_html + palette (match the background/gradients, accent colors, and typography). Still no external CDN fonts.",
   }
 }
 
@@ -2722,6 +2889,94 @@ async function executePublishWorldPage(input, env) {
   }
 }
 
+// Set up a World's PUBLIC homepage in ONE intent: write the apex page into the brand proxy's KV, then
+// attach BOTH the apex and www custom domains so the site actually resolves. Collapses the multi-step
+// manual dance (publish_world_page + two deploy_world_proxy calls) that was easy to get wrong. Key
+// design points: (1) content is POSTed through a host that ALREADY routes to the proxy (me.<domain>
+// by default) so it works even before apex/www are attached — no chicken-and-egg; (2) ONE html:<apex>
+// key serves www too via the proxy's www→apex fallback (no www key). Superadmin only; needs the
+// founder's stored token (Workers Routes/Domains + Zone read) + agent-worker's HTML_PUBLISH_SECRET.
+// Idempotent: re-running overwrites the page and re-attaches (skips) already-attached domains.
+async function executeSetupWorldHomepage(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfAccount, cfToken, domain } = ctx
+  if (!domain) return { success: false, error: 'domain (e.g. universi.no) is required' }
+  const stem = domain.split('.')[0]
+  const workerName = (input.worker_name || `${stem}-brand-proxy`).trim()
+  const apex = domain
+  const www = `www.${domain}`
+
+  // Resolve the homepage HTML: inline `html`, else a WORLD_TEMPLATES key.
+  let html = String(input.html || '')
+  if (!html) {
+    const templateKey = String(input.template_key || '').trim()
+    if (!templateKey) return { success: false, error: 'Provide either html (inline) or template_key.' }
+    if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+    html = await env.WORLD_TEMPLATES.get(templateKey)
+    if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }
+  }
+
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+
+  // Step 1 — write html:<apex> into the brand proxy's KV via a host that ALREADY routes to the proxy
+  // (me.<domain> default), so this succeeds even before apex/www are attached (no chicken-and-egg).
+  const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+  const token = await signPublishToken({ uid: 'agent-worker', appId: 'world-homepage', hostname: apex, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
+  const proxyUrl = (input.proxy_url || `https://me.${domain}/__html/publish`).trim()
+  let content
+  try {
+    const r = await fetch(proxyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Publish-Token': token },
+      body: JSON.stringify({ hostname: apex, html, overwrite: true }),
+    })
+    const j = await r.json().catch(() => null)
+    content = r.ok && j && j.ok
+      ? { ok: true, key: `html:${apex}`, via: proxyUrl }
+      : { ok: false, error: (j && j.error) || `HTTP ${r.status}`, via: proxyUrl, note: `Publish endpoint rejected. Is me.${domain} routed and does the brand proxy hold the publish secret? Run provision_world_kv for ${domain} if this says invalid token.` }
+  } catch (e) {
+    content = { ok: false, error: e.message, via: proxyUrl, note: `Could not reach ${proxyUrl}. Pass proxy_url=https://${workerName}.<subdomain>.workers.dev/__html/publish if me.${domain} is not routed yet.` }
+  }
+  if (!content.ok) return { success: false, step: 'write-content', error: content.error, detail: content }
+
+  // Steps 2 + 3 — attach apex and www as custom domains so BOTH hostnames route to the proxy.
+  const attach = async (host) => {
+    const r = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, host)
+    return r.ok
+      ? { ok: true, host, note: r.alreadyAttached ? `${host} already routed.` : `${host} attached (DNS + cert may take a few seconds).` }
+      : { ok: false, host, error: `${r.status}: ${r.detail}`, note: r.note }
+  }
+  const apexRoute = await attach(apex)
+  const wwwRoute = await attach(www)
+
+  // Step 4 — confirm the KV key is really present (read-back through the proxy).
+  let verify
+  try {
+    const r = await fetch(`https://me.${domain}/__html/check?hostname=${encodeURIComponent(apex)}`)
+    const j = await r.json().catch(() => null)
+    verify = { ok: Boolean(j && j.exists), exists: Boolean(j && j.exists) }
+  } catch (e) {
+    verify = { ok: false, error: e.message }
+  }
+
+  const failedRoutes = [apexRoute, wwwRoute].filter((r) => !r.ok)
+  return {
+    success: true,
+    domain,
+    worker_name: workerName,
+    content,
+    routes: { apex: apexRoute, www: wwwRoute },
+    verify,
+    urls: { apex: `https://${apex}/`, www: `https://${www}/` },
+    note: 'One KV key html:<apex> serves BOTH apex and www (the proxy falls back www→apex).',
+    next: failedRoutes.length === 0
+      ? `Homepage published + ${apex} and ${www} routed. Open https://${apex}/ — a newly attached custom domain can take a minute for DNS/cert to go live.`
+      : `Homepage published, but a route did not attach: ${failedRoutes.map((r) => `${r.host} (${r.error})`).join(', ')}. Ensure the founder token has Workers Routes/Domains + Zone read, or add the custom domain manually on ${workerName}.`,
+  }
+}
+
 // Re-publish the World-Founder page to EVERY active World in the world_founders registry. Use after
 // editing the shared template so all live me.<domain> pages pick up the change in one call. Reads the
 // template + secret ONCE, then loops the distinct active domains minting a host-scoped token per host
@@ -3300,6 +3555,181 @@ async function executeProvisionWorldKv(input, env) {
   }
 }
 
+// Provision a World Founder's OWN isolated photo storage in the founder's OWN Cloudflare account
+// (Superadmin only): a dedicated R2 bucket world-photos-<stem>, a per-world PHOTO_ALBUMS-<stem> KV,
+// the <stem>-photos-proxy worker (from WORLD_TEMPLATES/template:world-photos-proxy) bound to that
+// bucket, and cdn.<domain> attached as its Workers custom domain. Mirrors executeProvisionWorldKv /
+// executeDeployWorldProxy but for R2-backed image storage. Idempotent (find-or-create; force=true
+// redeploys the worker). Records the photos_* fields on config. Phase 1: delivery serves original
+// bytes; resize (?w=) is a deferred v2 spike (Cloudflare Image Transformations).
+async function executeProvisionWorldPhotos(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { founderEmail, cfAccount, cfToken, domain } = ctx
+  const stem = (domain || '').split('.')[0]
+  const bucketName = (input.bucket_name || `world-photos-${stem}`).trim()
+  const workerName = (input.worker_name || `${stem}-photos-proxy`).trim()
+  const deliveryHost = (input.delivery_host || `cdn.${domain}`).trim().toLowerCase()
+  const deliveryBase = `https://${deliveryHost}`
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const script = await env.WORLD_TEMPLATES.get('template:world-photos-proxy')
+  if (!script) return { success: false, error: 'Photos-proxy script not found in WORLD_TEMPLATES (key "template:world-photos-proxy"). Store it first via `wrangler kv key put`.' }
+
+  // 1. R2 bucket (create-or-find) in the founder's account. List returns { result: { buckets: [{name}] } }.
+  const listB = await cfApi(`/accounts/${cfAccount}/r2/buckets`, cfToken)
+  if (!listB.ok) return { success: false, error: `Could not list R2 buckets in ${cfAccount} (${listB.status}): ${listB.error || 'unknown'}. The token likely lacks Workers R2 Storage edit scope.` }
+  const buckets = (listB.json && listB.json.result && listB.json.result.buckets) || []
+  let bucketCreated = false
+  if (!buckets.find((b) => b.name === bucketName)) {
+    const mk = await cfApi(`/accounts/${cfAccount}/r2/buckets`, cfToken, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: bucketName }),
+    })
+    if (!mk.ok) return { success: false, error: `Could not create R2 bucket "${bucketName}" (${mk.status}): ${mk.error || 'unknown'}` }
+    bucketCreated = true
+  }
+
+  // 2. Per-world albums KV (create-or-find) — reuses the provision_world_kv ensureNs pattern.
+  const albumsTitle = `PHOTO_ALBUMS-${stem}`
+  let albumsKvId = null
+  {
+    const list = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken)
+    if (!list.ok) return { success: false, error: `Could not list KV namespaces (${list.status}): ${list.error || 'unknown'} — token likely lacks Workers KV Storage scope.` }
+    let ns = (list.json.result || []).find((n) => n.title === albumsTitle)
+    if (!ns) {
+      const mk = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces`, cfToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: albumsTitle }) })
+      if (!mk.ok) return { success: false, error: `Could not create KV namespace "${albumsTitle}" (${mk.status}): ${mk.error || 'unknown'}` }
+      ns = mk.json.result
+    }
+    albumsKvId = ns && ns.id
+  }
+
+  // 3. Deploy <stem>-photos-proxy from the template, bound to the bucket + albums KV + upload secret.
+  const uploadSecret = env.HTML_PUBLISH_SECRET || ''
+  const scriptUrl = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}`
+  const existing = await fetch(scriptUrl, { headers: { Authorization: `Bearer ${cfToken}` } })
+  let workerCreated = false
+  if (!existing.ok || input.force) {
+    const bindings = [
+      { type: 'r2_bucket', name: 'PHOTOS_BUCKET', bucket_name: bucketName },
+      { type: 'plain_text', name: 'DELIVERY_BASE', text: deliveryBase },
+    ]
+    if (albumsKvId) bindings.push({ type: 'kv_namespace', name: 'PHOTO_ALBUMS', namespace_id: albumsKvId })
+    if (uploadSecret) bindings.push({ type: 'secret_text', name: 'PHOTOS_UPLOAD_SECRET', text: uploadSecret })
+    const metadata = { main_module: 'index.js', compatibility_date: '2025-01-15', bindings }
+    const form = new FormData()
+    form.append('metadata', JSON.stringify(metadata))
+    form.append('index.js', new File([script], 'index.js', { type: 'application/javascript+module' }))
+    const up = await fetch(scriptUrl, { method: 'PUT', headers: { Authorization: `Bearer ${cfToken}` }, body: form })
+    const upJson = await up.json().catch(() => null)
+    if (!up.ok || !upJson || !upJson.success) {
+      const detail = (upJson && upJson.errors && upJson.errors[0] && (upJson.errors[0].message || upJson.errors[0].code)) || `HTTP ${up.status}`
+      return { success: false, error: `Photos-proxy upload failed: ${detail}`, worker_name: workerName, note: 'token needs Workers Scripts edit + Workers R2 Storage edit.' }
+    }
+    workerCreated = true
+  }
+
+  // 4. Attach cdn.<domain> as a Workers custom domain (reuses the brand-proxy domain helper).
+  let route
+  {
+    const r = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, deliveryHost)
+    route = r.ok
+      ? { ok: true, host: r.host, worker_name: r.workerName, note: r.alreadyAttached ? `${r.host} already routed to the photos proxy.` : `${r.host} attached (DNS + cert provisioning may take a few seconds).` }
+      : { ok: false, host: r.host, worker_name: r.workerName, error: `${r.status}: ${r.detail}`, note: r.note || `could not attach ${deliveryHost} — add it manually as a Workers custom domain on ${workerName}.` }
+  }
+
+  // 5. Record the registry fields on config (best-effort; requires the photos_* columns to exist).
+  const status = route.ok ? 'active' : 'partial'
+  try {
+    await env.DB.prepare(
+      'UPDATE config SET photos_bucket_name = ?, photos_proxy_worker = ?, photos_delivery_base = ?, photos_delivery_mode = ?, photos_albums_kv_id = ?, photos_status = ?, photos_provisioned_at = ? WHERE email = ?'
+    ).bind(bucketName, workerName, deliveryBase, 'r2-transform', albumsKvId || '', status, new Date().toISOString(), founderEmail).run()
+  } catch (e) { console.error('record photos registry failed (are the photos_* columns migrated?):', e) }
+
+  return {
+    success: true,
+    founder_email: founderEmail,
+    cf_account_id: cfAccount,
+    domain,
+    bucket: bucketName,
+    bucket_created: bucketCreated,
+    worker_name: workerName,
+    worker_created: workerCreated,
+    albums_kv_id: albumsKvId,
+    delivery_base: deliveryBase,
+    upload_secret: uploadSecret ? 'set' : { ok: false, note: 'agent-worker has no HTML_PUBLISH_SECRET — /photos/upload is unsecured until it is set.' },
+    route,
+    next: route.ok
+      ? `Photo storage ready: bucket ${bucketName} + ${workerName} + ${deliveryBase}. Upload a test image (POST ${deliveryBase}/photos/upload with X-Upload-Secret), then open ${deliveryBase}/photos/<key>.`
+      : `Bucket + worker ready, but ${deliveryHost} is NOT routed: ${route.note}`,
+  }
+}
+
+// Resolve a World's photo-storage context from the registry (config photos_* columns), by domain or
+// founder_email. Builds on resolveWorldInfraContext (Superadmin gate + cf creds), then reads the
+// photos_* fields provision_world_photos recorded. Returns { …, bucket, deliveryBase, proxyWorker }
+// or { error } if the World has no photo storage yet.
+async function resolveWorldPhotos(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return ctx
+  const { founderEmail, cfAccount, cfToken, domain } = ctx
+  const row = await env.DB.prepare(
+    'SELECT photos_bucket_name, photos_delivery_base, photos_proxy_worker FROM config WHERE email = ?'
+  ).bind(founderEmail).first()
+  if (!row || !row.photos_bucket_name || !row.photos_delivery_base) {
+    return { error: `No photo storage provisioned for ${founderEmail} — run provision_world_photos for ${domain} first.` }
+  }
+  return {
+    founderEmail, cfAccount, cfToken, domain,
+    bucket: row.photos_bucket_name,
+    deliveryBase: row.photos_delivery_base,
+    proxyWorker: row.photos_proxy_worker,
+  }
+}
+
+// Copy an external image into a World Founder's OWN photo storage (their isolated R2 bucket) and
+// return its cdn.<domain> URL. Fetches source_url and POSTs it to the World's photos-proxy upload
+// endpoint (authenticated with agent-worker's HTML_PUBLISH_SECRET, which provision_world_photos
+// stamped as PHOTOS_UPLOAD_SECRET). Phase 2 slice 1: the upload path lands photos in the founder's
+// own bucket, not the shared blog-pictures — proven end-to-end before the display-site resolver.
+async function executeUploadWorldImage(input, env) {
+  const ctx = await resolveWorldPhotos(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { deliveryBase, bucket, domain } = ctx
+  const sourceUrl = (input.source_url || '').trim()
+  if (!sourceUrl) return { success: false, error: "source_url is required (the HTTPS image to copy into the World's storage)." }
+  const secret = env.HTML_PUBLISH_SECRET
+  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET — cannot authenticate to the photos-proxy upload.' }
+
+  let imgRes
+  try { imgRes = await fetch(sourceUrl) } catch (e) { return { success: false, error: `Could not fetch source_url: ${e.message}` } }
+  if (!imgRes.ok) return { success: false, error: `source_url returned HTTP ${imgRes.status}` }
+  const contentType = imgRes.headers.get('content-type') || 'application/octet-stream'
+  const blob = await imgRes.blob()
+
+  const ext = (contentType.split('/')[1] || 'bin').split(';')[0].replace('jpeg', 'jpg').replace('svg+xml', 'svg')
+  const key = String(input.key || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`).replace(/^\/+/, '')
+
+  const form = new FormData()
+  form.append('file', new File([blob], key, { type: contentType }))
+  form.append('key', key)
+
+  const up = await fetch(`${deliveryBase}/photos/upload`, { method: 'POST', headers: { 'X-Upload-Secret': secret }, body: form })
+  const upJson = await up.json().catch(() => null)
+  if (!up.ok || !upJson || upJson.error) {
+    return { success: false, error: `Upload to ${deliveryBase}/photos/upload failed (${up.status}): ${(upJson && upJson.error) || 'unknown'}` }
+  }
+  const url = upJson.url || `${deliveryBase}/photos/${key}`
+  return {
+    success: true,
+    domain,
+    bucket,
+    key: upJson.key || key,
+    url,
+    note: `Image stored in the World's own bucket ${bucket} and served at ${url}. Use this URL (not an imgix URL) in ${domain} nodes.`,
+  }
+}
+
 async function executePublishChallengePage(input, env) {
   const callerUserId = input.userId
   if (!callerUserId) return { success: false, error: 'No user context available — sign in and retry.' }
@@ -3668,19 +4098,26 @@ async function executeAddEmailAccount(input, env) {
   const emailLower = email.toLowerCase()
 
   // Smart default for accountType: gmail for @gmail.com, smtp otherwise.
-  // smtp routes through /send-email → Cloudflare Email Service (no password).
-  // gmail routes through /send-gmail-email → requires appPassword.
+  // smtp            → /send-email → Cloudflare Email Service binding (same-account domains, no password).
+  // gmail           → /send-gmail-email → Gmail SMTP (requires appPassword).
+  // cf-email-service→ /send-cf-email → Cloudflare Email Service REST API for a domain in ANOTHER
+  //                   Cloudflare account; requires cfAccountId + an Email Sending API token (appPassword).
   let accountType = (input.accountType || '').trim().toLowerCase()
   if (!accountType) {
     accountType = emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp'
   }
-  if (accountType !== 'gmail' && accountType !== 'smtp') {
-    throw new Error(`accountType must be "smtp" or "gmail" (got "${accountType}")`)
+  if (!['gmail', 'smtp', 'cf-email-service'].includes(accountType)) {
+    throw new Error(`accountType must be "smtp", "gmail", or "cf-email-service" (got "${accountType}")`)
   }
 
   const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
+  const cfAccountId = typeof input.cfAccountId === 'string' ? input.cfAccountId.trim() : ''
   if (accountType === 'gmail' && !appPassword) {
     throw new Error('appPassword is required for Gmail accounts. Generate one at https://myaccount.google.com/apppasswords')
+  }
+  if (accountType === 'cf-email-service') {
+    if (!cfAccountId) throw new Error('cfAccountId (the Cloudflare account id that owns the sending domain) is required for cf-email-service accounts.')
+    if (!appPassword) throw new Error('appPassword (a Cloudflare API token with "Email Sending: Edit" permission on that account) is required for cf-email-service accounts.')
   }
   if (accountType === 'smtp' && appPassword) {
     // Not fatal — server stores it — but the SMTP path doesn't use it. Warn upstream.
@@ -3736,6 +4173,7 @@ async function executeAddEmailAccount(input, env) {
       isDefault: input.isDefault === true,
     },
   }
+  if (cfAccountId) payload.account.cfAccountId = cfAccountId
   if (appPassword) payload.appPassword = appPassword
 
   const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/email-accounts', {
@@ -3753,7 +4191,10 @@ async function executeAddEmailAccount(input, env) {
   }
 
   const stored = result.account || payload.account
-  const sendPath = accountType === 'gmail' ? '/send-gmail-email (Gmail SMTP)' : '/send-email (Cloudflare Email Service)'
+  const sendPath =
+    accountType === 'gmail' ? '/send-gmail-email (Gmail SMTP)' :
+    accountType === 'cf-email-service' ? `/send-cf-email (Cloudflare Email Service REST API, cfAccountId ${cfAccountId})` :
+    '/send-email (Cloudflare Email Service binding)'
 
   return {
     success: true,
@@ -3780,6 +4221,15 @@ async function executeSetEmailPassword(input, env) {
 
   const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
   if (!appPassword) throw new Error('appPassword is required')
+
+  // Optional: convert the existing sender to a different backend at the same time
+  // (e.g. upgrade an "smtp" sender to "cf-email-service"). Both fields are optional;
+  // when omitted the existing accountType / cfAccountId are preserved.
+  const newAccountType = (input.accountType || '').trim().toLowerCase()
+  if (newAccountType && !['gmail', 'smtp', 'cf-email-service'].includes(newAccountType)) {
+    throw new Error(`accountType must be "smtp", "gmail", or "cf-email-service" (got "${newAccountType}")`)
+  }
+  const newCfAccountId = typeof input.cfAccountId === 'string' ? input.cfAccountId.trim() : ''
 
   // Optional operator override: set the password on ANOTHER user's existing sender (Superadmin only).
   let targetEmail = profile.email
@@ -3810,17 +4260,24 @@ async function executeSetEmailPassword(input, env) {
     throw new Error(`Email account "${email}" is not configured. Use add_email_account to create it first.`)
   }
 
+  const effectiveAccountType = newAccountType || existing.accountType || (emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp')
+  const effectiveCfAccountId = newCfAccountId || existing.cfAccountId || ''
+  if (effectiveAccountType === 'cf-email-service' && !effectiveCfAccountId) {
+    throw new Error('cfAccountId is required to set a sender to cf-email-service. Pass cfAccountId (the Cloudflare account id that owns the sending domain).')
+  }
+
   const payload = {
     userEmail: targetEmail,
     account: {
       id: existing.id,
       email: existing.email || email,
       name: existing.name || '',
-      accountType: existing.accountType || (emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp'),
+      accountType: effectiveAccountType,
       isDefault: !!existing.isDefault,
     },
     appPassword,
   }
+  if (effectiveCfAccountId) payload.account.cfAccountId = effectiveCfAccountId
 
   const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/email-accounts', {
     method: 'POST',
@@ -3837,6 +4294,136 @@ async function executeSetEmailPassword(input, env) {
     success: true,
     account: { id: stored.id, email: stored.email, accountType: stored.accountType, hasPassword: true },
     message: `Updated the app password on existing sender ${email} (id: ${stored.id}). Use send_email with fromEmail="${email}" to send from this address.`,
+  }
+}
+
+// Upsert a World's email template (+ optional brand) into its KG email graph — the SSOT that
+// email-worker reads at send time. Deterministic graph id `email-templates-<domain>` (so the worker
+// can locate it in one read); this bypasses create_graph's UUID-forcing on purpose. Node schema:
+//   type "email-template" { info:<HTML body>, metadata:{purpose,language,subject} }
+//   type "email-brand"    { metadata:{name,logo,accent,fromName,footer} } — templates reference {brand*}
+async function executeSetWorldEmailTemplate(input, env) {
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "universi.no")')
+  const purpose = (input.purpose || '').trim().toLowerCase()
+  if (!purpose) throw new Error('purpose is required (e.g. "login", "meeting")')
+  const language = (input.language || 'no').trim().toLowerCase()
+  const subject = (input.subject || '').trim()
+  const body = typeof input.body === 'string' ? input.body : ''
+  if (!subject) throw new Error('subject is required')
+  if (!body) throw new Error('body (HTML) is required')
+  const brand = input.brand && typeof input.brand === 'object' ? input.brand : null
+
+  // Ensure the body carries at least one editable-section marker so it plugs into the SAME
+  // section-editing machinery html-nodes use (HtmlPreview Rediger/HTML/Erstatt; replace_html_section).
+  // Sections are delimited by <!-- edit:<id>:start --> … <!-- edit:<id>:end -->. Keep any the author
+  // added; if none, wrap the whole body as one section "email-body". email-worker strips these markers
+  // at send time so delivered emails stay clean.
+  const bodyMarked = /<!--\s*edit:[a-z0-9-]+:start\s*-->/i.test(body)
+    ? body
+    : `<!-- edit:email-body:start -->\n${body}\n<!-- edit:email-body:end -->`
+
+  // Graph ids MUST be UUIDs, so we can't use a deterministic id. Instead the email graph is a UUID
+  // graph tagged with a metaArea marker `#EMAIL-<domain>`; we locate it by that marker. Superadmin
+  // header so a draft email graph is visible to the summaries query.
+  const emailMarker = `EMAIL-${domain}`
+  const emailMetaArea = `#${emailMarker}`
+  const kgAuth = { 'x-user-role': 'Superadmin' }
+
+  let graphId = null
+  try {
+    const sr = await env.KG_WORKER.fetch(
+      `https://knowledge-graph-worker/getknowgraphsummaries?metaArea=${encodeURIComponent(emailMarker)}&limit=10`,
+      { headers: kgAuth },
+    )
+    if (sr.ok) {
+      const sj = await sr.json().catch(() => ({}))
+      const results = sj.results || sj.graphs || []
+      // summaries already server-filters by metaArea; summary objects omit metaArea, so take first.
+      if (results[0] && results[0].id) graphId = results[0].id
+    }
+  } catch { /* not found → create new */ }
+
+  let existing = null
+  if (graphId) {
+    try {
+      const gr = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+      if (gr.ok) existing = await gr.json().catch(() => null)
+    } catch { /* ignore */ }
+  }
+  const graphExists = !!(existing && Array.isArray(existing.nodes) && existing.metadata)
+  if (!graphId) graphId = crypto.randomUUID()
+  const nodes = graphExists ? [...existing.nodes] : []
+  const edges = graphExists && Array.isArray(existing.edges) ? existing.edges : []
+
+  // Upsert the email-brand node (only when brand fields are supplied).
+  if (brand) {
+    const bMeta = {
+      name: brand.name || '', logo: brand.logo || '', accent: brand.accent || '',
+      fromName: brand.fromName || '', footer: brand.footer || '',
+    }
+    const bIdx = nodes.findIndex((n) => (n.type || '').toLowerCase() === 'email-brand')
+    if (bIdx >= 0) {
+      nodes[bIdx] = { ...nodes[bIdx], type: 'email-brand', label: `${brand.name || domain} email brand`, metadata: { ...(nodes[bIdx].metadata || {}), ...bMeta } }
+    } else {
+      nodes.push({ id: crypto.randomUUID(), label: `${brand.name || domain} email brand`, type: 'email-brand', info: '', color: '#0f2a43', position: {}, visible: true, bibl: [], metadata: bMeta })
+    }
+  }
+
+  // Upsert the email-template node for (purpose, language).
+  const tMeta = { purpose, language, subject }
+  const tIdx = nodes.findIndex((n) =>
+    (n.type || '').toLowerCase() === 'email-template' &&
+    String(n.metadata?.purpose || '').toLowerCase() === purpose &&
+    String(n.metadata?.language || '').toLowerCase() === language)
+  const tLabel = `Email — ${purpose} (${language})`
+  let templateNodeId
+  if (tIdx >= 0) {
+    templateNodeId = nodes[tIdx].id
+    nodes[tIdx] = { ...nodes[tIdx], type: 'email-template', label: tLabel, info: bodyMarked, metadata: { ...(nodes[tIdx].metadata || {}), ...tMeta } }
+  } else {
+    templateNodeId = crypto.randomUUID()
+    nodes.push({ id: templateNodeId, label: tLabel, type: 'email-template', info: bodyMarked, color: '#1a4a6e', position: {}, visible: true, bibl: [], metadata: tMeta })
+  }
+
+  const createdBy = input.userId && String(input.userId).includes('@')
+    ? input.userId
+    : (graphExists && existing.metadata.createdBy) || 'agent@vegvisr.org'
+  const graphData = {
+    metadata: {
+      ...(graphExists ? existing.metadata : {}),
+      title: (graphExists && existing.metadata.title) || `Email Templates — ${domain}`,
+      description: `Per-World email templates (SSOT) for ${domain}. Read by email-worker at send time.`,
+      category: 'System',
+      metaArea: (graphExists && existing.metadata.metaArea) || emailMetaArea,
+      createdBy,
+      version: (graphExists && existing.metadata.version) || 0,
+    },
+    nodes,
+    edges,
+  }
+
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: graphId, graphData, override: graphExists }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `Failed to save email template graph (status ${res.status})`)
+
+  return {
+    success: true,
+    graphId,
+    nodeId: templateNodeId,
+    // The email body HTML — lets the Agent-Builder open it directly in HtmlPreview for editing.
+    html: bodyMarked,
+    purpose,
+    language,
+    brandUpdated: !!brand,
+    message:
+      `Saved the ${purpose}/${language} email template for ${domain} in graph ${graphId} (${graphExists ? 'updated' : 'created'})${brand ? ' + brand node' : ''}. ` +
+      `email-worker locates this at send time via the metaArea marker ${emailMetaArea} — from the ${domain} World's graph (the SSOT).`,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
   }
 }
 
@@ -3895,8 +4482,10 @@ async function executeSendEmail(input, env) {
   if (!html) throw new Error('Email body (html) is required')
 
   // Determine endpoint based on account type
-  const isGmail = (account.accountType || '').toLowerCase() === 'gmail' || account.email.endsWith('@gmail.com')
-  const endpoint = isGmail ? '/send-gmail-email' : '/send-email'
+  const acctType = (account.accountType || '').toLowerCase()
+  const isCfService = acctType === 'cf-email-service'
+  const isGmail = acctType === 'gmail' || account.email.endsWith('@gmail.com')
+  const endpoint = isCfService ? '/send-cf-email' : (isGmail ? '/send-gmail-email' : '/send-email')
 
   const payload = {
     userEmail: profile.email,
@@ -6942,6 +7531,7 @@ async function executeGetSystemRegistry(input, env) {
   const regApps        = registryNodesByType(registry, 'system-app')
   const regCredentials = registryNodesByType(registry, 'system-credential')
   const regComponentRegistries = registryNodesByType(registry, 'system-component-registry')
+  const regStorage = registryNodesByType(registry, 'system-storage')
 
   // ── 1. Workers: health + OpenAPI from graph-defined bindings ──
   let workers = []
@@ -7185,9 +7775,24 @@ async function executeGetSystemRegistry(input, env) {
     note: 'Pointer only. Fetch components with a DIRECT call (get_component), not via get_system_registry.',
   }))
 
+  // Object storage (R2 buckets) — where BYTES live. The registry documents workers; this
+  // documents the buckets they own (the "where do the files live" answer). Metadata only.
+  const r2Buckets = regStorage.map(n => {
+    const m = n.metadata || {}
+    return {
+      bucket: m.bucket || n.label,
+      kind: m.kind || 'r2',
+      owners: m.owners || (m.ownerWorker ? [m.ownerWorker] : []),
+      purpose: m.purpose || (n.info || '').split('\n')[0],
+      keyFormat: m.keyFormat || null,
+      serveUrl: m.serveUrl || null,
+    }
+  })
+
   const sections = {
     workers:         need('workers') ? workers : undefined,
     componentRegistries: need('componentRegistries') ? componentRegistries : undefined,
+    storageBuckets:  need('storageBuckets') ? r2Buckets : undefined,
     subagents:       need('subagents') ? subagents : undefined,
     tools:           need('tools') ? { count: tools.length, list: tools } : undefined,
     nodeTypes:       need('nodeTypes') ? nodeTypes : undefined,
@@ -7232,10 +7837,11 @@ async function executeGetSystemRegistry(input, env) {
     credentialsConfigured: credentials ? credentials.filter(c => c.configured).length : 0,
     credentialsTotal: credentials?.length || regCredentials.length,
     componentRegistries: componentRegistries.length,
+    storageBuckets: r2Buckets.length,
     registrySource: 'graph_system_registry',
   }
 
-  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.ecosystemApps} ecosystem apps (read-only), ${summary.componentRegistries} component registr${summary.componentRegistries === 1 ? 'y' : 'ies'} (fetched via direct get_component), ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
+  const message = `System has ${summary.workers} workers (${healthyCount} healthy, ${totalEndpoints} total API endpoints), ${subagents.length} subagents, ${summary.userAgents} user agents, ${tools.length} agent tools, ${nodeTypes.length} node types, ${dbNodes.length} databases (${totalTables} tables), ${summary.knowledgeGraphs} knowledge graphs, ${summary.templates} templates, ${summary.ecosystemApps} ecosystem apps (read-only), ${summary.componentRegistries} component registr${summary.componentRegistries === 1 ? 'y' : 'ies'} (fetched via direct get_component), ${summary.storageBuckets} storage buckets (R2), ${summary.credentialsConfigured}/${summary.credentialsTotal} API keys configured. Config source: graph_system_registry. All data is live.`
 
   // Apply filter
   if (filter !== 'all') {
@@ -9348,6 +9954,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListGraphs(toolInput, env)
     case 'list_meta_areas':
       return await executeListMetaAreas(toolInput, env)
+    case 'list_theme_graphs':
+      return await executeListThemeGraphs(toolInput, env)
+    case 'get_theme':
+      return await executeGetTheme(toolInput, env)
     case 'search_knowledge':
     case 'search_graphs':
       return await executeSearchKnowledge(toolInput, env)
@@ -9469,6 +10079,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeRegisterWorldFounder(toolInput, env)
     case 'publish_world_page':
       return await executePublishWorldPage(toolInput, env)
+    case 'setup_world_homepage':
+      return await executeSetupWorldHomepage(toolInput, env)
     case 'publish_all_world_pages':
       return await executePublishAllWorldPages(toolInput, env)
     case 'deploy_world_proxy':
@@ -9479,6 +10091,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCheckWorldCredentials(toolInput, env)
     case 'provision_world_kv':
       return await executeProvisionWorldKv(toolInput, env)
+    case 'provision_world_photos':
+      return await executeProvisionWorldPhotos(toolInput, env)
+    case 'upload_world_image':
+      return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':
       return await executeCheckWorldPublish(toolInput, env)
     case 'get_world_app_interests':
@@ -9517,6 +10133,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAddEmailAccount(toolInput, env)
     case 'set_email_password':
       return await executeSetEmailPassword(toolInput, env)
+    case 'set_world_email_template':
+      return await executeSetWorldEmailTemplate(toolInput, env)
     case 'list_email_accounts':
       return await executeListEmailAccounts(toolInput, env)
     case 'add_email_destination':

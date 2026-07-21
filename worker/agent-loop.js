@@ -9,7 +9,7 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
-import { detectFunctionalGaps, fetchNodeHtmlForGate } from './html-builder-subagent.js'
+import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate } from './html-builder-subagent.js'
 
 /**
  * PLAN MODE — read-only allowlist (fail-closed).
@@ -189,6 +189,21 @@ function truncateResult(result) {
 
 function buildCapabilityToolPayload(toolName, result) {
   if (!result || typeof result !== 'object') return null
+
+  // Theme picker: when list_theme_graphs returns the themes inside a graph, surface them so the
+  // frontend can render clickable theme CARDS (name + colour swatches) instead of a numbered list.
+  if (toolName === 'list_theme_graphs' && Array.isArray(result.themes) && result.themes.length) {
+    return {
+      themeOptions: {
+        graphId: result.graphId || null,
+        themes: result.themes.map((t) => ({
+          nodeId: t.nodeId,
+          name: t.name,
+          palette: Array.isArray(t.palette) ? t.palette.slice(0, 8) : [],
+        })),
+      },
+    }
+  }
 
   if (toolName === 'create_capability_blueprint') {
     return {
@@ -459,13 +474,39 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       log(`turn ${turn}/${maxTurns} — calling Anthropic`)
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
-      // Cap history: keep first message + last 10 messages to limit input token growth.
-      // Tool results from early turns are rarely needed by turn 5+.
-      // Always keep messages in assistant/user pairs so tool_use/tool_result stay paired.
+      // Cap history to the most recent window to limit input token growth.
+      // We intentionally DO NOT pin messages[0]: when the first conversation message is a
+      // one-shot imperative (e.g. "set the token on post@universi.no"), pinning it makes the
+      // model re-execute that command on every later turn and narrate "re-read the original
+      // request" (observed 2026-07-13, L54). The current request lives in the recent window,
+      // and the self-check below re-injects latestUserRequest for goal continuity.
       const MAX_HISTORY = 10
-      const cappedMessages = messages.length > MAX_HISTORY + 1
-        ? [messages[0], ...messages.slice(-(MAX_HISTORY))]
-        : [...messages]
+      let cappedMessages
+      if (messages.length > MAX_HISTORY) {
+        const tail = messages.slice(-MAX_HISTORY)
+        // The Anthropic API requires the first message to be role "user" and forbids an
+        // orphaned tool_result (whose tool_use parent was trimmed). Advance the window start
+        // until it begins on a clean user turn (user role, no tool_result blocks).
+        let startIdx = 0
+        while (startIdx < tail.length) {
+          const m = tail[startIdx]
+          const hasToolResult = Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')
+          if (m.role === 'user' && !hasToolResult) break
+          startIdx++
+        }
+        cappedMessages = tail.slice(startIdx)
+        // Fallback: if trimming emptied the window, keep from the last clean user message.
+        if (cappedMessages.length === 0) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i]
+            const hasToolResult = Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')
+            if (m.role === 'user' && !hasToolResult) { cappedMessages = messages.slice(i); break }
+          }
+          if (!cappedMessages || cappedMessages.length === 0) cappedMessages = messages.slice(-1)
+        }
+      } else {
+        cappedMessages = [...messages]
+      }
 
       // Self-check at every 3rd turn: inject a progress review instruction.
       // No extra API call — appended to the last user message so the next response includes reflection.
@@ -563,7 +604,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         if (options.graphId && options.activeHtmlNodeId && functionalGateRetries < 2 &&
             stats.toolCalls.some(t => /html|append_to_section|insert_in_element|insert_html_at/i.test(t))) {
           let gaps = []
-          try { gaps = detectFunctionalGaps(await fetchNodeHtmlForGate(env, options.graphId, options.activeHtmlNodeId)) }
+          try {
+            const gateHtml = await fetchNodeHtmlForGate(env, options.graphId, options.activeHtmlNodeId)
+            gaps = detectFunctionalGaps(gateHtml)
+            const dead = await detectDeadEndpoints(gateHtml)
+            if (dead.length) gaps = gaps.concat(dead)
+          }
           catch (e) { log(`functional gate read failed: ${e.message}`) }
           if (gaps.length) {
             functionalGateRetries++
@@ -808,6 +854,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // Pass updatedHtml for edit_html_node / replace_html_section so frontend can auto-preview
             if ((toolUse.name === 'edit_html_node' || toolUse.name === 'replace_html_section') && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
+            }
+            // Pass the email body for set_world_email_template so the frontend can open it in HtmlPreview
+            if (toolUse.name === 'set_world_email_template' && result.html) {
+              ssePayload.html = result.html
             }
             // Pass clientSideRequired data to frontend so it can handle transcription
             if (result.clientSideRequired) {

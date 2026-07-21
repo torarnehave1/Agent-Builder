@@ -669,6 +669,46 @@ async function fetchNodeHtmlForGate(env, graphId, nodeId) {
   return (g.nodes || []).find(n => n.id === nodeId)?.info || ''
 }
 
+// Deterministic "invented endpoint" gate. Extracts the backend URLs a page will call
+// (vegvisr.org / vegr.ai / *.workers.dev, excluding static assets + CDN component scripts) and
+// PROBES each. A guessed/nonexistent endpoint fails as a connection error (host doesn't resolve)
+// or 404 (path not found) — the exact "agent invented a URL" failure. Real endpoints answer
+// 200/401/403/405 (they exist) and pass. Probes run in parallel with a short timeout. Returns
+// gap strings (same shape detectFunctionalGaps returns), so it plugs into the same end_turn gate.
+async function detectDeadEndpoints(html) {
+  const h = String(html || '')
+  const urlRe = /https?:\/\/[a-z0-9.-]*(?:vegvisr\.org|vegr\.ai|workers\.dev)\/[^\s"'`)<>]*/gi
+  const found = new Set()
+  let m
+  while ((m = urlRe.exec(h)) !== null) {
+    const u = m[0].replace(/[.,;'")]+$/, '')
+    if (/\.(js|mjs|css|png|jpe?g|gif|svg|webp|ico|woff2?|ttf|mp3|mp4|wav|m4a|webm)(\?|#|$)/i.test(u)) continue // static assets
+    if (/\/components\/[a-z0-9-]+\.js/i.test(u)) continue // CDN web components (vegvisr-auth, etc.)
+    found.add(u)
+  }
+  const urls = [...found].slice(0, 8)
+  const results = await Promise.all(urls.map(async (u) => {
+    try {
+      const ctrl = new AbortController()
+      const t = setTimeout(() => ctrl.abort(), 5000)
+      let res
+      try { res = await fetch(u, { method: 'GET', signal: ctrl.signal }) } finally { clearTimeout(t) }
+      // 530 (Cloudflare 1016, "origin DNS error") = the host has NO DNS/origin → it does not
+      // exist = an invented hostname. This is the false-positive-safe signal. Do NOT flag 522
+      // (that is a same-zone worker->worker LOOPBACK on a REAL host) or 404 (ambiguous under
+      // loopback). 200/401/403/405/522/etc. all mean the host exists → pass.
+      return res.status === 530 ? { u, bad: 'HTTP 530 — the host has no DNS/origin; it does not exist' } : null
+    } catch (e) {
+      // A TIMEOUT (slow but real endpoint, e.g. a cold start) is INCONCLUSIVE — never flag it.
+      // A genuine connection failure (host cannot be resolved at all) = invented.
+      if (e && e.name === 'AbortError') return null
+      return { u, bad: 'no connection — the host does not resolve' }
+    }
+  }))
+  return results.filter(Boolean).map(r =>
+    `Backend URL in the page does NOT exist (${r.bad}): ${r.u}. This is a GUESSED/invented endpoint — the page will fail at runtime. Resolve the REAL browser URL from get_system_registry (a worker's public \`domain\` + its /openapi.json path) or from a data tool's returned URL. NEVER invent backend URLs.`)
+}
+
 function detectFunctionalGaps(html) {
   const h = String(html || '')
   const gaps = []
@@ -874,7 +914,12 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
       const effNodeId = nodeId || actions.find(a => a.nodeId)?.nodeId
       let gaps = []
       if (effNodeId) {
-        try { gaps = detectFunctionalGaps(await fetchNodeHtmlForGate(env, graphId, effNodeId)) }
+        try {
+          const gateHtml = await fetchNodeHtmlForGate(env, graphId, effNodeId)
+          gaps = detectFunctionalGaps(gateHtml)
+          const dead = await detectDeadEndpoints(gateHtml)
+          if (dead.length) gaps = gaps.concat(dead)
+        }
         catch (e) { log(`functional gate read failed: ${e.message}`) }
       }
       if (gaps.length && functionalRetries < 2) {
@@ -1053,4 +1098,4 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   }
 }
 
-export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, fetchNodeHtmlForGate }
+export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate }

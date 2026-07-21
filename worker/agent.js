@@ -94,6 +94,7 @@ const WORKERS_AI_TOOLS = new Set([
   'get_formatting_reference',
   'get_node_types_reference',
   'get_vemotion_reference',
+  'perplexity_search',
   'search_pexels',
   'search_unsplash',
   'get_album_images',
