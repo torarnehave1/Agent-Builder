@@ -450,6 +450,25 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                       </p>
                     )}
 
+                    {/* Node type tags — html-node highlighted so it's spottable at a glance */}
+                    {(g.nodeTypes?.length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {g.nodeTypes.map(t => (
+                          <span
+                            key={t}
+                            className={`text-[9px] px-1.5 py-0.5 rounded font-mono truncate max-w-[110px] ${
+                              t === 'html-node'
+                                ? 'bg-sky-500/20 text-sky-300'
+                                : 'bg-white/5 text-white/40'
+                            }`}
+                            title={t}
+                          >
+                            {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
                     {/* Footer */}
                     <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1">
                       {areas.slice(0, 2).map(area => (
