@@ -2145,6 +2145,52 @@ export default {
       }
 
       // POST /upgrade-html-node — Upgrade existing html-node to latest template
+      // POST /publish — publish an html-node to a live host directly from the Agent-Builder UI.
+      // Thin wrapper over the vetted publish_html_node tool (wrong-host guard, dead-URL probe,
+      // host-recording all preserved). Body: { graphId, nodeId, host, force?, authToken }.
+      if (pathname === '/publish' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { graphId, nodeId, host, force, authToken } = body
+        if (!graphId || !nodeId || !host) {
+          return new Response(JSON.stringify({ success: false, error: 'graphId, nodeId and host are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const result = await executeTool('publish_html_node', {
+          graphId, nodeId, host, force: force === true,
+          authContext, userId: authContext.userId || body.userId || null,
+        }, env)
+        return new Response(JSON.stringify(result), {
+          status: result.success ? 200 : 400, headers: corsHeaders
+        })
+      }
+
+      // POST /create-subdomain — provision a host (CNAME + route -> brand-worker) from the UI, so a
+      // never-published node can go live in one flow. Thin wrapper over the create_subdomain tool.
+      // Body: { subdomain, root_domain, zone_id?, authToken }.
+      if (pathname === '/create-subdomain' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { subdomain, root_domain, zone_id, authToken } = body
+        if (!subdomain || !root_domain) {
+          return new Response(JSON.stringify({ success: false, error: 'subdomain and root_domain are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const result = await executeTool('create_subdomain', {
+          subdomain, root_domain, zone_id,
+          authContext, userId: authContext.userId || body.userId || null,
+        }, env)
+        return new Response(JSON.stringify(result), {
+          status: result.success ? 200 : 400, headers: corsHeaders
+        })
+      }
+
       if (pathname === '/upgrade-html-node' && request.method === 'POST') {
         const body = await request.json()
         const { graphId, nodeId } = body

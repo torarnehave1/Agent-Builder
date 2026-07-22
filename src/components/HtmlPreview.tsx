@@ -53,6 +53,41 @@ function fillPreviewSampleVars(h: string, vars: Record<string, string>): string 
   return out;
 }
 
+// --- Publishing (where is this node live + one-click publish) ----------------
+// The agent-worker records the live host(s) onto the node's references/bibl as https://<host>/
+// when publish_html_node succeeds. We read the node back and extract those hosts so the toolbar
+// can show "where it's published" and default the publish target. Mirrors the host extraction in
+// executePublishHtmlNode's wrong-host guard.
+const AGENT_API = 'https://agent.vegvisr.org';
+
+function getAuthToken(): string {
+  try {
+    return JSON.parse(localStorage.getItem('user') || '{}').emailVerificationToken || '';
+  } catch {
+    return '';
+  }
+}
+
+function hostFromRef(r: unknown): string {
+  const s = String(r ?? '');
+  try {
+    return new URL(s).hostname.toLowerCase();
+  } catch {
+    return s.replace(/^https?:\/\//, '').split('/')[0].toLowerCase();
+  }
+}
+
+interface NodeRefs { references?: unknown[]; bibl?: unknown[]; path?: string }
+function extractPublishedHosts(node: NodeRefs | null | undefined): string[] {
+  if (!node) return [];
+  const src = [
+    ...(Array.isArray(node.references) ? node.references : []),
+    ...(Array.isArray(node.bibl) ? node.bibl : []),
+    ...(node.path ? [node.path] : []),
+  ];
+  return [...new Set(src.map(hostFromRef).filter(h => h && h.includes('.') && !h.includes(' ')))];
+}
+
 // --- Visual "click-on-the-page" text editing --------------------------------
 // The preview iframe runs same-origin, so we make EVERY element that directly holds
 // text contentEditable on click. Save re-parses the stored source and applies only the
@@ -317,6 +352,101 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [visualEdit, setVisualEdit] = useState(false);
   const [visualSaving, setVisualSaving] = useState(false);
   const [visualMsg, setVisualMsg] = useState('');
+
+  // Publishing — where the node is live + one-click publish/republish.
+  const [publishedHosts, setPublishedHosts] = useState<string[]>([]);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishHost, setPublishHost] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  const [publishMsg, setPublishMsg] = useState('');
+  const [publishNeedsSubdomain, setPublishNeedsSubdomain] = useState(false);
+
+  // Read the node's recorded live host(s) from references/bibl whenever the pinned node changes.
+  const loadPublishedHosts = useCallback(async () => {
+    if (!graphId || !nodeId) { setPublishedHosts([]); return; }
+    try {
+      const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const node = (data.nodes || []).find((n: { id: string }) => n.id === nodeId);
+      setPublishedHosts(extractPublishedHosts(node));
+    } catch { /* non-fatal — publish still works, just no prefill */ }
+  }, [graphId, nodeId]);
+
+  useEffect(() => { loadPublishedHosts(); }, [loadPublishedHosts]);
+
+  // When the publish panel opens, default the target to the node's current live host.
+  useEffect(() => {
+    if (publishOpen && !publishHost) setPublishHost(publishedHosts[0] || '');
+  }, [publishOpen, publishedHosts, publishHost]);
+
+  const runPublish = async (host: string, force = false) => {
+    const target = host.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!target || !target.includes('.')) {
+      setPublishMsg('Skriv et gyldig vertsnavn, f.eks. universi.vegvisr.org');
+      return;
+    }
+    setPublishing(true);
+    setPublishMsg('Publiserer…');
+    setPublishNeedsSubdomain(false);
+    try {
+      const res = await fetch(`${AGENT_API}/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ graphId, nodeId, host: target, force, authToken: getAuthToken() }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.success) {
+        setPublishMsg(`Publisert · ${target} er live`);
+        setPublishNeedsSubdomain(false);
+        loadPublishedHosts();
+        return;
+      }
+      const err = String(data?.error || `HTTP ${res.status}`);
+      // Host isn't routed to brand-worker yet → offer to create the subdomain then retry.
+      if (/create_subdomain|does not route|create it first|route to brand-worker/i.test(err)) {
+        setPublishNeedsSubdomain(true);
+        setPublishMsg(`${target} finnes ikke som vert ennå — opprett subdomenet først.`);
+      } else {
+        setPublishMsg(err);
+      }
+    } catch (e) {
+      setPublishMsg(`Publisering feilet: ${(e as Error).message}`);
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  const createSubdomainAndPublish = async () => {
+    const target = publishHost.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    const [subdomain, ...rest] = target.split('.');
+    const root_domain = rest.join('.');
+    if (!subdomain || !root_domain.includes('.')) {
+      setPublishMsg('Kan ikke utlede subdomene + rotdomene fra vertsnavnet.');
+      return;
+    }
+    setPublishing(true);
+    setPublishMsg(`Oppretter ${target}…`);
+    try {
+      const res = await fetch(`${AGENT_API}/create-subdomain`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subdomain, root_domain, authToken: getAuthToken() }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        setPublishMsg(String(data?.error || `Kunne ikke opprette subdomenet (HTTP ${res.status})`));
+        setPublishing(false);
+        return;
+      }
+      // Route exists — publish via the brand-worker binding works immediately (no DNS wait).
+      setPublishNeedsSubdomain(false);
+      await runPublish(target);
+    } catch (e) {
+      setPublishMsg(`Opprettelse feilet: ${(e as Error).message}`);
+      setPublishing(false);
+    }
+  };
 
   // Stable click handler (attached to the iframe document while in edit mode).
   // Change detection is NOT event-based — save() diffs the live DOM against a
@@ -634,8 +764,29 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <div className="flex items-center justify-between px-3 h-[36px] border-b border-white/10 bg-slate-900/50 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-white/50">Preview</span>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs text-white/50 flex-shrink-0">Preview</span>
+          {/* Where this node is live — read from the node's recorded host(s). */}
+          {publishedHosts.length > 0 && activeVersion === null && (
+            <span className="flex items-center gap-1 min-w-0" title="Live på">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+              {publishedHosts.slice(0, 2).map(h => (
+                <a
+                  key={h}
+                  href={`https://${h}/`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  className="text-[10px] text-emerald-300 hover:text-emerald-100 hover:underline truncate max-w-[160px]"
+                >
+                  {h} ↗
+                </a>
+              ))}
+              {publishedHosts.length > 2 && (
+                <span className="text-[10px] text-white/30">+{publishedHosts.length - 2}</span>
+              )}
+            </span>
+          )}
           {activeVersion !== null && (
             <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400">
               v{activeVersion}
@@ -708,6 +859,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               Erstatt
             </button>
           )}
+          {graphId && nodeId && activeVersion === null && !isEmailTpl && (
+            <button
+              type="button"
+              onClick={() => { setPublishOpen(p => !p); setVisualEdit(false); setEditOpen(false); setSrOpen(false); }}
+              className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${publishOpen ? 'bg-emerald-500/40 text-emerald-100' : 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/30'}`}
+              title="Publiser denne siden til et live domene"
+            >
+              ⬆ Publiser
+            </button>
+          )}
           {graphId && nodeId && (
             <button
               type="button"
@@ -744,6 +905,46 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           </button>
         </div>
       </div>
+      {publishOpen && (
+        <div className="px-3 py-2 border-b border-white/10 bg-emerald-950/30 flex-shrink-0 flex flex-col gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-emerald-200/80 flex-shrink-0">Publiser til vert</span>
+            <input
+              type="text"
+              value={publishHost}
+              onChange={e => { setPublishHost(e.target.value); setPublishNeedsSubdomain(false); }}
+              onKeyDown={e => { if (e.key === 'Enter' && !publishing) runPublish(publishHost); }}
+              placeholder="f.eks. universi.vegvisr.org"
+              spellCheck={false}
+              className="text-[11px] bg-slate-800 text-white/90 border border-white/10 rounded px-2 py-0.5 min-w-[220px] focus:outline-none focus:border-emerald-500/50"
+            />
+            <button
+              type="button"
+              onClick={() => runPublish(publishHost)}
+              disabled={publishing || !publishHost.trim()}
+              className="text-[11px] px-2.5 py-0.5 rounded bg-emerald-500/30 text-emerald-100 hover:bg-emerald-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+            >
+              {publishing ? 'Publiserer…' : (publishedHosts.includes(publishHost.trim().toLowerCase()) ? 'Republiser' : 'Publiser')}
+            </button>
+            {publishNeedsSubdomain && (
+              <button
+                type="button"
+                onClick={createSubdomainAndPublish}
+                disabled={publishing}
+                className="text-[11px] px-2.5 py-0.5 rounded bg-sky-500/30 text-sky-100 hover:bg-sky-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+              >
+                Opprett subdomene og publiser
+              </button>
+            )}
+            {publishedHosts.length > 0 && (
+              <span className="ml-auto text-[9px] text-white/30">
+                live: {publishedHosts.join(', ')}
+              </span>
+            )}
+          </div>
+          {publishMsg && <span className="text-[11px] text-white/70">{publishMsg}</span>}
+        </div>
+      )}
       {visualEdit && (
         <div className="px-3 py-1.5 border-b border-white/10 bg-orange-950/30 flex-shrink-0 flex items-center gap-2">
           <span className="text-[11px] text-orange-200/80">Klikk på en tekst i siden og skriv. Så:</span>
