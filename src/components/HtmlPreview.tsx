@@ -678,7 +678,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           )}
         </div>
         <div className="flex items-center gap-1">
-          {graphId && nodeId && anchorIds.length > 0 && activeVersion === null && (
+          {graphId && nodeId && activeVersion === null && (
             <button
               type="button"
               onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); }}
