@@ -91,6 +91,9 @@ function calculateCost(model, inputTokens, outputTokens) {
     'claude-opus-4-20250514':    { in: 15.00, out: 75.00 },
     // Fable
     'claude-fable-5':            { in: 3.00, out: 15.00 },
+    // xAI Grok chat path. Keep provider-prefixed IDs in session stats.
+    'grok/grok-4.5':             { in: 2.00, out: 6.00 },
+    'grok/grok-4.3':             { in: 1.25, out: 2.50 },
     // Fast path
     'fast-path':                 { in: 0, out: 0 },
   }
@@ -99,6 +102,7 @@ function calculateCost(model, inputTokens, outputTokens) {
 }
 
 const OPENAI_MODEL_PREFIX = 'openai/'
+const GROK_MODEL_PREFIX = 'grok/'
 const OPENAI_AGENT_TOOL_NAMES = [
   // Knowledge graph core
   'read_graph', 'read_graph_content', 'read_node', 'list_graphs', 'list_meta_areas', 'search_graphs',
@@ -156,9 +160,17 @@ function isOpenAIModel(model) {
   return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
 }
 
-function stripOpenAIModelPrefix(model) {
-  return String(model || '').startsWith(OPENAI_MODEL_PREFIX)
-    ? String(model).slice(OPENAI_MODEL_PREFIX.length)
+function isGrokModel(model) {
+  return typeof model === 'string' && model.startsWith(GROK_MODEL_PREFIX)
+}
+
+function isOpenAICompatibleModel(model) {
+  return isOpenAIModel(model) || isGrokModel(model)
+}
+
+function stripProviderModelPrefix(model, prefix) {
+  return String(model || '').startsWith(prefix)
+    ? String(model).slice(prefix.length)
     : String(model || '')
 }
 
@@ -562,7 +574,26 @@ function parseOpenAIToolArgs(raw) {
 async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 6
   const selectedModel = options.model || `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
-  const openAIModel = stripOpenAIModelPrefix(selectedModel)
+  const provider = isGrokModel(selectedModel)
+    ? {
+        name: 'grok',
+        label: 'Grok',
+        binding: env.GROK_WORKER,
+        bindingName: 'GROK_WORKER',
+        url: 'https://grok.vegvisr.org/chat',
+        prefix: GROK_MODEL_PREFIX,
+        maxTokenField: 'max_tokens',
+      }
+    : {
+        name: 'openai',
+        label: 'OpenAI',
+        binding: env.OPENAI_WORKER,
+        bindingName: 'OPENAI_WORKER',
+        url: 'https://openai.vegvisr.org/chat',
+        prefix: OPENAI_MODEL_PREFIX,
+        maxTokenField: 'max_completion_tokens',
+      }
+  const providerModel = stripProviderModelPrefix(selectedModel, provider.prefix)
   const authContext = options?.authContext || null
   const planMode = options.mode === 'plan'
   const startTime = Date.now()
@@ -572,11 +603,11 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
   const log = (msg) => {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    console.log(`[openai-agent-loop +${elapsed}s] ${msg}`)
+    console.log(`[${provider.name}-agent-loop +${elapsed}s] ${msg}`)
   }
 
   try {
-    if (!env.OPENAI_WORKER) throw new Error('OPENAI_WORKER service binding is not configured.')
+    if (!provider.binding) throw new Error(`${provider.bindingName} service binding is not configured.`)
 
     let { allTools, operationMap } = await loadAllTools(env)
     allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
@@ -585,33 +616,35 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
     const openAIToolPrompt =
       `${systemPrompt}\n\n` +
-      `## OpenAI AgentChat Tooling\n` +
-      `You are running through the OpenAI provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
-      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this OpenAI tool list, say that this OpenAI path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.`
+      `## ${provider.label} AgentChat Tooling\n` +
+      `You are running through the ${provider.label} provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
+      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this ${provider.label} tool list, say that this provider path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.`
 
     const openAIMessages = [
       { role: 'system', content: openAIToolPrompt },
       ...messages.map(toOpenAIMessage).filter((m) => m.content && m.content.trim()),
     ]
 
-    log(`started | model=${selectedModel} providerModel=${openAIModel} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length}`)
+    log(`started | model=${selectedModel} providerModel=${providerModel} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length}`)
 
     while (turn < maxTurns) {
       turn++
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
-      const response = await env.OPENAI_WORKER.fetch('https://openai.vegvisr.org/chat', {
+      const requestBody = {
+        userId,
+        model: providerModel,
+        messages: openAIMessages,
+        temperature: 0.3,
+        tools: openAITools,
+        tool_choice: 'auto',
+        [provider.maxTokenField]: 4096,
+      }
+
+      const response = await provider.binding.fetch(provider.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId,
-          model: openAIModel,
-          messages: openAIMessages,
-          max_completion_tokens: 4096,
-          temperature: 0.3,
-          tools: openAITools,
-          tool_choice: 'auto',
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       const data = await response.json().catch(() => ({}))
@@ -623,8 +656,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       if (!response.ok) {
         const detail = typeof data.error === 'string' ? data.error : JSON.stringify(data.error || data)
         stats.success = false
-        stats.error = detail || 'OpenAI API error'
-        writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: `The OpenAI provider returned an error: ${stats.error}` })}\n\n`))
+        stats.error = detail || `${provider.label} API error`
+        writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: `The ${provider.label} provider returned an error: ${stats.error}` })}\n\n`))
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: stats.error })}\n\n`))
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, error: true })}\n\n`))
         break
@@ -791,7 +824,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
   const model = options.model || DEFAULT_MODEL
-  if (isOpenAIModel(model)) {
+  if (isOpenAICompatibleModel(model)) {
     return streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options)
   }
   const authContext = options?.authContext || null

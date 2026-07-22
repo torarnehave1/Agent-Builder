@@ -31,6 +31,8 @@ const MODEL_LABELS: Record<string, string> = {
   'claude-sonnet-4-20250514': 'Sonnet 4',
   'claude-opus-4-6': 'Opus 4.6',
   'claude-opus-4-20250514': 'Opus 4',
+  'grok/grok-4.5': 'Grok 4.5',
+  'grok/grok-4.3': 'Grok 4.3',
   'fast-path': 'Fast-path',
   '@cf/meta/llama-4-scout-17b-16e-instruct': 'Llama 4 Scout',
   '@cf/google/gemma-4-26b-a4b-it': 'Gemma 4 26B',

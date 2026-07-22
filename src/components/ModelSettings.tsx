@@ -100,6 +100,24 @@ const MODELS = [
     badgeColor: 'bg-teal-500/20 text-teal-300',
   },
   {
+    id: 'grok/grok-4.5',
+    name: 'Grok 4.5',
+    description: 'xAI flagship for code, HTML, JavaScript, agentic tool calling, and general reasoning.',
+    inputCost: 2.00,
+    outputCost: 6.00,
+    badge: 'xAI',
+    badgeColor: 'bg-zinc-500/20 text-zinc-200',
+  },
+  {
+    id: 'grok/grok-4.3',
+    name: 'Grok 4.3',
+    description: 'Lower-cost xAI test option with long context. Useful for comparing code and HTML tasks before using Grok 4.5.',
+    inputCost: 1.25,
+    outputCost: 2.50,
+    badge: 'xAI',
+    badgeColor: 'bg-zinc-500/20 text-zinc-200',
+  },
+  {
     id: '@cf/bytedance/stable-diffusion-xl-lightning',
     name: 'SDXL Lightning',
     description: 'Stable Diffusion XL Lightning. Every message becomes an image prompt.',
@@ -167,7 +185,7 @@ export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' 
       <div className="max-w-xl mx-auto">
         <h2 className={`text-base font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>Model</h2>
         <p className={`text-xs mb-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
-          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude and OpenAI models use the SSE chat path.
+          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude, OpenAI, and xAI models use the SSE chat path.
         </p>
 
         <div className="flex flex-col gap-3">
