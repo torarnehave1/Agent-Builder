@@ -113,7 +113,9 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'get_html_builder_reference', 'get_vemotion_reference', 'get_carousel_reference',
   'read_html_section', 'read_html_head', 'list_html_anchors',
   'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
-  'publish_html_node', 'list_graph_versions', 'get_graph_version',
+  // publish's prerequisite must ride along — a loop with publish but no create_subdomain
+  // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
+  'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',
   'restore_graph_version', 'restore_html_node_version',
   // Search, media, albums, photos
   'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash', 'analyze_image',
@@ -155,6 +157,33 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'proff_find_business_network',
 ]
 const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
+
+// Tools that MUTATE a knowledge-graph node/graph (they read the version, edit, then patch
+// with expectedVersion). These MUST run one-at-a-time — running two on the SAME node in
+// parallel races optimistic concurrency (409) and, for nth-based tools, mis-targets after
+// the first edit shifts indices. Every code path that batches tool_use blocks filters
+// against THIS single set (no per-loop copies that can drift). A test
+// (test-sequential-tools.mjs) fails if any KG-writing tool is missing here.
+export const SEQUENTIAL_TOOLS = new Set([
+  'create_graph', 'create_node', 'create_html_node', 'add_edge',
+  'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
+  // Deterministic html-node edit/structure tools (node-content mutations).
+  'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
+  'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
+  'restore_html_node_version', 'restore_graph_version', 'patch_node_metadata', 'remove_node',
+  'create_html_from_template', 'save_component', 'save_layout',
+  'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
+  'register_chat_bot', 'trigger_bot_response',
+  // Other KG-writing tools (registry writes, analysis-node writes, suggestions, publish/reorder,
+  // learnings, world email template) — all patch/add/save a node or graph and therefore race on
+  // concurrent same-target execution. Surfaced by test-sequential-tools.mjs (Lesson 65).
+  'save_learning', 'reorder_nodes', 'publish_html_node', 'set_world_email_template',
+  'add_user_suggestion', 'update_suggestion_status', 'add_whats_new', 'generate_app_showcase',
+  'analyze_node', 'analyze_graph', 'analyze_transcription',
+  'deploy_worker', 'delete_worker', 'register_capability_worker', 'register_deployed_worker',
+  'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot',
+  'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact', 'delegate_to_youtube_graph',
+])
 
 function isOpenAIModel(model) {
   return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
@@ -601,6 +630,19 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
   let turn = 0
   const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
 
+  // "Create a new graph" protection for the OpenAI/Grok path. Unlike the Claude path (which
+  // removes create_node/patch_* from the orchestrator → delegate_to_kg mints a fresh graph),
+  // this path exposes those write tools DIRECTLY. With the current context graphId injected in
+  // the prompt, the model would otherwise patch the context graph's title + add nodes to it
+  // instead of making a NEW graph. contextGraphId = the currently-selected graph; requiresNewGraph
+  // = the user explicitly asked to create a graph (tightened regex so "create a NODE in this
+  // graph" does NOT trigger); createdGraphId = the id create_graph returns this turn.
+  const contextGraphId = options.graphId || null
+  const latestUserText = getLatestUserText(messages)
+  const requiresNewGraph = /\b(create|build|make|generate|start)\s+(a\s+|an\s+|the\s+)?(new\s+)?(knowledge\s+)?graph\b/i.test(latestUserText) || /\bnew graph\b/i.test(latestUserText)
+  let createdGraphId = null
+  const GRAPH_WRITE_TOOLS = new Set(['create_node', 'create_html_node', 'add_edge', 'patch_node', 'patch_graph_metadata'])
+
   const log = (msg) => {
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`[${provider.name}-agent-loop +${elapsed}s] ${msg}`)
@@ -703,6 +745,24 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           continue
         }
 
+        // Once create_graph has run this turn, redirect any graph-write that has no graphId
+        // (or still points at the context graph) to the NEW graph — so the model can't keep
+        // appending nodes to the context graph after making a new one.
+        if (createdGraphId && GRAPH_WRITE_TOOLS.has(toolName) && (!input.graphId || input.graphId === contextGraphId)) {
+          log(`redirected ${toolName} from ${input.graphId || 'unset'} to new graph ${createdGraphId}`)
+          input.graphId = createdGraphId
+        }
+        // On an explicit "create a new graph" request, refuse to mutate the CONTEXT graph before
+        // create_graph has run — otherwise the model overwrites the current graph's title and adds
+        // nodes to it instead of making a new one.
+        if (requiresNewGraph && !createdGraphId && GRAPH_WRITE_TOOLS.has(toolName) && (!input.graphId || input.graphId === contextGraphId)) {
+          const message = `This request is to create a NEW graph, but "${toolName}" would modify the current context graph${contextGraphId ? ` (${contextGraphId})` : ''}. Call create_graph FIRST — it returns a new graphId — then use THAT id for create_node / add_edge / patch_node. Do NOT patch or add to the context graph.`
+          log(`blocked ${toolName} on context graph before create_graph (explicit new-graph intent)`)
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
+          openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
+          continue
+        }
+
         const toolStart = Date.now()
         writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolName, input })}\n\n`))
         const onProgress = (msg) => {
@@ -711,6 +771,11 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
         try {
           const result = await executeTool(toolName, { ...input, userId, authContext }, env, operationMap, onProgress)
+          // Capture a freshly-created graph id so subsequent writes this turn target it, not the context graph.
+          if (toolName === 'create_graph' && result && result.success !== false && result.graphId) {
+            createdGraphId = result.graphId
+            log(`create_graph → new graphId ${createdGraphId} (subsequent writes will target it)`)
+          }
           if (result.inputTokens) stats.inputTokens += result.inputTokens
           if (result.outputTokens) stats.outputTokens += result.outputTokens
 
@@ -1098,12 +1163,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         }
 
         // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
-        const SEQUENTIAL_TOOLS = new Set([
-          'create_graph', 'create_node', 'create_html_node', 'add_edge',
-          'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
-          'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-          'register_chat_bot', 'trigger_bot_response', 'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact', 'delegate_to_youtube_graph'
-        ])
+        // SEQUENTIAL_TOOLS is the single module-level set (defined near the top) — no per-loop copy.
         const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
         const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
         let inferredGraphId = null
@@ -1248,8 +1308,18 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // Pass nodeId and graphId for tools that create or edit HTML nodes
             if (result.nodeId) ssePayload.nodeId = result.nodeId
             if (result.graphId) ssePayload.graphId = result.graphId
-            // Pass updatedHtml for edit_html_node / replace_html_section so frontend can auto-preview
-            if ((toolUse.name === 'edit_html_node' || toolUse.name === 'replace_html_section') && result.updatedHtml) {
+            // Pass updatedHtml for every html-editing tool that returns it so the frontend
+            // can refresh the preview. Previously only edit_html_node/replace_html_section were
+            // wired, so the section/structural tools the prompt now recommends (append_to_section,
+            // insert_html_at, insert_in_element, move/remove_html_element, apply_layout) saved but
+            // left the preview stale — reading to the user as "the agent did nothing".
+            const HTML_EDIT_TOOLS_WITH_HTML = new Set([
+              'edit_html_node', 'replace_html_section', 'append_to_section',
+              'insert_html_at', 'insert_in_element', 'move_html_element',
+              'remove_html_element', 'apply_layout', 'fill_slot_with_component',
+              'bind_node_text', 'delegate_to_html_builder',
+            ])
+            if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
             }
             // Pass the email body for set_world_email_template so the frontend can open it in HtmlPreview
@@ -1527,12 +1597,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       }
 
       // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
-      const SEQUENTIAL_TOOLS = new Set([
-        'create_graph', 'create_node', 'create_html_node', 'add_edge',
-        'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
-        'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
-        'register_chat_bot', 'trigger_bot_response', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_youtube_graph'
-      ])
+      // SEQUENTIAL_TOOLS is the single module-level set (defined near the top) — no per-loop copy.
       const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
       const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
       let inferredGraphId = null

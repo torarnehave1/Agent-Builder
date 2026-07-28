@@ -660,10 +660,14 @@ async function fetchHtmlNode(env, graphId, nodeId) {
 // position 'end' (default) = before the close; 'start' = after the open. Additive.
 const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
 function parseSelector(t) {
-  const sel = { tag: null, id: null, classes: [] }
+  const sel = { tag: null, id: null, classes: [], attrs: [] }
   const idm = t.match(/#([\w-]+)/); if (idm) sel.id = idm[1]
-  sel.classes = [...t.matchAll(/\.([\w-]+)/g)].map(m => m[1])
-  const tagm = t.match(/^([a-z][a-z0-9-]*)/i); if (tagm) sel.tag = tagm[1].toLowerCase()
+  // Attribute selectors: [name], [name=val], [name="val"]. Parse BEFORE classes so a
+  // dotted value inside brackets isn't mistaken for a class. Enables targeting
+  // [data-slot="nav"] — the container shape layout skeletons use.
+  const attrSrc = t.replace(/\[([\w-]+)(?:\s*=\s*["']?([^\]"']*)["']?)?\]/g, (_, name, value) => { sel.attrs.push({ name, value: value === undefined ? undefined : value }); return ' ' })
+  sel.classes = [...attrSrc.matchAll(/\.([\w-]+)/g)].map(m => m[1])
+  const tagm = attrSrc.match(/^\s*([a-z][a-z0-9-]*)/i); if (tagm) sel.tag = tagm[1].toLowerCase()
   return sel
 }
 function matchesSelector(attrs, tag, sel) {
@@ -674,12 +678,19 @@ function matchesSelector(attrs, tag, sel) {
     const cls = m ? m[1].split(/\s+/) : []
     if (!sel.classes.every(c => cls.includes(c))) return false
   }
+  if (sel.attrs && sel.attrs.length) {
+    for (const a of sel.attrs) {
+      const nameRe = a.name.replace(/[-]/g, '\\-')
+      if (a.value === undefined) { if (!new RegExp('\\b' + nameRe + '(?=[\\s=>]|$)', 'i').test(attrs)) return false }
+      else { const m = attrs.match(new RegExp('\\b' + nameRe + '\\s*=\\s*["\']([^"\']*)["\']', 'i')); if (!m || m[1] !== a.value) return false }
+    }
+  }
   return true
 }
 function spliceInElement(html, target, snippet, position, nth) {
   const t = String(target || '').trim()
   const sel = parseSelector(t)
-  if (!sel.tag && !sel.id && !sel.classes.length) {
+  if (!sel.tag && !sel.id && !sel.classes.length && !sel.attrs.length) {
     return { error: "target must be a tag ('nav'), class ('.card'), id ('#hero'), or combo ('div.card')." }
   }
   // Collect matching OPEN tags (skip self-closing).
@@ -708,6 +719,175 @@ function spliceInElement(html, target, snippet, position, nth) {
   return { html: html.slice(0, idx) + '\n' + snippet + '\n' + html.slice(idx), tag: o.tag, matchCount: opens.length, picked: pick + 1 }
 }
 
+// Locate a WHOLE element (its open tag through its MATCHING close) by the same
+// small selector grammar as spliceInElement. Returns byte offsets so callers can
+// extract / remove / move the element. `start`..`end` spans the entire element;
+// `innerStart`..`innerEnd` spans just its children (between open and close tags).
+// This is the missing primitive behind remove_html_element / move_html_element —
+// repositioning was previously only doable via brittle edit_html_node string
+// matching, which burned the subagent's whole turn budget on large pages.
+function findElementRange(html, target, nth) {
+  const t = String(target || '').trim()
+  const sel = parseSelector(t)
+  if (!sel.tag && !sel.id && !sel.classes.length && !sel.attrs.length) {
+    return { error: "target must be a tag ('nav'), class ('.card'), id ('#hero'), or combo ('div.card')." }
+  }
+  const opens = []
+  const re = /<([a-z][a-z0-9-]*)\b([^>]*)>/gi
+  let m
+  while ((m = re.exec(html)) !== null) {
+    if (m[2].trimEnd().endsWith('/')) continue
+    const tag = m[1].toLowerCase()
+    if (matchesSelector(m[2], tag, sel)) opens.push({ tag, openStart: m.index, endOfOpen: re.lastIndex })
+  }
+  if (!opens.length) return { error: `No element matches "${t}" in this node.` }
+  const pick = (Number.isInteger(nth) && nth > 0) ? nth - 1 : 0
+  if (pick >= opens.length) return { error: `Only ${opens.length} element(s) match "${t}"; nth=${nth} is out of range.` }
+  const o = opens[pick]
+  if (VOID_TAGS.has(o.tag)) return { error: `<${o.tag}> is a void element — it has no closing tag to enclose a range.` }
+  const tre = new RegExp('<' + o.tag + '\\b[^>]*>|</' + o.tag + '\\s*>', 'gi')
+  tre.lastIndex = o.endOfOpen
+  let depth = 1, closeStart = -1, closeEnd = -1, m2
+  while ((m2 = tre.exec(html)) !== null) {
+    if (m2[0][1] === '/') { depth -= 1; if (depth === 0) { closeStart = m2.index; closeEnd = tre.lastIndex; break } }
+    else depth += 1
+  }
+  if (closeEnd === -1) return { error: `No matching </${o.tag}> for "${t}".` }
+  return { tag: o.tag, start: o.openStart, innerStart: o.endOfOpen, innerEnd: closeStart, end: closeEnd, matchCount: opens.length, picked: pick + 1 }
+}
+
+// Delete a whole element chosen by selector (nesting-aware). The clean way to
+// remove a misplaced/duplicate block — edit_html_node's content-loss guard fights
+// deletions (needs force:true + an exact string match), which thrashes on large
+// pages. Purely subtractive: removes exactly one matched element, nothing else.
+async function executeRemoveHtmlElement(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const target = String(input.target || input.selector || '').trim()
+  if (!target) return { success: false, error: "target is required — a selector like '.drop-zone', '#dropZone', or 'div.card'." }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `remove_html_element only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  const r = findElementRange(currentHtml, target, nth)
+  if (r.error) return { success: false, error: r.error }
+  const removed = currentHtml.slice(r.start, r.end)
+  const newHtml = currentHtml.slice(0, r.start) + currentHtml.slice(r.end)
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  const ambiguity = r.matchCount > 1 ? ` NOTE: "${target}" matched ${r.matchCount} elements — removed #${r.picked} (${nth ? 'you chose nth=' + nth : 'the first; pass nth to pick another'}).` : ''
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    target,
+    matchedTag: r.tag,
+    matchCount: r.matchCount,
+    picked: r.picked,
+    changed: true,
+    removedChars: removed.length,
+    charDelta: -removed.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Removed <${r.tag}> (${target}) from "${input.nodeId}" — ${removed.length} chars deleted.${ambiguity} Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
+// Reposition a whole element (chosen by selector) to a new place relative to a
+// destination element — the deterministic "move" primitive. Move = extract the
+// source element intact + splice it back at the destination, in ONE call with no
+// retyping and no content-loss risk. This is what "move the drop-zone out of
+// .main-layout so it sits below the grid" needs: move_html_element(target:'#dropZone',
+// to:'.main-layout', position:'after'). position: 'start'/'end' place it as the
+// first/last CHILD of `to`; 'before'/'after' place it as a SIBLING of `to`.
+async function executeMoveHtmlElement(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const target = String(input.target || input.selector || '').trim()
+  if (!target) return { success: false, error: "target is required — a selector for the element to MOVE, e.g. '#dropZone' or '.drop-zone'." }
+  const to = String(input.to || input.destination || '').trim()
+  if (!to) return { success: false, error: "to is required — a selector for the destination element, e.g. '.container' or '.main-layout'." }
+  const position = String(input.position || 'end').trim().toLowerCase()
+  if (!['start', 'end', 'before', 'after'].includes(position)) {
+    return { success: false, error: "position must be 'start'/'end' (place as first/last child of `to`) or 'before'/'after' (place as a sibling of `to`)." }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `move_html_element only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const srcNth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
+  const toNth = Number.isInteger(input.toNth) ? input.toNth : (input.toNth ? Number(input.toNth) : undefined)
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+
+  // 1. Locate & extract the element to move.
+  const src = findElementRange(currentHtml, target, srcNth)
+  if (src.error) return { success: false, error: `Source: ${src.error}` }
+  const moved = currentHtml.slice(src.start, src.end)
+  // 2. Remove it first, so destination offsets are computed on the post-removal HTML.
+  const without = currentHtml.slice(0, src.start) + currentHtml.slice(src.end)
+  // 3. Locate the destination in the post-removal HTML (guarantees we never splice
+  //    the element back inside itself — the source no longer exists to match).
+  const dst = findElementRange(without, to, toNth)
+  if (dst.error) return { success: false, error: `Destination: ${dst.error} (the destination must be a DIFFERENT element than the one being moved).` }
+  let idx
+  if (position === 'start') idx = dst.innerStart
+  else if (position === 'end') idx = dst.innerEnd
+  else if (position === 'before') idx = dst.start
+  else idx = dst.end // after
+  const trimmed = moved.replace(/^\n+|\n+$/g, '')
+  const newHtml = without.slice(0, idx) + '\n' + trimmed + '\n' + without.slice(idx)
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  const rel = position === 'start' || position === 'end'
+    ? `as the ${position === 'start' ? 'first' : 'last'} child of <${dst.tag}> (${to})`
+    : `${position} <${dst.tag}> (${to})`
+  const srcAmb = src.matchCount > 1 ? ` (source "${target}" matched ${src.matchCount}; moved #${src.picked}${srcNth ? '' : ' — pass nth to pick another'})` : ''
+  const dstAmb = dst.matchCount > 1 ? ` (destination "${to}" matched ${dst.matchCount}; used #${dst.picked}${toNth ? '' : ' — pass toNth to pick another'})` : ''
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    target,
+    to,
+    position,
+    movedTag: src.tag,
+    destinationTag: dst.tag,
+    changed: true,
+    charDelta: newHtml.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Moved <${src.tag}> (${target}) ${rel} in "${input.nodeId}".${srcAmb}${dstAmb} Element preserved intact (${moved.length} chars), no content lost. Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
+// True when `snippet` contains JavaScript declarations but has NO <script> wrapper.
+// Inserting such content at a body/head/element position (outside any <script>) makes it
+// DEAD TEXT that never executes — the v71 grid-builder failure: five handlers were
+// inserted after </script>, so all were `undefined` at runtime with no console error.
+// The insert tools call this and refuse, telling the model to wrap the JS in <script>.
+function isUnwrappedJs(snippet) {
+  const s = String(snippet || '')
+  if (/<script[\s>]/i.test(s)) return false // already wrapped (or a <script src=…>)
+  return /\bfunction\s+[A-Za-z_$][\w$]*\s*\(|\baddEventListener\s*\(|\b(?:document|window)\.(?:querySelector|getElementById|createElement|addEventListener)\s*\(/.test(s)
+}
+const JS_WRAPPER_HINT = 'The content looks like JavaScript but has NO <script> wrapper — inserted here it lands OUTSIDE any <script> block and renders as DEAD TEXT that never executes (declared functions end up "undefined" at runtime, with no error). Wrap it in <script>\n…your JS…\n</script> and insert again (position "before_body_end" is the usual spot for a script). If you meant to add to the page\'s EXISTING script, there is no in-place-script insert — wrap this JS in its own <script> tag; multiple <script> blocks are fine.'
+
 async function executeInsertInElement(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -716,6 +896,7 @@ async function executeInsertInElement(input, env) {
   if (!target) return { success: false, error: "target is required — a tag name (e.g. 'nav') or '#id'." }
   const snippet = String(input.html ?? input.content ?? '')
   if (input.html === undefined && input.content === undefined) return { success: false, error: 'html (the content to insert) is required.' }
+  if (isUnwrappedJs(snippet)) return { success: false, blocked: 'js_without_script_wrapper', error: JS_WRAPPER_HINT }
   const where = String(input.position || 'end').trim().toLowerCase()
   if (where !== 'end' && where !== 'start') return { success: false, error: "position must be 'end' (default) or 'start'." }
 
@@ -955,6 +1136,11 @@ async function executeInsertHtmlAt(input, env) {
   if (input.html === undefined && input.content === undefined) {
     return { success: false, error: 'html (the content to insert) is required.' }
   }
+  // Raw JS at any position but append_to_style (which takes CSS) lands outside a <script>
+  // block and never runs. Refuse before writing it — this is the v71 dead-code failure.
+  if (position !== 'append_to_style' && isUnwrappedJs(snippet)) {
+    return { success: false, blocked: 'js_without_script_wrapper', error: JS_WRAPPER_HINT }
+  }
 
   const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
   if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
@@ -964,20 +1150,29 @@ async function executeInsertHtmlAt(input, env) {
 
   const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
 
+  // Mask <script> bodies and HTML comments (same length, positions preserved) so tag
+  // searches can NEVER match a lookalike inside JS string literals — a component whose
+  // persist code contained the literal '</style>' got the appended CSS spliced into the
+  // middle of its JS string, corrupting the script with a silent SyntaxError
+  // (2026-07-24 theme-picker on ua.vegvisr.org).
+  const maskedHtml = currentHtml
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, m => '<script>' + ' '.repeat(m.length - 17) + '</script>')
+    .replace(/<!--[\s\S]*?-->/g, m => ' '.repeat(m.length))
+
   // Resolve the insertion index deterministically off single-occurrence tags.
   let idx = -1        // where the snippet is spliced in
   let missing = ''    // tag we needed but couldn't find
   if (position === 'before_body_end') {
-    idx = currentHtml.lastIndexOf('</body>'); if (idx === -1) missing = '</body>'
+    idx = maskedHtml.lastIndexOf('</body>'); if (idx === -1) missing = '</body>'
   } else if (position === 'before_head_end') {
-    idx = currentHtml.lastIndexOf('</head>'); if (idx === -1) missing = '</head>'
+    idx = maskedHtml.lastIndexOf('</head>'); if (idx === -1) missing = '</head>'
   } else if (position === 'append_to_style') {
-    idx = currentHtml.lastIndexOf('</style>'); if (idx === -1) missing = '</style>'
+    idx = maskedHtml.lastIndexOf('</style>'); if (idx === -1) missing = '</style>'
   } else if (position === 'after_body_start') {
-    const m = currentHtml.match(/<body[^>]*>/i)
+    const m = maskedHtml.match(/<body[^>]*>/i)
     if (m) idx = m.index + m[0].length; else missing = '<body>'
   } else if (position === 'after_head_start') {
-    const m = currentHtml.match(/<head[^>]*>/i)
+    const m = maskedHtml.match(/<head[^>]*>/i)
     if (m) idx = m.index + m[0].length; else missing = '<head>'
   }
 
@@ -1058,7 +1253,10 @@ function buildGateElement(opts) {
 function injectPublishedAuthBridge(html, graphId, opts) {
   if (!html) return html
   // Idempotent: skip the head script if already present (republish reads clean node.info anyway).
-  let out = html
+  // Substitute the {{GRAPH_ID}} token like the in-app viewer (applyGraphIdBindings) and the
+  // frontend Publish button do — publishing raw node.info left the literal token in the live
+  // page, breaking every runtime fetch built from it (2026-07-23 ua.vegvisr.org "graph 404").
+  let out = graphId ? html.replaceAll('{{GRAPH_ID}}', graphId) : html
   if (out.indexOf('components/vegvisr-auth.js') === -1) {
     const bridge = buildPublishedAuthBridge(graphId)
     const headIdx = out.indexOf('<head>')
@@ -1279,6 +1477,18 @@ async function executePublishHtmlNode(input, env) {
     }
   } catch (e) { /* bookkeeping only — publish already succeeded */ }
 
+  // LIVENESS CHECK — the KV write goes through the brand-worker service binding, which
+  // bypasses DNS entirely, so "publish accepted" does NOT mean the host serves anything.
+  // Publishing to a host with no subdomain/DNS used to report "It is now live" while the
+  // browser got NXDOMAIN (2026-07-24 themetest). Probe the public host: 530/1016 or a
+  // thrown fetch = not routed (needs create_subdomain); 522 = same-zone worker loopback
+  // on a REAL routed host (fine); anything else = serving.
+  let hostRoutes = true
+  try {
+    const probe = await fetch(`https://${host}/`, { method: 'HEAD', redirect: 'manual' })
+    if (probe.status === 530 || probe.status === 1016) hostRoutes = false
+  } catch (e) { hostRoutes = false }
+
   return {
     success: true,
     graphId: input.graphId,
@@ -1289,7 +1499,10 @@ async function executePublishHtmlNode(input, env) {
     html_bytes: html.length,
     via: proxyUrl,
     hostRecorded,
-    message: `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`,
+    hostRoutes,
+    message: hostRoutes
+      ? `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`
+      : `Content for "${input.nodeId}" (${html.length} chars) is stored for https://${host}/, but ${host} DOES NOT RESOLVE yet — the site is NOT reachable in a browser. Run create_subdomain('${host.split('.')[0]}', '${host.split('.').slice(1).join('.')}') to provision DNS + routing, after which the stored page serves immediately (no republish needed). Do NOT tell the user it is live.`,
   }
 }
 
@@ -3114,6 +3327,37 @@ async function executeSetWorldCredentials(input, env) {
     token_suffix: `...${cfToken.slice(-6)}`,
     token_status: verifyData.result?.status,
     next: 'You can now run provision_world_kv / publish_world_page for this founder.',
+  }
+}
+
+// Set config.cf_r2_public_base — the permanent public origin for a founder's realtime-recordings
+// R2 bucket (read by realtime-worker's getStorageCredentials, index.js:64). Does NOT touch DNS or
+// Cloudflare custom-domain routing; the hostname must already resolve to the bucket/proxy.
+async function executeSetRealtimeRecordingsDomain(input, env) {
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to set the realtime recordings domain.' }
+
+  const founderEmail = (input.founder_email || '').trim().toLowerCase()
+  if (!founderEmail) return { success: false, error: 'founder_email is required' }
+
+  let recordingsDomain = (input.recordings_domain || '').trim()
+  if (!recordingsDomain) return { success: false, error: 'recordings_domain is required' }
+  if (!/^https:\/\//i.test(recordingsDomain)) recordingsDomain = `https://${recordingsDomain}`
+  try { new URL(recordingsDomain) } catch { return { success: false, error: `"${recordingsDomain}" is not a valid URL` } }
+  recordingsDomain = recordingsDomain.replace(/\/+$/, '')
+
+  const existing = await env.DB.prepare('SELECT email, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket FROM config WHERE email = ?').bind(founderEmail).first()
+  if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
+  if (!existing.cf_r2_bucket) return { success: false, error: `${founderEmail} has no cf_r2_bucket configured yet — recordings have nowhere to land.` }
+
+  await env.DB.prepare('UPDATE config SET cf_r2_public_base = ? WHERE email = ?').bind(recordingsDomain, founderEmail).run()
+  return {
+    success: true,
+    founder_email: founderEmail,
+    cf_r2_public_base: recordingsDomain,
+    has_own_rtk_app: !!(existing.cf_rtk_app_id && existing.cf_rtk_token),
+    note: 'Set in config only. If the hostname is not yet routed to the R2 bucket/proxy, playback links will 404 until that DNS/route work is done.',
   }
 }
 
@@ -7487,6 +7731,275 @@ async function executeGetLayout(input, env) {
   }
 }
 
+// WRITE path for the Component Registry (fixes the read-only gap: the library could never
+// grow through the app). Stores a component/layout as a node in COMPONENT_REGISTRY_GRAPH_ID
+// with metadata.schema (contract), metadata.impl (the reusable HTML/CSS/JS), and
+// metadata.verify (proof). Verification is the system's acknowledged OPEN frontier — this
+// tool STORES whatever proof the caller provides and defaults to UNVERIFIED; it never claims
+// a piece is verified without a real-browser verdict. `kind` = 'component' | 'layout'.
+async function executeSaveRegistryItem(input, env, kind) {
+  const gate = await resolveSuperadminCaller(input, env, `save a ${kind} to the registry`)
+  if (!gate.ok) return { success: false, error: gate.error }
+  const name = String(input.name || '').trim().toLowerCase()
+  if (!/^[a-z][a-z0-9-]*$/.test(name)) return { success: false, error: `name must be kebab-case (a-z, 0-9, '-'), e.g. "grid-builder".` }
+  // Large impls can't survive a chat tool-call argument, so allow reading the impl straight
+  // from an html-node the caller already built + verified (build → verify → register-from-node).
+  let impl = String(input.impl ?? '')
+  if (input.fromNodeId) {
+    const srcGraph = input.fromGraphId || input.graphId
+    if (!srcGraph) return { success: false, error: 'fromGraphId (or graphId) is required when using fromNodeId.' }
+    const src = await fetchHtmlNode(env, srcGraph, input.fromNodeId)
+    if (!src.node) return { success: false, error: `fromNodeId "${input.fromNodeId}" not found in graph "${srcGraph}".` }
+    impl = String(src.node.info || '')
+  }
+  if (!impl) return { success: false, error: `impl (the reusable HTML/CSS/JS to store) is required — pass it inline, or pass fromGraphId+fromNodeId to read it from a node you already built.` }
+  if (kind === 'layout' && !/data-slot=/.test(impl)) {
+    return { success: false, error: `A layout impl must contain <div data-slot="NAME"> containers. This impl has none.` }
+  }
+  const schema = (input.schema && typeof input.schema === 'object') ? input.schema : {}
+  const v = (input.verify && typeof input.verify === 'object') ? input.verify : {}
+  const verdict = String(v.verdict || 'UNVERIFIED').toUpperCase()
+  const verifyMeta = { verdict, verifiedDate: v.verifiedDate || null, method: v.method || null, note: v.note || null }
+  const itemMeta = { schema, impl, verify: verifyMeta, updatedAt: new Date().toISOString(), updatedBy: gate.email || null }
+
+  const graphId = COMPONENT_REGISTRY_GRAPH_ID
+  const { items, error } = await fetchRegistryItems(env, kind)
+  if (error) return { success: false, error: `${kind} registry unavailable: ${error}` }
+  const existing = items.find(n => (n.label || '').toLowerCase() === name)
+  const unverifiedNote = verdict === 'PASS'
+    ? ''
+    : ` STORED AS UNVERIFIED — it will NOT count as verified (and list_${kind}s shows verified:false) until a REAL-BROWSER test sets verify.verdict='PASS'. Verification is the system's open frontier; do not mark PASS without an actual rendered-page observation.`
+
+  if (existing) {
+    if (input.overwrite !== true) {
+      return { success: false, error: `A ${kind} named "${name}" already exists (verify=${existing.metadata?.verify?.verdict || '?'}). Pass overwrite:true to replace its impl/schema/verify.` }
+    }
+    // patchNodeWithVersionRetry supplies expectedVersion + 409 retry — a raw patchNode
+    // call without it is rejected by the KG worker ("expectedVersion (integer) required"),
+    // which silently broke every registry OVERWRITE (2026-07-24 theme-picker re-register).
+    const data = await patchNodeWithVersionRetry(env, graphId, existing.id, {
+      metadata: { ...(existing.metadata || {}), ...itemMeta },
+      info: input.description || existing.info || `${kind}: ${name}`,
+    })
+    return { success: true, graphId, name, kind, nodeId: existing.id, overwritten: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Updated ${kind} "${name}" in the Component Registry (${impl.length} chars).${unverifiedNote}` }
+  }
+
+  const nodeId = `${kind}-${name}`
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graphId, node: {
+      id: nodeId, label: name, type: kind, info: input.description || `${kind}: ${name}`,
+      color: kind === 'component' ? '#2a9d8f' : '#45b7d1', bibl: [], position: { x: 0, y: 0 }, visible: true,
+      metadata: { origin: 'agent-registered', createdAt: new Date().toISOString(), ...itemMeta },
+    } }),
+  })
+  const data = await res.json()
+  if (!res.ok) return { success: false, error: data.error || `addNode failed (${res.status})` }
+  return { success: true, graphId, name, kind, nodeId, created: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Registered new ${kind} "${name}" in the Component Registry (${impl.length} chars), reusable via get_${kind}("${name}").${unverifiedNote}` }
+}
+
+// Assembly primitive: fetch a registered component's verified impl and splice it into a
+// named layout slot ([data-slot="NAME"]) of an html-node — the "app = layout + components +
+// content" model in one deterministic call (no hand-writing, no exact-string match).
+async function executeFillSlotWithComponent(input, env) {
+  const graphId = input.graphId, nodeId = input.nodeId
+  const slot = String(input.slot || '').trim()
+  const componentName = String(input.component || input.componentName || '').trim()
+  if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  if (!slot) return { success: false, error: 'slot is required — the layout slot name to fill, e.g. "main" or "aside".' }
+  if (!componentName) return { success: false, error: 'component is required — a registered component name (list_components).' }
+  const { items, error } = await fetchRegistryItems(env, 'component')
+  if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+  const comp = items.find(n => (n.label || '').toLowerCase() === componentName.toLowerCase())
+  if (!comp) return { success: false, error: `Component "${componentName}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
+  const impl = comp.metadata?.impl
+  if (!impl) return { success: false, error: `Component "${componentName}" has no stored impl.` }
+  // Reuse the nesting-aware selector splice; slot containers are [data-slot="NAME"].
+  // Spread the original input so the caller's auth (userId/authContext) reaches the inner
+  // Superadmin gate — building a fresh input object here would drop it (role=unknown).
+  const result = await executeInsertInElement({ ...input, target: `[data-slot="${slot}"]`, html: impl, position: input.position === 'start' ? 'start' : 'end' }, env)
+  if (result && result.success) {
+    result.componentInserted = componentName
+    result.slot = slot
+    result.componentVerified = comp.metadata?.verify?.verdict === 'PASS'
+    result.message = `Inserted component "${componentName}" (${impl.length} chars) into slot "${slot}" of "${nodeId}"${comp.metadata?.verify?.verdict === 'PASS' ? '' : ' — NOTE: this component is not browser-verified'}. Saved as v${result.version}, not live until published.`
+  } else if (result && result.error && /No element matches/.test(result.error)) {
+    return { success: false, error: `No [data-slot="${slot}"] container in "${nodeId}". Apply a layout first (apply_layout) so the slot exists, or check the slot name with list_layouts.` }
+  }
+  return result
+}
+
+// Bind a NODE's text into an html-node as an editable bound-text block — in ONE deterministic
+// call. This is the ONLY approved way to show editable node text: the marker alone renders
+// nothing, and hand-rolling a getknowgraph fetch is read-only. A prompt asking the agent to do
+// "insert the component AND place a marker" was unreliable (it placed the marker but skipped the
+// component). So this tool does BOTH atomically and idempotently:
+//   1. if the bound-text component impl is not already on the page, fetch it from the registry
+//      and insert it before </body>;
+//   2. place a <div data-bound-node data-bound-graph> marker where the text should appear
+//      (inside `target` if given, else before </body>).
+// The graph id is stamped explicitly (a bare marker renders "missing node/graph" in the viewer).
+async function executeBindNodeText(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  const graphId = input.graphId, nodeId = input.nodeId
+  const sourceNodeId = String(input.sourceNodeId || input.textNodeId || input.contentNodeId || '').trim()
+  if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId (the html-node to edit) are required.' }
+  if (!sourceNodeId) return { success: false, error: 'sourceNodeId is required — the node whose text to show and make editable.' }
+  const sourceGraphId = String(input.sourceGraphId || graphId).trim()
+  const target = String(input.target || input.selector || '').trim()
+
+  const { node } = await fetchHtmlNode(env, graphId, nodeId)
+  if (!node) return { success: false, error: `Node "${nodeId}" not found.` }
+  if (node.type !== 'html-node') return { success: false, error: `bind_node_text only works on html-node. "${nodeId}" is type "${node.type}".` }
+
+  // Confirm the source node exists so a mismatch is a readable error, not a silent blank marker.
+  const src = await fetchHtmlNode(env, sourceGraphId, sourceNodeId)
+  if (!src.node) return { success: false, error: `sourceNodeId "${sourceNodeId}" not found in graph "${sourceGraphId}".` }
+
+  let html = (node.info || '').replace(/\r\n/g, '\n')
+  let componentInserted = false
+
+  // 1. Ensure the bound-text component impl is present (idempotent).
+  if (!/data-component=["']bound-text["']/.test(html)) {
+    const { items, error } = await fetchRegistryItems(env, 'component')
+    if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+    const comp = items.find(n => (n.label || '').toLowerCase() === 'bound-text')
+    if (!comp || !comp.metadata?.impl) return { success: false, error: 'bound-text component is not in the registry.' }
+    const impl = comp.metadata.impl
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, impl + '\n</body>') : html + '\n' + impl
+    componentInserted = true
+  }
+
+  // 2. Place the marker (explicit graph id — never rely on a graph-id global).
+  const marker = `<div data-bound-node="${sourceNodeId}" data-bound-graph="${sourceGraphId}"></div>`
+  if (target) {
+    const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
+    const r = spliceInElement(html, target, marker, 'end', nth)
+    if (r.error) return { success: false, error: `Could not place the marker in "${target}": ${r.error}` }
+    html = r.html
+  } else {
+    html = /<\/body>/i.test(html) ? html.replace(/<\/body>/i, marker + '\n</body>') : html + '\n' + marker
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, graphId, nodeId, {
+    info: html, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  return {
+    success: true,
+    graphId, nodeId, sourceNodeId, sourceGraphId,
+    componentInserted, markerPlaced: true,
+    changed: true,
+    version: patchData.newVersion,
+    updatedHtml: html,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version.`,
+    message: `Bound "${sourceNodeId}" into "${nodeId}" as an editable bound-text block${componentInserted ? ' (added the bound-text component)' : ''}. Superadmin/Admin get an in-place pencil that saves back to the node; visitors see read-only rendered markdown. Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
+// Convert an EXISTING html-node to a verified page layout in ONE deterministic call.
+// Restructuring a whole page (moving all existing markup into a layout's slots while
+// keeping the scripts wired) is the single hardest thing for the builder and overran the
+// 20-turn budget every time (2026-07-22 holy-grail attempt: 13 versions, never applied).
+// This tool does it atomically: fetch the verified skeleton, splice it into the body,
+// clear its placeholder text, then MOVE each mapped existing section into its slot with
+// findElementRange (nesting-aware, no retyping → nothing lost, scripts untouched).
+async function executeApplyLayout(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const layoutName = String(input.layout || input.name || '').trim()
+  if (!layoutName) return { success: false, error: 'layout is required (e.g. "holy-grail"). Call list_layouts to see options.' }
+  const slots = Array.isArray(input.slots) ? input.slots : []
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `apply_layout only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+
+  // Fetch the verified skeleton from the layout registry (same source as get_layout).
+  const reg = await fetchRegistryItems(env, 'layout')
+  if (reg.error) return { success: false, error: `Layout registry unavailable: ${reg.error}` }
+  const layoutNode = (reg.items || []).find(n => (n.label || '').toLowerCase() === layoutName.toLowerCase())
+  if (!layoutNode) return { success: false, error: `Layout "${layoutName}" not found. Available: ${(reg.items || []).map(n => n.label).join(', ') || '(none)'}.` }
+  const impl = (layoutNode.metadata || {}).impl
+  if (!impl) return { success: false, error: `Layout "${layoutName}" has no stored impl.` }
+  const declaredSlots = ((layoutNode.metadata || {}).schema || {}).slots || []
+
+  let working = (node.info || '').replace(/\r\n/g, '\n')
+
+  // 1. Splice the skeleton in right after <body>, above the existing content.
+  const bodyM = working.match(/<body[^>]*>/i)
+  if (!bodyM) return { success: false, error: 'No <body> tag — cannot apply a page layout to an HTML fragment. Add a full page shell first.' }
+  const bodyEnd = bodyM.index + bodyM[0].length
+  working = working.slice(0, bodyEnd) + '\n' + impl + '\n' + working.slice(bodyEnd)
+
+  // 2. Clear each slot's default placeholder text (the impl ships ">header<", ">nav<", …).
+  for (const sname of declaredSlots) {
+    const r = findElementRange(working, `[data-slot="${sname}"]`)
+    if (!r.error) working = working.slice(0, r.innerStart) + working.slice(r.innerEnd)
+  }
+
+  // 3. Move each mapped existing section into its slot (placeholder already cleared → append).
+  const filled = new Set(); const moved = []; const warnings = []
+  for (const map of slots) {
+    const sname = String(map.slot || '').trim()
+    const target = String(map.target || map.selector || '').trim()
+    if (!sname || !target) { warnings.push(`skipped mapping (need slot+target): ${JSON.stringify(map)}`); continue }
+    const slotSel = `[data-slot="${sname}"]`
+    if (findElementRange(working, slotSel).error) { warnings.push(`slot "${sname}" is not in the ${layoutName} skeleton (slots: ${declaredSlots.join(', ')})`); continue }
+    const src = findElementRange(working, target, Number.isInteger(map.nth) ? map.nth : undefined)
+    if (src.error) { warnings.push(`source "${target}" → ${sname}: ${src.error}`); continue }
+    const chunk = working.slice(src.start, src.end).replace(/^\n+|\n+$/g, '')
+    const without = working.slice(0, src.start) + working.slice(src.end)
+    const dst = findElementRange(without, slotSel)
+    if (dst.error) { warnings.push(`slot "${sname}" not found after moving "${target}" — skipped`); continue }
+    working = without.slice(0, dst.innerEnd) + '\n' + chunk + '\n' + without.slice(dst.innerEnd)
+    filled.add(sname); moved.push(`${target} → ${sname}`)
+  }
+
+  // 4. Optional cleanup: remove leftover wrappers that are now empty. Guarded — never
+  //    removes an element that still holds a <script>/<style>/media, an element child, or
+  //    visible text (so it can't nuke the app's code). Pass inner wrappers before outer.
+  const unwrap = Array.isArray(input.removeEmpty) ? input.removeEmpty : (input.removeEmpty ? [input.removeEmpty] : [])
+  const unwrapped = []
+  for (const sel of unwrap) {
+    const r = findElementRange(working, String(sel))
+    if (r.error) continue
+    const inner = working.slice(r.innerStart, r.innerEnd)
+    const hasCode = /<(script|style|video|iframe|canvas|svg)\b/i.test(inner)
+    const hasEl = /<[a-z]/i.test(inner.replace(/<!--[\s\S]*?-->/g, ''))
+    const hasText = inner.replace(/<!--[\s\S]*?-->/g, '').replace(/<[^>]+>/g, '').trim().length > 0
+    if (!hasCode && !hasEl && !hasText) { working = working.slice(0, r.start) + working.slice(r.end); unwrapped.push(String(sel)) }
+    else warnings.push(`kept "${sel}" — still has content (not empty)`)
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: working, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    layout: layoutName,
+    slotsAvailable: declaredSlots,
+    slotsFilled: [...filled],
+    moved,
+    unwrapped,
+    warnings,
+    changed: true,
+    charDelta: working.length - (node.info || '').length,
+    version: patchData.newVersion,
+    updatedHtml: working,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion}, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Applied "${layoutName}" layout to "${input.nodeId}": inserted the verified skeleton (slots: ${declaredSlots.join(', ')}) and moved ${moved.length} section(s) into slots${moved.length ? ' (' + moved.join('; ') + ')' : ''}.${unwrapped.length ? ' Removed empty wrappers: ' + unwrapped.join(', ') + '.' : ''}${warnings.length ? ' ⚠ ' + warnings.join(' | ') : ''} Saved as v${patchData.newVersion}, not live until published — VERIFY in a rendered preview that every feature still works.`,
+  }
+}
+
 async function fetchWorkerSpec(fetcher, baseUrl) {
   try {
     let res = await fetcher.fetch(`${baseUrl}/openapi.json`)
@@ -9118,6 +9631,175 @@ async function executeOnboardingStatus(input, env) {
   return await res.json()
 }
 
+// Generic, READ-ONLY Cloudflare API introspection. Two credential sources:
+//  - founder_email omitted -> env.CF_ACCOUNT_ID / env.CF_API_TOKEN, the platform admin's OWN
+//    Cloudflare account (wrangler.toml vars, verified 2026-07-28 as "Torarnehave@gmail.com's
+//    Account"). This is the default and the common case.
+//  - founder_email given -> that founder's config.cf_account_id/cf_api_token, for inspecting a
+//    SPECIFIC founder's own account (e.g. Stine's R2/KV). NOTE: config rows are NOT reliably
+//    correct — torarnehave@gmail.com's own config row was found cross-wired to a different
+//    founder's (lydmorah.net@gmail.com) account, so this path can return another founder's data
+//    if their row is wrong. world_founders.cf_account_id is the more trustworthy source when in
+//    doubt, but this tool intentionally mirrors cfApi()/resolveWorldCredentials()'s existing
+//    config-based lookup rather than silently substituting a different table.
+async function executeCloudflareApi(input, env) {
+  const founderEmail = (input.founder_email || '').trim().toLowerCase()
+  let path = (input.path || '').trim()
+  if (!path) throw new Error('path is required, e.g. /r2/buckets or /storage/kv/namespaces/<id>/keys')
+  if (!path.startsWith('/')) path = `/${path}`
+  // Read-only by construction: no method override is accepted (always GET below), so this tool
+  // can inspect but never mutate an account from a chat message.
+
+  let cfAccount, cfToken
+  if (founderEmail) {
+    const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+    cfAccount = (row && row.cf_account_id) || ''
+    cfToken = row && row.cf_api_token
+    if (!cfAccount) throw new Error(`No cf_account_id stored for ${founderEmail}`)
+    if (!cfToken) throw new Error(`No cf_api_token stored for ${founderEmail}`)
+  } else {
+    cfAccount = env.CF_ACCOUNT_ID || ''
+    cfToken = env.CF_API_TOKEN || ''
+    if (!cfAccount || !cfToken) throw new Error('CF_ACCOUNT_ID/CF_API_TOKEN not configured on this worker')
+  }
+
+  // Accept paths already scoped to /accounts/<id>/... or bare resource paths like /r2/buckets —
+  // auto-prefix the latter with this founder's account id so callers don't have to know it.
+  const fullPath = path.startsWith('/accounts/') ? path : `/accounts/${cfAccount}${path}`
+  const query = (input.query && typeof input.query === 'object') ? input.query : null
+  const qs = query ? `?${new URLSearchParams(query).toString()}` : ''
+
+  const { ok, status, json, error } = await cfApi(`${fullPath}${qs}`, cfToken, { method: 'GET' })
+  if (!ok) throw new Error(error || `Cloudflare API ${status} for ${fullPath}`)
+  return { path: fullPath, result: json.result, result_info: json.result_info || null }
+}
+
+// ── MCP (Model Context Protocol) client ───────────────────────────
+// An MCP server is just an HTTP endpoint speaking JSON-RPC 2.0, so we talk to it directly
+// instead of relying on a provider-specific connector. That matters here because AgentChat is
+// multi-model (Claude, GPT, Grok, Llama, Gemma, Nemotron…): doing the MCP call ourselves and
+// handing the model an ordinary function-calling tool means EVERY model gets MCP, not just one
+// vendor's. (Verified 2026-07-28: Anthropic's Messages API rejects `mcp_toolset` outright and
+// silently ignores `mcp_servers`, so the provider-native route was a dead end anyway.)
+
+const MCP_SERVERS = {
+  'cloudflare-docs': {
+    url: 'https://docs.mcp.cloudflare.com/mcp',
+    auth: null, // public — verified working with no credentials
+    description: 'Cloudflare product documentation search (Workers, R2, KV, D1, Zero Trust, DNS…)',
+  },
+  // The remaining Cloudflare servers require an OAuth access token obtained via an interactive
+  // browser flow, which a Worker cannot perform. Registered here so the shape is ready; each
+  // needs `auth` populated with a bearer token before it will work.
+  'cloudflare': { url: 'https://mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Cloudflare account API (Code Mode)' },
+  'cloudflare-bindings': { url: 'https://bindings.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Manage Workers bindings (KV, R2, D1)' },
+  'cloudflare-builds': { url: 'https://builds.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Workers build status and logs' },
+  'cloudflare-observability': { url: 'https://observability.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Workers logs, analytics, errors' },
+}
+
+// MCP streamable-HTTP replies are SSE-framed ("event: message\ndata: {...}"), not bare JSON,
+// so pull the JSON out of the data: lines. Falls back to plain JSON.parse for servers that
+// answer with a normal body.
+function parseMcpResponse(text) {
+  const trimmed = (text || '').trim()
+  if (trimmed.startsWith('{')) {
+    try { return JSON.parse(trimmed) } catch { /* fall through to SSE parsing */ }
+  }
+  for (const line of trimmed.split('\n')) {
+    const s = line.trim()
+    if (s.startsWith('data:')) {
+      const payload = s.slice(5).trim()
+      if (!payload || payload === '[DONE]') continue
+      try { return JSON.parse(payload) } catch { /* keep scanning */ }
+    }
+  }
+  throw new Error(`Could not parse MCP response: ${trimmed.slice(0, 300)}`)
+}
+
+async function mcpRpc(server, method, params) {
+  const headers = {
+    'Content-Type': 'application/json',
+    // Streamable HTTP servers require BOTH, and reject the request without the SSE type.
+    Accept: 'application/json, text/event-stream',
+  }
+  if (server.auth) headers.Authorization = `Bearer ${server.auth}`
+
+  const res = await fetch(server.url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params || {} }),
+    signal: AbortSignal.timeout(30000),
+  })
+
+  const text = await res.text()
+  if (!res.ok) throw new Error(`MCP ${method} failed (${res.status}): ${text.slice(0, 300)}`)
+
+  const json = parseMcpResponse(text)
+  if (json.error) throw new Error(`MCP ${method} error: ${json.error.message || JSON.stringify(json.error)}`)
+  return json.result
+}
+
+async function executeMcpCall(input, env) {
+  const serverName = (input.server || '').trim()
+  if (!serverName) {
+    return {
+      error: 'server is required',
+      available_servers: Object.entries(MCP_SERVERS).map(([name, s]) => ({
+        name, description: s.description, ready: !s.requiresOAuth || Boolean(s.auth),
+      })),
+    }
+  }
+
+  const server = MCP_SERVERS[serverName]
+  if (!server) {
+    throw new Error(`Unknown MCP server "${serverName}". Available: ${Object.keys(MCP_SERVERS).join(', ')}`)
+  }
+  if (server.requiresOAuth && !server.auth) {
+    throw new Error(`MCP server "${serverName}" requires an OAuth access token that is not configured. Only "cloudflare-docs" works without credentials today.`)
+  }
+
+  const toolName = (input.tool_name || '').trim()
+
+  // No tool_name → discovery. Lets the model find out what a server offers before calling it.
+  if (!toolName) {
+    const result = await mcpRpc(server, 'tools/list', {})
+    const tools = (result.tools || []).map((t) => ({
+      name: t.name,
+      description: t.description,
+      input_schema: t.inputSchema, // MCP spells it inputSchema; normalize for the model
+    }))
+    return {
+      server: serverName,
+      tools,
+      // agent-loop surfaces result.message as the SSE summary line — without it the UI shows
+      // a bare "mcp_call completed" and the user can't see what came back.
+      message: `${serverName}: ${tools.length} tool(s) — ${tools.map((t) => t.name).join(', ')}`,
+    }
+  }
+
+  const result = await mcpRpc(server, 'tools/call', {
+    name: toolName,
+    arguments: (input.arguments && typeof input.arguments === 'object') ? input.arguments : {},
+  })
+
+  // MCP returns content as an array of typed blocks — flatten the text for the model.
+  const textOut = (result.content || [])
+    .filter((c) => c && c.type === 'text')
+    .map((c) => c.text)
+    .join('\n\n')
+
+  return {
+    server: serverName,
+    tool: toolName,
+    is_error: Boolean(result.isError),
+    text: textOut || null,
+    structured: result.structuredContent || null,
+    message: result.isError
+      ? `${serverName}/${toolName}: MCP tool reported an error`
+      : `${serverName}/${toolName}: ${textOut ? `${textOut.length} chars returned` : 'no text content'}`,
+  }
+}
+
 // ── Chat DB tools ─────────────────────────────────────────────────
 
 async function executeChatDbListTables(env) {
@@ -9940,6 +10622,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAppendToSection(toolInput, env)
     case 'insert_in_element':
       return await executeInsertInElement(toolInput, env)
+    case 'remove_html_element':
+      return await executeRemoveHtmlElement(toolInput, env)
+    case 'move_html_element':
+      return await executeMoveHtmlElement(toolInput, env)
+    case 'apply_layout':
+      return await executeApplyLayout(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':
@@ -10087,6 +10775,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDeployWorldProxy(toolInput, env)
     case 'set_world_credentials':
       return await executeSetWorldCredentials(toolInput, env)
+    case 'set_realtime_recordings_domain':
+      return await executeSetRealtimeRecordingsDomain(toolInput, env)
     case 'check_world_credentials':
       return await executeCheckWorldCredentials(toolInput, env)
     case 'provision_world_kv':
@@ -10273,6 +10963,14 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeListLayouts(toolInput, env)
     case 'get_layout':
       return await executeGetLayout(toolInput, env)
+    case 'save_component':
+      return await executeSaveRegistryItem(toolInput, env, 'component')
+    case 'save_layout':
+      return await executeSaveRegistryItem(toolInput, env, 'layout')
+    case 'fill_slot_with_component':
+      return await executeFillSlotWithComponent(toolInput, env)
+    case 'bind_node_text':
+      return await executeBindNodeText(toolInput, env)
     case 'get_secure_worker_template':
       return await executeGetSecureWorkerTemplate(toolInput, env)
     case 'create_capability_blueprint':
@@ -10297,6 +10995,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeDbQuery(toolInput, env)
     case 'onboarding_status':
       return await executeOnboardingStatus(toolInput, env)
+    case 'cloudflare_api':
+      return await executeCloudflareApi(toolInput, env)
+    case 'mcp_call':
+      return await executeMcpCall(toolInput, env)
     case 'calendar_list_tables':
       return await executeCalendarListTables(env)
     case 'calendar_query':
@@ -10395,20 +11097,18 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       // Phantom-success detection: subagent claims success + tried to edit, but the
       // node is byte-identical → the change did not persist. Override to failure.
       const phantomSuccess = result.success === true && editAttempted && contentChanged === false
-      // FALSE-NEGATIVE fix (L36): the subagent can run out of turns AFTER its edit
-      // already landed, returning success:false — but the bytes DID change. Reporting a
-      // flat failure then (a) lies the other way and (b) blocks the frontend from
-      // refreshing the preview (it only refreshes on success), so the user sees a STALE
-      // page and concludes nothing happened. Treat "changed but not cleanly finished" as
-      // a success WITH a verify-caveat, so the preview refreshes and the truth shows.
+      // Partial-change handling: the subagent can run out of turns AFTER a write
+      // already landed. That is not a completed feature, but the frontend still
+      // needs the new HTML so the user sees the true partial state instead of a
+      // stale preview.
       const landedButUnconfirmed = result.success === false && contentChanged === true
-      const finalSuccess = phantomSuccess ? false : (result.success || landedButUnconfirmed)
+      const finalSuccess = phantomSuccess ? false : result.success
 
       let message
       if (phantomSuccess) {
         message = `HTML Builder reported success but the node content DID NOT CHANGE (still ${afterInfo.length} chars, byte-identical). The edit did NOT land — do NOT tell the user it is done. Re-run with an exact old→new instruction (quote the precise text to replace), or the change genuinely made no difference.`
       } else if (landedButUnconfirmed) {
-        message = `HTML Builder did NOT finish cleanly (${result.error || 'ran out of turns'}), BUT the node content DID change (${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}). The edit landed but was not fully confirmed by the builder — tell the user exactly what changed and to verify it matches the request, and re-run if it looks incomplete. Do NOT claim the preview auto-refreshed unless you know it did.`
+        message = `HTML Builder did NOT finish cleanly (${result.error || 'ran out of turns'}), and the requested feature is INCOMPLETE. The node content did change (${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}), so the preview can refresh to show the partial state. Do NOT report this as done. Re-read the node, verify what is actually present, then continue with smaller deterministic edits instead of repeating the same broad delegation.`
       } else if (finalSuccess) {
         const proof = contentChanged === true ? ` [verified: content changed, ${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}]` : ''
         message = `HTML Builder completed: ${(result.summary || '').slice(0, 500)}${proof}`
@@ -10429,6 +11129,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         charDelta,
         version: graphVersion,
         phantomSuccess,
+        partialChange: landedButUnconfirmed,
+        updatedHtml: landedButUnconfirmed && afterInfo !== null ? afterInfo : undefined,
         savedNotLive: finalSuccess && contentChanged === true,
         publishReminder: (finalSuccess && contentChanged === true)
           ? `Change saved${graphVersion !== null ? ` as v${graphVersion}` : ''} in the graph, NOT live on any domain until published. Tell the user the new version${graphVersion !== null ? ` ("nå på v${graphVersion}", roll back any time with restore_html_node_version)` : ''} AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`

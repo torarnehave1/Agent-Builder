@@ -2064,7 +2064,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               }
               return prev;
             });
-          } else if (toolName === 'edit_html_node' || toolName === 'replace_html_section') {
+          } else if (toolName === 'edit_html_node' || toolName === 'replace_html_section' ||
+                     toolName === 'append_to_section' || toolName === 'insert_html_at' ||
+                     toolName === 'insert_in_element' || toolName === 'move_html_element' ||
+                     toolName === 'remove_html_element' || toolName === 'apply_layout') {
             const resultData = ev.data as Record<string, unknown>;
             if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string, (resultData.graphId as string) || lastAgentGraphRef.current || null); }
             const updatedHtml = resultData.updatedHtml as string;
@@ -2164,7 +2167,9 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         // which reads as the agent lying. The success:true path is handled above; this
         // covers the failure/partial path so the preview always shows the truth.
         if (ev.type === 'tool_result' && !ev.data.success && onPreview &&
-            (ev.data.tool === 'delegate_to_html_builder' || ev.data.tool === 'replace_html_section' || ev.data.tool === 'edit_html_node')) {
+            (ev.data.tool === 'delegate_to_html_builder' || ev.data.tool === 'replace_html_section' || ev.data.tool === 'edit_html_node' ||
+             ev.data.tool === 'append_to_section' || ev.data.tool === 'insert_html_at' || ev.data.tool === 'insert_in_element' ||
+             ev.data.tool === 'move_html_element' || ev.data.tool === 'remove_html_element' || ev.data.tool === 'apply_layout')) {
           const rd = ev.data as Record<string, unknown>;
           const gId = (rd.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
           const nId = (rd.nodeId || lastHtmlNodeIdRef.current) as string | undefined;

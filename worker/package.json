@@ -4,7 +4,9 @@
   "description": "Cloudflare Worker that executes autonomous agents with Knowledge Graph tools.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test-sequential-tools.mjs",
+    "predeploy": "node test-sequential-tools.mjs",
+    "deploy": "wrangler deploy"
   },
   "keywords": [],
   "author": "",

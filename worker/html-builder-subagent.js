@@ -21,6 +21,9 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 3. \`edit_html_node\` — Find-and-replace exact text. old_string must match exactly (use matchedLine from reads). BRITTLE on large pages — the exact string often mismatches, which burns turns. LAST RESORT only: use it for a small, exact, in-place text tweak you have just read. To ADD new content use \`insert_html_at\`; to CHANGE an anchored region use \`replace_html_section\`.
 3a. \`list_html_anchors\` / \`replace_html_section\` — the RELIABLE way to CHANGE an existing region. Editable regions are delimited by comment markers \`<!-- edit:<id>:start --> … <!-- edit:<id>:end -->\`. \`list_html_anchors\` shows which exist; \`replace_html_section(anchorId, html)\` swaps everything between the two markers by NAME — it cannot mismatch. To edit an existing section: if it has an anchor, use replace_html_section; if not, wrap it ONCE with the two markers via a single edit_html_node, then use replace_html_section from then on.
 3b. \`insert_html_at\` — the RELIABLE way to ADD new content (a button, a \`<script>\`, extra CSS, a nav bar, a widget) to an existing page. Inserts at a named position keyed to the page's own tags, so it CANNOT mismatch and needs no anchors: \`before_body_end\` (scripts & body-level buttons/widgets), \`after_body_start\` (top-of-page bars), \`before_head_end\` (\`<link>\`/\`<meta>\`/\`<style>\` blocks), \`append_to_style\` (add CSS rules/variables to the existing \`<style>\` — pass raw CSS, no \`<style>\` wrapper), \`after_head_start\`. A multi-region feature like a light/dark theme toggle is THREE calls: \`append_to_style\` for the CSS, \`before_body_end\` for the button, \`before_body_end\` for the toggle script — never reach for edit_html_node for this.
+3c. \`insert_in_element\` — ADD content INSIDE a specific element chosen by a small CSS selector (tag \`nav\`, class \`.card\`, id \`#hero\`, combo \`div.card\`). Use when \`insert_html_at\`'s body/head positions are not precise enough — e.g. put a button in the \`<nav>\`, a cell in a \`.grid-wrapper\`. position \`end\` (before the element's close) / \`start\` (after its open). If several match, pass \`nth\` (1-based).
+3d. \`move_html_element\` — the RELIABLE way to REPOSITION an element that is in the WRONG PLACE. This is the tool for "move X out of Y", "put the drop-zone below the grid", "it's under the left menu, move it". \`target\` = selector of the element to move; \`to\` = selector of the destination; position \`start\`/\`end\` (first/last CHILD of \`to\`) or \`before\`/\`after\` (SIBLING of \`to\`). It extracts the whole element and re-splices it in ONE call — do NOT try to move things with edit_html_node (brittle) or by remove-then-recreate (retypes = drops content). Example: a drop-zone wrongly nested inside a two-column \`.main-layout\` grid (so it wraps under the sidebar) → \`move_html_element(target:'#dropZone', to:'.main-layout', position:'after')\` makes it a full-width sibling below the grid.
+3e. \`remove_html_element\` — DELETE a whole element by selector (nesting-aware, subtractive). Use to remove a misplaced or duplicate block instead of fighting edit_html_node's content-loss guard. If several match, pass \`nth\`.
 4. \`validate_html_syntax\` — Counts brackets/braces/parentheses in all <script> blocks. Reports the EXACT line where nesting breaks. Runs automatically after every edit — check its output.
 5. \`rollback_html_node\` — Restore an HTML node to a previous version. Every edit creates a version. If you've broken something, roll back and try a surgical fix instead of rewriting.
 6. \`create_html_node\` / \`create_html_from_template\` — Create new HTML apps.
@@ -45,7 +48,9 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - For syntax errors: \`validate_html_syntax\` results are provided upfront — go straight to the reported line
 
 ### Step 4: Make the change — pick the RIGHT tool (this is what saves turns)
-- ADDING something new (button, script, CSS, section, widget)? → \`insert_html_at\` with a named position. Deterministic, never mismatches.
+- ADDING something new (button, script, CSS, section, widget)? → \`insert_html_at\` with a named position, or \`insert_in_element\` to target a specific element. Deterministic, never mismatches.
+- REPOSITIONING an element that is in the wrong place (wrong column, under the sidebar, needs to sit below/above/outside another element)? → \`move_html_element(target, to, position)\`. ONE call. NEVER move by edit_html_node or by delete-then-recreate.
+- DELETING a misplaced/duplicate element? → \`remove_html_element(target)\` by selector.
 - CHANGING an existing region that has an anchor? → \`replace_html_section\`.
 - Small exact in-place text tweak on content you just read? → \`edit_html_node\` (last resort; old_string must match exactly).
 - Make one edit per call. Multiple edits = multiple calls.
@@ -66,8 +71,10 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - Every edit_html_node creates a new version automatically. You always have a safety net.
 
 ## HTML creation rules
+- **Converting an EXISTING page to a layout? Use \`apply_layout\` — do NOT hand-restructure.** To make an existing html-node use a layout (holy-grail, app-shell, two-column, etc.), call \`list_layouts\` for the slot names, then ONE \`apply_layout(nodeId, layout, slots)\` call: it inserts the verified skeleton and MOVES your mapped sections into its slots deterministically (e.g. \`slots:[{slot:'nav',target:'.sidebar'},{slot:'main',target:'.grid-builder'},{slot:'header',target:'h1'}]\`, plus \`removeEmpty:['.main-layout','.container']\` to drop the empty old wrappers). Moving all the markup by hand with edit_html_node/replace_html_section overruns the turn budget and loses functionality — never do that for a whole-page restructure.
 - **Start from a verified LAYOUT — do NOT hand-write page structure.** When building a NEW full page, call \`list_layouts\` first and pick one (holy-grail, app-shell, two-column, left/right sidebar, single/two column). Call \`get_layout\` and insert its \`impl\` (a CSS-grid skeleton with \`<div data-slot="NAME">\` containers) **intact** — it was verified responsive in a real browser. Then fill each \`data-slot\` with content or a component. Assembly model: **app = layout + components + content.** Only hand-write structure when no layout fits.
 - **Reuse verified components — do NOT hand-write them.** Before building a known interactive component (theme/dark-mode toggle, login/logout, etc.), call \`list_components\`. If the component exists, call \`get_component\` and insert its \`impl\` HTML **intact** (it carries its own <style>, markup, and <script>, and was verified in a real browser). Only hand-write a component when the registry does not have it. This is why the theme toggle now works: the wiring is proven once and reused, never re-improvised.
+- **Node-sourced TEXT a user may edit → the \`bound-text\` component, NEVER a hand-rolled fetch.** To show a graph node's text on the page where an authorized user edits it in place, do NOT write a \`getknowgraph\` fetch that injects innerHTML — that is READ-ONLY and un-editable by the visual editor. Instead \`get_component('bound-text')\` and insert its \`impl\` intact ONCE, then place a marker where the text goes: \`<div data-bound-node="NODE_ID" data-bound-graph="GRAPH_ID"></div>\` (ALWAYS the real graph id; a bare marker renders "missing node/graph"). It renders the node's markdown and gives Superadmin/Admin an in-place pencil that saves back via \`vegvisrPatchNode\`; visitors read-only. One marker per node. This is the ONLY approved way to show editable node text — reserve a hand-rolled fetch for custom NON-text data.
 - **Wrap every major editable content section in edit-anchors** so future edits are reliable: put \`<!-- edit:<id>:start -->\` immediately before the section and \`<!-- edit:<id>:end -->\` immediately after (e.g. \`hero\`, \`om-prosjektet\`, \`om-meg\`, \`footer\`). Use short kebab-case ids. This lets replace_html_section change a section by name instead of fragile string matching.
 - All HTML must be self-contained (inline CSS, inline JS)
 - Every fetch() call must have: console.error('[functionName] Error:', error)
@@ -641,6 +648,23 @@ async function executeRollbackHtmlNode(input, env) {
 // ONLY these tools — no read_node (forces read_html_section), no patch_node, no get_html_builder_reference
 const SUBAGENT_TOOL_NAMES = new Set([
   'edit_html_node', 'replace_html_section', 'insert_html_at', 'list_html_anchors', 'create_html_node', 'create_html_from_template', 'get_contract', 'get_app_table_schema', 'add_app_table_column',
+  // Selector-based, placement-aware writes — the reliable way to reposition/add/remove
+  // elements on a large page without brittle exact-string matching (fixes the "move an
+  // element" turn-budget thrash: move_html_element does it in one deterministic call).
+  'insert_in_element', 'move_html_element', 'remove_html_element',
+  // Integration reads/adds — the subagent was BLIND on large nodes (no read_node), so it
+  // pasted DUPLICATE implementations instead of hooking into the existing handlers. read_node
+  // lets it see the whole node to find the existing function to modify; append_to_section adds
+  // loss-proof inside an anchor; read_html_head gives styling context cheaply.
+  'read_node', 'append_to_section', 'read_html_head',
+  // One-shot, deterministic whole-page layout conversion (insert verified skeleton + move
+  // existing sections into slots) — restructuring by hand overran the turn budget every time.
+  'apply_layout',
+  // Component-SSOT assembly + write loop: fill a layout slot with a verified component, and
+  // register a newly-built (browser-verified) component/layout so the library grows via the app.
+  'fill_slot_with_component', 'save_component', 'save_layout',
+  // Show a node's text as an editable bound-text block in one atomic call (component + marker).
+  'bind_node_text',
   'get_system_registry', 'save_learning',
   // Component registry — fetch verified components + layouts instead of hand-writing them
   'list_components', 'get_component', 'list_layouts', 'get_layout'
@@ -707,6 +731,80 @@ async function detectDeadEndpoints(html) {
   }))
   return results.filter(Boolean).map(r =>
     `Backend URL in the page does NOT exist (${r.bad}): ${r.u}. This is a GUESSED/invented endpoint — the page will fail at runtime. Resolve the REAL browser URL from get_system_registry (a worker's public \`domain\` + its /openapi.json path) or from a data tool's returned URL. NEVER invent backend URLs.`)
+}
+
+// Detect JavaScript sitting OUTSIDE any <script> block — it renders as dead text and
+// never executes. This is the v71 grid-builder failure: 5 handlers were written after
+// </script>, so every one was `undefined` at runtime with NO console error (a bracket/JS
+// syntax check can't catch it — the code is well-formed, just not in a script). Blank out
+// every <script>/<style>/<!--comment-->/<pre>/<code> span (so documented code samples
+// don't false-positive), then look for JS declarations in what remains. Any hit = code the
+// page will silently not run. Deterministic, no browser needed.
+function detectOrphanScript(html) {
+  const h = String(html || '')
+  const blanked = h
+    .replace(/<script[\s\S]*?<\/script>/gi, m => ' '.repeat(m.length))
+    .replace(/<style[\s\S]*?<\/style>/gi, m => ' '.repeat(m.length))
+    .replace(/<pre[\s\S]*?<\/pre>/gi, m => ' '.repeat(m.length))
+    .replace(/<code[\s\S]*?<\/code>/gi, m => ' '.repeat(m.length))
+    .replace(/<!--[\s\S]*?-->/g, m => ' '.repeat(m.length))
+  const found = new Set()
+  // Strong code signals only — `function NAME(` and `.addEventListener(` are near-never
+  // written verbatim in prose, so they don't false-positive on documentation text the way
+  // a bare `document.querySelector()` mention does. v71's dead handlers were all `function`
+  // declarations, so this still catches the real failure.
+  const patterns = [
+    /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g,
+    /\.addEventListener\s*\(/g,
+  ]
+  for (const re of patterns) {
+    let m
+    while ((m = re.exec(blanked)) !== null) {
+      const line = blanked.slice(0, m.index).split('\n').length
+      found.add(`${(m[1] ? 'function ' + m[1] + '()' : m[0].trim())} @ line ~${line}`)
+      if (found.size >= 6) break
+    }
+    if (found.size >= 6) break
+  }
+  if (!found.size) return []
+  return [`JavaScript is sitting OUTSIDE any <script> tag, so it will NOT execute — it renders as dead text and every function it declares is "undefined" at runtime (no error is thrown). Found: ${[...found].join('; ')}. Move ALL of this code INSIDE a <script>…</script> block (wrap it in its own <script> tag — multiple script blocks are fine), then verify the functions are defined.`]
+}
+
+// Detect a DUPLICATE implementation pasted into the page instead of integrated — the
+// large-node failure mode: blind (no full read) the builder re-creates a whole second
+// copy of code that already exists. Deterministic signals, all inside <script> only:
+//   (1) the same `function NAME(` DEFINED 2+ times (a redefinition shadows the earlier one);
+//   (2) 3+ DOMContentLoaded listeners (each re-initializes → dueling init);
+//   (3) an "EXISTING … CODE" / "duplicate"-style marker comment left by a paste.
+// Any hit = the builder likely duplicated rather than hooked in → loop back to reconcile.
+function detectDuplicateImplementation(html) {
+  const h = String(html || '')
+  // Scan only inside <script> blocks.
+  let scriptText = ''
+  const sre = /<script[^>]*>([\s\S]*?)<\/script>/gi
+  let sm
+  while ((sm = sre.exec(h)) !== null) scriptText += '\n' + sm[1]
+
+  const gaps = []
+  // (1) redefined functions
+  const defs = {}
+  const fre = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g
+  let fm
+  while ((fm = fre.exec(scriptText)) !== null) defs[fm[1]] = (defs[fm[1]] || 0) + 1
+  const dup = Object.entries(defs).filter(([, n]) => n >= 2).map(([name]) => name)
+  if (dup.length) {
+    gaps.push(`Duplicate function definition(s): ${dup.map(n => n + '()').join(', ')} — each is declared more than once, so the later copy shadows the earlier and the two implementations fight. You pasted code that already exists instead of editing the existing function. Remove the duplicate copy and modify the ONE original (read_node to find it).`)
+  }
+  // (2) too many DOMContentLoaded initializers
+  const domReady = (scriptText.match(/addEventListener\(\s*["']DOMContentLoaded["']/g) || []).length
+  if (domReady >= 3) {
+    gaps.push(`${domReady} separate DOMContentLoaded handlers run on load — a strong sign several copies of the init/builder code were pasted and now re-initialize over each other. Consolidate to one initializer.`)
+  }
+  // (3) paste-marker comments
+  if (/\/\/[^\n]*\bEXISTING\b[^\n]*\bCODE\b/i.test(h) || /<!--[^>]*\bEXISTING\b[^>]*\bCODE\b/i.test(h)) {
+    gaps.push('An "EXISTING … CODE" marker comment is present — a tell that a second copy of the existing code was pasted beneath the original instead of editing it. Reconcile into a single implementation.')
+  }
+  return gaps
 }
 
 function detectFunctionalGaps(html) {
@@ -917,6 +1015,8 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
         try {
           const gateHtml = await fetchNodeHtmlForGate(env, graphId, effNodeId)
           gaps = detectFunctionalGaps(gateHtml)
+          gaps = gaps.concat(detectOrphanScript(gateHtml))
+          gaps = gaps.concat(detectDuplicateImplementation(gateHtml))
           const dead = await detectDeadEndpoints(gateHtml)
           if (dead.length) gaps = gaps.concat(dead)
         }
@@ -1098,4 +1198,4 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   }
 }
 
-export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate }
+export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, detectOrphanScript, detectDuplicateImplementation, detectDeadEndpoints, fetchNodeHtmlForGate }

@@ -392,6 +392,64 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'apply_layout',
+    description: "Convert an EXISTING html-node to a verified page LAYOUT (holy-grail, app-shell, two-column, left/right-sidebar, single-column) in ONE deterministic call — the reliable way to 'make this node use layout X'. Restructuring a whole page (moving all existing markup into a layout's slots while keeping scripts wired) otherwise overruns the builder's turn budget and silently fails. This tool: (1) fetches the verified skeleton from the layout registry (same source as get_layout — its own <style> + a `<div class=\"lay\">` with `<div data-slot=\"NAME\">` containers), (2) splices it into the <body>, (3) clears the skeleton's placeholder text, (4) MOVES each existing section you map into its slot (nesting-aware, no retyping, scripts/styles untouched). Provide `slots`: an array mapping each slot name to a CSS selector of existing content to move into it — e.g. holy-grail: [{slot:'header', target:'h1'}, {slot:'nav', target:'.sidebar'}, {slot:'main', target:'.grid-builder'}]. Unmapped slots stay empty. Optionally pass `removeEmpty` (a selector or list) to delete leftover now-empty wrapper divs (e.g. ['.main-layout','.container']) — guarded, it never removes an element still holding a script/style/child/text. Call list_layouts first for names+slots. Returns version + which sections moved + warnings. ALWAYS verify the result in a rendered preview. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID to convert' },
+        layout: { type: 'string', description: "Layout name from list_layouts, e.g. 'holy-grail', 'app-shell', 'two-column', 'left-sidebar', 'right-sidebar', 'single-column'." },
+        slots: {
+          type: 'array',
+          description: "Mapping of existing content into the layout's slots. Each item: { slot: '<slot name>', target: '<CSS selector of existing element to move into it>', nth?: <1-based if the selector matches several> }. Unmapped slots are left empty. Selectors: tag / .class / #id / [attr=\"val\"] / combos.",
+          items: {
+            type: 'object',
+            properties: {
+              slot: { type: 'string', description: "Slot name from the layout (e.g. 'header', 'nav', 'main', 'aside', 'footer')." },
+              target: { type: 'string', description: "CSS selector of the existing element to move into this slot (e.g. '.sidebar', '#gridWrapper', 'h1')." },
+              nth: { type: 'integer', description: 'If the selector matches several elements, which one (1-based).' }
+            },
+            required: ['slot', 'target']
+          }
+        },
+        removeEmpty: { type: 'array', items: { type: 'string' }, description: "Optional: selectors of now-empty wrapper elements to delete after the moves (e.g. ['.main-layout','.container']). List inner wrappers before outer. Guarded — an element still holding a script/style/child/text is kept, not removed." }
+      },
+      required: ['graphId', 'nodeId', 'layout']
+    }
+  },
+  {
+    name: 'move_html_element',
+    description: "RELIABLE way to REPOSITION an existing element on an html-node — the deterministic 'move' primitive. Use this instead of edit_html_node whenever an element is in the WRONG PLACE (e.g. a drop-zone that landed inside a two-column grid and now sits under the sidebar). It extracts the whole `target` element intact and splices it back at `to`, in ONE call — no retyping, no exact-string matching, no content-loss risk. `target` selects the element to move; `to` selects the destination element. position: 'start'/'end' place it as the FIRST/LAST CHILD of `to`; 'before'/'after' place it as a SIBLING of `to`. Selectors use the same grammar as insert_in_element: tag ('nav'), class ('.drop-zone'), id ('#dropZone'), tag+class ('div.card'), combo. If several match, pass `nth` (source) / `toNth` (destination), 1-based; otherwise the FIRST is used and the result reports matchCount. Nesting-aware. Example — move a drop-zone out of the grid so it renders full-width below it: move_html_element(target:'#dropZone', to:'.main-layout', position:'after'). Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        target: { type: 'string', description: "Selector for the element to MOVE: tag ('section'), class ('.drop-zone'), id ('#dropZone'), tag+class ('div.card'), or combo." },
+        to: { type: 'string', description: "Selector for the DESTINATION element the moved element is placed relative to, e.g. '.container' or '.main-layout'. Must be a different element than `target`." },
+        position: { type: 'string', enum: ['start', 'end', 'before', 'after'], description: "'start'/'end' = place as the first/last CHILD of `to`; 'before'/'after' = place as a SIBLING just before/after `to`. Default 'end'." },
+        nth: { type: 'integer', description: 'When `target` matches several elements, which one (1-based) to move. Omit for the first; matchCount is reported.' },
+        toNth: { type: 'integer', description: 'When `to` matches several elements, which one (1-based) to place relative to. Omit for the first.' }
+      },
+      required: ['graphId', 'nodeId', 'target', 'to']
+    }
+  },
+  {
+    name: 'remove_html_element',
+    description: "RELIABLE way to DELETE a whole element from an html-node, chosen by selector — nesting-aware and purely subtractive (removes exactly one matched element, nothing else). Use this instead of edit_html_node to remove a misplaced or duplicate block: edit_html_node's content-loss guard fights deletions (needs force:true PLUS an exact old_string match), which thrashes on large pages. Selectors use the insert_in_element grammar: tag ('aside'), class ('.drop-zone'), id ('#dropZone'), tag+class ('div.card'), combo. If several match, pass `nth` (1-based) to choose; otherwise the FIRST is removed and matchCount is reported so you can retry. To REPOSITION rather than delete, use move_html_element (do NOT remove-then-recreate). Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        target: { type: 'string', description: "Selector for the element to REMOVE: tag, class ('.drop-zone'), id ('#dropZone'), tag+class, or combo." },
+        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to remove. Omit for the first; matchCount is reported.' }
+      },
+      required: ['graphId', 'nodeId', 'target']
+    }
+  },
+  {
     name: 'insert_html_at',
     description: "RELIABLE way to ADD new HTML/CSS/JS to an existing page — use this instead of edit_html_node whenever you are INSERTING (not replacing) something: a new button, a <script>, extra CSS, a nav bar, a widget. It inserts at a named structural position keyed to the page's own <head>/<body>/<style> tags, so it CANNOT mismatch the way edit_html_node does on large pages. No anchor comments needed and it works on any existing page. Positions: 'before_body_end' (just before </body> — for scripts and body-level widgets/buttons), 'after_body_start' (right after <body> — for top-of-page bars), 'before_head_end' (just before </head> — for <link>/<meta>/<style> blocks), 'append_to_style' (just before the last </style> — to add CSS rules/variables to the existing stylesheet), 'after_head_start' (right after <head>). A multi-region change like a theme toggle is three calls: append_to_style for the CSS, before_body_end for the button, before_body_end for the script — no exact-string matching, no thrash. Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
@@ -1596,7 +1654,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'onboarding_status',
-    description: 'Get the COMPLETE onboarding status for a client by email (and optional domain). Returns role, registrar, dns_move state (not_started/propagating/active), RealtimeKit (app + meeting rooms), R2 recording, telemetry KV, knowledge graphs, chat engagement, routine graph, and an engagement verdict on a 5-level ladder (lowest→highest: PARK < ON WAIT < NUDGE < DEVELOPING < GO — PARK=dormant, ON WAIT=engaged but blocked on DNS propagation, NUDGE=some signal but stalled, DEVELOPING=actively building but not yet live, GO=shipped a live published page; with a reason). ALWAYS use this for any "onboarding status / is X ready / how is client X doing / what is the status for X" question. DO NOT use db_query against the config table for onboarding status — this tool aggregates many sources (config, chat DB, RDAP registrar, live DNS) that a single config row does not have. Pass the domain when the email is on a custom domain (e.g. kristoffer@vitalinnsikt.no -> vitalinnsikt.no); the domain also auto-derives from the email when omitted. The response ALSO includes a `world` block — the collective World activity across identities: its chat group, KGs tagged with the World (#<DOMAIN-STEM>), contributors, and a World-level verdict. ALWAYS present the `world` block when it is non-null (chat group name + message count, KG count, contributors, World verdict) — it captures work done under a different identity than the account-holder email (e.g. a project owner who created the group and graphs under their personal email). Report BOTH the personal capabilities AND the World aggregate. The response also includes `published_pages` (in both capabilities and world) — a live HTTP probe of the brand-proxy for the apex, www, and any assigned subdomain; each entry is {host, live, published_at}. A live published page is the FINAL step of the onboarding journey, so it pushes BOTH verdicts to GO (engagement.published / world.published are true). ALWAYS mention which hosts are live when any published_pages entry has live=true. published_pages AUTO-DISCOVERS every published page including arbitrary subdomains (e.g. claude.iamazing.page, ua.iamazing.page) — not just apex/www. The World may be resolved via the World Founder registry: when result.domain_source=\'world-founder-registry\' the founder\'s email did not reveal the domain (e.g. msneeggen@gmail.com founds iamazing.page), and result.founder_of lists the Worlds they found ({world_name, domain, cf_account_id, meta_area_tag, account_holder_email}) — state the founder→World relationship in your answer. result.ownership is the ORGANIZATIONAL stack for this person: {system_owner:{org_name,scope}|null, orgs:[{name,function,percent}], worlds:[{world_name,domain,org_name,hosting_model}], domains_operated:[{domain,kind,org_name}]}. When present, OPEN your answer with it — e.g. "Tor Arne Håve represents Universi AS (System Owner, 80% owner) and co-owns AlivenessLAB AS (20%)". A role (System Owner / World Founder) is held by an ORG and represented by the person; orgs[].percent is their ownership share. Always frame Worlds as founded by the ORG (org_name), not the person. The OVERALL verdict is engagement.verdict — it is the HIGHER of the personal and World ladders: when the World is further along than the account-holder identity (whose activity often lives under other identities, e.g. iamazing.page work is Maiken\'s), engagement.verdict is lifted to the World level and engagement.personal_verdict holds the raw account-only signal. So ALWAYS present engagement.verdict as the overall status; if it differs from personal_verdict, briefly note the World is being actively worked on under other identities. Never report the lower personal_verdict as the overall. capabilities.email_sending reports whether the account can SEND mail — {ok, verified, accounts, with_password, senders[], verified_senders[], last_verified_at}. TWO distinct levels: ok=true = CONFIGURED (≥1 sender has a stored Gmail app password — the "machine password"); verified=true = PROVEN (a real test send actually succeeded, stamped at last_verified_at). Present it as a provisioning step like RealtimeKit/R2, and STATE THE LEVEL: "verified sender (proven by a real send on <last_verified_at>)" when verified=true, "configured but not yet verified — no successful send on record" when ok=true but verified=false, or "email sending not set up" when ok=false. capabilities.email_routing reports whether the domain RECEIVES mail via Cloudflare Email Routing — {enabled, mx[]}; enabled=true means MX points to route*.mx.cloudflare.net, enabled=false with a non-empty mx means the domain uses other mail (e.g. Google smtp.google.com — say which), enabled=null means no domain/lookup failed. Note email_sending (can SEND as the account) and email_routing (can RECEIVE on the domain via Cloudflare) are independent steps; report both.',
+    description: 'Get the COMPLETE onboarding status for a client by email (and optional domain). Returns role, registrar, dns_move state (not_started/propagating/active), RealtimeKit (app + meeting rooms), R2 recording, telemetry KV, knowledge graphs, chat engagement, routine graph, and an engagement verdict on a 5-level ladder (lowest→highest: PARK < ON WAIT < NUDGE < DEVELOPING < GO — PARK=dormant, ON WAIT=engaged but blocked on DNS propagation, NUDGE=some signal but stalled, DEVELOPING=actively building but not yet live, GO=shipped a live published page; with a reason). ALWAYS use this for any "onboarding status / is X ready / how is client X doing / what is the status for X" question. DO NOT use db_query against the config table for onboarding status — this tool aggregates many sources (config, chat DB, RDAP registrar, live DNS) that a single config row does not have. Pass the domain when the email is on a custom domain (e.g. kristoffer@vitalinnsikt.no -> vitalinnsikt.no); the domain also auto-derives from the email when omitted. The response ALSO includes a `world` block — the collective World activity across identities: its chat group, KGs tagged with the World (#<DOMAIN-STEM>), contributors, and a World-level verdict. ALWAYS present the `world` block when it is non-null (chat group name + message count, KG count, contributors, World verdict) — it captures work done under a different identity than the account-holder email (e.g. a project owner who created the group and graphs under their personal email). Report BOTH the personal capabilities AND the World aggregate. The response also includes `published_pages` (in both capabilities and world) — a live HTTP probe of the brand-proxy for the apex, www, and any assigned subdomain; each entry is {host, live, published_at}. A live published page is the FINAL step of the onboarding journey, so it pushes BOTH verdicts to GO (engagement.published / world.published are true). ALWAYS mention which hosts are live when any published_pages entry has live=true. published_pages AUTO-DISCOVERS every published page including arbitrary subdomains (e.g. claude.iamazing.page, ua.iamazing.page) — not just apex/www. The World may be resolved via the World Founder registry: when result.domain_source=\'world-founder-registry\' the founder\'s email did not reveal the domain (e.g. msneeggen@gmail.com founds iamazing.page), and result.founder_of lists the Worlds they found ({world_name, domain, cf_account_id, meta_area_tag, account_holder_email}) — state the founder→World relationship in your answer. result.ownership is the ORGANIZATIONAL stack for this person: {system_owner:{org_name,scope}|null, orgs:[{name,function,percent}], worlds:[{world_name,domain,org_name,hosting_model}], domains_operated:[{domain,kind,org_name}]}. When present, OPEN your answer with it — e.g. "Tor Arne Håve represents Universi AS (System Owner, 80% owner) and co-owns AlivenessLAB AS (20%)". A role (System Owner / World Founder) is held by an ORG and represented by the person; orgs[].percent is their ownership share. Always frame Worlds as founded by the ORG (org_name), not the person. The OVERALL verdict is engagement.verdict — it is the HIGHER of the personal and World ladders: when the World is further along than the account-holder identity (whose activity often lives under other identities, e.g. iamazing.page work is Maiken\'s), engagement.verdict is lifted to the World level and engagement.personal_verdict holds the raw account-only signal. So ALWAYS present engagement.verdict as the overall status; if it differs from personal_verdict, briefly note the World is being actively worked on under other identities. Never report the lower personal_verdict as the overall. capabilities.email_sending reports whether the account can SEND mail — {ok, verified, accounts, with_password, senders[], verified_senders[], last_verified_at}. TWO distinct levels: ok=true = CONFIGURED (≥1 sender has a stored Gmail app password — the "machine password"); verified=true = PROVEN (a real test send actually succeeded, stamped at last_verified_at). Present it as a provisioning step like RealtimeKit/R2, and STATE THE LEVEL: "verified sender (proven by a real send on <last_verified_at>)" when verified=true, "configured but not yet verified — no successful send on record" when ok=true but verified=false, or "email sending not set up" when ok=false. capabilities.email_routing reports whether the domain RECEIVES mail via Cloudflare Email Routing — {enabled, mx[]}; enabled=true means MX points to route*.mx.cloudflare.net, enabled=false with a non-empty mx means the domain uses other mail (e.g. Google smtp.google.com — say which), enabled=null means no domain/lookup failed. Note email_sending (can SEND as the account) and email_routing (can RECEIVE on the domain via Cloudflare) are independent steps; report both. capabilities also has 4 media-storage checks resolved LIVE against the founder\'s own Cloudflare account (not from a stale D1 flag) — ALWAYS include all 4 when present: capabilities.video_domain {ok, domain} = has a custom domain for video storage (config.cf_r2_public_base, e.g. recordings.<domain>); capabilities.videos_stored {ok, count} = how many recordings are actually stored (r2_sync_jobs rows); capabilities.audio_r2 {ok, bucket, object_count, kv_namespace, note} = audio setup, true if EITHER the R2 bucket has objects under an `audio/` prefix OR an AUDIO_PORTFOLIO KV namespace exists; capabilities.transcripts_kv {ok, namespace, key_count, note} = true if `audio-recording:` keys exist inside that AUDIO_PORTFOLIO namespace (transcripts are stored as the VALUE of those keys, not a separate namespace). Report ok=false with its `note` verbatim rather than omitting the check.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1604,6 +1662,32 @@ const TOOL_DEFINITIONS = [
         domain: { type: 'string', description: 'Optional domain for the registrar/DNS/zone/routine-graph checks, e.g. vitalinnsikt.no' }
       },
       required: ['email']
+    }
+  },
+  {
+    name: 'cloudflare_api',
+    description: 'READ-ONLY live introspection of a Cloudflare account — call this for ANY "what R2 buckets/KV namespaces/Workers/DNS records does X actually have" question that onboarding_status does not already cover (onboarding_status.capabilities already hardcodes video_domain/videos_stored/audio_r2/transcripts_kv checks — use THOSE for that specific question instead of calling this tool redundantly). TWO credential modes: (1) founder_email OMITTED (the DEFAULT and most common case) — uses this worker\'s own CF_ACCOUNT_ID/CF_API_TOKEN, the platform admin\'s (torarnehave@gmail.com) own Cloudflare account. Use this whenever the user asks about "my account" / their own Cloudflare setup, or when no specific founder is named. (2) founder_email given — resolves THAT founder\'s cf_account_id/cf_api_token from their own config row instead (same credentials set_world_credentials writes), to inspect a specific founder\'s own account (e.g. Stine\'s R2/KV). CAUTION on mode 2: config rows are not always correct — torarnehave@gmail.com\'s own config row was found cross-wired to a DIFFERENT founder\'s Cloudflare account (verified 2026-07-28). If a founder_email lookup returns data that looks wrong for who was asked about (wrong account name in a /accounts/<id> call, resources that don\'t match what the user expects), say so explicitly rather than presenting it as correct — do not silently trust the config row. Calls https://api.cloudflare.com/client/v4 directly — GET only, no method override, so it can never mutate any account. Common paths: "/r2/buckets" (list buckets), "/r2/buckets/<bucket>/objects?prefix=<p>" (list objects — prefix also settable via the query param), "/storage/kv/namespaces" (list KV namespaces), "/storage/kv/namespaces/<id>/keys?prefix=<p>" (list keys in a namespace), "/workers/scripts" (list deployed Workers), "/zones" then "/zones/<zone_id>/dns_records" (DNS records — needs the zone id from the first call), "" or "/" (account details — useful to confirm WHICH account you\'re actually looking at). Pass EITHER a bare resource path (auto-prefixed with /accounts/<account_id>) OR a full /accounts/... or /zones/... path. Returns {path, result, result_info} — result is the raw Cloudflare API result array/object, present it directly (bucket names, key names, counts) rather than re-deriving a verdict. If no credentials are available, this throws — tell the user rather than guessing.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: 'Optional. A specific founder\'s config-row email whose OWN Cloudflare account to inspect, e.g. stine.oksvold@gmail.com. OMIT this to use the platform admin\'s own account instead (the default, and what to use for "my account" questions).' },
+        path: { type: 'string', description: 'Cloudflare API path, e.g. "/r2/buckets" or "/storage/kv/namespaces/<id>/keys". Bare resource paths are auto-prefixed with /accounts/<resolved_account_id>.' },
+        query: { type: 'object', description: 'Optional query-string parameters as key/value pairs, e.g. {"prefix": "audio/"}' }
+      },
+      required: ['path']
+    }
+  },
+  {
+    name: 'mcp_call',
+    description: 'Call a tool on a remote MCP (Model Context Protocol) server. Use this for authoritative, CURRENT Cloudflare product documentation — Workers, R2, KV, D1, Durable Objects, Queues, Hyperdrive, Workers AI, Vectorize, AI Gateway, Zero Trust/Access/Tunnel/WARP, CDN/Cache/DNS, Rulesets, Terraform, billing. PREFER THIS over answering Cloudflare questions from memory: model training data goes stale and Cloudflare config syntax changes, whereas this returns the live docs. TWO MODES: (1) DISCOVERY — pass only `server` and omit `tool_name` to list the tools that server offers, with their input schemas. (2) CALL — pass `server`, `tool_name`, and `arguments` to run a tool. Available servers: "cloudflare-docs" (PUBLIC, no credentials, works today — its tool is `search_cloudflare_documentation` taking {"query": "<search text>"}); "cloudflare", "cloudflare-bindings", "cloudflare-builds", "cloudflare-observability" (all require an OAuth token that is NOT yet configured — calling them returns a clear error, so use cloudflare-docs unless told otherwise). Returns {server, tool, text, structured, is_error} where `text` is the flattened documentation content — quote and cite it, and include the source URLs it contains rather than paraphrasing from memory. NOTE this is documentation lookup, NOT account inspection: to read a specific World Founder\'s actual R2 buckets or KV namespaces use the `cloudflare_api` tool instead, which authenticates with that founder\'s own stored credentials.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        server: { type: 'string', description: 'MCP server name, e.g. "cloudflare-docs". Omit tool_name to discover what tools it offers.' },
+        tool_name: { type: 'string', description: 'Tool to invoke on that server, e.g. "search_cloudflare_documentation". Omit to list available tools instead of calling one.' },
+        arguments: { type: 'object', description: 'Arguments for the tool, matching its input schema. For search_cloudflare_documentation: {"query": "your search text"}' }
+      },
+      required: ['server']
     }
   },
   {
@@ -2082,6 +2166,71 @@ const TOOL_DEFINITIONS = [
       required: ['name'],
       properties: {
         name: { type: 'string', description: 'Layout name, e.g. "holy-grail". Case-insensitive.' }
+      }
+    }
+  },
+  {
+    name: 'save_component',
+    description: "REGISTER a reusable UI COMPONENT into the Component Registry so it can be inserted intact into future pages (get_component / fill_slot_with_component) — this is how the component library GROWS through the app instead of every app re-implementing the same widget. Store `impl` = the self-contained HTML/CSS/JS (its own <style>+markup+<script>), `schema` = the contract (props/description), and `verify` = the proof. VERIFICATION IS THE SYSTEM'S OPEN FRONTIER: this tool STORES what you pass and defaults to UNVERIFIED — pass verify:{verdict:'PASS', verifiedDate, method} ONLY after you have actually observed the component working in a real rendered browser; never mark PASS from source inspection. Pass overwrite:true to replace an existing component. Superadmin only. Stored in the Component Registry graph (4072b898), NOT hardcoded in code — visible/manageable as a graph node.",
+    input_schema: {
+      type: 'object',
+      required: ['name'],
+      properties: {
+        name: { type: 'string', description: 'kebab-case component name, e.g. "grid-builder", "stat-card".' },
+        impl: { type: 'string', description: 'The self-contained HTML/CSS/JS to store and later insert intact (its own <style>, markup, <script>). Provide this OR fromNodeId.' },
+        fromNodeId: { type: 'string', description: "Instead of pasting a large impl inline, read it from an html-node you already built + verified: pass fromNodeId (+ fromGraphId) and the node's full HTML becomes the impl. This is the build→verify→register-from-node workflow." },
+        fromGraphId: { type: 'string', description: 'The graph containing fromNodeId (defaults to graphId if omitted).' },
+        schema: { type: 'object', description: 'The contract: { description, props: {name: "..."} }. Optional but recommended.' },
+        description: { type: 'string', description: 'One-line human description (stored in node info).' },
+        verify: { type: 'object', description: "Proof of real-browser verification: { verdict: 'PASS'|'UNVERIFIED', verifiedDate, method, note }. Defaults to UNVERIFIED. Only PASS after an actual rendered-page observation." },
+        overwrite: { type: 'boolean', description: 'Replace an existing component of this name. Default false.' }
+      }
+    }
+  },
+  {
+    name: 'save_layout',
+    description: "REGISTER a reusable page LAYOUT into the Component Registry (apply_layout / get_layout will then offer it). `impl` MUST be a CSS-grid skeleton containing <div data-slot=\"NAME\"> containers (that is what apply_layout fills). Same verification contract as save_component: stored UNVERIFIED unless you pass verify:{verdict:'PASS',...} after a real rendered-browser test at multiple widths. Pass overwrite:true to replace. Superadmin only. Stored in the Component Registry graph (4072b898).",
+    input_schema: {
+      type: 'object',
+      required: ['name', 'impl'],
+      properties: {
+        name: { type: 'string', description: 'kebab-case layout name, e.g. "sidebar-builder".' },
+        impl: { type: 'string', description: 'CSS-grid skeleton with <div data-slot="NAME"> containers + its own <style>. Must contain data-slot=.' },
+        schema: { type: 'object', description: 'The contract: { description, slots: ["header","main",...], responsive: "..." }.' },
+        description: { type: 'string', description: 'One-line description.' },
+        verify: { type: 'object', description: "Real-browser proof: { verdict:'PASS'|'UNVERIFIED', verifiedDate, method }. Defaults UNVERIFIED." },
+        overwrite: { type: 'boolean', description: 'Replace an existing layout of this name. Default false.' }
+      }
+    }
+  },
+  {
+    name: 'fill_slot_with_component',
+    description: "ASSEMBLY primitive: fetch a registered component's verified impl and splice it into a named layout slot ([data-slot=\"NAME\"]) of an html-node, in ONE deterministic call. This is the 'app = layout + components + content' model made concrete: apply_layout to get the slots, then fill_slot_with_component to populate them — no hand-writing, no exact-string matching. If the node has no [data-slot=\"<slot>\"] container it tells you to apply a layout first. position 'end' (default) / 'start'. Returns version + charDelta. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId', 'slot', 'component'],
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID (must already have a layout applied so slots exist)' },
+        slot: { type: 'string', description: 'The layout slot name to fill, e.g. "main", "aside", "header".' },
+        component: { type: 'string', description: 'A registered component name (see list_components).' },
+        position: { type: 'string', enum: ['start', 'end'], description: "'end' (default) appends inside the slot; 'start' prepends." }
+      }
+    }
+  },
+  {
+    name: 'bind_node_text',
+    description: "Show a NODE's TEXT on an html-node page as an EDITABLE bound-text block, in ONE deterministic call — the ONLY approved way to display editable node text. Use whenever the user says \"show the text from node X on the page\", \"put the about/intro/preparations text on the page\", \"make this section editable\", or \"so I/admins can edit it directly\". Does BOTH steps atomically and idempotently: (1) inserts the verified bound-text component if the page doesn't already have it; (2) places a <div data-bound-node=\"…\" data-bound-graph=\"…\"> marker (with the REAL graph id) where the text goes. The page then renders the node's markdown and gives Superadmin/Admin a hover pencil that saves edits back to the source node; visitors see read-only rendered text. NEVER hand-roll a getknowgraph fetch for node text (that is read-only) and NEVER delegate_to_html_builder for this. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId', 'sourceNodeId'],
+      properties: {
+        graphId: { type: 'string', description: 'The graph containing the html-node to edit.' },
+        nodeId: { type: 'string', description: 'The html-node ID to add the editable text block to.' },
+        sourceNodeId: { type: 'string', description: 'The node whose text (info) to display and make editable.' },
+        sourceGraphId: { type: 'string', description: 'Graph of the source node, if DIFFERENT from graphId (cross-graph binding). Defaults to graphId.' },
+        target: { type: 'string', description: "Optional selector (tag or '#id' or [data-slot=\"main\"]) to place the marker INSIDE. Omit to append before </body>." },
+        nth: { type: 'number', description: 'If target matches several elements, which one (1-based).' }
       }
     }
   },
@@ -3039,6 +3188,19 @@ const TOOL_DEFINITIONS = [
         cf_api_token: { type: 'string', description: "The founder's Cloudflare API token (scoped to their account). Required. Stored, never returned." },
       },
       required: ['cf_api_token'],
+    },
+  },
+  {
+    name: 'set_realtime_recordings_domain',
+    description:
+      "Set the permanent public URL for a founder's realtime-video recordings bucket (config.cf_r2_public_base, read by realtime-worker). When set, recording playUrls are permanent links on the founder's own domain (e.g. https://recordings.<founderdomain>) instead of short-lived presigned R2 URLs. This does NOT provision DNS/CNAME or Cloudflare custom-domain routing — the hostname must already resolve to the founder's R2 bucket (or a proxy in front of it) before calling this. Superadmin only. Requires an existing config row for the founder (register the user first).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: "The founder's email — must already have a config row." },
+        recordings_domain: { type: 'string', description: 'Full https URL for the recordings origin, e.g. https://recordings.stineoksvolddesign.no' },
+      },
+      required: ['founder_email', 'recordings_domain'],
     },
   },
   {

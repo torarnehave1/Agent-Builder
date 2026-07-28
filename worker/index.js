@@ -1502,11 +1502,41 @@ export default {
           }
         }
 
+        // EXCLUSIVE work contexts — the deliberate exception to the orientation-only rule below.
+        // Selecting one of these HARD-RESTRICTS the toolbox to the listed tools; the agent
+        // physically cannot call anything else, because the other tools are never sent to the
+        // model. Used where the user wants a locked-down surface rather than a starting point
+        // (Cloudflare MCP: only the MCP path, no graph writes, no email, no account calls).
+        // Keyed by context title, which is what the UI sends. Spoofing it can only ever REMOVE
+        // capability, never add any, so it needs no authentication.
+        const EXCLUSIVE_CONTEXTS = {
+          'Cloudflare MCP Server': ['mcp_call'],
+        }
+        const exclusiveTools = (workContext && typeof workContext === 'object' && workContext.title)
+          ? EXCLUSIVE_CONTEXTS[workContext.title]
+          : null
+        if (exclusiveTools) {
+          // Overrides any per-agent toolFilter — the lock is the stricter intent.
+          toolFilter = exclusiveTools
+          console.log(`[chat] exclusive context "${workContext.title}" — toolbox locked to: ${exclusiveTools.join(', ')}`)
+        }
+
         // Inject the selected Work Context as ORIENTATION (never a restriction).
         // Tells the agent which domain the user started in and what that context
         // highlights — so it frames answers and can answer "what can I do here?"
         // accurately. The full toolbox stays available; cross-domain is allowed.
-        if (workContext && typeof workContext === 'object' && workContext.title) {
+        // (Except for EXCLUSIVE_CONTEXTS above, which are handled separately below.)
+        if (workContext && typeof workContext === 'object' && workContext.title && exclusiveTools) {
+          const caps = Array.isArray(workContext.capabilities) ? workContext.capabilities : []
+          const capLines = caps.map(c => `- **${c.name}** — ${c.summary || c.name}`).join('\n')
+          systemPrompt += `\n\n## Current Work Context: ${workContext.title} (LOCKED)\n` +
+            (workContext.description ? `Focus: ${workContext.description}\n` : '') +
+            (capLines ? `\nThe ONLY tools you have here:\n${capLines}\n` : '') +
+            `\nThis context is a RESTRICTION, not orientation. You have been given ONLY the tools listed above — the rest of the toolbox is not loaded and cannot be called.\n` +
+            `If the user asks for anything outside this context (graphs, email, video, account changes), do NOT attempt it and do NOT claim you did. Say plainly that this context is limited to ${workContext.title}, and tell them to pick another work context from the start screen for that request.\n` +
+            `Answer "what can I do here" immediately from the list above, in the same turn, with no tool call.\n` +
+            `When you DO call a tool, report its result to the user in full — quote the returned content and include any source URLs. Never end a turn having called a tool without telling the user what came back.`
+        } else if (workContext && typeof workContext === 'object' && workContext.title) {
           const caps = Array.isArray(workContext.capabilities) ? workContext.capabilities : []
           const capLines = caps.map(c => `- **${c.name}** — ${c.summary || c.name}`).join('\n')
           systemPrompt += `\n\n## Current Work Context: ${workContext.title}\n` +
