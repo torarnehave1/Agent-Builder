@@ -425,8 +425,23 @@ function isExplicitCreateGraphIntent(userText) {
   return createVerb.test(text) && graphTarget.test(text) && !discoveryOnly.test(text)
 }
 
+// Calendar detection is two-tier on purpose. The old single regex matched bare substrings,
+// so ordinary English tripped it: "List the tools AVAILABLE on the MCP server" was classified
+// as a calendar question, the guard below then demanded a calendar_ tool that would never be
+// called, and the turn budget burned out emitting nothing (observed 2026-07-28).
+//
+// STRONG = unambiguous calendar vocabulary; triggers on its own.
+const CALENDAR_STRONG = /\b(calendar|calandar|appointment|appointments)\b/
+// WEAK = everyday words that only mean "calendar" alongside a time reference or a personal
+// possessive. "tools available" must NOT trigger; "available on Friday" / "my schedule" must.
+const CALENDAR_WEAK = /\b(meeting|meetings|booking|bookings|schedule|scheduled|scheduling|availability|available|busy|free time)\b/
+const CALENDAR_PERSONAL = /\b(my|our|i|me)\b/
+
 function textMentionsCalendar(text) {
-  return /(calendar|calandar|booking|bookings|appointment|appointments|meeting|meetings|schedule|scheduled|availability|available|busy|free time)/.test(String(text || '').toLowerCase())
+  const s = String(text || '').toLowerCase()
+  if (CALENDAR_STRONG.test(s)) return true
+  if (!CALENDAR_WEAK.test(s)) return false
+  return textMentionsDateOrRelativeTime(s) || CALENDAR_PERSONAL.test(s)
 }
 
 function textMentionsDateOrRelativeTime(text) {
@@ -942,6 +957,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const enforceGraphWrite = requiresGraphWrite && canWriteGraph
   const enforceCalendarQuery = requiresCalendarQuery && canQueryCalendar
 
+  // Retry caps. An end_turn guard nudges the model once or twice — it must never be able to
+  // consume the whole turn budget, because a blocked end_turn also SKIPS text emission, so an
+  // over-eager guard shows the user nothing at all while costing a full run of model calls.
+  // After the cap the guard stands down and the turn is allowed to finish and speak.
+  const MAX_GUARD_RETRIES = 2
+  let graphWriteGuardRetries = 0
+  let graphVerifyGuardRetries = 0
+  let calendarGuardRetries = 0
+
   log(`started | model=${model} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
 
   try {
@@ -1050,8 +1074,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       if (data.stop_reason === 'end_turn') {
         // Guardrail: if user asked for graph creation/modification but no write was completed,
         // force one continuation turn with a direct tool-routing reminder.
-        if (enforceGraphWrite && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
-          log('end_turn blocked: graph write requested but no graph-write completion detected; forcing continuation')
+        if (enforceGraphWrite && graphWriteGuardRetries < MAX_GUARD_RETRIES && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
+          graphWriteGuardRetries++
+          log(`end_turn blocked: graph write requested but no graph-write completion detected; forcing continuation (retry ${graphWriteGuardRetries}/${MAX_GUARD_RETRIES})`)
           messages.push(
             { role: 'assistant', content: data.content },
             { role: 'user', content: 'You have not completed the requested graph write yet. Use delegate_to_kg now to perform the creation/update action before ending your turn.' }
@@ -1059,8 +1084,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           continue
         }
 
-        if (enforceGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
-          log('end_turn blocked: graph write completed but no verification read detected; forcing continuation')
+        if (enforceGraphWrite && graphVerifyGuardRetries < MAX_GUARD_RETRIES && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
+          graphVerifyGuardRetries++
+          log(`end_turn blocked: graph write completed but no verification read detected; forcing continuation (retry ${graphVerifyGuardRetries}/${MAX_GUARD_RETRIES})`)
           messages.push(
             { role: 'assistant', content: data.content },
             { role: 'user', content: 'The graph write is not verified yet. Read the affected graph or node now with read_node, read_graph, or read_graph_content and confirm the exact change before ending your turn.' }
@@ -1068,8 +1094,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           continue
         }
 
-        if (enforceCalendarQuery && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
-          log('end_turn blocked: calendar/date question answered without fresh calendar tool call; forcing continuation')
+        if (enforceCalendarQuery && calendarGuardRetries < MAX_GUARD_RETRIES && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
+          calendarGuardRetries++
+          log(`end_turn blocked: calendar/date question answered without fresh calendar tool call; forcing continuation (retry ${calendarGuardRetries}/${MAX_GUARD_RETRIES})`)
           messages.push(
             { role: 'assistant', content: data.content },
             { role: 'user', content: 'This calendar answer is not grounded yet. Call the appropriate calendar_ tool now for the requested date or follow-up date and answer from that result only.' }
