@@ -9813,14 +9813,20 @@ async function executeMcpCall(input, env) {
     .map((c) => c.text)
     .join('\n\n')
 
+  // An MCP tool that reports isError did NOT succeed. agent-loop decides failure from
+  // `success === false`, so without this the chip renders "(success)" on a failed call —
+  // exactly the non-throwing failure reported as success that Lesson 1 forbids.
+  const failed = Boolean(result.isError)
   return {
+    success: !failed,
     server: serverName,
     tool: toolName,
-    is_error: Boolean(result.isError),
+    is_error: failed,
     text: textOut || null,
     structured: result.structuredContent || null,
-    message: result.isError
-      ? `${serverName}/${toolName}: MCP tool reported an error`
+    ...(failed ? { error: textOut || 'MCP tool reported an error' } : {}),
+    message: failed
+      ? `${serverName}/${toolName} FAILED: ${(textOut || 'MCP tool reported an error').slice(0, 200)}`
       : `${serverName}/${toolName}: ${textOut ? `${textOut.length} chars returned` : 'no text content'}`,
   }
 }
