@@ -9705,8 +9705,47 @@ const MCP_SERVERS = {
     // returned 403 "Authentication error" for a token lacking Workers R2 Storage: Read.
     description: 'Workers bindings — KV, R2, D1, Hyperdrive. Requires the token to carry the matching product scope (e.g. Workers R2 Storage: Read) or individual calls return 403',
   },
-  'cloudflare': { url: 'https://mcp.cloudflare.com/mcp', requiresToken: true, description: 'Cloudflare account API (Code Mode) — untested' },
+  'cloudflare': {
+    url: 'https://mcp.cloudflare.com/mcp',
+    requiresToken: true,
+    ownerOnly: true, // `execute` runs arbitrary JS against the whole Cloudflare API, DELETE included
+    description: 'Cloudflare API "Code Mode" — tools: docs, search (OpenAPI spec), and execute (run JS via cloudflare.request against ANY endpoint). This is the only server that can reach zones/domains, e.g. GET /zones or GET /accounts/<id>/workers/domains. OWNER ONLY.',
+  },
   'cloudflare-builds': { url: 'https://builds.mcp.cloudflare.com/mcp', requiresToken: true, description: 'Workers build status and logs — untested' },
+}
+
+// ── Owner gate ────────────────────────────────────────────────────
+// MCP exposes real destructive power: r2_bucket_delete / d1_database_delete /
+// kv_namespace_delete, d1_database_query (arbitrary SQL, so DROP TABLE), and the core server's
+// `execute` (arbitrary JS against any Cloudflare endpoint, any HTTP method). The founder tokens
+// these run under now carry Write on R2/D1/KV/DNS/Workers, so a destructive call would really
+// execute rather than 403.
+//
+// This FAILS CLOSED: a tool is allowed for non-owners only if it is provably read-shaped.
+// Anything unrecognised — including any new tool Cloudflare adds later — is owner-only by
+// default. That is deliberate: the alternative (blocklisting known-destructive names) silently
+// permits every future tool until someone remembers to add it.
+function isReadOnlyMcpTool(name) {
+  return /_list$/.test(name)
+    || /_get$/.test(name)
+    || /^search_/.test(name)
+    || /^migrate_/.test(name)
+    || /^query_/.test(name)
+    || /^observability_/.test(name)
+    || name === 'workers_get_worker'
+    || name === 'workers_get_worker_code'
+}
+
+async function assertMcpOwner(input, env, what) {
+  const ownerEmail = String(env.PLATFORM_OWNER_EMAIL || 'torarnehave@gmail.com').toLowerCase()
+  const callerUserId = input.userId
+  if (!callerUserId) throw new Error(`${what} is restricted to the platform owner, and no user context was available. Sign in and retry.`)
+  const profile = await resolveUserProfile(callerUserId, env)
+  const email = String((profile && profile.email) || '').toLowerCase()
+  const role = String((profile && (profile.Role || profile.role)) || '').trim()
+  if (!profile || email !== ownerEmail || role !== 'Superadmin') {
+    throw new Error(`${what} is restricted to the platform owner (${ownerEmail}). Read-only MCP tools — anything ending in _list or _get, plus docs search — remain available to you.`)
+  }
 }
 
 // MCP streamable-HTTP replies are SSE-framed ("event: message\ndata: {...}"), not bare JSON,
@@ -9766,6 +9805,17 @@ async function executeMcpCall(input, env) {
   if (!server) {
     throw new Error(`Unknown MCP server "${serverName}". Available: ${Object.keys(MCP_SERVERS).join(', ')}`)
   }
+
+  // Owner gate — enforced BEFORE any token is resolved or any request leaves this worker.
+  // Two independent conditions: the whole server (core "cloudflare" carries `execute`), or an
+  // individual tool that is not provably read-shaped.
+  const requestedTool = (input.tool_name || '').trim()
+  if (server.ownerOnly) {
+    await assertMcpOwner(input, env, `The "${serverName}" MCP server (it exposes \`execute\`, arbitrary Cloudflare API access)`)
+  } else if (requestedTool && !isReadOnlyMcpTool(requestedTool)) {
+    await assertMcpOwner(input, env, `The MCP tool "${requestedTool}" (it can modify or delete resources)`)
+  }
+
   // Resolve the bearer token. Per-founder by design: passing founder_email uses THAT founder's
   // own cf_api_token, so the call runs against their own Cloudflare account — the same
   // credential and multi-tenant model as the cloudflare_api tool. Omitting it falls back to
