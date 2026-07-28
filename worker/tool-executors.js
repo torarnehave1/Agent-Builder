@@ -9685,16 +9685,28 @@ async function executeCloudflareApi(input, env) {
 const MCP_SERVERS = {
   'cloudflare-docs': {
     url: 'https://docs.mcp.cloudflare.com/mcp',
-    auth: null, // public — verified working with no credentials
+    requiresToken: false, // public — verified working with no credentials
     description: 'Cloudflare product documentation search (Workers, R2, KV, D1, Zero Trust, DNS…)',
   },
-  // The remaining Cloudflare servers require an OAuth access token obtained via an interactive
-  // browser flow, which a Worker cannot perform. Registered here so the shape is ready; each
-  // needs `auth` populated with a bearer token before it will work.
-  'cloudflare': { url: 'https://mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Cloudflare account API (Code Mode)' },
-  'cloudflare-bindings': { url: 'https://bindings.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Manage Workers bindings (KV, R2, D1)' },
-  'cloudflare-builds': { url: 'https://builds.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Workers build status and logs' },
-  'cloudflare-observability': { url: 'https://observability.mcp.cloudflare.com/mcp', auth: null, requiresOAuth: true, description: 'Workers logs, analytics, errors' },
+  // These take a plain Cloudflare API token as a bearer token — NOT OAuth. Verified 2026-07-28
+  // against the live servers with a founder's stored cf_api_token, and confirmed by the official
+  // README (cloudflare/mcp-server-cloudflare), which documents passing an API token for
+  // programmatic callers. OAuth is only what desktop MCP clients use because they can open a
+  // browser; it is not a server requirement. Do not "restore" an OAuth requirement here.
+  'cloudflare-observability': {
+    url: 'https://observability.mcp.cloudflare.com/mcp',
+    requiresToken: true,
+    description: 'Workers logs, analytics and errors for a founder\'s own account — VERIFIED working with a founder API token (workers_list returned real deployed workers)',
+  },
+  'cloudflare-bindings': {
+    url: 'https://bindings.mcp.cloudflare.com/mcp',
+    requiresToken: true,
+    // tools/list works; individual calls need matching scope on the token. r2_buckets_list
+    // returned 403 "Authentication error" for a token lacking Workers R2 Storage: Read.
+    description: 'Workers bindings — KV, R2, D1, Hyperdrive. Requires the token to carry the matching product scope (e.g. Workers R2 Storage: Read) or individual calls return 403',
+  },
+  'cloudflare': { url: 'https://mcp.cloudflare.com/mcp', requiresToken: true, description: 'Cloudflare account API (Code Mode) — untested' },
+  'cloudflare-builds': { url: 'https://builds.mcp.cloudflare.com/mcp', requiresToken: true, description: 'Workers build status and logs — untested' },
 }
 
 // MCP streamable-HTTP replies are SSE-framed ("event: message\ndata: {...}"), not bare JSON,
@@ -9716,13 +9728,13 @@ function parseMcpResponse(text) {
   throw new Error(`Could not parse MCP response: ${trimmed.slice(0, 300)}`)
 }
 
-async function mcpRpc(server, method, params) {
+async function mcpRpc(server, method, params, authToken) {
   const headers = {
     'Content-Type': 'application/json',
     // Streamable HTTP servers require BOTH, and reject the request without the SSE type.
     Accept: 'application/json, text/event-stream',
   }
-  if (server.auth) headers.Authorization = `Bearer ${server.auth}`
+  if (authToken) headers.Authorization = `Bearer ${authToken}`
 
   const res = await fetch(server.url, {
     method: 'POST',
@@ -9745,7 +9757,7 @@ async function executeMcpCall(input, env) {
     return {
       error: 'server is required',
       available_servers: Object.entries(MCP_SERVERS).map(([name, s]) => ({
-        name, description: s.description, ready: !s.requiresOAuth || Boolean(s.auth),
+        name, description: s.description, needs_token: Boolean(s.requiresToken),
       })),
     }
   }
@@ -9754,15 +9766,28 @@ async function executeMcpCall(input, env) {
   if (!server) {
     throw new Error(`Unknown MCP server "${serverName}". Available: ${Object.keys(MCP_SERVERS).join(', ')}`)
   }
-  if (server.requiresOAuth && !server.auth) {
-    throw new Error(`MCP server "${serverName}" requires an OAuth access token that is not configured. Only "cloudflare-docs" works without credentials today.`)
+  // Resolve the bearer token. Per-founder by design: passing founder_email uses THAT founder's
+  // own cf_api_token, so the call runs against their own Cloudflare account — the same
+  // credential and multi-tenant model as the cloudflare_api tool. Omitting it falls back to
+  // this worker's own CF_API_TOKEN (the platform admin's account).
+  let authToken = null
+  if (server.requiresToken) {
+    const founderEmail = (input.founder_email || '').trim().toLowerCase()
+    if (founderEmail) {
+      const row = await env.DB.prepare('SELECT cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+      authToken = (row && row.cf_api_token) || null
+      if (!authToken) throw new Error(`No cf_api_token stored for ${founderEmail} — run set_world_credentials first.`)
+    } else {
+      authToken = env.CF_API_TOKEN || null
+      if (!authToken) throw new Error(`MCP server "${serverName}" needs a Cloudflare API token. Pass founder_email to use that founder's token, or configure CF_API_TOKEN on this worker.`)
+    }
   }
 
   const toolName = (input.tool_name || '').trim()
 
   // No tool_name → discovery. Lets the model find out what a server offers before calling it.
   if (!toolName) {
-    const result = await mcpRpc(server, 'tools/list', {})
+    const result = await mcpRpc(server, 'tools/list', {}, authToken)
     const tools = (result.tools || []).map((t) => ({
       name: t.name,
       description: t.description,
@@ -9780,7 +9805,7 @@ async function executeMcpCall(input, env) {
   const result = await mcpRpc(server, 'tools/call', {
     name: toolName,
     arguments: (input.arguments && typeof input.arguments === 'object') ? input.arguments : {},
-  })
+  }, authToken)
 
   // MCP returns content as an array of typed blocks — flatten the text for the model.
   const textOut = (result.content || [])
