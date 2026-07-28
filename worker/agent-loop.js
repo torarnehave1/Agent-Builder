@@ -923,6 +923,25 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     log(`tool filter applied: ${options.toolFilter.length} allowed → ${allTools.length} tools`)
   }
 
+  // A guard that DEMANDS a tool must not fire when that tool isn't in the toolbox.
+  // The intent flags above are computed from the user's text alone, before toolFilter is
+  // applied — so in a restricted context (EXCLUSIVE_CONTEXTS) they can demand a tool the
+  // model was never given. That is unsatisfiable: the guard blocks end_turn every turn,
+  // burns the whole turn budget, and emits NO text, so the user sees silence instead of a
+  // refusal. Gate each guard on the tool actually being available.
+  const availableToolNames = new Set(allTools.map(t => t.name))
+  const GRAPH_WRITE_TOOLS = ['delegate_to_kg', 'create_graph', 'create_node', 'patch_node', 'add_edge', 'remove_node', 'create_html_node', 'create_html_from_template']
+  const canWriteGraph = GRAPH_WRITE_TOOLS.some(n => availableToolNames.has(n))
+  const canQueryCalendar = [...availableToolNames].some(n => n.startsWith('calendar_'))
+  if (requiresGraphWrite && !canWriteGraph) {
+    log('graph-write guard DISABLED — no graph-write tool in this toolbox (restricted context)')
+  }
+  if (requiresCalendarQuery && !canQueryCalendar) {
+    log('calendar guard DISABLED — no calendar_ tool in this toolbox (restricted context)')
+  }
+  const enforceGraphWrite = requiresGraphWrite && canWriteGraph
+  const enforceCalendarQuery = requiresCalendarQuery && canQueryCalendar
+
   log(`started | model=${model} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
 
   try {
@@ -1031,7 +1050,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       if (data.stop_reason === 'end_turn') {
         // Guardrail: if user asked for graph creation/modification but no write was completed,
         // force one continuation turn with a direct tool-routing reminder.
-        if (requiresGraphWrite && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
+        if (enforceGraphWrite && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
           log('end_turn blocked: graph write requested but no graph-write completion detected; forcing continuation')
           messages.push(
             { role: 'assistant', content: data.content },
@@ -1040,7 +1059,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           continue
         }
 
-        if (requiresGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
+        if (enforceGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
           log('end_turn blocked: graph write completed but no verification read detected; forcing continuation')
           messages.push(
             { role: 'assistant', content: data.content },
@@ -1049,7 +1068,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           continue
         }
 
-        if (requiresCalendarQuery && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
+        if (enforceCalendarQuery && !hasCalendarToolUseSince(messages, calendarQueryStartIndex)) {
           log('end_turn blocked: calendar/date question answered without fresh calendar tool call; forcing continuation')
           messages.push(
             { role: 'assistant', content: data.content },
