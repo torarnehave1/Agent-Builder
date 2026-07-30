@@ -9828,6 +9828,12 @@ async function executeMcpCall(input, env) {
       const row = await env.DB.prepare('SELECT cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
       authToken = (row && row.cf_api_token) || null
       if (!authToken) throw new Error(`No cf_api_token stored for ${founderEmail} — run set_world_credentials first.`)
+    } else if (input.use_pages_token === true) {
+      // A separate, narrower token (Cloudflare Pages: Edit only) — opt-in so this
+      // never silently changes behavior for any existing zones/DNS/Workers call,
+      // which still defaults to CF_API_TOKEN below.
+      authToken = env.CF_PAGES_TOKEN || null
+      if (!authToken) throw new Error('use_pages_token was set but CF_PAGES_TOKEN is not configured on this worker.')
     } else {
       authToken = env.CF_API_TOKEN || null
       if (!authToken) throw new Error(`MCP server "${serverName}" needs a Cloudflare API token. Pass founder_email to use that founder's token, or configure CF_API_TOKEN on this worker.`)
