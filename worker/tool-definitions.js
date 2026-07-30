@@ -3404,6 +3404,22 @@ const TOOL_DEFINITIONS = [
       },
       required: ['name', 'confirmed']
     }
+  },
+  {
+    name: 'github_generate_from_template',
+    description: "Create a new repository by copying an existing GitHub template repository's file tree in one call (GitHub's native 'Generate from template' feature) — the correct way to scaffold a new app (e.g. a Vite/React starter) instead of committing files one by one. The source repo must already be marked as a template repository (Settings -> General -> Template repository on GitHub). This creates a real, visible repository — always tell the user the exact template/new-name/visibility before calling this, and only call it after the user has confirmed.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        templateRepo: { type: 'string', description: "Full name of the template repository to copy from, e.g. 'torarnehave1/Vegvisr-App-Starter'. Must have is_template:true on GitHub." },
+        name: { type: 'string', description: 'Name for the new repository.' },
+        description: { type: 'string', description: 'Short description for the new repository.' },
+        private: { type: 'boolean', description: 'Create as a private repository. Defaults to true if omitted.' },
+        includeAllBranches: { type: 'boolean', description: 'Copy all branches from the template, not just the default branch. Defaults to false.' },
+        confirmed: { type: 'boolean', description: 'Must be true. Set only after the user has explicitly confirmed the exact template/name/visibility.' }
+      },
+      required: ['templateRepo', 'name', 'confirmed']
+    }
   }
 ]
 

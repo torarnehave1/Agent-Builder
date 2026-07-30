@@ -10930,6 +10930,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGithubCreatePr(toolInput, env)
     case 'github_create_repo':
       return await executeGithubCreateRepo(toolInput, env)
+    case 'github_generate_from_template':
+      return await executeGithubGenerateFromTemplate(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -12204,6 +12206,32 @@ async function executeGithubCreateRepo(input, env) {
     // Administration permission required to create repos on the user's behalf.
     if (err.status === 403 && /not accessible by integration/i.test(err.message || '')) {
       return { success: false, error: 'GitHub repo creation needs the Administration permission on the connected GitHub App, which has not been granted yet. Ask the user to approve it at github.com/settings/installations, then reconnect GitHub.' }
+    }
+    return githubErrorResult(err)
+  }
+}
+
+async function executeGithubGenerateFromTemplate(input, env) {
+  const { templateRepo, name, description, private: isPrivate, includeAllBranches, confirmed } = input
+  if (!templateRepo || !name) return { success: false, error: 'templateRepo and name are required' }
+  if (confirmed !== true) {
+    return { success: false, error: 'This would create a real GitHub repository from a template. Ask the user to confirm the exact template/name/visibility first, then call again with confirmed:true.' }
+  }
+  try {
+    await assertGithubWriteAllowed(env, input.userId)
+    const result = await githubApiRequest(env, input.userId, `/repos/${templateRepo}/generate`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        description: description || undefined,
+        private: isPrivate !== false,
+        include_all_branches: includeAllBranches === true,
+      }),
+    })
+    return { success: true, fullName: result.full_name, repoUrl: result.html_url, defaultBranch: result.default_branch }
+  } catch (err) {
+    if (err.status === 422 && /not a template/i.test(err.message || '')) {
+      return { success: false, error: `${templateRepo} is not marked as a GitHub template repository yet — enable it in that repo's Settings > General > Template repository.` }
     }
     return githubErrorResult(err)
   }
