@@ -3421,6 +3421,18 @@ const TOOL_DEFINITIONS = [
       },
       required: ['templateRepo', 'name', 'confirmed']
     }
+  },
+  {
+    name: 'cloudflare_pages_deploy',
+    description: "Trigger a real Cloudflare Pages deployment for an existing Pages project connected to a GitHub repo — builds and deploys the project's current default branch. This does NOT create the Pages project or attach a domain (use mcp_call with the cloudflare server + use_pages_token:true for that, see its description) — it only starts a build for a project that already exists. Superadmin (platform owner) only. This triggers a real, live deployment on Cloudflare — always tell the user the exact project name before calling this, and only call it after the user has explicitly confirmed.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        projectName: { type: 'string', description: "The Cloudflare Pages project name (lowercase-with-dashes), e.g. 'gimbo-gamboo'. Not the GitHub repo name if they differ." },
+        confirmed: { type: 'boolean', description: 'Must be true. Set only after the user has explicitly confirmed the exact project name.' }
+      },
+      required: ['projectName', 'confirmed']
+    }
   }
 ]
 

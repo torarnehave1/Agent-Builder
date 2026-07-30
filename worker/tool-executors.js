@@ -10938,6 +10938,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGithubCreateRepo(toolInput, env)
     case 'github_generate_from_template':
       return await executeGithubGenerateFromTemplate(toolInput, env)
+    case 'cloudflare_pages_deploy':
+      return await executeCloudflarePagesDeploy(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -12241,6 +12243,31 @@ async function executeGithubGenerateFromTemplate(input, env) {
     }
     return githubErrorResult(err)
   }
+}
+
+async function executeCloudflarePagesDeploy(input, env) {
+  const { projectName, confirmed } = input
+  if (!projectName) return { success: false, error: 'projectName is required' }
+  if (confirmed !== true) {
+    return { success: false, error: 'This would trigger a real Cloudflare Pages deployment. Ask the user to confirm the exact project name first, then call again with confirmed:true.' }
+  }
+  await assertMcpOwner(input, env, 'cloudflare_pages_deploy (it triggers a real Cloudflare deployment)')
+  const token = env.CF_PAGES_TOKEN
+  const account = env.CF_ACCOUNT_ID
+  if (!token || !account) {
+    return { success: false, error: 'CF_PAGES_TOKEN/CF_ACCOUNT_ID not configured on this worker.' }
+  }
+  const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects/${projectName}/deployments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!data.success) {
+    const message = (data.errors && data.errors[0] && data.errors[0].message) || `Cloudflare API error (${res.status})`
+    return { success: false, error: message }
+  }
+  const d = data.result
+  return { success: true, deploymentId: d.id, projectName: d.project_name, url: d.url, status: d.latest_stage?.status || 'queued' }
 }
 
 export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }
