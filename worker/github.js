@@ -96,6 +96,26 @@ export async function disconnectGithub(env, userId) {
   await env.DB.prepare('DELETE FROM github_connections WHERE user_id = ?').bind(userId).run()
 }
 
+// A hard, config-level backstop that disables all GitHub write tools outright —
+// independent of and in addition to the per-call confirmed:true gate already on
+// github_write_file / github_create_pr. Mirrors github-mcp-server's --read-only
+// flag: "write tools are skipped... even if explicitly requested."
+export async function setGithubReadOnly(env, userId, readOnly) {
+  await env.DB.prepare('UPDATE github_connections SET read_only = ? WHERE user_id = ?')
+    .bind(readOnly ? 1 : 0, userId).run()
+}
+
+// Throws if the connected user has read-only mode enabled. Call this at the
+// top of every GitHub write-tool executor before making any mutating API call.
+export async function assertGithubWriteAllowed(env, userId) {
+  const conn = await getGithubConnection(env, userId)
+  if (conn && conn.read_only) {
+    const err = new Error('GitHub is set to read-only for this account. Turn off read-only mode in Settings to allow writes.')
+    err.code = 'READ_ONLY'
+    throw err
+  }
+}
+
 // Rate-limit handling per GitHub's own documented order of precedence
 // (docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api):
 //   1. Retry-After header present → wait exactly that long.

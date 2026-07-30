@@ -20,7 +20,7 @@ import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
 import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
-import { githubApiRequest, githubPaginate } from './github.js'
+import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -12135,6 +12135,7 @@ async function executeGithubWriteFile(input, env) {
     return { success: false, error: 'This would commit a real change to the repo. Ask the user to confirm the exact repo/path/branch first, then call again with confirmed:true.' }
   }
   try {
+    await assertGithubWriteAllowed(env, input.userId)
     // Look up the current file's SHA if it exists, so this is an update, not a conflicting create.
     let sha
     try {
@@ -12164,6 +12165,7 @@ async function executeGithubCreatePr(input, env) {
     return { success: false, error: 'This would open a real pull request. Ask the user to confirm the repo/title/branches first, then call again with confirmed:true.' }
   }
   try {
+    await assertGithubWriteAllowed(env, input.userId)
     let baseBranch = base
     if (!baseBranch) {
       const repoInfo = await githubApiRequest(env, input.userId, `/repos/${repo}`)

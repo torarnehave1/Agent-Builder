@@ -21,6 +21,7 @@ function getAuthToken(): string {
 export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
   const [connected, setConnected] = useState(false);
   const [accountLogin, setAccountLogin] = useState<string | null>(null);
+  const [readOnly, setReadOnly] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const isLight = resolvedTheme === 'light';
@@ -32,10 +33,24 @@ export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
       .then((data) => {
         setConnected(!!data.connected);
         setAccountLogin(data.accountLogin || null);
+        setReadOnly(!!data.readOnly);
         setError('');
       })
       .catch(() => setError('Could not check GitHub connection status.'))
       .finally(() => setLoading(false));
+  };
+
+  const handleToggleReadOnly = async () => {
+    const next = !readOnly;
+    setReadOnly(next); // optimistic — matches the hard server-side gate this drives
+    await fetch(`${AGENT_API}/github/read-only`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authToken: getAuthToken(), readOnly: next }),
+    }).catch(() => {
+      setReadOnly(!next);
+      setError('Could not update read-only mode.');
+    });
   };
 
   useEffect(() => {
@@ -72,17 +87,23 @@ export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
       {loading ? (
         <div className={`text-xs ${isLight ? 'text-slate-400' : 'text-white/40'}`}>Checking connection…</div>
       ) : connected ? (
-        <div className="flex items-center justify-between">
-          <span className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
-            Connected{accountLogin ? ` as ${accountLogin}` : ''}
-          </span>
-          <button
-            type="button"
-            onClick={handleDisconnect}
-            className="rounded-lg border border-rose-400/40 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10"
-          >
-            Disconnect
-          </button>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+              Connected{accountLogin ? ` as ${accountLogin}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              className="rounded-lg border border-rose-400/40 px-3 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10"
+            >
+              Disconnect
+            </button>
+          </div>
+          <label className={`flex items-center gap-2 text-xs cursor-pointer ${isLight ? 'text-slate-600' : 'text-white/60'}`}>
+            <input type="checkbox" checked={readOnly} onChange={handleToggleReadOnly} className="accent-amber-500" />
+            Read-only mode — blocks all GitHub writes (commits, pull requests), even if chat asks to confirm one
+          </label>
         </div>
       ) : (
         <button

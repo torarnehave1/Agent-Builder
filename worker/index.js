@@ -25,7 +25,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
-import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub } from './github.js'
+import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly } from './github.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -344,7 +344,22 @@ export default {
         return new Response(JSON.stringify({
           connected: !!conn,
           accountLogin: conn?.account_login || null,
+          readOnly: !!conn?.read_only,
         }), { headers: corsHeaders })
+      }
+
+      // POST /github/read-only — toggle the hard write-lock independent of
+      // the per-call confirmed:true gate already on the write tools.
+      if (pathname === '/github/read-only' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        await setGithubReadOnly(env, auth.userId, !!body.readOnly)
+        return new Response(JSON.stringify({ success: true, readOnly: !!body.readOnly }), { headers: corsHeaders })
       }
 
       // GET /github/oauth/start — top-level browser redirect to GitHub's authorize page.
