@@ -7,6 +7,7 @@ import DataExplorer from './DataExplorer';
 import GraphPortfolioTab from './GraphPortfolioTab';
 import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel, isWorkersAIModel } from './ModelSettings';
+import GitHubConnect from './GitHubConnect';
 import UsageDashboard from './UsageDashboard';
 import WorkContextTab, { type WorkContext } from './WorkContextTab';
 import AutomationTab from './AutomationTab';
@@ -196,7 +197,10 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
       {view === 'data' && <DataExplorer />}
       {view === 'usage' && <UsageDashboard userId={userId} />}
       {view === 'settings' && (
-        <ModelSettings model={model} onChange={setModel} resolvedTheme={resolvedTheme} />
+        <div className="flex flex-col gap-4 p-4 overflow-y-auto">
+          <GitHubConnect resolvedTheme={resolvedTheme} />
+          <ModelSettings model={model} onChange={setModel} resolvedTheme={resolvedTheme} />
+        </div>
       )}
     </div>
   );

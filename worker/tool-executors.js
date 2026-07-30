@@ -20,6 +20,7 @@ import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
 import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
+import { githubApiRequest } from './github.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -10493,6 +10494,62 @@ function slugifyAppName(label) {
     .replace(/^-+|-+$/g, '')
 }
 
+// ── App Catalog marker contract ───────────────────────────────────
+// The fulltext node body IS the editable surface for the me.<domain> Apps tab.
+// HTML comments survive the gnew-viewer's markdown → v-html path as DOM comment
+// nodes (invisible, no layout shift), so a founder reads normal prose while these
+// markers tell the console what to render:
+//   <!--INTRO-->short card line<!--/INTRO-->
+//   <!--DESCRIPTION-->longer detail-modal text<!--/DESCRIPTION-->
+//   <!--URL: https://the-app.example/-->
+// Consumed by GET /world-app-interests (worker/index.js) and re-emitted by the
+// showcase builder below, so a hand-edit survives regenerate:true.
+export function pickAppMarker(info, tag) {
+  const m = String(info || '').match(new RegExp(`<!--\\s*${tag}\\s*-->([\\s\\S]*?)<!--\\s*/${tag}\\s*-->`, 'i'))
+  return m ? m[1].trim() : ''
+}
+
+// Which nodes of the App Catalog graph are app cards. Historically this was the id
+// pattern app-NN alone, which silently excluded any node added through the viewer
+// (those get a generated `fulltext_…` id). A body marker now counts as the node
+// declaring itself an app, so adding an app no longer depends on guessing an id.
+// The catalog cover node carries no markers and stays out.
+export function isAppCatalogNode(node) {
+  if (/^app-\d+$/.test(node?.id || '')) return true
+  const info = node?.info || ''
+  return Boolean(pickAppMarker(info, 'INTRO') || pickAppMarker(info, 'DESCRIPTION') || pickAppUrlMarker(info))
+}
+
+// The pre-marker heuristic: which line of the body becomes the card text. Exported so
+// GET /world-app-interests and the marker migration agree on exactly the same line.
+// Returns { start, end, line } into the ORIGINAL string, or null.
+export function findAppCardLineSpan(info) {
+  const text = String(info || '')
+  const wit = /\*\*What it is:\*\*[ \t]*([^\n]+)/i.exec(text)
+  if (wit) {
+    const start = wit.index + wit[0].lastIndexOf(wit[1])
+    return { start, end: start + wit[1].length, line: wit[1].trim() }
+  }
+  const sec = /\[SECTION[^\]]*\][ \t]*\n([^\n]+)/.exec(text)
+  if (sec && !/^\s*\*\*/.test(sec[1])) {
+    const start = sec.index + sec[0].lastIndexOf(sec[1])
+    return { start, end: start + sec[1].length, line: sec[1].trim() }
+  }
+  return null
+}
+
+export function scrapeAppCardLine(info) {
+  const span = findAppCardLineSpan(info)
+  return span ? span.line : ''
+}
+
+export function pickAppUrlMarker(info) {
+  // Quotes/angle brackets excluded — the value is written straight into an href in the
+  // me.<domain> console, so it must not be able to break out of the attribute.
+  const m = String(info || '').match(/<!--\s*URL:\s*(https?:\/\/[^\s>"'<]+)\s*-->/i)
+  return m ? m[1].trim() : ''
+}
+
 function extractDevLinks(text) {
   const urls = String(text || '').match(/https?:\/\/[^\s)\]]+/g) || []
   const repo = urls.find(u => /github\.com/i.test(u)) || null
@@ -10500,12 +10557,17 @@ function extractDevLinks(text) {
   return { live, repo }
 }
 
-function buildShowcaseInfo({ name, logoUrl, tagline, cards, live, repo }) {
+function buildShowcaseInfo({ name, logoUrl, tagline, cards, live, repo, description }) {
   const cardBlock = cards.slice(0, 3).map(c => `**${c.title}**\n${c.body}`).join('\n\n')
   let info = ''
   info += `![${name} logo|width:120px; height:auto; margin: '0 auto'](${logoUrl}?w=240&auto=format)\n\n`
   info += `[FANCY | font-size: 2.4em; color: #0f2a43; text-align: center]\n${name}\n[END FANCY]\n\n`
-  info += `[SECTION | background-color: #f4f8fb; color: #1a1a1a; padding: 18px; border-radius: 10px; font-size: 1.15em]\n${tagline}\n[END SECTION]\n\n`
+  // The tagline is the card line — wrapped in INTRO markers so me.<domain> reads it
+  // explicitly instead of guessing at the first prose line under [SECTION].
+  info += `[SECTION | background-color: #f4f8fb; color: #1a1a1a; padding: 18px; border-radius: 10px; font-size: 1.15em]\n<!--INTRO-->\n${tagline}\n<!--/INTRO-->\n[END SECTION]\n\n`
+  if (description) {
+    info += `<!--DESCRIPTION-->\n${description}\n<!--/DESCRIPTION-->\n\n`
+  }
   info += `[FLEXBOX-CARDS]\n${cardBlock}\n[END FLEXBOX]`
   const footerBits = []
   if (live) footerBits.push(`Live: ${live}`)
@@ -10513,6 +10575,8 @@ function buildShowcaseInfo({ name, logoUrl, tagline, cards, live, repo }) {
   if (footerBits.length) {
     info += `\n\n[SECTION | background-color: #ffffff; color: #555555; padding: 10px; border-radius: 8px; font-size: 0.95em]\n${footerBits.join('  ·  ')}\n[END SECTION]`
   }
+  // Invisible in the viewer; this is what the console links "See it live" to.
+  if (live) info += `\n\n<!--URL: ${live}-->`
   return info
 }
 
@@ -10558,6 +10622,100 @@ Return ONLY a JSON object, no markdown fences:
     : []
   if (!tagline || cards.length < 3) throw new Error('pitch missing tagline or 3 cards')
   return { tagline, cards }
+}
+
+// Migrate App Catalog nodes onto the marker contract WITHOUT rewriting their content:
+// wraps the existing card line in <!--INTRO-->, seeds <!--DESCRIPTION--> from the node's
+// metadata.capabilities_summary, and appends <!--URL: …--> only for URLs the caller supplies.
+// Idempotent (an existing marker is never touched) and purely mechanical — no model call,
+// so no pitch text is invented and no [FLEXBOX-CARDS] edit is lost. Superadmin only.
+async function executeMigrateAppMarkers(input, env) {
+  const callerId = input?.authContext?.email || input?.authContext?.userId || input?.userId
+  const profile = callerId ? await resolveUserProfile(callerId, env) : null
+  const role = String(profile?.role || input?.authContext?.role || '').toLowerCase()
+  if (role !== 'superadmin') throw new Error('migrate_app_markers requires Superadmin.')
+
+  const graphId = (typeof input.graphId === 'string' && input.graphId.trim()) || APP_CATALOG_GRAPH_ID
+  const dryRun = input.dry_run === true
+  const target = (typeof input.app === 'string' && input.app.trim()) ? input.app.trim() : 'all'
+  const targetSlug = target.toLowerCase() === 'all' ? 'all' : slugifyAppName(target)
+  const urlInput = (input.urls && typeof input.urls === 'object' && !Array.isArray(input.urls)) ? input.urls : {}
+  // Accept the url map keyed by node id ('app-07'), slug ('audio-studio') or label ('Audio Studio').
+  const urlByKey = {}
+  for (const [k, v] of Object.entries(urlInput)) {
+    if (typeof v !== 'string' || !/^https?:\/\/[^\s>"'<]+$/.test(v.trim())) continue
+    urlByKey[String(k).trim().toLowerCase()] = v.trim()
+    urlByKey[slugifyAppName(k)] = v.trim()
+  }
+
+  const { graph } = await fetchGraphForVersion(graphId, env)
+  const nodes = (Array.isArray(graph?.nodes) ? graph.nodes : []).filter(isAppCatalogNode)
+  if (!nodes.length) throw new Error(`Catalog graph ${graphId} has no app nodes`)
+
+  const updated = []
+  const skipped = []
+  const needsUrl = []
+
+  for (const node of nodes) {
+    const slug = slugifyAppName(node.label)
+    if (targetSlug !== 'all' && slug !== targetSlug) continue
+
+    let info = String(node.info || '')
+    const changes = []
+
+    if (!pickAppMarker(info, 'INTRO')) {
+      const span = findAppCardLineSpan(info)
+      if (span) {
+        info = info.slice(0, span.start) + `<!--INTRO-->${span.line}<!--/INTRO-->` + info.slice(span.end)
+        changes.push('INTRO')
+      }
+    }
+
+    const caps = String(node.metadata?.capabilities_summary || '').trim()
+    if (!pickAppMarker(info, 'DESCRIPTION') && caps) {
+      info = `${info.replace(/\s+$/, '')}\n\n<!--DESCRIPTION-->\n${caps}\n<!--/DESCRIPTION-->`
+      changes.push('DESCRIPTION')
+    }
+
+    const url = urlByKey[String(node.id).toLowerCase()] || urlByKey[slug] || ''
+    if (!pickAppUrlMarker(info)) {
+      if (url) {
+        info = `${info.replace(/\s+$/, '')}\n\n<!--URL: ${url}-->`
+        changes.push('URL')
+      } else {
+        // Reported so the operator knows exactly which apps still need a live link —
+        // computed per node, so a node that already carries a URL marker is never listed.
+        needsUrl.push(`${node.label} (${node.id})`)
+      }
+    }
+
+    if (!changes.length) {
+      skipped.push({ app: node.label, nodeId: node.id, reason: 'already migrated (or nothing to migrate: no card line, no capabilities_summary, no url given)' })
+      continue
+    }
+
+    if (dryRun) {
+      updated.push({ app: node.label, nodeId: node.id, changes, preview: info.slice(0, 240) })
+      continue
+    }
+
+    try {
+      await patchNodeWithVersionRetry(env, graphId, node.id, { info })
+      updated.push({ app: node.label, nodeId: node.id, changes })
+    } catch (err) {
+      skipped.push({ app: node.label, nodeId: node.id, reason: `patch failed: ${err.message}` })
+    }
+  }
+
+  return {
+    message: `${dryRun ? '[DRY RUN] ' : ''}Marker migration: ${updated.length} node(s) ${dryRun ? 'would change' : 'updated'}, ${skipped.length} skipped${needsUrl.length ? ` — still without a live-app URL (pass them in \`urls\` to add "See it live" links): ${needsUrl.join(', ')}` : ' — every app now has a URL marker'}`,
+    graphId,
+    dry_run: dryRun,
+    updated,
+    skipped,
+    needs_url: needsUrl,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+  }
 }
 
 async function executeGenerateAppShowcase(input, env) {
@@ -10624,7 +10782,20 @@ async function executeGenerateAppShowcase(input, env) {
     }
 
     const { live, repo } = extractDevLinks(sourceInfo)
-    const info = buildShowcaseInfo({ name: node.label, logoUrl, tagline: pitch.tagline, cards: pitch.cards, live, repo })
+    // Hand-authored markers in the CURRENT body win over anything regenerated —
+    // an edited intro / description / app URL must survive regenerate:true.
+    const keptIntro = pickAppMarker(node.info, 'INTRO')
+    const keptDescription = pickAppMarker(node.info, 'DESCRIPTION')
+    const keptUrl = pickAppUrlMarker(node.info)
+    const info = buildShowcaseInfo({
+      name: node.label,
+      logoUrl,
+      tagline: keptIntro || pitch.tagline,
+      cards: pitch.cards,
+      live: keptUrl || live,
+      repo,
+      description: keptDescription,
+    })
     const fields = {
       info,
       showcaseVersion: Number(node.showcaseVersion || 0) + 1,
@@ -10744,6 +10915,19 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGetAlbumImages(toolInput, env)
     case 'generate_app_showcase':
       return await executeGenerateAppShowcase(toolInput, env)
+
+    case 'migrate_app_markers':
+      return await executeMigrateAppMarkers(toolInput, env)
+    case 'github_list_repos':
+      return await executeGithubListRepos(toolInput, env)
+    case 'github_list_files':
+      return await executeGithubListFiles(toolInput, env)
+    case 'github_read_file':
+      return await executeGithubReadFile(toolInput, env)
+    case 'github_write_file':
+      return await executeGithubWriteFile(toolInput, env)
+    case 'github_create_pr':
+      return await executeGithubCreatePr(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -11892,6 +12076,93 @@ async function executeGetParticipantGraph(input, env) {
   let progress = {}
   try { progress = JSON.parse(row.progress || '{}') } catch { progress = {} }
   return { success: true, challenge_id, participant_user_id, personal_graph_id: row.personal_graph_id, status: row.status, joined_at: row.joined_at, progress }
+}
+
+function githubErrorResult(err) {
+  if (err.code === 'NOT_CONNECTED') return { success: false, error: err.message }
+  return { success: false, error: err.message || 'GitHub API request failed' }
+}
+
+async function executeGithubListRepos(input, env) {
+  try {
+    const data = await githubApiRequest(env, input.userId, '/installation/repositories')
+    const repos = (data.repositories || []).map(r => ({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch }))
+    return { success: true, repos }
+  } catch (err) { return githubErrorResult(err) }
+}
+
+async function executeGithubListFiles(input, env) {
+  const { repo, path = '', ref } = input
+  if (!repo) return { success: false, error: 'repo is required' }
+  try {
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+    const data = await githubApiRequest(env, input.userId, `/repos/${repo}/contents/${path}${query}`)
+    const entries = Array.isArray(data) ? data : [data]
+    return { success: true, entries: entries.map(e => ({ name: e.name, path: e.path, type: e.type, size: e.size })) }
+  } catch (err) { return githubErrorResult(err) }
+}
+
+async function executeGithubReadFile(input, env) {
+  const { repo, path, ref } = input
+  if (!repo || !path) return { success: false, error: 'repo and path are required' }
+  try {
+    const query = ref ? `?ref=${encodeURIComponent(ref)}` : ''
+    const data = await githubApiRequest(env, input.userId, `/repos/${repo}/contents/${path}${query}`)
+    if (Array.isArray(data)) return { success: false, error: `${path} is a directory, not a file — use github_list_files.` }
+    const content = data.encoding === 'base64' ? atob(data.content.replace(/\n/g, '')) : data.content
+    return { success: true, repo, path, content, sha: data.sha }
+  } catch (err) { return githubErrorResult(err) }
+}
+
+async function executeGithubWriteFile(input, env) {
+  const { repo, path, content, message, branch, confirmed } = input
+  if (!repo || !path || content === undefined || !message) {
+    return { success: false, error: 'repo, path, content, and message are required' }
+  }
+  if (confirmed !== true) {
+    return { success: false, error: 'This would commit a real change to the repo. Ask the user to confirm the exact repo/path/branch first, then call again with confirmed:true.' }
+  }
+  try {
+    // Look up the current file's SHA if it exists, so this is an update, not a conflicting create.
+    let sha
+    try {
+      const query = branch ? `?ref=${encodeURIComponent(branch)}` : ''
+      const existing = await githubApiRequest(env, input.userId, `/repos/${repo}/contents/${path}${query}`)
+      sha = Array.isArray(existing) ? undefined : existing.sha
+    } catch { sha = undefined }
+
+    const body = {
+      message,
+      content: btoa(unescape(encodeURIComponent(content))),
+      ...(branch ? { branch } : {}),
+      ...(sha ? { sha } : {}),
+    }
+    const result = await githubApiRequest(env, input.userId, `/repos/${repo}/contents/${path}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
+    return { success: true, repo, path, commitSha: result.commit?.sha, commitUrl: result.commit?.html_url }
+  } catch (err) { return githubErrorResult(err) }
+}
+
+async function executeGithubCreatePr(input, env) {
+  const { repo, title, head, base, body, confirmed } = input
+  if (!repo || !title || !head) return { success: false, error: 'repo, title, and head are required' }
+  if (confirmed !== true) {
+    return { success: false, error: 'This would open a real pull request. Ask the user to confirm the repo/title/branches first, then call again with confirmed:true.' }
+  }
+  try {
+    let baseBranch = base
+    if (!baseBranch) {
+      const repoInfo = await githubApiRequest(env, input.userId, `/repos/${repo}`)
+      baseBranch = repoInfo.default_branch
+    }
+    const result = await githubApiRequest(env, input.userId, `/repos/${repo}/pulls`, {
+      method: 'POST',
+      body: JSON.stringify({ title, head, base: baseBranch, body: body || '' }),
+    })
+    return { success: true, repo, prNumber: result.number, prUrl: result.html_url }
+  } catch (err) { return githubErrorResult(err) }
 }
 
 export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }

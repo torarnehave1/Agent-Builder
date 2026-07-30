@@ -3309,6 +3309,86 @@ const TOOL_DEFINITIONS = [
         authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
       }
     }
+  },
+  {
+    name: 'migrate_app_markers',
+    description:
+      "Migrate App Catalog nodes onto the me.<domain> MARKER CONTRACT without rewriting their content. The Apps/Capabilities tab on a World Founder's console reads three HTML-comment markers out of each app node's fulltext body — <!--INTRO-->…<!--/INTRO--> (the card line), <!--DESCRIPTION-->…<!--/DESCRIPTION--> (the detail-modal text) and <!--URL: https://…--> (the 'See it live' link) — and falls back to the old prose-scraping when a marker is absent. This tool adds the missing markers MECHANICALLY: it wraps the node's existing card line (the '**What it is:**' line, else the first prose line under [SECTION]) in INTRO markers in place, appends a DESCRIPTION block seeded from that node's metadata.capabilities_summary, and appends a URL marker ONLY for urls the caller passes in. No model call, so no text is invented and [FLEXBOX-CARDS] content is never touched. Idempotent — a marker that already exists is left alone. Run with dry_run:true first to see what would change. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        app: { type: 'string', description: "App name or slug to migrate, e.g. 'Vemotion', or 'all' for every app-NN node in the catalog. Default 'all'." },
+        urls: { type: 'object', description: "Live app URLs to write as <!--URL: …--> markers, keyed by node id ('app-07'), slug ('audio-studio') or label ('Audio Studio'). Apps missing from this map get no URL marker and are reported in the result. Only http(s) URLs are accepted." },
+        dry_run: { type: 'boolean', description: 'If true, report what would change (with a preview) without patching any node. Default false.' },
+        graphId: { type: 'string', description: 'Override the catalog graph id. Defaults to the App Catalog 6074a2bf-082b-4e92-a91d-eeab94c69b66.' }
+      }
+    }
+  },
+  {
+    name: 'github_list_repos',
+    description: "List the GitHub repositories the current user's connected GitHub App can access. Requires the user to have connected GitHub in Settings first — if not connected, this returns an error telling the user to connect.",
+    input_schema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'github_list_files',
+    description: 'List files and folders at a path in a connected GitHub repository (like `ls`). Use this before github_read_file to find the right path.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: "Repository full name, e.g. 'torarnehave/Agent-Builder'" },
+        path: { type: 'string', description: "Directory path within the repo. Empty string or omitted for repo root." },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA. Defaults to the repo default branch.' }
+      },
+      required: ['repo']
+    }
+  },
+  {
+    name: 'github_read_file',
+    description: 'Read the contents of a single file from a connected GitHub repository.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: "Repository full name, e.g. 'torarnehave/Agent-Builder'" },
+        path: { type: 'string', description: "File path within the repo, e.g. 'worker/index.js'" },
+        ref: { type: 'string', description: 'Branch, tag, or commit SHA. Defaults to the repo default branch.' }
+      },
+      required: ['repo', 'path']
+    }
+  },
+  {
+    name: 'github_write_file',
+    description: 'Create or update a single file in a connected GitHub repository by committing directly to a branch. This is a real, irreversible-without-a-revert write to the repo — always tell the user which repo/branch/file will be committed before calling this, and only call it after the user has confirmed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: "Repository full name, e.g. 'torarnehave/Agent-Builder'" },
+        path: { type: 'string', description: 'File path within the repo to create or update.' },
+        content: { type: 'string', description: 'The full new file content (plain text, not base64).' },
+        message: { type: 'string', description: 'Commit message.' },
+        branch: { type: 'string', description: 'Branch to commit to. Defaults to the repo default branch.' },
+        confirmed: { type: 'boolean', description: 'Must be true. Set only after the user has explicitly confirmed this exact write.' }
+      },
+      required: ['repo', 'path', 'content', 'message', 'confirmed']
+    }
+  },
+  {
+    name: 'github_create_pr',
+    description: 'Open a pull request in a connected GitHub repository from an existing branch. This creates a real, visible PR — always tell the user the repo/branch/title before calling this, and only call it after the user has confirmed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        repo: { type: 'string', description: "Repository full name, e.g. 'torarnehave/Agent-Builder'" },
+        title: { type: 'string', description: 'Pull request title.' },
+        head: { type: 'string', description: 'The branch containing the changes.' },
+        base: { type: 'string', description: 'The branch to merge into. Defaults to the repo default branch.' },
+        body: { type: 'string', description: 'Pull request description.' },
+        confirmed: { type: 'boolean', description: 'Must be true. Set only after the user has explicitly confirmed opening this PR.' }
+      },
+      required: ['repo', 'title', 'head', 'confirmed']
+    }
   }
 ]
 

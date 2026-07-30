@@ -13,7 +13,7 @@
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph } from './tool-executors.js'
+import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { runAutomation, runSingleStep } from './automation-runner.js'
 import { buildAutomationSpec } from './automation-builder.js'
@@ -25,6 +25,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub } from './github.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -297,21 +298,27 @@ export default {
           if (res.ok) {
             const g = await res.json()
             universe = (g.nodes || [])
-              .filter(n => /^app-\d+$/.test(n.id || ''))
+              .filter(isAppCatalogNode)
               .map(n => {
                 const info = n.info || ''
                 const logoM = info.match(/!\[[^\]]*\]\((https?:\/\/[^)\s]+)\)/)
-                let desc = ''
-                const witM = info.match(/\*\*What it is:\*\*\s*([^\n]+)/i)
-                if (witM) desc = witM[1].trim()
-                else {
-                  const secM = info.match(/\[SECTION[^\]]*\]\s*\n([^\n]+)/)
-                  if (secM && !/^\s*\*\*/.test(secM[1])) desc = secM[1].trim()
-                }
+                // Marker contract (see pickAppMarker in tool-executors.js) — the node body is
+                // the editable surface. A missing marker falls back to the old scraping below,
+                // so unmigrated catalog nodes keep rendering exactly as before.
+                const intro = pickAppMarker(info, 'INTRO')
+                const longDesc = pickAppMarker(info, 'DESCRIPTION')
+                const appUrl = pickAppUrlMarker(info)
+                // Same helper the marker migration uses, so the two can never disagree
+                // about which line is the card line.
+                let desc = scrapeAppCardLine(info)
                 if (desc.length > 130) desc = desc.slice(0, 127) + '…'
                 const m = n.metadata || {}
                 return {
-                  id: n.id, title: n.label || n.id, logo: logoM ? logoM[1] : '', description: desc,
+                  id: n.id, title: n.label || n.id, logo: logoM ? logoM[1] : '',
+                  // INTRO is used verbatim (no truncation) — the card clamps with CSS.
+                  description: intro || desc,
+                  long_description: longDesc || m.capabilities_summary || '',
+                  url: appUrl,
                   capabilities_summary: m.capabilities_summary || '',
                   highlights: Array.isArray(m.highlights) ? m.highlights : [],
                 }
@@ -322,6 +329,62 @@ export default {
         let selected = []
         try { const d = JSON.parse(row?.data || '{}'); if (Array.isArray(d.app_interests)) selected = d.app_interests } catch { selected = [] }
         return new Response(JSON.stringify({ universe, selected }), { headers: corsHeaders })
+      }
+
+      // GET /github/status — is the current user connected? Used by the Settings tab.
+      if (pathname === '/github/status' && request.method === 'GET') {
+        const auth = await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        const conn = await getGithubConnection(env, auth.userId).catch(() => null)
+        return new Response(JSON.stringify({
+          connected: !!conn,
+          accountLogin: conn?.account_login || null,
+        }), { headers: corsHeaders })
+      }
+
+      // GET /github/oauth/start — top-level browser redirect to GitHub's authorize page.
+      // Auth comes from the vegvisr_token cookie (same cookie AgentBuilder sets on login),
+      // not a bearer token, since this is a full-page navigation, not a fetch() call.
+      if (pathname === '/github/oauth/start' && request.method === 'GET') {
+        const auth = await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response('Not signed in to Agent-Builder.', { status: 401 })
+        }
+        // state carries the userId so the callback (a separate request) knows who to attach the token to.
+        const state = btoa(JSON.stringify({ userId: auth.userId, ts: Date.now() }))
+        return Response.redirect(buildGithubAuthorizeUrl(env, state), 302)
+      }
+
+      // GET /github/oauth/callback — GitHub redirects here with ?code=&state=
+      if (pathname === '/github/oauth/callback' && request.method === 'GET') {
+        const code = url.searchParams.get('code')
+        const state = url.searchParams.get('state')
+        let userId = null
+        try { userId = JSON.parse(atob(state || '')).userId } catch { userId = null }
+        if (!code || !userId) {
+          return new Response('Missing code or invalid state from GitHub.', { status: 400 })
+        }
+        try {
+          const tokenData = await exchangeGithubCode(env, code)
+          const { accountLogin } = await saveGithubConnection(env, userId, tokenData)
+          const redirectTarget = `${env.FRONTEND_BASE_URL || 'https://agent-builder.vegvisr.org'}/?github=connected${accountLogin ? `&as=${encodeURIComponent(accountLogin)}` : ''}`
+          return Response.redirect(redirectTarget, 302)
+        } catch (err) {
+          console.error('[/github/oauth/callback] failed', err)
+          return new Response(`GitHub connection failed: ${err.message}`, { status: 500 })
+        }
+      }
+
+      // POST /github/disconnect
+      if (pathname === '/github/disconnect' && request.method === 'POST') {
+        const auth = await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        await disconnectGithub(env, auth.userId)
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
       }
 
       // GET /challenge-session — participant session for challenge.<domain>
