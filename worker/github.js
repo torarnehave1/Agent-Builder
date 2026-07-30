@@ -96,15 +96,17 @@ export async function disconnectGithub(env, userId) {
   await env.DB.prepare('DELETE FROM github_connections WHERE user_id = ?').bind(userId).run()
 }
 
-// Thin wrapper for calling the GitHub REST API as the connected user.
-export async function githubApiRequest(env, userId, path, options = {}) {
+// Low-level fetch shared by githubApiRequest and githubPaginate — returns both
+// the parsed body and the raw Response so callers that need response headers
+// (e.g. the Link header for pagination) aren't forced to re-fetch.
+async function githubFetch(env, userId, path, options = {}) {
   const conn = await getGithubConnection(env, userId)
   if (!conn) {
     const err = new Error('No GitHub connection for this user. Connect GitHub first in Settings.')
     err.code = 'NOT_CONNECTED'
     throw err
   }
-  const res = await fetch(`${GITHUB_API_BASE}${path}`, {
+  const res = await fetch(path.startsWith('http') ? path : `${GITHUB_API_BASE}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${conn.access_token}`,
@@ -123,5 +125,44 @@ export async function githubApiRequest(env, userId, path, options = {}) {
     err.data = data
     throw err
   }
+  return { data, res }
+}
+
+// Thin wrapper for calling the GitHub REST API as the connected user.
+export async function githubApiRequest(env, userId, path, options = {}) {
+  const { data } = await githubFetch(env, userId, path, options)
   return data
+}
+
+// Extracts the "next" URL from a GitHub Link response header, per GitHub's
+// documented pagination contract (rel="next"/"prev"/"first"/"last"). Returns
+// null when the header is absent — GitHub omits it once results fit on one page.
+function extractNextLink(linkHeader) {
+  if (!linkHeader) return null
+  const match = linkHeader.split(',').find(part => /rel="next"/.test(part))
+  if (!match) return null
+  const urlMatch = match.match(/<([^>]+)>/)
+  return urlMatch ? urlMatch[1] : null
+}
+
+// Fully paginates a GitHub list endpoint by following the Link header's
+// rel="next" URL until it's absent, rather than assuming any fixed per_page
+// ceiling is enough (a per_page=100-only call still silently truncates any
+// account with more than 100 items). `arrayKey` selects which field of each
+// page's JSON body holds the array to accumulate (e.g. "repositories" for
+// /user/installations/{id}/repositories, or omit for endpoints that return
+// a bare array like /user/repos).
+export async function githubPaginate(env, userId, path, { arrayKey, perPage = 100, maxPages = 20 } = {}) {
+  const sep = path.includes('?') ? '&' : '?'
+  let nextUrl = `${GITHUB_API_BASE}${path}${sep}per_page=${perPage}`
+  const items = []
+  let pages = 0
+  while (nextUrl && pages < maxPages) {
+    const { data, res } = await githubFetch(env, userId, nextUrl)
+    const pageItems = arrayKey ? (data[arrayKey] || []) : (Array.isArray(data) ? data : [])
+    items.push(...pageItems)
+    nextUrl = extractNextLink(res.headers.get('link'))
+    pages += 1
+  }
+  return items
 }

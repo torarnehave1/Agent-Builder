@@ -20,7 +20,7 @@ import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
 import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
-import { githubApiRequest } from './github.js'
+import { githubApiRequest, githubPaginate } from './github.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -12088,13 +12088,14 @@ async function executeGithubListRepos(input, env) {
     // /installation/repositories is for server-to-server installation tokens.
     // A user-to-server OAuth token (what this connector stores) must instead
     // enumerate the user's installations, then list each installation's repos.
-    const installations = await githubApiRequest(env, input.userId, '/user/installations')
+    // Both calls fully paginate via the Link header rather than assuming a
+    // single per_page=100 page is enough — that alone still silently
+    // truncates any account with more than 100 items on one page.
+    const installations = await githubPaginate(env, input.userId, '/user/installations', { arrayKey: 'installations' })
     const repos = []
-    for (const inst of installations.installations || []) {
-      // GitHub paginates at 30/page by default — per_page=100 covers the vast
-      // majority of accounts in one call without needing to follow next-page links.
-      const data = await githubApiRequest(env, input.userId, `/user/installations/${inst.id}/repositories?per_page=100`)
-      for (const r of data.repositories || []) {
+    for (const inst of installations) {
+      const instRepos = await githubPaginate(env, input.userId, `/user/installations/${inst.id}/repositories`, { arrayKey: 'repositories' })
+      for (const r of instRepos) {
         repos.push({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch })
       }
     }
