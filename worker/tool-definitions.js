@@ -3389,6 +3389,21 @@ const TOOL_DEFINITIONS = [
       },
       required: ['repo', 'title', 'head', 'confirmed']
     }
+  },
+  {
+    name: 'github_create_repo',
+    description: 'Create a new GitHub repository owned by the connected user. Requires the Administration permission on the GitHub App connection — if that permission has not been granted/approved, this will fail with a clear error telling the user to approve it. This creates a real, visible repository — always tell the user the exact name/visibility before calling this, and only call it after the user has confirmed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Repository name.' },
+        description: { type: 'string', description: 'Short repository description.' },
+        private: { type: 'boolean', description: 'Create as a private repository. Defaults to true if omitted.' },
+        autoInit: { type: 'boolean', description: 'Initialize with a README so the repo has a default branch immediately. Defaults to true if omitted.' },
+        confirmed: { type: 'boolean', description: 'Must be true. Set only after the user has explicitly confirmed the exact name/visibility.' }
+      },
+      required: ['name', 'confirmed']
+    }
   }
 ]
 

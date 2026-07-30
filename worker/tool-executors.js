@@ -10928,6 +10928,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGithubWriteFile(toolInput, env)
     case 'github_create_pr':
       return await executeGithubCreatePr(toolInput, env)
+    case 'github_create_repo':
+      return await executeGithubCreateRepo(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -12177,6 +12179,34 @@ async function executeGithubCreatePr(input, env) {
     })
     return { success: true, repo, prNumber: result.number, prUrl: result.html_url }
   } catch (err) { return githubErrorResult(err) }
+}
+
+async function executeGithubCreateRepo(input, env) {
+  const { name, description, private: isPrivate, autoInit, confirmed } = input
+  if (!name) return { success: false, error: 'name is required' }
+  if (confirmed !== true) {
+    return { success: false, error: 'This would create a real GitHub repository. Ask the user to confirm the exact name/visibility first, then call again with confirmed:true.' }
+  }
+  try {
+    await assertGithubWriteAllowed(env, input.userId)
+    const result = await githubApiRequest(env, input.userId, '/user/repos', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        description: description || undefined,
+        private: isPrivate !== false,
+        auto_init: autoInit !== false,
+      }),
+    })
+    return { success: true, fullName: result.full_name, repoUrl: result.html_url, defaultBranch: result.default_branch }
+  } catch (err) {
+    // GitHub returns this exact message when the App's token lacks the
+    // Administration permission required to create repos on the user's behalf.
+    if (err.status === 403 && /not accessible by integration/i.test(err.message || '')) {
+      return { success: false, error: 'GitHub repo creation needs the Administration permission on the connected GitHub App, which has not been granted yet. Ask the user to approve it at github.com/settings/installations, then reconnect GitHub.' }
+    }
+    return githubErrorResult(err)
+  }
 }
 
 export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }
