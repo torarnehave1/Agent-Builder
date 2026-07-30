@@ -96,6 +96,43 @@ export async function disconnectGithub(env, userId) {
   await env.DB.prepare('DELETE FROM github_connections WHERE user_id = ?').bind(userId).run()
 }
 
+// Rate-limit handling per GitHub's own documented order of precedence
+// (docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api):
+//   1. Retry-After header present → wait exactly that long.
+//   2. Otherwise x-ratelimit-remaining === 0 → wait until x-ratelimit-reset.
+//   3. Otherwise (secondary/abuse limit, transient 5xx) → exponential backoff.
+//   4. Stop and fail loudly past a bounded retry count — GitHub warns that
+//      continuing to hit a rate-limited endpoint risks the integration being banned.
+// Waits are capped so a single tool call can't stall a chat turn indefinitely —
+// a wait longer than the cap fails fast with a clear "try again shortly" error
+// instead of blocking, since a Worker invocation has a wall-clock budget.
+const RATE_LIMIT_MAX_RETRIES = 3
+const RATE_LIMIT_MAX_WAIT_MS = 15_000
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function isRateLimited(res) {
+  if (res.status === 403 || res.status === 429) return true
+  return false
+}
+
+function computeRateLimitWaitMs(res) {
+  const retryAfter = res.headers.get('retry-after')
+  if (retryAfter) {
+    const seconds = parseInt(retryAfter, 10)
+    if (!Number.isNaN(seconds)) return seconds * 1000
+  }
+  const remaining = res.headers.get('x-ratelimit-remaining')
+  const reset = res.headers.get('x-ratelimit-reset')
+  if (remaining === '0' && reset) {
+    const resetMs = parseInt(reset, 10) * 1000
+    return Math.max(0, resetMs - Date.now())
+  }
+  return null // secondary/abuse limit or transient error with no explicit signal
+}
+
 // Low-level fetch shared by githubApiRequest and githubPaginate — returns both
 // the parsed body and the raw Response so callers that need response headers
 // (e.g. the Link header for pagination) aren't forced to re-fetch.
@@ -106,7 +143,8 @@ async function githubFetch(env, userId, path, options = {}) {
     err.code = 'NOT_CONNECTED'
     throw err
   }
-  const res = await fetch(path.startsWith('http') ? path : `${GITHUB_API_BASE}${path}`, {
+
+  const doFetch = () => fetch(path.startsWith('http') ? path : `${GITHUB_API_BASE}${path}`, {
     ...options,
     headers: {
       Authorization: `Bearer ${conn.access_token}`,
@@ -116,6 +154,23 @@ async function githubFetch(env, userId, path, options = {}) {
       ...options.headers,
     },
   })
+
+  let res = await doFetch()
+  let attempt = 0
+  while (isRateLimited(res) && attempt < RATE_LIMIT_MAX_RETRIES) {
+    const explicitWaitMs = computeRateLimitWaitMs(res)
+    const waitMs = explicitWaitMs !== null ? explicitWaitMs : Math.min(1_000 * 2 ** attempt, RATE_LIMIT_MAX_WAIT_MS)
+    if (waitMs > RATE_LIMIT_MAX_WAIT_MS) {
+      const err = new Error(`GitHub rate limit hit — reset is ${Math.ceil(waitMs / 1000)}s away, longer than this call can wait. Try again shortly.`)
+      err.status = res.status
+      err.code = 'RATE_LIMITED'
+      throw err
+    }
+    await sleep(waitMs)
+    attempt += 1
+    res = await doFetch()
+  }
+
   const text = await res.text()
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
@@ -123,6 +178,7 @@ async function githubFetch(env, userId, path, options = {}) {
     const err = new Error(data.message || `GitHub API error (${res.status})`)
     err.status = res.status
     err.data = data
+    if (isRateLimited(res)) err.code = 'RATE_LIMITED'
     throw err
   }
   return { data, res }
