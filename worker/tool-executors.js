@@ -12085,9 +12085,20 @@ function githubErrorResult(err) {
 
 async function executeGithubListRepos(input, env) {
   try {
-    const data = await githubApiRequest(env, input.userId, '/installation/repositories')
-    const repos = (data.repositories || []).map(r => ({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch }))
-    return { success: true, repos }
+    // /installation/repositories is for server-to-server installation tokens.
+    // A user-to-server OAuth token (what this connector stores) must instead
+    // enumerate the user's installations, then list each installation's repos.
+    const installations = await githubApiRequest(env, input.userId, '/user/installations')
+    const repos = []
+    for (const inst of installations.installations || []) {
+      // GitHub paginates at 30/page by default — per_page=100 covers the vast
+      // majority of accounts in one call without needing to follow next-page links.
+      const data = await githubApiRequest(env, input.userId, `/user/installations/${inst.id}/repositories?per_page=100`)
+      for (const r of data.repositories || []) {
+        repos.push({ fullName: r.full_name, private: r.private, defaultBranch: r.default_branch })
+      }
+    }
+    return { success: true, count: repos.length, repos }
   } catch (err) { return githubErrorResult(err) }
 }
 
