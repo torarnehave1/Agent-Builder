@@ -25,7 +25,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
-import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly } from './github.js'
+import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -410,6 +410,41 @@ export default {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
         }
         await disconnectGithub(env, auth.userId)
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
+      }
+
+      // POST /github/webhook — GitHub calls this on authorization/installation
+      // events so a revoked or uninstalled connection is invalidated proactively
+      // instead of surfacing as an opaque GitHub API error on the next tool call.
+      // Verified via HMAC signature (X-Hub-Signature-256), not caller identity —
+      // GitHub itself is the caller here, there is no Agent-Builder user session.
+      if (pathname === '/github/webhook' && request.method === 'POST') {
+        const rawBody = await request.text()
+        const signature = request.headers.get('x-hub-signature-256')
+        const valid = await verifyGithubWebhookSignature(env, rawBody, signature).catch(() => false)
+        if (!valid) {
+          return new Response(JSON.stringify({ error: 'Invalid signature' }), { status: 401, headers: corsHeaders })
+        }
+        const eventType = request.headers.get('x-github-event')
+        let payload
+        try { payload = JSON.parse(rawBody) } catch { payload = {} }
+
+        try {
+          if (eventType === 'github_app_authorization' && payload.action === 'revoked') {
+            // User revoked the App's access to their account — their stored
+            // token is now dead; remove it so the next tool call gets a clear
+            // "reconnect GitHub" message instead of a raw GitHub 401.
+            if (payload.sender?.login) await disconnectGithubByAccountLogin(env, payload.sender.login)
+          } else if (eventType === 'installation' && payload.action === 'deleted') {
+            // App fully uninstalled from the account — installation_id is now
+            // invalid. (Suspend/unsuspend intentionally does nothing here:
+            // GitHub documents that suspension does not revoke the user's own
+            // authorization, only server-to-server installation-token access.)
+            if (payload.installation?.id) await disconnectGithubByInstallationId(env, payload.installation.id)
+          }
+        } catch (err) {
+          console.error('[/github/webhook] handling failed', err)
+        }
         return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
       }
 

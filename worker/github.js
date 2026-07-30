@@ -96,6 +96,38 @@ export async function disconnectGithub(env, userId) {
   await env.DB.prepare('DELETE FROM github_connections WHERE user_id = ?').bind(userId).run()
 }
 
+// GitHub's webhooks identify the affected account by login or installation_id,
+// never by this app's internal userId — these two variants let the webhook
+// handler invalidate the right stored connection without knowing that id.
+export async function disconnectGithubByAccountLogin(env, login) {
+  await env.DB.prepare('DELETE FROM github_connections WHERE account_login = ?').bind(login).run()
+}
+
+export async function disconnectGithubByInstallationId(env, installationId) {
+  await env.DB.prepare('DELETE FROM github_connections WHERE installation_id = ?').bind(String(installationId)).run()
+}
+
+// Verifies a GitHub webhook's HMAC-SHA256 signature (X-Hub-Signature-256:
+// "sha256=<hex>") against the app's webhook secret, per GitHub's documented
+// contract (docs.github.com/en/webhooks/webhook-events-and-payloads). Uses
+// constant-time comparison to avoid a timing side-channel on the digest check.
+export async function verifyGithubWebhookSignature(env, rawBody, signatureHeader) {
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.GITHUB_WEBHOOK_SECRET || ''),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  )
+  const mac = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody))
+  const expectedHex = 'sha256=' + Array.from(new Uint8Array(mac)).map(b => b.toString(16).padStart(2, '0')).join('')
+  if (expectedHex.length !== signatureHeader.length) return false
+  let diff = 0
+  for (let i = 0; i < expectedHex.length; i++) diff |= expectedHex.charCodeAt(i) ^ signatureHeader.charCodeAt(i)
+  return diff === 0
+}
+
 // A hard, config-level backstop that disables all GitHub write tools outright —
 // independent of and in addition to the per-call confirmed:true gate already on
 // github_write_file / github_create_pr. Mirrors github-mcp-server's --read-only
