@@ -6,6 +6,18 @@ interface Props {
   resolvedTheme?: 'light' | 'dark';
 }
 
+// Agent-Builder's login doesn't create a session the worker's cookie-based auth
+// can see — every authenticated call passes this stored token explicitly instead
+// (same convention AgentChat.tsx uses for /chat).
+function getAuthToken(): string {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return user.emailVerificationToken || '';
+  } catch {
+    return '';
+  }
+}
+
 export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
   const [connected, setConnected] = useState(false);
   const [accountLogin, setAccountLogin] = useState<string | null>(null);
@@ -15,7 +27,7 @@ export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
 
   const loadStatus = () => {
     setLoading(true);
-    fetch(`${AGENT_API}/github/status`, { credentials: 'include' })
+    fetch(`${AGENT_API}/github/status?authToken=${encodeURIComponent(getAuthToken())}`)
       .then((res) => res.json())
       .then((data) => {
         setConnected(!!data.connected);
@@ -39,11 +51,15 @@ export default function GitHubConnect({ resolvedTheme = 'dark' }: Props) {
   }, []);
 
   const handleConnect = () => {
-    window.location.href = `${AGENT_API}/github/oauth/start`;
+    window.location.href = `${AGENT_API}/github/oauth/start?authToken=${encodeURIComponent(getAuthToken())}`;
   };
 
   const handleDisconnect = async () => {
-    await fetch(`${AGENT_API}/github/disconnect`, { method: 'POST', credentials: 'include' });
+    await fetch(`${AGENT_API}/github/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ authToken: getAuthToken() }),
+    });
     loadStatus();
   };
 

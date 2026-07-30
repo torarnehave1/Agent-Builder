@@ -333,7 +333,10 @@ export default {
 
       // GET /github/status — is the current user connected? Used by the Settings tab.
       if (pathname === '/github/status' && request.method === 'GET') {
-        const auth = await resolveAuthorizedCaller(request, env)
+        const statusToken = url.searchParams.get('authToken') || ''
+        const auth = statusToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: statusToken }, env)
+          : await resolveAuthorizedCaller(request, env)
         if (!auth?.userId) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
         }
@@ -345,10 +348,15 @@ export default {
       }
 
       // GET /github/oauth/start — top-level browser redirect to GitHub's authorize page.
-      // Auth comes from the vegvisr_token cookie (same cookie AgentBuilder sets on login),
-      // not a bearer token, since this is a full-page navigation, not a fetch() call.
+      // This is a full-page navigation, not a fetch() call, so it can't carry an
+      // Authorization header — and Agent-Builder's login does not create an OpenAuth
+      // session for resolveAuthorizedCaller's cookie check to find. The frontend instead
+      // passes the user's own stored token (localStorage) as a one-time query param here.
       if (pathname === '/github/oauth/start' && request.method === 'GET') {
-        const auth = await resolveAuthorizedCaller(request, env)
+        const queryToken = url.searchParams.get('authToken') || ''
+        const auth = queryToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: queryToken }, env)
+          : await resolveAuthorizedCaller(request, env)
         if (!auth?.userId) {
           return new Response('Not signed in to Agent-Builder.', { status: 401 })
         }
@@ -379,7 +387,10 @@ export default {
 
       // POST /github/disconnect
       if (pathname === '/github/disconnect' && request.method === 'POST') {
-        const auth = await resolveAuthorizedCaller(request, env)
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
         if (!auth?.userId) {
           return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
         }
