@@ -903,11 +903,21 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         body: JSON.stringify({ tool, input, userId, authToken, confirmed }),
       });
       const data = await res.json();
-      const summary = !confirmed
-        ? 'Graph creation declined — nothing was created.'
-        : data.error
-          ? `Failed to create graph: ${data.error}`
-          : `Graph created: "${(input.title as string) || 'Untitled'}" (${data.result?.graphId || 'unknown id'}).`;
+      const newGraphId = data.result?.graphId as string | undefined;
+      let summary: string;
+      if (!confirmed) {
+        summary = 'Graph creation declined — nothing was created.';
+      } else if (data.error || !newGraphId) {
+        summary = `Failed to create graph: ${data.error || 'no graphId returned'}`;
+      } else {
+        // Switch the active graph context to the newly created graph — same mechanism
+        // every other graph-creating tool result already uses (see delegate_to_kg/
+        // create_graph result handling below). Any write the agent makes from here on
+        // targets THIS new graph, not whatever template/graph was open before.
+        lastAgentGraphRef.current = newGraphId;
+        onGraphChange(newGraphId);
+        summary = `Graph created: "${(input.title as string) || 'Untitled'}" (${newGraphId}). This is now the active graph — continue your request and it will be written here.`;
+      }
       setMessages(prev => [...prev, { role: 'assistant', content: summary }]);
     } catch (err) {
       setMessages(prev => [...prev, { role: 'assistant', content: `Confirmation request failed: ${err instanceof Error ? err.message : String(err)}` }]);
