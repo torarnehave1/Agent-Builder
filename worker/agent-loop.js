@@ -1246,27 +1246,6 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ blocked: true, planMode: true, message }) }
           }
 
-          // create_graph always creates a NEW graph (server-generates a fresh UUID — see
-          // executeCreateGraph). Never let the model execute this on its own judgment: two
-          // consecutive report-generation runs silently merged new content into an existing
-          // template graph because the model was trusted to decide when a new graph vs. an
-          // edit was correct (2026-07-31). Gate it behind an explicit user click instead —
-          // the button executes the exact stored tool call directly via /confirm-tool,
-          // bypassing the model entirely for the actual creation step.
-          if (toolUse.name === 'create_graph') {
-            const confirmId = crypto.randomUUID()
-            const title = (toolUse.input && toolUse.input.title) || 'Untitled Graph'
-            writer.write(encoder.encode(`event: confirm_required\ndata: ${JSON.stringify({
-              confirmId,
-              tool: 'create_graph',
-              input: toolUse.input,
-              message: `Create a new graph titled "${title}"?`,
-            })}\n\n`))
-            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: 'Waiting for user confirmation — not created yet.' })}\n\n`))
-            log(`create_graph held for user confirmation (confirmId=${confirmId}, title="${title}")`)
-            return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ status: 'awaiting_user_confirmation', message: 'This graph was NOT created. The user must click Yes/No in the chat UI. Do not retry create_graph automatically — stop and wait for the user\'s next message.' }) }
-          }
-
           const GRAPH_DISCOVERY_TOOLS = new Set(['search_graphs', 'list_graphs'])
           if (
             requiresCreateGraph

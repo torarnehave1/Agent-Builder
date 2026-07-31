@@ -1764,39 +1764,6 @@ export default {
         })
       }
 
-      // POST /confirm-tool — executes a tool call the model was blocked from running
-      // pending explicit user confirmation (see the create_graph gate in agent-loop.js).
-      // Deliberately bypasses the LLM entirely: the frontend sends back the EXACT input
-      // it received in the `confirm_required` SSE event, and this executes it directly.
-      // No model judgment involved in the actual write — the user's click is the only
-      // authorization. Allowlist is intentionally narrow; widen only for tools that get
-      // the same confirm_required gate in agent-loop.js.
-      if (pathname === '/confirm-tool' && request.method === 'POST') {
-        const body = await request.json()
-        const { tool, input, userId, authToken, confirmed } = body
-        const CONFIRMABLE_TOOLS = new Set(['create_graph'])
-
-        if (!confirmed) {
-          return new Response(JSON.stringify({ skipped: true, message: 'Not confirmed — nothing was created.' }), { headers: corsHeaders })
-        }
-        if (!tool || !CONFIRMABLE_TOOLS.has(tool)) {
-          return new Response(JSON.stringify({ error: `Tool "${tool}" is not confirmable via this endpoint.` }), { status: 400, headers: corsHeaders })
-        }
-        const authContext = authToken
-          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
-          : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || userId
-        if (!effectiveUserId) {
-          return new Response(JSON.stringify({ error: 'Not authenticated.' }), { status: 401, headers: corsHeaders })
-        }
-        try {
-          const result = await executeTool(tool, { ...(input || {}), userId: effectiveUserId, authContext }, env, null, () => {})
-          return new Response(JSON.stringify({ confirmed: true, result }), { headers: corsHeaders })
-        } catch (err) {
-          return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders })
-        }
-      }
-
       // GET /recordings — list the user's audio portfolio recordings.
       // Pure lookup; no LLM. Frontend (RecordingsPanel) calls this directly so
       // users can browse their recordings without going through the agent.
