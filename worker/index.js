@@ -1741,7 +1741,7 @@ export default {
         ctx.waitUntil(
           streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, effectiveUserId, env, {
             model: agentModel,
-            maxTurns: maxTurns || 8,
+            maxTurns: maxTurns || 25,
             mode: planMode ? 'plan' : 'auto',
             toolFilter,
             avatarUrl: agentAvatarUrl,
