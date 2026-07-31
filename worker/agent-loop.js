@@ -1062,7 +1062,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         // error does not). For the out-of-credits case show "API Refund needed" so the operator
         // knows it's billing, not a bug. Then close cleanly with done so the UI doesn't show a bare
         // stream error.
-        const errMsg = String((data.error && data.error.message) || '')
+        // data.error shape varies by failure path (object with .message, plain string, or
+        // something else entirely) — assuming .message always exists silently swallowed the
+        // real reason and fell back to the generic "Anthropic API error" (2026-07-31, same
+        // bug class as the kg-subagent.js fix, just not caught here until now).
+        const errMsg = typeof data.error === 'string'
+          ? data.error
+          : (data.error && typeof data.error.message === 'string' && data.error.message)
+            ? data.error.message
+            : JSON.stringify(data.error || {})
         const isCredit = /credit balance is too low|insufficient.*credit|too low to access/i.test(errMsg)
         const friendly = isCredit
           ? '⚠️ API Refund needed — the Anthropic API credit balance is too low to run the agent. Top up at console.anthropic.com (Plans & Billing), then retry. This is a billing issue, not a code error.'
