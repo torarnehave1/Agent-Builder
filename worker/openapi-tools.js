@@ -458,7 +458,15 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
   }
 
   if (!res.ok) {
-    throw new Error((data && data.error) || `Worker ${binding} ${meta.path} failed (${res.status})`)
+    let errorMsg = (data && data.error) || `Worker ${binding} ${meta.path} failed (${res.status})`
+    // kg_save_graph_with_history rejects new (non-existing) graph ids that aren't UUID v4.
+    // The model has no way to know the id it invented was rejected for that specific reason
+    // unless told explicitly — without this it dead-ends the whole task (observed 2026-07-31,
+    // audio-studio report run). Give it the exact next action instead of a bare error.
+    if (toolName === 'kg_save_graph_with_history' && /valid UUID v4/i.test(errorMsg)) {
+      errorMsg += ' — generate a random UUID v4 (e.g. crypto.randomUUID() format) for a NEW graph and retry with that id, or use create_graph instead which generates one for you.'
+    }
+    throw new Error(errorMsg)
   }
 
   return data
