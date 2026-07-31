@@ -151,10 +151,22 @@ async function executeCreateGraph(input, env) {
   if (!response.ok) {
     throw new Error(data.error || `Failed to create graph (status: ${response.status})`)
   }
+
+  // create_graph is metadata-only — it never accepts nodes/edges/content, no matter
+  // what the caller passes. Silently dropping caller-supplied content here is exactly
+  // what produced empty "successful" graphs in the field (2026-07-31). Warn loudly.
+  const ignoredContentKeys = ['nodes', 'edges', 'graphData'].filter((k) => {
+    const v = input[k]
+    return v !== undefined && v !== null && (Array.isArray(v) ? v.length > 0 : (typeof v === 'string' ? v.trim().length > 0 : true))
+  })
+  const warning = ignoredContentKeys.length > 0
+    ? ` WARNING: input.${ignoredContentKeys.join(', input.')} was IGNORED — create_graph is metadata-only and does not accept node/edge content.`
+    : ''
+
   return {
     graphId: data.id || graphId,
     version: data.newVersion || 1,
-    message: `Graph "${title}" created successfully`,
+    message: `Graph "${title}" created successfully with 0 nodes. Call create_node once per node to add content — this graph has no content yet.${warning}`,
     viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`
   }
 }

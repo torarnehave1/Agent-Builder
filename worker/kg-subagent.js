@@ -198,8 +198,9 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
 
     const data = await response.json()
     if (!response.ok) {
-      log(`ERROR: ${JSON.stringify(data.error)}`)
-      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
+      const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error || {})
+      log(`ERROR: ${errorMsg}`)
+      return { success: false, error: errorMsg || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
     }
 
     if (data.usage) {
