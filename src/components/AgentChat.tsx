@@ -86,7 +86,7 @@ interface ChatMessage {
 }
 
 interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions' | 'agent_info';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions' | 'agent_info' | 'confirm_required';
   data: Record<string, unknown>;
 }
 
@@ -869,6 +869,52 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   // Prompt suggestions state
   const [suggestions, setSuggestions] = useState<string[]>([]);
+
+  // Pending create_graph confirmation — the model is blocked from creating a new
+  // graph on its own judgment (2026-07-31, silent template pollution). Yes executes
+  // the EXACT stored tool call directly via /confirm-tool, bypassing the model
+  // entirely for the write itself; No discards it. Nothing is created until clicked.
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    confirmId: string;
+    tool: string;
+    input: Record<string, unknown>;
+    message: string;
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const resolveConfirm = async (confirmed: boolean) => {
+    if (!pendingConfirm || confirmBusy) return;
+    setConfirmBusy(true);
+    const { tool, input } = pendingConfirm;
+    setPendingConfirm(null);
+    try {
+      const authToken = (() => {
+        try {
+          const user = JSON.parse(localStorage.getItem('user') || '{}');
+          return user.emailVerificationToken || '';
+        } catch {
+          return '';
+        }
+      })();
+      const res = await fetch(`${AGENT_API}/confirm-tool`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tool, input, userId, authToken, confirmed }),
+      });
+      const data = await res.json();
+      const summary = !confirmed
+        ? 'Graph creation declined — nothing was created.'
+        : data.error
+          ? `Failed to create graph: ${data.error}`
+          : `Graph created: "${(input.title as string) || 'Untitled'}" (${data.result?.graphId || 'unknown id'}).`;
+      setMessages(prev => [...prev, { role: 'assistant', content: summary }]);
+    } catch (err) {
+      setMessages(prev => [...prev, { role: 'assistant', content: `Confirmation request failed: ${err instanceof Error ? err.message : String(err)}` }]);
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
 
   // Theme picker cards — populated from a list_theme_graphs tool_result (themeOptions payload)
   const [themeOptions, setThemeOptions] = useState<{
@@ -2292,6 +2338,17 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           setSuggestions(ev.data.suggestions as string[]);
         }
 
+        // Handle confirm_required event — model was blocked from creating a graph,
+        // hold it here until the user clicks Yes/No (see resolveConfirm above).
+        if (ev.type === 'confirm_required') {
+          setPendingConfirm({
+            confirmId: ev.data.confirmId as string,
+            tool: ev.data.tool as string,
+            input: (ev.data.input as Record<string, unknown>) || {},
+            message: (ev.data.message as string) || 'Create this graph?',
+          });
+        }
+
         // Theme picker: list_theme_graphs (graph) tool_result carries themeOptions → render cards
         if (ev.type === 'tool_result' && ev.data.themeOptions) {
           const to = ev.data.themeOptions as {
@@ -3092,6 +3149,31 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-400/20 text-indigo-300 text-sm italic animate-pulse">
             <span className="opacity-70">&#x2728;</span>
             {subagentProgress}
+          </div>
+        </div>
+      )}
+
+      {/* create_graph confirmation — nothing is created until Yes is clicked */}
+      {pendingConfirm && (
+        <div className="px-3 sm:px-4 py-2 flex justify-center">
+          <div className="flex items-center gap-3 px-4 py-2 rounded-lg bg-amber-500/10 border border-amber-400/30 text-amber-200 text-sm">
+            <span>{pendingConfirm.message}</span>
+            <button
+              type="button"
+              disabled={confirmBusy}
+              onClick={() => resolveConfirm(true)}
+              className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-medium"
+            >
+              Yes, create it
+            </button>
+            <button
+              type="button"
+              disabled={confirmBusy}
+              onClick={() => resolveConfirm(false)}
+              className="px-3 py-1 rounded bg-neutral-700 hover:bg-neutral-600 disabled:opacity-50 text-white text-xs font-medium"
+            >
+              No
+            </button>
           </div>
         </div>
       )}
