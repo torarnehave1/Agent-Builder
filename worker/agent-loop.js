@@ -864,6 +864,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
     if (turn >= maxTurns) {
       stats.maxTurnsReached = true
+      const stopMsg = `Stopped after ${turn} turns (the limit for this request) — the task may not be finished. Reply "continue" to resume, or tell me what to do differently.`
+      writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: stopMsg })}\n\n`))
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
@@ -1457,6 +1459,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     if (turn >= maxTurns) {
       stats.maxTurnsReached = true
       log(`max turns reached (${maxTurns})`)
+      // Silently closing here reads as the agent just stopping with no explanation —
+      // the user has no way to tell "finished" from "ran out of budget mid-task"
+      // (2026-07-31, recurring confusion). State it plainly and ask.
+      const stopMsg = `Stopped after ${turn} turns (the limit for this request) — the task may not be finished. Reply "continue" to resume, or tell me what to do differently.`
+      writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: stopMsg })}\n\n`))
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
