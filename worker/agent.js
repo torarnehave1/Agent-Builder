@@ -100,6 +100,7 @@ const WORKERS_AI_TOOLS = new Set([
   'get_album_images',
   'analyze_image',
   'get_system_registry',
+  'run_cloudflare_selftest',
   'save_learning',
   'get_secure_worker_template',
   'create_capability_blueprint',

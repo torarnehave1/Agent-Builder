@@ -1634,7 +1634,7 @@ export default {
         // Keyed by context title, which is what the UI sends. Spoofing it can only ever REMOVE
         // capability, never add any, so it needs no authentication.
         const EXCLUSIVE_CONTEXTS = {
-          'Cloudflare MCP Server': ['mcp_call'],
+          'Cloudflare MCP Server': ['mcp_call', 'check_pages_deployment_status'],
         }
         const exclusiveTools = (workContext && typeof workContext === 'object' && workContext.title)
           ? EXCLUSIVE_CONTEXTS[workContext.title]
@@ -1656,8 +1656,9 @@ export default {
           systemPrompt += `\n\n## Current Work Context: ${workContext.title} (LOCKED)\n` +
             (workContext.description ? `Focus: ${workContext.description}\n` : '') +
             (capLines ? `\nThe ONLY tools you have here:\n${capLines}\n` : '') +
-            `\nThis context is a RESTRICTION, not orientation. You have been given ONLY the tools listed above — the rest of the toolbox is not loaded and cannot be called.\n` +
-            `If the user asks for anything outside this context (graphs, email, video, account changes), do NOT attempt it and do NOT claim you did. Say plainly that this context is limited to ${workContext.title}, and tell them to pick another work context from the start screen for that request.\n` +
+            `\nThis context is a RESTRICTION, not orientation. You have been given ONLY the tools listed above — the rest of the toolbox (graphs, email, video, GitHub, account changes) is not loaded and cannot be called.\n` +
+            `\`mcp_call\` itself is NOT limited to documentation lookup. It is a full proxy to the connected MCP server's tools (for "cloudflare": \`docs\`, \`search\`, AND \`execute\` — \`execute\` runs real Cloudflare API calls against the account, e.g. Pages projects, deployments, DNS, domains). Never tell the user you are "limited to documentation" or "cannot access the account" while \`mcp_call\` is in your toolbox — that is false. If a request is answerable via \`mcp_call\` (with \`use_pages_token\` when appropriate), attempt the call and report its real result — success or the actual error — instead of pre-emptively declining.\n` +
+            `Only say a request is out of scope for this context when it needs a tool that is NOT \`mcp_call\` at all (e.g. reading a graph, sending email, GitHub repo actions) — then say plainly that this context is limited to ${workContext.title}, and tell them to pick another work context from the start screen for that request.\n` +
             `Answer "what can I do here" immediately from the list above, in the same turn, with no tool call.\n` +
             `When you DO call a tool, report its result to the user in full — quote the returned content and include any source URLs. Never end a turn having called a tool without telling the user what came back.`
         } else if (workContext && typeof workContext === 'object' && workContext.title) {

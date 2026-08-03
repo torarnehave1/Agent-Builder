@@ -134,6 +134,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'create_app_table', 'insert_app_record', 'delete_app_records', 'add_app_table_column',
   // Identity, discovery, components, capability workers
   'who_am_i', 'onboarding_status', 'describe_capabilities', 'get_system_registry',
+  'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   'get_secure_worker_template', 'create_capability_blueprint',
   'build_capability_worker_scaffold', 'deploy_worker', 'register_deployed_worker',

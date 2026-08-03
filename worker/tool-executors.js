@@ -9687,6 +9687,201 @@ async function executeCloudflareApi(input, env) {
   return { path: fullPath, result: json.result, result_info: json.result_info || null }
 }
 
+// ── run_cloudflare_selftest ───────────────────────────────────────
+// Deterministic, backend-run Cloudflare test suite that writes REAL results to a graph.
+// Built after an agent (2026-08-02) hand-assembled Cloudflare tests via execute/cloudflare_api,
+// hit its own tool-usage bugs (wrong /zones prefix → "could not route"; execute "Unexpected
+// token"), then FABRICATED a "25% success rate" graph with invented root causes. The durable fix
+// is to take the test logic OUT of the model's hands: fixed correct calls here, real HTTP
+// status + error captured verbatim, no interpretation. Anti-fabrication is the point (L1, L24, L45).
+async function executeRunCloudflareSelftest(input, env) {
+  // Owner-only: this reads the platform Cloudflare account and writes a system graph.
+  await assertMcpOwner(input, env, 'The run_cloudflare_selftest tool (it reads the platform Cloudflare account and writes a system graph)')
+
+  const founderEmail = (input.founder_email || '').trim().toLowerCase()
+  let cfAccount, cfToken, tokenSource
+  if (founderEmail) {
+    const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+    cfAccount = (row && row.cf_account_id) || ''
+    cfToken = row && row.cf_api_token
+    tokenSource = `founder token for ${founderEmail}`
+    if (!cfAccount || !cfToken) throw new Error(`No cf_account_id/cf_api_token stored for ${founderEmail} — run set_world_credentials first.`)
+  } else {
+    cfAccount = env.CF_ACCOUNT_ID || ''
+    cfToken = env.CF_API_TOKEN || ''
+    tokenSource = 'platform CF_API_TOKEN'
+    if (!cfAccount || !cfToken) throw new Error('CF_ACCOUNT_ID/CF_API_TOKEN not configured on this worker')
+  }
+  const pagesToken = env.CF_PAGES_TOKEN || null
+
+  // A self-test must ALWAYS produce a full report — one check throwing must not abort the suite.
+  const safeCfApi = async (path, token) => {
+    try { return await cfApi(path, token) }
+    catch (e) { return { ok: false, status: 0, json: null, error: (e && e.message) ? e.message : 'request threw' } }
+  }
+
+  const results = []
+  // run() records the REAL outcome of one check. It never interprets — pass iff the API said
+  // success, fail carries the verbatim status+error, skip carries the missing precondition.
+  const run = async (name, whatItProves, method, path, token, extract, opts = {}) => {
+    if (opts.skip) { results.push({ name, whatItProves, method, path, status: 'skipped', ok: null, reason: opts.reason || 'precondition not met' }); return null }
+    if (!token) { results.push({ name, whatItProves, method, path, status: 'skipped', ok: null, reason: opts.noTokenReason || 'required token not configured' }); return null }
+    const res = await safeCfApi(path, token)
+    const ok = !!res.ok
+    const entry = { name, whatItProves, method, path, status: res.status, ok }
+    if (ok) { try { entry.sample = extract ? extract(res.json && res.json.result) : null } catch { entry.sample = null } }
+    else { entry.error = res.error || `HTTP ${res.status}` }
+    results.push(entry)
+    return ok ? (res.json && res.json.result) : null
+  }
+
+  // token_identity FIRST — reveal WHICH token the worker is actually using (its real id +
+  // status), so a scope edit is made to the RIGHT token. Nothing else in the system exposed
+  // this, so an agent "guessed" the token from a screenshot and named the wrong one — the exact
+  // fabrication this tool exists to kill. Account-owned tokens reject /user/tokens/verify
+  // (Lesson 45 v2), so fall back to /accounts/<id>/tokens/verify.
+  {
+    let v = await safeCfApi('/user/tokens/verify', cfToken)
+    let via = '/user/tokens/verify'
+    if (!v.ok) { v = await safeCfApi(`/accounts/${cfAccount}/tokens/verify`, cfToken); via = `/accounts/${cfAccount}/tokens/verify` }
+    if (!v.ok) {
+      results.push({ name: 'token_identity', whatItProves: 'which token the worker uses (name + scopes)', method: 'GET', path: via, status: v.status, ok: false, error: v.error || `HTTP ${v.status}` })
+    } else {
+      // The dashboard lists tokens by NAME (no id column), so an id alone is useless. Chain
+      // verify→details to get the NAME + permission groups the architect CAN match in the list,
+      // so a scope edit hits the RIGHT token — and CF_API_TOKEN is shared by many tools, so it must
+      // be edited IN PLACE, not swapped. If the token cannot read its own metadata (needs
+      // "User API Tokens: Read"), say so honestly rather than guessing a name (the fabrication we kill).
+      const tokenId = (v.json && v.json.result && v.json.result.id) || null
+      const vStatus = (v.json && v.json.result && v.json.result.status) || null
+      let d = tokenId ? await safeCfApi(`/user/tokens/${tokenId}`, cfToken) : { ok: false, status: 0, error: 'verify returned no token id' }
+      let dvia = `/user/tokens/${tokenId}`
+      if (!d.ok && tokenId) { d = await safeCfApi(`/accounts/${cfAccount}/tokens/${tokenId}`, cfToken); dvia = `/accounts/${cfAccount}/tokens/${tokenId}` }
+      if (d.ok) {
+        const t = (d.json && d.json.result) || {}
+        const permGroups = []
+        for (const p of (t.policies || [])) for (const g of (p.permission_groups || [])) if (g && g.name) permGroups.push(g.name)
+        results.push({ name: 'token_identity', whatItProves: 'the EXACT token the worker uses — find THIS name in the dashboard and ADD the missing scopes to it (do NOT swap the token; it is shared by other agent-worker tools)', method: 'GET', path: dvia, status: d.status, ok: true, sample: { name: t.name || null, status: t.status || null, issued_on: t.issued_on || null, modified_on: t.modified_on || null, has_r2_read: permGroups.some((n) => /R2 Storage.*Read/i.test(n)), has_kv_read: permGroups.some((n) => /KV Storage.*Read/i.test(n)), permission_groups: permGroups.slice(0, 40) } })
+      } else {
+        results.push({ name: 'token_identity', whatItProves: 'the token name (so you can find it in the dashboard)', method: 'GET', path: dvia, status: d.status, ok: false, error: `Token is valid (id ${tokenId}, status ${vStatus}) but it cannot read its own name/scopes — it lacks "User API Tokens: Read", so the worker cannot self-identify by name. ${d.error || ''}`.trim() })
+      }
+    }
+  }
+
+  // Fixed suite — each path is correct-by-construction (the ones the agent got wrong are fixed here).
+  await run('account_info', 'API token can read the account', 'GET', `/accounts/${cfAccount}`, cfToken,
+    (r) => r ? { id: r.id, name: r.name, type: r.type } : null)
+
+  // TOP-LEVEL /zones — NOT /accounts/<id>/zones. cloudflare_api force-prefixes /accounts/<id>, so it
+  // physically cannot make this call; that is exactly why the agent's "zones" test 404'd ("could not route").
+  const zones = await run('zones', 'token can list DNS zones (top-level /zones, not account-scoped)', 'GET', '/zones', cfToken,
+    (r) => Array.isArray(r) ? { count: r.length, names: r.slice(0, 8).map((z) => z.name) } : null)
+
+  await run('pages_projects', 'Pages token can list Pages projects', 'GET', `/accounts/${cfAccount}/pages/projects`, pagesToken,
+    (r) => Array.isArray(r) ? { count: r.length, names: r.slice(0, 10).map((p) => p.name) } : null,
+    { noTokenReason: 'CF_PAGES_TOKEN not configured on this worker (Pages checks need the Pages-scoped token)' })
+
+  await run('r2_buckets', 'token has Workers R2 Storage: Read', 'GET', `/accounts/${cfAccount}/r2/buckets`, cfToken,
+    (r) => (r && Array.isArray(r.buckets)) ? { count: r.buckets.length, names: r.buckets.slice(0, 10).map((b) => b.name) } : null)
+
+  await run('kv_namespaces', 'token has Workers KV Storage: Read', 'GET', `/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken,
+    (r) => Array.isArray(r) ? { count: r.length } : null)
+
+  await run('workers_scripts', 'token can list Workers scripts', 'GET', `/accounts/${cfAccount}/workers/scripts`, cfToken,
+    (r) => Array.isArray(r) ? { count: r.length } : null)
+
+  const firstZone = (Array.isArray(zones) && zones[0]) ? zones[0] : null
+  await run('dns_records', 'token can read DNS records for a zone', 'GET',
+    firstZone ? `/zones/${firstZone.id}/dns_records?per_page=5` : '/zones/<no-zone>/dns_records', cfToken,
+    (r) => Array.isArray(r) ? { zone: firstZone.name, sampled: r.length } : null,
+    { skip: !firstZone, reason: 'the zones check returned no zone to sample DNS from' })
+
+  const passed = results.filter((r) => r.ok === true).length
+  const failed = results.filter((r) => r.ok === false).length
+  const skipped = results.filter((r) => r.ok === null).length
+  const total = results.length
+  const ranAt = new Date().toISOString()
+
+  // ── Build the report graph from REAL results only (light backgrounds, black text — no dark sections) ──
+  const statusWord = (r) => r.ok === true ? 'PASS' : r.ok === false ? 'FAIL' : 'SKIP'
+  const statusColor = (r) => r.ok === true ? '#43a047' : r.ok === false ? '#e53935' : '#9e9e9e'
+  const nodes = []
+  const edges = []
+
+  const summaryId = 'n-summary'
+  nodes.push({
+    id: summaryId, type: 'fulltext', color: failed === 0 ? '#43a047' : '#e53935',
+    label: `Cloudflare Self-Test — ${passed}/${total} passed`,
+    info: [
+      `**Ran:** ${ranAt}`,
+      `**Account:** ${cfAccount}`,
+      `**Credential:** ${tokenSource}`,
+      '',
+      `**Passed:** ${passed} · **Failed:** ${failed} · **Skipped:** ${skipped} · **Total:** ${total}`,
+      '',
+      'Every result below is the **actual** Cloudflare API response — HTTP status and error string captured verbatim. Nothing here is interpreted: a FAIL is a real API error, a SKIP is a missing precondition (e.g. no Pages token). Written by the `run_cloudflare_selftest` backend tool, not by an agent assembling calls by hand.',
+    ].join('\n'),
+    bibl: [], position: {}, visible: true,
+  })
+
+  const manifestId = 'n-manifest'
+  nodes.push({
+    id: manifestId, type: 'fulltext', color: '#1976d2',
+    label: 'Test Manifest (what each check proves)',
+    info: results.map((r) => `- **${r.name}** — ${r.whatItProves}\n  \`${r.method} ${r.path}\``).join('\n'),
+    bibl: [], position: {}, visible: true,
+  })
+  edges.push({ source: summaryId, target: manifestId, label: 'manifest', type: 'link' })
+
+  results.forEach((r, i) => {
+    const nid = `n-check-${i + 1}`
+    const body = r.ok === true
+      ? `**Status:** PASS (HTTP ${r.status})\n\n**Proves:** ${r.whatItProves}\n\n**Call:** \`${r.method} ${r.path}\`\n\n**Result:** ${r.sample ? '```json\n' + JSON.stringify(r.sample, null, 2) + '\n```' : '(no sample)'}`
+      : r.ok === false
+        ? `**Status:** FAIL (HTTP ${r.status})\n\n**Proves:** ${r.whatItProves}\n\n**Call:** \`${r.method} ${r.path}\`\n\n**Actual error (verbatim):** ${r.error}`
+        : `**Status:** SKIP\n\n**Would prove:** ${r.whatItProves}\n\n**Call:** \`${r.method} ${r.path}\`\n\n**Reason:** ${r.reason}`
+    nodes.push({ id: nid, type: 'fulltext', color: statusColor(r), label: `${statusWord(r)} — ${r.name}`, info: body, bibl: [], position: {}, visible: true })
+    edges.push({ source: summaryId, target: nid, label: statusWord(r), type: 'link' })
+  })
+
+  // Canonical self-test graph — a FIXED UUID v4 (the KG worker rejects NEW graphs whose id is not
+  // a UUID v4; a human-readable id like "graph_cloudflare_selftest" 400s on first create). First run
+  // creates this graph; every later run overwrites it (override:true), keeping version history.
+  const graphId = (input.graphId && String(input.graphId).trim()) || '7fcaa5f8-c530-4038-8f7c-ef385f6159dd'
+  const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: graphId,
+      graphData: {
+        nodes, edges,
+        metadata: {
+          title: 'Cloudflare Self-Test',
+          description: `Deterministic Cloudflare API self-test. Last run ${ranAt}: ${passed}/${total} passed, ${failed} failed, ${skipped} skipped.`,
+          createdBy: 'run_cloudflare_selftest', metaArea: '#Cloudflare #SelfTest', category: 'System',
+        },
+      },
+      override: true,
+    }),
+  })
+  if (!saveRes.ok) {
+    const errText = await saveRes.text().catch(() => '')
+    throw new Error(`Checks ran (${passed}/${total} passed, ${failed} failed) but writing the report graph failed: HTTP ${saveRes.status} ${errText.slice(0, 200)}`)
+  }
+  const saveJson = await saveRes.json().catch(() => ({}))
+
+  return {
+    // The TOOL succeeded (suite ran + graph written). Per-check pass/fail is DATA, not tool failure —
+    // a failing check is a real finding, not a reason to mark the whole tool red (which would tempt a retry/fabricate).
+    success: true,
+    ranAt, account: cfAccount, credential: tokenSource,
+    passed, failed, skipped, total,
+    results,
+    graphId, graphVersion: saveJson.newVersion || null,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
+    message: `Cloudflare self-test: ${passed}/${total} passed, ${failed} failed, ${skipped} skipped — real API results (HTTP status + error verbatim) written to ${graphId}${saveJson.newVersion ? ` (v${saveJson.newVersion})` : ''}. Failures are actual Cloudflare responses, not fabricated diagnoses.`,
+  }
+}
+
 // ── MCP (Model Context Protocol) client ───────────────────────────
 // An MCP server is just an HTTP endpoint speaking JSON-RPC 2.0, so we talk to it directly
 // instead of relying on a provider-specific connector. That matters here because AgentChat is
@@ -9871,9 +10066,43 @@ async function executeMcpCall(input, env) {
     }
   }
 
+  // The model sometimes places a tool's own arguments (most often `code`, for the
+  // "cloudflare" server's execute tool) as siblings of `arguments` instead of nested inside
+  // it. Silently dropping those into an empty {} produces a confusing downstream validation
+  // error ("code: expected string, received undefined") that has caused the model to misread
+  // it as a credentials problem and fabricate a founder_email. Fold any known stray top-level
+  // fields in before they're lost, rather than requiring the model to get the shape right.
+  const effectiveArguments = (input.arguments && typeof input.arguments === 'object') ? { ...input.arguments } : {}
+  if (typeof input.code === 'string' && typeof effectiveArguments.code !== 'string') {
+    effectiveArguments.code = input.code
+  }
+  if (typeof input.query === 'string' && typeof effectiveArguments.query !== 'string') {
+    effectiveArguments.query = input.query
+  }
+
+  // L79: a prose instruction to "prefer check_pages_deployment_status" is not a structural
+  // guarantee — the model can still choose to hand-write execute JS against the Pages
+  // deployments endpoint instead (observed live, 1-in-5 runs). Foreclose that path outright
+  // for the platform-account case (no founder_email — a foreign account has no dedicated tool
+  // to redirect to) rather than merely discouraging it: refuse to run the call and hand back
+  // the exact fix, so the model corrects in the SAME turn instead of getting a real but
+  // redundant answer 4 tool calls later.
+  if (
+    serverName === 'cloudflare' &&
+    toolName === 'execute' &&
+    !(input.founder_email || '').trim() &&
+    typeof effectiveArguments.code === 'string' &&
+    /\/pages\/projects\/[^/'"` ]*\/deployments/.test(effectiveArguments.code)
+  ) {
+    return {
+      success: false,
+      error: 'Blocked: use the check_pages_deployment_status tool for this instead of hand-written execute JS against /pages/projects/.../deployments — it resolves domain→project→deployment deterministically in backend code. Call check_pages_deployment_status with domain (or projectName) now.',
+    }
+  }
+
   const result = await mcpRpc(server, 'tools/call', {
     name: toolName,
-    arguments: (input.arguments && typeof input.arguments === 'object') ? input.arguments : {},
+    arguments: effectiveArguments,
   }, authToken)
 
   // MCP returns content as an array of typed blocks — flatten the text for the model.
@@ -10952,6 +11181,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeGithubGenerateFromTemplate(toolInput, env)
     case 'cloudflare_pages_deploy':
       return await executeCloudflarePagesDeploy(toolInput, env)
+    case 'check_pages_deployment_status':
+      return await executeCheckPagesDeploymentStatus(toolInput, env)
+    case 'run_cloudflare_selftest':
+      return await executeRunCloudflareSelftest(toolInput, env)
     case 'album_list':
       return await executeAlbumList(toolInput, env)
     case 'album_get':
@@ -12280,6 +12513,77 @@ async function executeCloudflarePagesDeploy(input, env) {
   }
   const d = data.result
   return { success: true, deploymentId: d.id, projectName: d.project_name, url: d.url, status: d.latest_stage?.status || 'queued' }
+}
+
+// Deterministic replacement for hand-written mcp_call/execute JS: resolves domain → Pages
+// project → real latest deployment entirely in backend code, so the answer can never be
+// short-circuited into presenting a DNS record's created_on as deployment status (a mistake
+// the model made repeatedly when left to write its own lookup chain).
+async function executeCheckPagesDeploymentStatus(input, env) {
+  const { domain, projectName } = input
+  if (!domain && !projectName) {
+    return { success: false, error: 'Pass domain or projectName.' }
+  }
+  const token = env.CF_PAGES_TOKEN
+  const account = env.CF_ACCOUNT_ID
+  if (!token || !account) {
+    return { success: false, error: 'CF_PAGES_TOKEN/CF_ACCOUNT_ID not configured on this worker.' }
+  }
+  const cfFetch = (path) => fetch(`https://api.cloudflare.com/client/v4${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  }).then((r) => r.json())
+
+  let project = null
+  if (projectName) {
+    const data = await cfFetch(`/accounts/${account}/pages/projects/${projectName}`)
+    if (!data.success) {
+      const message = (data.errors && data.errors[0] && data.errors[0].message) || `Cloudflare API error looking up project "${projectName}"`
+      return { success: false, error: message }
+    }
+    project = data.result
+  } else {
+    const data = await cfFetch(`/accounts/${account}/pages/projects`)
+    if (!data.success) {
+      const message = (data.errors && data.errors[0] && data.errors[0].message) || 'Cloudflare API error listing Pages projects'
+      return { success: false, error: message }
+    }
+    const target = domain.trim().toLowerCase()
+    project = (data.result || []).find((p) => (p.domains || []).some((d) => d.toLowerCase() === target))
+    if (!project) {
+      return {
+        success: false,
+        error: `No Pages project on this account has "${domain}" attached as a custom domain.`,
+        allProjects: (data.result || []).map((p) => ({ name: p.name, domains: p.domains || [] })),
+      }
+    }
+  }
+
+  const deploymentsData = await cfFetch(`/accounts/${account}/pages/projects/${project.name}/deployments`)
+  if (!deploymentsData.success) {
+    const message = (deploymentsData.errors && deploymentsData.errors[0] && deploymentsData.errors[0].message) || 'Cloudflare API error listing deployments'
+    return { success: false, error: message }
+  }
+  const latest = (deploymentsData.result || [])[0]
+  if (!latest) {
+    return { success: true, project: project.name, domains: project.domains || [], message: `Project "${project.name}" has no deployments yet.` }
+  }
+
+  return {
+    success: true,
+    project: project.name,
+    domains: project.domains || [],
+    latestDeployment: {
+      id: latest.id,
+      status: latest.latest_stage?.status || latest.deployment_trigger?.metadata?.status || 'unknown',
+      createdOn: latest.created_on,
+      url: latest.url,
+      branch: latest.deployment_trigger?.metadata?.branch,
+      commitHash: latest.deployment_trigger?.metadata?.commit_hash,
+      environment: latest.environment,
+    },
+    totalDeployments: (deploymentsData.result || []).length,
+    message: `${project.name}: latest deployment ${latest.id} — ${latest.latest_stage?.status || 'unknown'} at ${latest.created_on}`,
+  }
 }
 
 export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }
