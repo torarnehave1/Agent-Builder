@@ -15,6 +15,8 @@ The current implementation is broader than the original foundation roadmap. This
 
 ## Project Documentation
 
+- [worker/ARCHITECTURE.md](./worker/ARCHITECTURE.md) — **System reference: how it works and how to change it safely.** arc42-structured, every load-bearing claim anchored `file:line`, machine-verifiable against the code with the drift-check below. Start here to touch the tool lifecycle, model routing, the SSE/Workers-AI chat contracts, the D1 schemas, or auth.
+- [worker/scripts/doc-drift-check.mjs](./worker/scripts/doc-drift-check.mjs) — extracts the load-bearing inventory (tool counts, exposure whitelists/blocklist, SSE event catalogue, model registry, D1 databases) from source and fails if `ARCHITECTURE.md` drifts. Run: `node worker/scripts/doc-drift-check.mjs`.
 - [CLAUDE.md](./CLAUDE.md) — Project-specific Claude Code instructions
 - [_project/lessons_learned.md](./_project/lessons_learned.md) — Engineering discipline & failure patterns (read first per response)
 - [_project/STATUS.md](./_project/STATUS.md) — Current state & progress log
