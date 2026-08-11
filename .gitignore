@@ -32,5 +32,7 @@ dist-ssr
 
 # Cloudflare
 worker/wrangler.toml
+# wrangler build/dev cache — regenerated on every deploy, never committed
+.wrangler/
 /_project/
 .claude/settings.local.json
