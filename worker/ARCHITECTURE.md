@@ -48,8 +48,8 @@ in `wrangler.toml`). Data: D1 `vegvisr_org` (app data) + the KG worker's own D1 
 | `index.js` | Fetch router; `/chat` (SSE) entry; per-agent config load; `EXCLUSIVE_CONTEXTS`; DO routing. |
 | `agent.js` | `VegvisrAgent` Durable Object — the **Workers-AI** engine (AI-SDK). |
 | `agent-loop.js` | `streamingAgentLoop` — the **Claude / OpenAI / Grok** engine (branches on model). |
-| `tool-definitions.js` | `TOOL_DEFINITIONS` array (**213** tools, drift-check) + `PROFF_TOOLS`, `WEB_SEARCH_TOOL`. |
-| `tool-executors.js` | `executeTool` switch (**216** cases, drift-check) → executor fns; `cfApi`, `assertMcpOwner`. |
+| `tool-definitions.js` | `TOOL_DEFINITIONS` array (**214** tools, drift-check) + `PROFF_TOOLS`, `WEB_SEARCH_TOOL`. |
+| `tool-executors.js` | `executeTool` switch (**217** cases, drift-check) → executor fns; `cfApi`, `assertMcpOwner`. |
 | `system-prompt.js` | Behavioral rules injected into the system prompt. |
 | `*-subagent.js` | Delegated sub-loops (kg, html-builder, chat, bot, contact, album, agent-builder, video). |
 | `openapi-tools.js` | Dynamic registry-driven tools (the `default:` dispatch path). |
@@ -277,7 +277,7 @@ A request hits exactly one engine, and each gates the toolbox differently:
 | Surface | Gating | File | Effect of a NEW tool |
 |---|---|---|---|
 | Claude path | **BLOCKLIST** `ORCHESTRATOR_BLOCKED_TOOLS` (38) | agent-loop.js:228, filter :244 | **Auto-exposed** unless blocked |
-| OpenAI/Grok | **WHITELIST** `OPENAI_AGENT_TOOL_NAMES` (120) | agent-loop.js:106, filter :671 | **Invisible until added** |
+| OpenAI/Grok | **WHITELIST** `OPENAI_AGENT_TOOL_NAMES` (121) | agent-loop.js:106, filter :671 | **Invisible until added** |
 | Workers-AI | **WHITELIST** `WORKERS_AI_TOOLS` (53) | agent.js:81, filter :220 | **Invisible until added** |
 | Locked context | `EXCLUSIVE_CONTEXTS` (keys: `Cloudflare MCP Server`) | index.js:1636 | **Uncallable unless listed** |
 | Per user-agent | D1 `agent_configs.tools` JSON → `toolFilter` (schema §5.2) | index.js:1624 | Only if that agent's list includes it (data, not code) |
@@ -386,8 +386,8 @@ does not duplicate them; it is the "how it works" companion to that "how healthy
 ---
 
 ### Verified inventory snapshot (drift-check, 2026-08-03)
-TOOL_DEFINITIONS 213 · dispatch cases 216 · WORKERS_AI_TOOLS 53 · OPENAI_AGENT_TOOL_NAMES 120 ·
-ORCHESTRATOR_BLOCKED_TOOLS 38 · SEQUENTIAL_TOOLS 54 · EXCLUSIVE_CONTEXTS: `Cloudflare MCP Server` ·
+TOOL_DEFINITIONS 214 · dispatch cases 217 · WORKERS_AI_TOOLS 53 · OPENAI_AGENT_TOOL_NAMES 121 ·
+ORCHESTRATOR_BLOCKED_TOOLS 38 · SEQUENTIAL_TOOLS 55 · EXCLUSIVE_CONTEXTS: `Cloudflare MCP Server` ·
 subagents: kg 12, html-builder 26, chat 18, bot 6, contact 5, album 11, agent-builder 7, video 7 ·
 coherence: 0 tools defined-without-dispatch ·
 MODELS (models.js): `claude-haiku-4-5-20251001` `claude-sonnet-4-6` `claude-opus-4-8` `claude-fable-5` ·

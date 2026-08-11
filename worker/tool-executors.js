@@ -20,6 +20,7 @@ import { runVideoSubagent } from './video-subagent.js'
 import { runContactSubagent } from './contact-subagent.js'
 import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
+import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -5472,6 +5473,35 @@ async function executeTranscribeAudio(input, env) {
 
   let resolvedUrl = audioUrl
   let resolvedRecordingId = recordingId
+
+  // 0a. Realtime/meeting recordings (list_realtime_videos) must be fetched through
+  //     the realtime worker, NOT via their playUrl.
+  //
+  //     Transcription happens in the BROWSER (see step 2) — it fetches the bytes
+  //     and decodes them with AudioContext. The R2 public host
+  //     realtimevideos.vegvisr.org answers WITHOUT an access-control-allow-origin
+  //     header (verified 2026-08-11: HTTP 206, no ACAO), and per-user 'r2-own'
+  //     playUrls are presigned URLs with the same problem, so a cross-origin
+  //     fetch of either is blocked and transcription fails before it starts.
+  //     /realtime/recordings/download does send CORS headers, so route through it.
+  const realtimeKey = typeof input.recordingKey === 'string' && input.recordingKey.trim()
+    ? input.recordingKey.trim()
+    : null
+  const isRealtimePublicUrl = (u) => {
+    try { return new URL(u).host === 'realtimevideos.vegvisr.org' } catch { return false }
+  }
+  if (realtimeKey || (resolvedUrl && isRealtimePublicUrl(resolvedUrl))) {
+    const authToken = getAuthTokenFromToolInput(input)
+    if (!authToken) {
+      throw new Error('You must be logged in to transcribe a realtime/meeting recording. Please refresh the page and try again.')
+    }
+    // An agent that copied the playUrl gives us the key in the path instead.
+    const key = realtimeKey || decodeURIComponent(new URL(resolvedUrl).pathname.replace(/^\/+/, ''))
+    const params = new URLSearchParams({ key, token: authToken })
+    if (input.asUser) params.set('asUser', String(input.asUser))
+    resolvedUrl = `https://api.vegvisr.org/realtime/recordings/download?${params.toString()}`
+    resolvedRecordingId = resolvedRecordingId || `realtime:${key}`
+  }
 
   // 0. Resolve a Contact Log recording ("contactlog:<logId>") from Drizzle.
   //    list_recordings surfaces contact-log recordings straight from the
@@ -11759,6 +11789,9 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
           : undefined,
       }
+    }
+    case 'delegate_to_meeting_graph': {
+      return await runMeetingGraphSubagent(toolInput, env, progress)
     }
     case 'delegate_to_youtube_graph': {
       const result = await runYoutubeGraphSubagent(toolInput, env, progress, executeTool)

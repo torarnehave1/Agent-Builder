@@ -980,7 +980,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_realtime_videos',
-    description: 'List the current user\'s video recordings from their R2 bucket. Returns TWO kinds, distinguished by the `type` field on each result: (1) `type:"realtime"` — MP4s from RealtimeKit video/meeting sessions (stored under recordings/); (2) `type:"stream"` — Cloudflare Stream LIVE BROADCAST recordings synced into the SAME bucket under stream-recordings/, each carrying `title` (the meeting title), `duration` (seconds), `streamVideoId`, and `liveInputId`. Use this tool when the user asks about their "realtime recording", "realtime video", "video recording", "stream recording", "live stream recording", or "broadcast recording" — it covers all of them. DIFFERENT from list_recordings (which is for audio voice memos). Each user\'s videos live in their own R2 bucket; this tool automatically resolves the correct bucket/path from the logged-in user\'s config row — do not ask the user for a path. Each returned video has a permanent public `playUrl` — use it EXACTLY as returned; never construct, guess, or modify a recording URL/key, and never combine a session id with a timestamp from another entry. To embed a recording in a graph, create a `video` node with `path` = that exact `playUrl`. Do NOT route these recordings to delegate_to_video / Cloudflare Stream (they already have a permanent URL), and never hand the user terminal/wrangler/curl commands.',
+    description: 'List the current user\'s video recordings from their R2 bucket. Returns TWO kinds, distinguished by the `type` field on each result: (1) `type:"realtime"` — MP4s from RealtimeKit video/meeting sessions (stored under recordings/); (2) `type:"stream"` — Cloudflare Stream LIVE BROADCAST recordings synced into the SAME bucket under stream-recordings/, each carrying `title` (the meeting title), `duration` (seconds), `streamVideoId`, and `liveInputId`. Use this tool when the user asks about their "realtime recording", "realtime video", "video recording", "stream recording", "live stream recording", or "broadcast recording" — it covers all of them. DIFFERENT from list_recordings (which is for audio voice memos). Each user\'s videos live in their own R2 bucket; this tool automatically resolves the correct bucket/path from the logged-in user\'s config row — do not ask the user for a path. Each returned video has a permanent public `playUrl` — use it EXACTLY as returned; never construct, guess, or modify a recording URL/key, and never combine a session id with a timestamp from another entry. To embed a recording in a graph, create a `video` node with `path` = that exact `playUrl`. Do NOT route these recordings to delegate_to_video / Cloudflare Stream (they already have a permanent URL), and never hand the user terminal/wrangler/curl commands. TO TRANSCRIBE one of these: call transcribe_audio with `recordingKey` set to this result\'s `key` field (NOT its playUrl — the R2 public host sends no CORS header, so a browser fetch of playUrl is blocked). Combine with saveToGraph:true to turn a meeting or podcast recording straight into a knowledge graph.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1166,12 +1166,14 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'transcribe_audio',
-    description: 'Transcribe an audio file. PREFERRED: pass the `audioUrl` copied EXACTLY from a list_recordings result — this always works, including for Contact-app recordings. Alternatively pass a `recordingId`, but ONLY the exact string returned by list_recordings (e.g. an audio-portfolio id or a `contactlog:<id>` id) — NEVER construct, guess, or derive a recordingId from a filename or timestamp. Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
+    description: 'Transcribe an audio file. THREE input routes, pick by where the recording came from: (1) AUDIO PORTFOLIO / CONTACT-APP recordings — pass the `audioUrl` copied EXACTLY from a list_recordings result; this always works. (2) REALTIME / MEETING / PODCAST recordings from list_realtime_videos — pass that result\'s `key` as `recordingKey` (NOT its playUrl; the R2 public host sends no CORS header, so a browser fetch of playUrl is blocked and transcription fails before it starts — passing recordingKey routes it through the realtime worker instead). Passing the realtime playUrl as audioUrl also works, it is rewritten automatically, but recordingKey is the reliable form. (3) A `recordingId`, but ONLY the exact string returned by list_recordings (an audio-portfolio id or `contactlog:<id>`) — NEVER construct, guess, or derive a recordingId from a filename or timestamp. Automatically uses the logged-in user\'s email for portfolio lookups. Returns the transcription text. Use saveToGraph to create a graph with the transcription as a fulltext node directly — this saves directly without sending the full text through the LLM, so it is much faster for large transcriptions. ALWAYS use saveToGraph:true when the user asks to transcribe and save/create a graph.',
     input_schema: {
       type: 'object',
       properties: {
         recordingId: { type: 'string', description: 'The EXACT recordingId string from a list_recordings result (audio-portfolio id or `contactlog:<id>`). Do NOT invent or derive one from a filename/timestamp. Prefer passing audioUrl instead.' },
-        audioUrl: { type: 'string', description: 'Direct URL to the audio file — copy the `audioUrl` field from a list_recordings result verbatim. This is the preferred, most reliable input.' },
+        audioUrl: { type: 'string', description: 'Direct URL to the audio file — copy the `audioUrl` field from a list_recordings result verbatim. This is the preferred, most reliable input for audio-portfolio and Contact-app recordings.' },
+        recordingKey: { type: 'string', description: 'For REALTIME / MEETING / PODCAST recordings: the exact `key` field from a list_realtime_videos result (e.g. "recordings/podcast-2026-08-11-2130.webm"). Use this instead of that result\'s playUrl — the R2 public host does not send CORS headers, so the browser cannot fetch playUrl to decode it. Copy the key verbatim; never construct one.' },
+        asUser: { type: 'string', description: 'Superadmin only: the email whose R2 bucket holds the recording, when transcribing another user\'s realtime recording.' },
         service: { type: 'string', enum: ['openai', 'cloudflare'], description: 'Transcription service. Default: openai (higher quality)' },
         language: { type: 'string', description: 'Language code hint (e.g. "en", "no"). Improves accuracy.' },
         saveToPortfolio: { type: 'boolean', description: 'If true and recordingId provided, save transcription text back to portfolio metadata. Default: false' },
@@ -2919,6 +2921,21 @@ const TOOL_DEFINITIONS = [
         }
       },
       required: ['task']
+    }
+  },
+  {
+    name: 'delegate_to_meeting_graph',
+    description: 'Turn a MEETING / INTERVIEW / PODCAST transcript into a STRUCTURED knowledge graph. Use this when the user asks to turn a recording or conversation into a graph, summarise a meeting as a graph, or extract themes/decisions/action points from a recording. Produces an overview node, a participants node, one node per theme, plus decisions, action points, pull quotes, and the full transcript preserved as a final node — NOT one flat wall of text. WORKFLOW: (1) find the recording with list_realtime_videos (meeting/podcast recordings in R2) or list_recordings (audio portfolio / Contact app); (2) call transcribe_audio with saveToGraph:false to get the transcript TEXT back — pass `recordingKey` for realtime recordings, `audioUrl` for portfolio ones; (3) pass that text here as `transcript`. Do NOT use transcribe_audio saveToGraph:true when the user wants structure — that path creates a single fulltext node and this tool is the structured alternative. For YouTube videos use delegate_to_youtube_graph instead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        transcript: { type: 'string', description: 'The full transcript text, as returned by transcribe_audio. Required.' },
+        recordingName: { type: 'string', description: 'Human name of the recording, used as a title hint and shown on the overview node.' },
+        playUrl: { type: 'string', description: 'Permanent playback URL of the recording, linked from the overview node. Copy verbatim from the list result.' },
+        targetLanguage: { type: 'string', description: 'Language for the generated text (e.g. "norwegian", "english"). Defaults to the transcript\'s own language.' },
+        metaArea: { type: 'string', description: 'Hashtag meta area for the graph, e.g. "#MEETING #ONBOARDING". Defaults to "#MEETING".' }
+      },
+      required: ['transcript']
     }
   },
   {

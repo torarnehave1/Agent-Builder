@@ -150,7 +150,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'get_participant_graph', 'publish_challenge_page',
   // Subagents
   'delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_albums', 'delegate_to_video',
-  'delegate_to_youtube_graph', 'delegate_to_contact', 'delegate_to_chat',
+  'delegate_to_youtube_graph', 'delegate_to_meeting_graph', 'delegate_to_contact', 'delegate_to_chat',
   'delegate_to_bot', 'delegate_to_agent_builder',
   // Norwegian business registry
   'proff_search_companies', 'proff_get_financials', 'proff_get_company_details',
@@ -184,6 +184,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   'deploy_worker', 'delete_worker', 'register_capability_worker', 'register_deployed_worker',
   'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot',
   'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact', 'delegate_to_youtube_graph',
+  'delegate_to_meeting_graph',
 ])
 
 function isOpenAIModel(model) {
@@ -1266,7 +1267,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           }
 
           // Auto-inject nodeId into HTML builder delegation (HTML edits always target a specific node)
-          const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_youtube_graph'])
+          const DELEGATION_TOOLS = new Set(['delegate_to_kg', 'delegate_to_html_builder', 'delegate_to_chat', 'delegate_to_bot', 'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_youtube_graph', 'delegate_to_meeting_graph'])
           if (DELEGATION_TOOLS.has(toolUse.name)) {
             // NOTE: Do NOT auto-inject graphId into delegations. The LLM must explicitly include graphId
             // when it wants the subagent to work on a specific graph. If omitted, the subagent is free to
