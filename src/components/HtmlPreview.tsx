@@ -89,11 +89,21 @@ function extractPublishedHosts(node: NodeRefs | null | undefined): string[] {
 }
 
 // --- Visual "click-on-the-page" text editing --------------------------------
-// The preview iframe runs same-origin, so we make EVERY element that directly holds
+// The preview iframe runs same-origin, so we make every element that directly holds
 // text contentEditable on click. Save re-parses the stored source and applies only the
-// changed text blocks (matched by document order), so the page's structure, scripts,
-// styles and runtime state are preserved — only edited text changes. No anchors needed.
-const V_ATTR = 'data-v-editable';
+// changed text blocks, so the page's structure, scripts, styles and runtime state are
+// preserved — only edited text changes. No anchors needed.
+//
+// Identity, NOT document order (L49 — verified on treet.vegvisr.org: 74 text elements in
+// the live DOM vs 23 in the source, diverging already at index 13). Pages build DOM at
+// runtime (d3 pins, `card.innerHTML` + appendChild, panel rewrites), so a live-DOM index
+// does not address the same element as a source index — matching by order either aborts
+// the save or writes text into the wrong element. Instead the source elements are stamped
+// with `data-v-src-idx` BEFORE the iframe renders them: every stamped element in the live
+// DOM maps back to exactly one source element, and script-generated elements carry no
+// stamp, so they are neither editable nor able to block a save.
+const V_IDX = 'data-v-src-idx';   // per editable source element: its index in the source parse
+const V_COUNT = 'data-v-src-count'; // on <html>: how many the stamping pass found (staleness check)
 
 // Elements we never make editable even if they contain text (scripts/styles/head meta,
 // and interactive controls whose click must keep its behavior — tab buttons, inputs).
@@ -114,8 +124,8 @@ function hasDirectText(el: Element): boolean {
 // layout wrapper (only element children, no direct text) is excluded, so a page never
 // collapses into one giant editable blob. When text-bearing elements nest (e.g. a link
 // inside a paragraph), only the OUTERMOST is returned, so editing it inline covers the
-// inner text and no element is diffed twice on save. Document order is stable and equal
-// between the live iframe DOM and a fresh re-parse of the source, so index i matches.
+// inner text and no element is diffed twice on save. Deterministic for a given source
+// string: the stamping pass and the save pass parse the same bytes and get the same list.
 function getEditableEls(root: Element | null | undefined): HTMLElement[] {
   if (!root) return [];
   const isCand = (el: Element) => !V_SKIP.has(el.tagName) && hasDirectText(el);
@@ -133,10 +143,25 @@ function getEditableEls(root: Element | null | undefined): HTMLElement[] {
 }
 
 // Strip the edit-only attributes we injected before saving, so node.info stays clean.
+// (`data-v-editable` is the pre-stamping attribute — kept in the strip list so any HTML
+// still carrying it round-trips clean.)
 function cleanInner(s: string): string {
   return s
     .replace(/\s*contenteditable="(?:true|false)"/gi, '')
-    .replace(new RegExp(`\\s*${V_ATTR}="[^"]*"`, 'gi'), '');
+    .replace(new RegExp(`\\s*${V_IDX}="[^"]*"`, 'gi'), '')
+    .replace(/\s*data-v-editable="[^"]*"/gi, '');
+}
+
+// Stamp every editable SOURCE element with its index, so the rendered page can be mapped
+// back to the source element-by-element regardless of what the page's scripts do to the
+// DOM at runtime. Only used for the edit-mode render; the bytes we save are always a fresh
+// parse of the stored source, so no stamp ever reaches node.info.
+function stampEditable(html: string): string {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const els = getEditableEls(doc.body || doc.documentElement);
+  els.forEach((el, i) => el.setAttribute(V_IDX, String(i)));
+  doc.documentElement.setAttribute(V_COUNT, String(els.length));
+  return '<!DOCTYPE html>\n' + doc.documentElement.outerHTML;
 }
 
 // --- Deterministic search & replace over the raw node HTML (no agent, no LLM) ------
@@ -348,10 +373,24 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   // Visual "click-on-the-page" edit mode
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const baselineRef = useRef<string[]>([]); // per text-block (document order) clean innerHTML at load
+  const baselineRef = useRef<string[]>([]); // clean innerHTML at load, keyed by SOURCE index (V_IDX)
   const [visualEdit, setVisualEdit] = useState(false);
   const [visualSaving, setVisualSaving] = useState(false);
   const [visualMsg, setVisualMsg] = useState('');
+
+  // What the iframe actually renders. Edit mode renders the STAMPED source so every text
+  // block can be mapped back to the source on save; every other mode renders exactly what
+  // it rendered before (email templates get their send-time placeholders filled in), so
+  // normal previewing and publishing are byte-for-byte unaffected by the stamping.
+  const previewHtml = useMemo(() => {
+    const base = versionHtml || html || '';
+    if (!base) return base;
+    if (visualEdit) {
+      if (versionHtml) return versionHtml; // old version: read-only, saving is blocked
+      try { return stampEditable(base); } catch { return base; } // no stamps → save says so
+    }
+    return isEmailTpl ? fillPreviewSampleVars(base, effPreviewVars) : base;
+  }, [versionHtml, html, visualEdit, isEmailTpl, effPreviewVars]);
 
   // Publishing — where the node is live + one-click publish/republish.
   const [publishedHosts, setPublishedHosts] = useState<string[]>([]);
@@ -453,8 +492,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   // baseline captured at load, so any edit is caught regardless of keystroke events.
   const handlersRef = useRef({
     click: (e: Event) => {
-      const el = (e.target as Element)?.closest?.(`[${V_ATTR}]`) as HTMLElement | null;
-      if (!el) return; // clicks on non-text elements (tab buttons, etc.) pass through
+      const el = (e.target as Element)?.closest?.(`[${V_IDX}]`) as HTMLElement | null;
+      if (!el) return; // non-source text (script-generated cards, tab buttons, …) passes through
       e.preventDefault();
       e.stopPropagation();
       el.setAttribute('contenteditable', 'true');
@@ -467,18 +506,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     if (!doc.getElementById('__v_edit_style__')) {
       const st = doc.createElement('style');
       st.id = '__v_edit_style__';
-      st.textContent = `[${V_ATTR}]{outline:1px dashed rgba(249,115,22,.55);outline-offset:2px;cursor:text}[${V_ATTR}]:hover{outline:2px solid rgba(249,115,22,.95)}[contenteditable="true"]{outline:2px solid #22c55e!important;background:rgba(34,197,94,.06)}`;
+      st.textContent = `[${V_IDX}]{outline:1px dashed rgba(249,115,22,.55);outline-offset:2px;cursor:text}[${V_IDX}]:hover{outline:2px solid rgba(249,115,22,.95)}[contenteditable="true"]{outline:2px solid #22c55e!important;background:rgba(34,197,94,.06)}`;
       doc.head?.appendChild(st);
     }
-    // Make EVERY block-level text element on the page editable (no anchors needed),
-    // and capture each one's clean innerHTML in document order as the baseline that
-    // save() diffs against. querySelectorAll order is stable and matches a re-parse of
-    // the source, so index i here == index i in the source document on save.
-    const els = getEditableEls(doc.body || doc.documentElement);
+    // Every stamped element — i.e. every text block that exists in the SOURCE — becomes
+    // editable, and its clean innerHTML at this moment is the baseline save() diffs
+    // against, keyed by the stamped source index (not by position in the live DOM).
     const base: string[] = [];
-    els.forEach((el, i) => {
-      el.setAttribute(V_ATTR, '1');
-      base[i] = cleanInner(el.innerHTML);
+    doc.querySelectorAll(`[${V_IDX}]`).forEach(el => {
+      const i = Number(el.getAttribute(V_IDX));
+      if (Number.isInteger(i)) base[i] = cleanInner(el.innerHTML);
     });
     baselineRef.current = base;
     doc.addEventListener('click', handlersRef.current.click, true);
@@ -488,10 +525,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     if (!doc) return;
     doc.removeEventListener('click', handlersRef.current.click, true);
     doc.getElementById('__v_edit_style__')?.remove();
-    doc.querySelectorAll(`[${V_ATTR}]`).forEach(el => {
-      el.removeAttribute(V_ATTR);
-      el.removeAttribute('contenteditable');
-    });
+    // The stamps themselves stay — they come from the rendered srcDoc, not from here, and
+    // leaving edit mode re-renders the iframe from the unstamped source anyway.
+    doc.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
   }, []);
 
   // Re-apply / remove edit mode whenever it toggles (on the current iframe doc).
@@ -508,26 +544,43 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   const saveVisual = async () => {
     if (!graphId || !nodeId || !html) return;
+    if (versionHtml) { setVisualMsg('Avslutt versjonsvisningen før du lagrer'); return; }
     const doc = iframeRef.current?.contentDocument;
     if (!doc) return;
     setVisualSaving(true);
     setVisualMsg('');
     try {
-      // Diff each live text block against its as-loaded baseline (document order), and
-      // apply ONLY the changed blocks onto a FRESH parse of the source. Re-parsing the
+      // Apply ONLY the edited blocks onto a FRESH parse of the source. Re-parsing the
       // stored source (not the runtime DOM) means the page's structure, scripts, styles
       // and runtime state (active tab, inline display) are preserved — only edited text
-      // changes. All text is editable; nothing else is touched.
-      const liveEls = getEditableEls(doc.body || doc.documentElement);
+      // changes. Each live block addresses its source element through its own stamp, so
+      // script-generated DOM is simply absent from this loop instead of derailing it.
       const src = new DOMParser().parseFromString(html, 'text/html');
       const srcEls = getEditableEls(src.body || src.documentElement);
-      if (liveEls.length !== srcEls.length) {
-        setVisualMsg('Kan ikke lagre trygt — last siden på nytt'); setVisualSaving(false); return;
+      const stamped = Array.from(doc.querySelectorAll(`[${V_IDX}]`));
+      if (stamped.length === 0) {
+        setVisualMsg('Redigering ikke aktiv på denne visningen — slå av og på «Rediger»'); setVisualSaving(false); return;
+      }
+      // The only way indices can be wrong now is if `html` changed after the iframe was
+      // rendered (a save from another panel, a restored version). The stamped count says
+      // what the render was built from; a mismatch means re-render before touching text.
+      const stampedFrom = Number(doc.documentElement.getAttribute(V_COUNT));
+      if (!Number.isInteger(stampedFrom) || stampedFrom !== srcEls.length) {
+        setVisualMsg('Siden er endret siden den ble lastet — last den på nytt'); setVisualSaving(false); return;
       }
       let changed = false;
-      for (let i = 0; i < liveEls.length; i++) {
-        const cur = cleanInner(liveEls[i].innerHTML);
-        if (cur !== baselineRef.current[i]) { srcEls[i].innerHTML = cur; changed = true; }
+      for (const el of stamped) {
+        // Only blocks the user actually opened (click sets contenteditable) are candidates.
+        // Without this, a script that rewrites its own element after load — a theme toggle
+        // swapping its label, a panel re-rendering — would be diffed as a "user edit" and
+        // written into the stored source.
+        if (!el.hasAttribute('contenteditable')) continue;
+        const i = Number(el.getAttribute(V_IDX));
+        if (!Number.isInteger(i) || !srcEls[i]) continue;
+        const cur = cleanInner(el.innerHTML);
+        if (cur === baselineRef.current[i]) continue;
+        srcEls[i].innerHTML = cur;
+        changed = true;
       }
       if (!changed) { setVisualMsg('Ingen endring'); setVisualSaving(false); return; }
       const newHtml = '<!DOCTYPE html>\n' + src.documentElement.outerHTML;
@@ -647,6 +700,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   const previewVersion = async (version: number) => {
     if (!graphId || !nodeId) return;
+    setVisualEdit(false); // an old version is not what a save would write to — leave edit mode
     setLoadingVersion(true);
     try {
       const res = await fetch(`https://knowledge.vegvisr.org/getknowgraphversion?id=${encodeURIComponent(graphId)}&version=${version}`);
@@ -1052,7 +1106,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       <iframe
         ref={iframeRef}
         onLoad={handleIframeLoad}
-        srcDoc={injectBridge(isEmailTpl && !visualEdit ? fillPreviewSampleVars(versionHtml || html, effPreviewVars) : (versionHtml || html), graphId, nodeId, userEmail)}
+        srcDoc={injectBridge(previewHtml, graphId, nodeId, userEmail)}
         sandbox="allow-scripts allow-forms allow-same-origin allow-modals allow-popups"
         className={`w-full bg-white border-0 ${consoleOpen ? 'flex-[3]' : 'flex-1'}`}
         title="HTML Preview"
