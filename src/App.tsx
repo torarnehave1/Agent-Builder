@@ -7,6 +7,7 @@ import { getStoredLanguage, setStoredLanguage } from './lib/storage';
 import { getStoredThemeMode, resolveTheme, setStoredThemeMode, type ThemeMode } from './lib/theme';
 import { useTranslation } from './lib/useTranslation';
 import AgentBuilder from './components/AgentBuilder';
+import BuildPill from './components/BuildPill';
 import ImpersonationBar from './components/ImpersonationBar';
 
 const MAGIC_BASE = 'https://cookie.vegvisr.org';
@@ -278,7 +279,10 @@ function App() {
                 </div>
               </header>
 
-              <EcosystemNav className="mt-4" />
+              <div className="mt-4 flex items-center gap-3">
+                <EcosystemNav className="flex-1 min-w-0" />
+                <BuildPill theme={resolvedTheme} />
+              </div>
             </>
           )}
 
@@ -333,7 +337,10 @@ function App() {
       {/* Agent Builder — full screen when authenticated */}
       {authStatus === 'authed' && authUser && (
         <div className="flex flex-col h-screen">
-          <EcosystemNav className={`flex-shrink-0 px-4 py-2 border-b ${resolvedTheme === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950'}`} />
+          <div className={`flex-shrink-0 flex items-center gap-3 px-4 py-2 border-b ${resolvedTheme === 'light' ? 'border-slate-200 bg-white text-slate-900' : 'border-white/10 bg-slate-950'}`}>
+            <EcosystemNav className="flex-1 min-w-0" />
+            <BuildPill theme={resolvedTheme} />
+          </div>
           <ImpersonationBar />
           <AgentBuilder
             userId={authUser.userId}
