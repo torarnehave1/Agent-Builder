@@ -14,6 +14,7 @@ function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () =
 }
 import { useAgentChat, getToolPartState, getToolCallId, getToolInput, getToolOutput } from '@cloudflare/ai-chat/react';
 import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
+import { providerOf } from '../lib/modelProvider';
 
 const AGENT_HOST = 'agent.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
@@ -2032,7 +2033,9 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   }
 
   function copyLog() {
-    const header = `=== Vegvisr Agent Chat Log ===\nModel: ${model}\nDate: ${new Date().toLocaleString()}\n\n`;
+    // Provider as well as model — tool-choice behaviour differs between them, and a log that names
+    // only the model still hides which engine actually ran (see lib/modelProvider.ts).
+    const header = `=== Vegvisr Agent Chat Log ===\nProvider: ${providerOf(model)}\nModel: ${model || '(default — chosen by the worker)'}\nDate: ${new Date().toLocaleString()}\n\n`;
     const body = messages.map((msg) => {
       const role = msg.role === 'user' ? '[USER]' : '[AGENT]';
       const parts = msg.parts.map((part) => {

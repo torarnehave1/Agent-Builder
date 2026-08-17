@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
 import RecordingsPanel from './RecordingsPanel';
 import JsonViewerModal from './JsonViewerModal';
+import { providerOf } from '../lib/modelProvider';
 // rehype-sanitize removed: agent-generated content is trusted,
 // and the sanitizer was stripping graph viewer hrefs from links
 
@@ -1070,6 +1071,13 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     const lines: string[] = [];
     lines.push(`=== Agent Chat Log ===`);
     lines.push(`Time: ${new Date().toISOString()}`);
+    // Provider + model belong in the log because tool-selection behaviour differs between them:
+    // on 2026-08-17 Grok answered "register a user" by scaffolding and DEPLOYING a duplicate
+    // worker instead of calling the existing admin_register_user tool; Haiku called the tool on
+    // the first try with the same prompt. Without these two lines the log looks identical either
+    // way, and the cause gets misattributed to the wording of the prompt.
+    lines.push(`Provider: ${providerOf(model)}`);
+    lines.push(`Model: ${model || '(default — chosen by the worker)'}`);
     lines.push(`Graph: ${graphId || '(none)'}`);
     lines.push(`User: ${userId}`);
     lines.push('');
@@ -1108,7 +1116,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     }
 
     return lines.join('\n');
-  }, [messages, current, graphId, userId]);
+  }, [messages, current, graphId, userId, model]);
 
   const copyLog = useCallback(() => {
     const log = buildLog();
@@ -2067,7 +2075,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           } else if (toolName === 'edit_html_node' || toolName === 'replace_html_section' ||
                      toolName === 'append_to_section' || toolName === 'insert_html_at' ||
                      toolName === 'insert_in_element' || toolName === 'move_html_element' ||
-                     toolName === 'remove_html_element' || toolName === 'apply_layout') {
+                     toolName === 'remove_html_element' || toolName === 'apply_layout' ||
+                     toolName === 'translate_html_node') {
             const resultData = ev.data as Record<string, unknown>;
             if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string, (resultData.graphId as string) || lastAgentGraphRef.current || null); }
             const updatedHtml = resultData.updatedHtml as string;
@@ -2169,7 +2178,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         if (ev.type === 'tool_result' && !ev.data.success && onPreview &&
             (ev.data.tool === 'delegate_to_html_builder' || ev.data.tool === 'replace_html_section' || ev.data.tool === 'edit_html_node' ||
              ev.data.tool === 'append_to_section' || ev.data.tool === 'insert_html_at' || ev.data.tool === 'insert_in_element' ||
-             ev.data.tool === 'move_html_element' || ev.data.tool === 'remove_html_element' || ev.data.tool === 'apply_layout')) {
+             ev.data.tool === 'move_html_element' || ev.data.tool === 'remove_html_element' || ev.data.tool === 'apply_layout' ||
+             ev.data.tool === 'translate_html_node')) {
           const rd = ev.data as Record<string, unknown>;
           const gId = (rd.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
           const nId = (rd.nodeId || lastHtmlNodeIdRef.current) as string | undefined;
