@@ -493,6 +493,52 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'list_html_text',
+    description: "READ every translatable string that is ACTUALLY on an html-node — the markup text AND the string literals the page's own scripts render at runtime — each with a stable id. This is the MANDATORY first step for ANY translation, language-switch or bulk-copy-rewrite task. NEVER write a translation dictionary from read_node or from memory: doing that produced a page where 3 of 49 dictionary keys matched real text and clicking ENG changed only the heading (2026-08-13, ravner.vegvisr.org). Returns { id, text, source ('markup' | 'script'), count } plus `languageToggle` — the data-lang values the page's own buttons carry, which are the EXACT codes translate_html_node's `lang` must use. Paged: pass offset/limit (default 250, max 500) and the result reports hasMore + how many are unseen — it never silently truncates. Read-only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        source: { type: 'string', enum: ['all', 'markup', 'script'], description: "Filter by where the string lives: 'markup' (in the HTML), 'script' (a literal the page renders at runtime, e.g. a data array), 'all' (default)." },
+        offset: { type: 'integer', description: 'Start index for paging (default 0).' },
+        limit: { type: 'integer', description: 'How many strings to return (default 250, max 500).' },
+        includeScripts: { type: 'boolean', description: 'Set false to skip script string literals. Default true — leave it on, or text the page builds at runtime stays untranslated.' }
+      },
+      required: ['graphId', 'nodeId']
+    }
+  },
+  {
+    name: 'translate_html_node',
+    description: "Install or extend a page's translation dictionary so its language buttons actually switch the content. You supply ONLY { id, text } per string — the id from list_html_text and your translation; the tool resolves the source text itself, so you never retype a source string and a fabricated key is impossible. An entry whose text does not occur in the node is REJECTED and reported, not written. Writes ONE managed <!-- v-i18n --> block (dictionary as JSON + a switcher that also handles DOM the page's own scripts build later, and restores the original language without a page reload); re-running REPLACES that block and merges dictionaries, so it can never produce the duplicate-declaration SyntaxError a hand-written second <script> does. Also removes a pre-existing hand-rolled translations/translatePage script that would fight it (pass removeLegacy:false to keep it). `lang` must be the code the page's buttons carry (list_html_text reports them); `base` is the language the page is written in (default 'no'). Call it repeatedly to translate in batches — mode defaults to 'merge'. The result reports coveragePercent and exactly which strings are still untranslated: tell the user that number rather than claiming the page is translated. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        lang: { type: 'string', description: 'Language code you are ADDING, e.g. "en". Must match the data-lang value on the page\'s button (list_html_text reports the values).' },
+        base: { type: 'string', description: "The language the page is WRITTEN in, e.g. 'no' (default). Clicking this value restores the original text." },
+        entries: {
+          type: 'array',
+          description: 'The translations. Each item: { id: "t12", text: "<translation>" } — id comes from list_html_text. (An explicit { source, text } is accepted too, but only if that exact text occurs in the node.)',
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', description: 'String id from list_html_text, e.g. "t12".' },
+              text: { type: 'string', description: 'The translated text.' },
+              source: { type: 'string', description: 'Optional: the exact source string instead of an id. Rejected if it does not occur in the node.' }
+            },
+            required: ['text']
+          }
+        },
+        mode: { type: 'string', enum: ['merge', 'replace'], description: "'merge' (default) adds to this language's existing dictionary; 'replace' discards it and keeps only these entries." },
+        buttonSelector: { type: 'string', description: "CSS selector for the language buttons. Default '[data-lang]' (what the page usually already has)." },
+        removeLegacy: { type: 'boolean', description: 'Default true — removes a hand-written translations/translatePage <script> that would fight the managed one. Set false to keep it.' }
+      },
+      required: ['graphId', 'nodeId', 'lang', 'entries']
+    }
+  },
+  {
     name: 'list_html_anchors',
     description: "List the edit-anchor ids present in an html-node (the <!-- edit:<id>:start --> markers). Use this BEFORE replace_html_section to see which sections are anchor-editable, then read_html_section to see a section's content. Read-only. Code-hardcoded (not in registry).",
     input_schema: {
@@ -3473,6 +3519,58 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+
+  {
+    name: 'provision_world_email',
+    description: "Set up a working inbox on a domain in ONE step: turns on Cloudflare Email Routing, registers the forwarding destination, and creates the rule. Replaces five manual dashboard steps (the same gap provision_world_kv closed for KV). The domain does NOT need to be a registered World and there is NO need to ask for a 'World Founder email' — if no World is registered for the domain, the tool uses the CALLER'S OWN Cloudflare account and says so in account_owner. Only pass founder_email to act on somebody else's World explicitly. Enabling routing makes Cloudflare write the MX and SPF records itself, so do NOT add them by hand. Idempotent: re-running reports what already existed instead of duplicating it. Read the returned blockers/mail_flows — a destination that has never clicked Cloudflare's verification link, or a zone where routing is not on, means mail does not flow yet. Requires the domain to already be a zone in that Cloudflare account (nameservers pointed at Cloudflare) and a stored token with Email Routing edit scope. Superadmin only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. \"hagal.no\". Must already be a zone in the founder's Cloudflare account." },
+        address: { type: 'string', description: 'Local part of the address to create. Defaults to "post" (giving post@<domain>).' },
+        forward_to: { type: 'string', description: "Inbox that mail is forwarded to. Defaults to the founder's own email." },
+        replace_existing_mx: { type: 'boolean', description: "Required only when the domain ALREADY delivers mail somewhere else. Enabling Cloudflare Email Routing replaces the zone's MX records, so any existing mailbox (a registrar's hosted mail, Google Workspace, …) stops receiving. The tool refuses and names the current MX hosts unless this is explicitly true. Never set it without the user confirming they want that mail service dropped." },
+        founder_email: { type: 'string', description: "Optional. Only for acting on somebody else's World. Leave it out for a domain in the caller's own account — do NOT ask the user for it, and never invent a World Founder registration as a precondition." }
+      },
+      required: ['domain']
+    }
+  },
+  // ── Billing (catalog-only) ────────────────────────────────────────
+  // These decide what is SOLD, never what it COSTS. Stripe products and prices are
+  // created by a human in the Stripe dashboard; the agent only chooses which existing
+  // price is sellable and how it is presented.
+  {
+    name: 'list_stripe_prices',
+    description: 'List the active prices that exist in the platform Stripe account, so you can see what is available to sell. Read-only — it never creates anything in Stripe. Each price reports a derived kind: "fixed" (one-time set amount), "custom_amount" (buyer types the amount, e.g. a donation) or "recurring" (a subscription, with its interval). Superadmin only.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_products',
+    description: 'List the products currently sellable on Vegvisr — the billing catalog. This is what a page can link a buy button to. Public information: no auth needed.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'set_product',
+    description: 'Make an existing Stripe price sellable, or update how it is presented. Upserts one row in the billing catalog — it does NOT create a Stripe product or price, and cannot change an amount. The kind (fixed/custom_amount/recurring) is derived from the Stripe price itself and a contradicting kind is refused, so a recurring price can never be sold in one-time mode. Use list_stripe_prices first to get a real price id. Superadmin only.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Catalog id — a readable slug like "prod_nine_supporter". This is what a page\'s buy button refers to, NOT the Stripe prod_... id.' },
+        name: { type: 'string', description: 'Display name shown to a buyer.' },
+        stripe_price_id: { type: 'string', description: 'An existing Stripe price id (price_...), from list_stripe_prices.' },
+        description: { type: 'string', description: 'Short description shown to a buyer.' },
+        price_nok: { type: 'number', description: 'Display-only amount in whole NOK. Defaults from the Stripe price. Never charged from.' },
+        grants: { type: 'string', description: 'Entitlement key a purchase should confer. Recorded on the order but not yet enforced anywhere.' },
+        active: { type: 'boolean', description: 'false removes it from the catalog without deleting history. Defaults true.' }
+      },
+      required: ['id', 'name', 'stripe_price_id']
+    }
+  },
+  {
+    name: 'list_orders',
+    description: 'List billing activity: one-time orders and supporter subscriptions. Status "pending" means a checkout was started, "paid"/"active" means the Stripe webhook confirmed it. Superadmin sees all buyers. Use this to answer "has anyone bought/donated yet".',
+    input_schema: { type: 'object', properties: {} }
+  },
 ]
 
 /**
@@ -3678,6 +3776,7 @@ const PROFF_TOOLS = [
     }
   }
 ]
+
 
 /**
  * Claude API native web search tool (server-side — no API key needed from us)

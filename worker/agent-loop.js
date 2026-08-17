@@ -101,6 +101,85 @@ function calculateCost(model, inputTokens, outputTokens) {
   return ((inputTokens / 1_000_000) * price.in) + ((outputTokens / 1_000_000) * price.out)
 }
 
+/**
+ * WRITE-AHEAD EVENT LOG — durability for the agent loop.
+ *
+ * Every model call and every tool run is recorded in STATS_DB.session_events
+ * *before* it is attempted, then settled with its outcome afterwards.
+ *
+ * WHY, given session_tools already exists: session_tools records what FINISHED.
+ * When the isolate dies mid-tool (CPU limit, eviction, an executor that never
+ * returns) nothing is written at all — the most interesting failures are exactly
+ * the invisible ones. A row written ahead of the attempt survives the crash with
+ * status='started', so the intent is recoverable and hung tools are queryable
+ * (see the queries at the bottom of schema-events.sql).
+ *
+ * Rules this helper enforces:
+ *  - begin() is AWAITED. A log written after the fact is not write-ahead.
+ *  - settle() is fire-and-forget. Nothing in the loop waits on an outcome write.
+ *  - Every failure is swallowed and logged. Telemetry must never break a run,
+ *    and a missing session_events table must not take the agent down — which is
+ *    why begin() degrades to a no-op handle instead of throwing.
+ *  - Payloads are clipped: tool inputs routinely carry whole HTML documents.
+ */
+const WAL_PAYLOAD_MAX = 2000
+
+function createEventLog(env, { sessionId, userId, log }) {
+  const db = env.STATS_DB || null
+  let seq = 0
+
+  const clip = (value) => {
+    if (value === undefined || value === null) return null
+    let s
+    try { s = typeof value === 'string' ? value : JSON.stringify(value) } catch { s = String(value) }
+    if (typeof s !== 'string') return null
+    return s.length > WAL_PAYLOAD_MAX ? `${s.slice(0, WAL_PAYLOAD_MAX)}… [clipped from ${s.length}]` : s
+  }
+
+  // Handle returned when the WAL is unavailable — callers never branch on it.
+  const NOOP_HANDLE = { settle: () => {} }
+
+  return {
+    /**
+     * Record the intent to run something, before running it. Awaited.
+     * @returns handle with settle(status, outcome); status ∈ ok | error | blocked
+     */
+    async begin(kind, name, payload) {
+      if (!db) return NOOP_HANDLE
+      const id = crypto.randomUUID()
+      const mySeq = ++seq
+      const started = Date.now()
+      try {
+        await db.prepare(
+          `INSERT INTO session_events (id, session_id, seq, turn, kind, name, payload, started_at, status, user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'started', ?)`
+        ).bind(
+          id, sessionId, mySeq,
+          payload && typeof payload.turn === 'number' ? payload.turn : null,
+          kind, name || null, clip(payload),
+          new Date(started).toISOString(), userId || null,
+        ).run()
+      } catch (e) {
+        log?.(`[wal] begin ${kind}:${name} failed (non-fatal): ${e.message}`)
+        return NOOP_HANDLE
+      }
+      return {
+        settle(status, outcome) {
+          try {
+            db.prepare(
+              `UPDATE session_events SET status = ?, ended_at = ?, duration_ms = ?, outcome = ? WHERE id = ?`
+            ).bind(status, new Date().toISOString(), Date.now() - started, clip(outcome), id)
+              .run()
+              .catch(e => log?.(`[wal] settle ${kind}:${name} failed (non-fatal): ${e.message}`))
+          } catch (e) {
+            log?.(`[wal] settle ${kind}:${name} threw (non-fatal): ${e.message}`)
+          }
+        },
+      }
+    },
+  }
+}
+
 const OPENAI_MODEL_PREFIX = 'openai/'
 const GROK_MODEL_PREFIX = 'grok/'
 const OPENAI_AGENT_TOOL_NAMES = [
@@ -111,8 +190,9 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // References and HTML node work
   'get_contract', 'get_formatting_reference', 'get_node_types_reference',
   'get_html_builder_reference', 'get_vemotion_reference', 'get_carousel_reference',
-  'read_html_section', 'read_html_head', 'list_html_anchors',
+  'read_html_section', 'read_html_head', 'list_html_anchors', 'list_html_text',
   'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
+  'translate_html_node',
   // publish's prerequisite must ride along — a loop with publish but no create_subdomain
   // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
   'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',
@@ -171,6 +251,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
+  'translate_html_node',
   'restore_html_node_version', 'restore_graph_version', 'patch_node_metadata', 'remove_node',
   'create_html_from_template', 'save_component', 'save_layout',
   'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
@@ -185,6 +266,11 @@ export const SEQUENTIAL_TOOLS = new Set([
   'delegate_to_html_builder', 'delegate_to_kg', 'delegate_to_chat', 'delegate_to_bot',
   'delegate_to_agent_builder', 'delegate_to_video', 'delegate_to_contact', 'delegate_to_youtube_graph',
   'delegate_to_meeting_graph',
+  // Both confirmed writers by reading the executors (2026-08-13), not by trusting the test:
+  // migrate_app_markers loops patchNodeWithVersionRetry over every app-catalog node, and
+  // run_cloudflare_selftest saveGraphWithHistory's its whole fixed report graph with
+  // override:true — two concurrent runs of the latter overwrite each other wholesale.
+  'migrate_app_markers', 'run_cloudflare_selftest',
 ])
 
 function isOpenAIModel(model) {
@@ -664,6 +750,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`[${provider.name}-agent-loop +${elapsed}s] ${msg}`)
   }
+  const wal = createEventLog(env, { sessionId, userId, log })
 
   try {
     if (!provider.binding) throw new Error(`${provider.bindingName} service binding is not configured.`)
@@ -700,6 +787,17 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         [provider.maxTokenField]: 4096,
       }
 
+      // Write-ahead: the intent to call the model lands before the call is made,
+      // so a turn that never returns is still visible as status='started'.
+      const modelEvent = await wal.begin('model_call', selectedModel, {
+        turn,
+        provider: provider.name,
+        providerModel,
+        messages: openAIMessages.length,
+        tools: openAITools.length,
+        mode: planMode ? 'plan' : 'auto',
+      })
+
       const response = await provider.binding.fetch(provider.url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -707,6 +805,14 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       })
 
       const data = await response.json().catch(() => ({}))
+      modelEvent.settle(response.ok ? 'ok' : 'error', response.ok
+        ? {
+            finish_reason: data.choices?.[0]?.finish_reason ?? null,
+            tool_calls: (data.choices?.[0]?.message?.tool_calls || []).length,
+            prompt_tokens: data.usage?.prompt_tokens ?? data.usage?.input_tokens ?? null,
+            completion_tokens: data.usage?.completion_tokens ?? data.usage?.output_tokens ?? null,
+          }
+        : { status: response.status, error: data.error ?? null })
       if (data.usage) {
         stats.inputTokens += data.usage.prompt_tokens || data.usage.input_tokens || 0
         stats.outputTokens += data.usage.completion_tokens || data.usage.output_tokens || 0
@@ -748,8 +854,14 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         const input = parseOpenAIToolArgs(functionCall.arguments)
         stats.toolCalls.push(toolName)
 
+        // Write-ahead: the model's PROPOSED call is logged before any gate runs, so
+        // blocked intent is on the record too (a gate that fires unexpectedly is a
+        // failure mode worth seeing).
+        const toolEvent = await wal.begin('tool_call', toolName, { turn, input })
+
         if (!openAIAllowedTools.has(toolName)) {
           const message = `The OpenAI AgentChat path did not expose "${toolName}" in this request. Available OpenAI tools include: ${Array.from(openAIAllowedTools).slice(0, 40).join(', ')}${openAIAllowedTools.size > 40 ? ', ...' : ''}.`
+          toolEvent.settle('blocked', `not exposed on the ${provider.name} path`)
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
           continue
@@ -757,6 +869,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
         if (planMode && !READ_ONLY_TOOLS.has(toolName)) {
           const message = `PLAN MODE is active (read-only). The "${toolName}" tool was not executed. Present a concise plan instead.`
+          toolEvent.settle('blocked', 'Plan mode (read-only)')
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: 'Blocked — Plan mode (read-only).' })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ blocked: true, planMode: true, message }) })
           continue
@@ -775,6 +888,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         if (requiresNewGraph && !createdGraphId && GRAPH_WRITE_TOOLS.has(toolName) && (!input.graphId || input.graphId === contextGraphId)) {
           const message = `This request is to create a NEW graph, but "${toolName}" would modify the current context graph${contextGraphId ? ` (${contextGraphId})` : ''}. Call create_graph FIRST — it returns a new graphId — then use THAT id for create_node / add_edge / patch_node. Do NOT patch or add to the context graph.`
           log(`blocked ${toolName} on context graph before create_graph (explicit new-graph intent)`)
+          toolEvent.settle('blocked', 'would mutate the context graph before create_graph ran')
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
           continue
@@ -804,6 +918,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
               : (toolFailed && typeof result.error === 'string' && result.error.trim())
                 ? result.error
                 : `${toolName} ${toolFailed ? 'failed' : 'completed'}`
+
+          toolEvent.settle(toolFailed ? 'error' : 'ok', summary)
 
           if (env.STATS_DB) {
             const toolDuration = Date.now() - toolStart
@@ -849,6 +965,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: truncateResult(resultForOpenAI) })
         } catch (error) {
           const toolDuration = Date.now() - toolStart
+          toolEvent.settle('error', error.message)
           if (env.STATS_DB) {
             env.STATS_DB.prepare(
               `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at, model)
@@ -932,6 +1049,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`[agent-loop +${elapsed}s] ${msg}`)
   }
+  const wal = createEventLog(env, { sessionId, userId, log })
 
   let { allTools, operationMap } = await loadAllTools(env)
 
@@ -1032,6 +1150,17 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         }
       }
 
+      // Write-ahead: the intent to call the model lands before the call is made, so a
+      // turn that never returns (isolate death, upstream hang) is still visible as
+      // status='started'. Message BODIES are deliberately not logged — count only.
+      const modelEvent = await wal.begin('model_call', model, {
+        turn,
+        messages: cappedMessages.length,
+        tools: allTools.length,
+        maxTokens: 16384,
+        mode: planMode ? 'plan' : 'auto',
+      })
+
       const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1048,6 +1177,14 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       })
 
       const data = await response.json()
+      modelEvent.settle(response.ok ? 'ok' : 'error', response.ok
+        ? {
+            stop_reason: data.stop_reason ?? null,
+            blocks: (data.content || []).length,
+            input_tokens: data.usage?.input_tokens ?? null,
+            output_tokens: data.usage?.output_tokens ?? null,
+          }
+        : { status: response.status, error: data.error ?? null })
       log(`turn ${turn} response: status=${response.status} stop_reason=${data.stop_reason} content_blocks=${(data.content||[]).length}`)
 
       // Accumulate token usage across turns
@@ -1168,6 +1305,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             return `${m.role}: ${content.slice(0, 300)}`
           }).join('\n')
 
+          // The suggestions call is a real model call and a real token spend — it belongs
+          // in the log like any other, so a session's cost reconciles against its events.
+          const suggestEvent = await wal.begin('model_call', MODELS.HAIKU, { turn, purpose: 'suggestions' })
           const suggestRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1183,6 +1323,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               temperature: 0.7,
             }),
           })
+
+          suggestEvent.settle(suggestRes.ok ? 'ok' : 'error', { status: suggestRes.status })
 
           if (suggestRes.ok) {
             const suggestData = await suggestRes.json()
@@ -1239,11 +1381,18 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         ])
 
         const executeAndStream = async (toolUse) => {
+          // Write-ahead: the model's PROPOSED call is logged before any gate runs and
+          // before the input is rewritten by the auto-injection below — the record is
+          // what the model asked for, which is what you need when diagnosing a run.
+          // Blocked intent is logged too: a gate firing unexpectedly is a failure mode.
+          const toolEvent = await wal.begin('tool_call', toolUse.name, { turn, input: toolUse.input })
+
           // PLAN MODE gate — fail-closed. Block anything not on the read-only allowlist.
           // The tool never runs; the model is told to propose a plan and stop.
           if (planMode && !READ_ONLY_TOOLS.has(toolUse.name)) {
             const message = `PLAN MODE is active (read-only). The "${toolUse.name}" tool makes changes and was NOT executed. Do not retry it or any other write/create/modify/generate/delegate tool. Instead, present a concise step-by-step PLAN of exactly what you would do — which tools, in what order, on which graph/nodes/data — and then STOP and wait. The user will switch to Auto mode to approve and run it.`
             log(`PLAN MODE blocked ${toolUse.name}`)
+            toolEvent.settle('blocked', 'Plan mode (read-only)')
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: 'Blocked — Plan mode (read-only). Proposed, not executed.' })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ blocked: true, planMode: true, message }) }
           }
@@ -1256,6 +1405,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           ) {
             const message = 'This request is to create a new graph. Call create_graph first, then create_node/add_edge as needed. Do not search existing graphs first.'
             log(`blocked ${toolUse.name} before create_graph for explicit create request`)
+            toolEvent.settle('blocked', 'graph discovery before create_graph on an explicit create request')
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: message })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: message }) }
           }
@@ -1335,6 +1485,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const resultLen = JSON.stringify(result).length
             const toolDuration = Date.now() - toolStart
             log(`${toolUse.name} ${toolFailed ? 'returned FAILURE' : 'OK'} (${(toolDuration / 1000).toFixed(1)}s, ${resultLen} chars)`)
+            toolEvent.settle(toolFailed ? 'error' : 'ok', summary)
 
             // Roll subagent tokens into parent session totals
             if (result.inputTokens) stats.inputTokens += result.inputTokens
@@ -1375,7 +1526,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               'edit_html_node', 'replace_html_section', 'append_to_section',
               'insert_html_at', 'insert_in_element', 'move_html_element',
               'remove_html_element', 'apply_layout', 'fill_slot_with_component',
-              'bind_node_text', 'delegate_to_html_builder',
+              'bind_node_text', 'translate_html_node', 'delegate_to_html_builder',
             ])
             if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
@@ -1406,6 +1557,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           } catch (error) {
             const toolDuration = Date.now() - toolStart
             log(`${toolUse.name} FAILED (${(toolDuration / 1000).toFixed(1)}s): ${error.message}`)
+            toolEvent.settle('error', error.message)
             if (env.STATS_DB) {
               env.STATS_DB.prepare(
                 `INSERT INTO session_tools (id, session_id, tool_name, subagent, success, duration_ms, occurred_at, model)
@@ -1535,6 +1687,17 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
   const executionLog = []
   let turn = 0
   const maxTurns = agentConfig.max_turns || 5
+  const model = agentConfig.model || DEFAULT_MODEL
+
+  // The in-memory executionLog above is returned to the caller and dies with the
+  // request. The WAL is the durable half: /execute runs unattended (cron, automation),
+  // so when one dies mid-tool the session_events rows are the only surviving trace.
+  const sessionId = crypto.randomUUID()
+  const wal = createEventLog(env, {
+    sessionId,
+    userId,
+    log: (m) => console.log(`[execute-agent] ${m}`),
+  })
 
   while (turn < maxTurns) {
     turn++
@@ -1545,6 +1708,14 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       timestamp: new Date().toISOString()
     })
 
+    const modelEvent = await wal.begin('model_call', model, {
+      turn,
+      messages: messages.length,
+      tools: allTools.length,
+      maxTokens: agentConfig.max_tokens || 4096,
+      agentId: agentConfig.id || null,
+    })
+
     const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1552,7 +1723,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         userId: userId,
         apiKey: env.ANTHROPIC_API_KEY || undefined,
         messages: messages,
-        model: agentConfig.model || DEFAULT_MODEL,
+        model,
         max_tokens: agentConfig.max_tokens || 4096,
         temperature: agentConfig.temperature ?? 0.3,
         system: agentConfig.system_prompt,
@@ -1561,6 +1732,14 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
     })
 
     const data = await response.json()
+    modelEvent.settle(response.ok ? 'ok' : 'error', response.ok
+      ? {
+          stop_reason: data.stop_reason ?? null,
+          blocks: (data.content || []).length,
+          input_tokens: data.usage?.input_tokens ?? null,
+          output_tokens: data.usage?.output_tokens ?? null,
+        }
+      : { status: response.status, error: data.error ?? null })
 
     if (!response.ok) {
       executionLog.push({
@@ -1680,6 +1859,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       // Phase 1: Run graph-mutating tools sequentially (one at a time)
       const sequentialResults = []
       for (const toolUse of sequentialTools) {
+        const toolEvent = await wal.begin('tool_call', toolUse.name, { turn, input: toolUse.input })
         const GRAPH_DISCOVERY_TOOLS = new Set(['search_graphs', 'list_graphs'])
         if (
           requiresCreateGraph
@@ -1687,6 +1867,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
           && GRAPH_DISCOVERY_TOOLS.has(toolUse.name)
         ) {
           const message = 'This request is to create a new graph. Call create_graph first, then create_node/add_edge as needed. Do not search existing graphs first.'
+          toolEvent.settle('blocked', 'graph discovery before create_graph on an explicit create request')
           executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: message, timestamp: new Date().toISOString() })
           sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: message }) })
           continue
@@ -1701,9 +1882,12 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
           if (result?.graphId) {
             inferredGraphId = result.graphId
           }
-          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !(result && result.success === false), result, timestamp: new Date().toISOString() })
+          const toolFailed = !!(result && result.success === false)
+          toolEvent.settle(toolFailed ? 'error' : 'ok', result?.message || result?.summary || result?.error || `${toolUse.name} ${toolFailed ? 'failed' : 'completed'}`)
+          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !toolFailed, result, timestamp: new Date().toISOString() })
           sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) })
         } catch (error) {
+          toolEvent.settle('error', error.message)
           executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
           sequentialResults.push({ type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) })
         }
@@ -1711,11 +1895,15 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
 
       // Phase 2: Run non-mutating tools in parallel
       const parallelResults = await Promise.all(parallelTools.map(async (toolUse) => {
+        const toolEvent = await wal.begin('tool_call', toolUse.name, { turn, input: toolUse.input })
         try {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
-          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !(result && result.success === false), result, timestamp: new Date().toISOString() })
+          const toolFailed = !!(result && result.success === false)
+          toolEvent.settle(toolFailed ? 'error' : 'ok', result?.message || result?.summary || result?.error || `${toolUse.name} ${toolFailed ? 'failed' : 'completed'}`)
+          executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !toolFailed, result, timestamp: new Date().toISOString() })
           return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result) }
         } catch (error) {
+          toolEvent.settle('error', error.message)
           executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: error.message, timestamp: new Date().toISOString() })
           return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
         }
@@ -1781,6 +1969,8 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
   return {
     success: turn < maxTurns,
     turns: turn,
+    // Correlates this run with its durable session_events rows.
+    sessionId,
     executionLog: executionLog
   }
 }

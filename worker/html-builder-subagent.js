@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { detectTranslationGap } from './html-i18n.js'
 import { DEFAULT_MODEL } from './models.js'
 
 // ---------------------------------------------------------------------------
@@ -657,6 +658,11 @@ const SUBAGENT_TOOL_NAMES = new Set([
   // lets it see the whole node to find the existing function to modify; append_to_section adds
   // loss-proof inside an anchor; read_html_head gives styling context cheaply.
   'read_node', 'append_to_section', 'read_html_head',
+  // Translation: the ONLY correct way to build a language switcher. list_html_text hands
+  // over the page's real strings with ids; translate_html_node writes the one managed
+  // dictionary block. Hand-writing a `translations` object is what shipped a page where
+  // 3 of 49 keys matched (2026-08-13) — and a second one on top of it, a SyntaxError.
+  'list_html_text', 'translate_html_node',
   // One-shot, deterministic whole-page layout conversion (insert verified skeleton + move
   // existing sections into slots) — restructuring by hand overran the turn budget every time.
   'apply_layout',
@@ -838,6 +844,13 @@ function detectFunctionalGaps(html) {
   if (iconLink && !/class=["'][^"']*material-(symbols|icons)/i.test(h)) {
     gaps.push('Material Icons/Symbols stylesheet is LOADED but no element uses it (no `class="material-symbols-outlined"`/`material-icons` glyph). Add the icon spans, or the icons will not show.')
   }
+
+  // 4. Language switcher present but its dictionary does not match the page's own text —
+  //    the "kun tittelen endres" failure (2026-08-13). Source-level heuristic; it forces a
+  //    fix before end_turn, it does not certify that switching works.
+  const translationGap = detectTranslationGap(h)
+  if (translationGap) gaps.push(translationGap)
+
   return gaps
 }
 

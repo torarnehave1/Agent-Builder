@@ -10,6 +10,10 @@ import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache 
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE } from './system-prompt.js'
 import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure } from './html-builder-subagent.js'
+import {
+  extractTranslatableStrings, normText, buildI18nBlock, readI18nConfig, stripI18nBlocks,
+  findLegacyTranslationScripts, removeLegacyTranslationScripts,
+} from './html-i18n.js'
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
@@ -652,6 +656,206 @@ async function executeReadHtmlHead(input, env) {
     hasThemeToggle: /data-theme|prefers-color-scheme|light-theme|toggleTheme/i.test(html),
     fullNodeChars: html.length,
     message: `Styling context for "${input.nodeId}" (${Object.keys(cssVariables).length} CSS vars, ${styleBlocks.length} <style> block(s), ${links.length} <link>(s)) — ${styleText.length} style chars vs ${html.length} full-node chars. Use these variables/selectors to write MATCHING theme/font CSS, then insert_html_at. Do NOT read_node.`,
+  }
+}
+
+// Every translatable string that is actually IN the node, with an id per string.
+// This exists because the model cannot be trusted to reproduce a page's source text from
+// memory: asked to translate ravner.vegvisr.org it hand-wrote 49 Norwegian keys of which
+// 3 occurred on the page, so clicking ENG changed the heading and nothing else. The model
+// must never retype a source string — it reads them here and translates BY ID.
+async function executeListHtmlText(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `list_html_text only works on html-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const html = (node.info || '').replace(/\r\n/g, '\n')
+  const extracted = extractTranslatableStrings(html, { includeScripts: input.includeScripts !== false })
+
+  const source = String(input.source || 'all').toLowerCase()
+  let strings = extracted.strings
+  if (source === 'markup' || source === 'script') strings = strings.filter(s => s.source === source)
+
+  // Page rather than truncate — a silent cut here reads as "that is all the text there is",
+  // which is exactly how a half-translated page ships.
+  const offset = Math.max(0, Number(input.offset) || 0)
+  const limit = Math.min(Math.max(1, Number(input.limit) || 250), 500)
+  const page = strings.slice(offset, offset + limit)
+  const more = offset + page.length < strings.length
+
+  const existing = readI18nConfig(html)
+  const installedLangs = existing ? Object.keys(existing.langs) : []
+  const covered = existing
+    ? new Set(Object.values(existing.langs).flatMap(d => Object.keys(d || {})))
+    : new Set()
+  const remaining = strings.filter(s => !covered.has(s.text)).length
+
+  const toggle = extracted.languageToggle
+  const toggleNote = toggle.found
+    ? `The page's own language buttons use ${toggle.selector} with values: ${toggle.values.map(v => `"${v}"`).join(', ')} — pass one of those EXACT values as translate_html_node's \`lang\` (and the source language as \`base\`), or no button will ever select your dictionary.`
+    : `This page has no language buttons yet (no ${toggle.selector} with two values). Add them first with insert_in_element/insert_html_at — e.g. <button data-lang="no">NO</button><button data-lang="en">ENG</button> — then translate.`
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    total: strings.length,
+    offset,
+    returned: page.length,
+    hasMore: more,
+    markupCount: extracted.markupCount,
+    scriptCount: extracted.scriptCount,
+    languageToggle: toggle,
+    installedLanguages: installedLangs,
+    untranslatedCount: remaining,
+    strings: page,
+    nextStep: 'translate_html_node',
+    message: `${strings.length} translatable string(s) in "${input.nodeId}" (${extracted.markupCount} in the markup, ${extracted.scriptCount} in script literals the page renders at runtime); showing ${page.length} from offset ${offset}${more ? ` — ${strings.length - offset - page.length} MORE not shown, call again with offset=${offset + page.length}` : ''}. ${toggleNote} Translate with translate_html_node passing { id, text } per string — send the ID, never retype the source string. ${installedLangs.length ? `Already installed: ${installedLangs.join(', ')} (${remaining} string(s) still untranslated).` : 'No dictionary installed yet.'}`,
+  }
+}
+
+// Install/extend the page's translation dictionary as ONE managed, replaceable block.
+// Entries are resolved back to strings that provably occur in the node — an entry whose
+// source text is not on the page is REFUSED, not written, which is the mechanical end of
+// the fabricated-key failure. Re-running replaces the block instead of stacking a second
+// one (the earlier hand-written attempt died on "Identifier 'translations' has already
+// been declared" precisely because nothing owned the block).
+async function executeTranslateHtmlNode(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const lang = String(input.lang || '').trim()
+  if (!/^[a-z]{2,8}(-[A-Za-z0-9]{2,8})?$/.test(lang)) {
+    return { success: false, error: 'lang is required and must be a language code such as "en", "no", "de", "en-GB". Use the EXACT value the page\'s language buttons carry (list_html_text reports them).' }
+  }
+  const entries = Array.isArray(input.entries) ? input.entries : null
+  if (!entries || entries.length === 0) {
+    return { success: false, error: 'entries is required: an array of { id, text } from list_html_text (id = the string id, text = its translation). Call list_html_text first.' }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `translate_html_node only works on html-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+
+  // Resolve ids against the node AS IT IS NOW, so a stale id can never silently write a
+  // translation onto the wrong string.
+  const extracted = extractTranslatableStrings(currentHtml)
+  const byId = new Map(extracted.strings.map(s => [s.id, s.text]))
+  const pageText = new Set(extracted.strings.map(s => s.text))
+
+  const existing = readI18nConfig(currentHtml)
+  const base = String(input.base || existing?.base || 'no').trim()
+  if (base === lang) {
+    return { success: false, error: `lang ("${lang}") and base ("${base}") are the same language — nothing to translate. base is the language the page is WRITTEN in; lang is the one you are adding.` }
+  }
+  const selector = String(input.buttonSelector || existing?.selector || extracted.languageToggle.selector || '[data-lang]')
+
+  const mode = String(input.mode || 'merge').toLowerCase()
+  const langs = { ...(existing?.langs || {}) }
+  const dict = mode === 'replace' ? {} : { ...(langs[lang] || {}) }
+
+  const applied = []
+  const rejected = []
+  for (const entry of entries) {
+    const translation = normText(entry?.text ?? entry?.translation ?? '')
+    const rawId = entry?.id != null ? String(entry.id).trim() : ''
+    const rawSource = entry?.source != null ? normText(entry.source) : ''
+    let sourceText = ''
+    if (rawId) {
+      sourceText = byId.get(rawId) || ''
+      if (!sourceText) { rejected.push({ id: rawId, reason: `no string with id "${rawId}" in this node — the node changed since list_html_text; list again and use the fresh ids` }); continue }
+    } else if (rawSource) {
+      // An explicit source string is allowed, but ONLY if it really occurs on the page.
+      if (!pageText.has(rawSource)) { rejected.push({ source: rawSource, reason: 'this text does not occur anywhere in the node — it was not read from the page. Use list_html_text and pass ids' }); continue }
+      sourceText = rawSource
+    } else {
+      rejected.push({ reason: 'entry needs an id (from list_html_text) or a source string' }); continue
+    }
+    if (!translation) { rejected.push({ id: rawId || undefined, source: sourceText, reason: 'empty translation' }); continue }
+    if (translation === sourceText) { rejected.push({ id: rawId || undefined, source: sourceText, reason: 'translation is identical to the source — skipped' }); continue }
+    dict[sourceText] = translation
+    applied.push({ id: rawId || undefined, source: sourceText, text: translation })
+  }
+
+  if (!Object.keys(dict).length) {
+    return {
+      success: false,
+      error: `No entry could be applied — nothing written. ${rejected.length} rejected: ${rejected.slice(0, 5).map(r => `${r.id || `"${(r.source || '').slice(0, 40)}"`}: ${r.reason}`).join('; ')}${rejected.length > 5 ? `; …${rejected.length - 5} more` : ''}. Call list_html_text on this node and translate the ids it returns.`,
+      rejected,
+    }
+  }
+  langs[lang] = dict
+
+  // One managed block: strip any previous one (its dictionaries are already merged above)
+  // and, unless told otherwise, the hand-rolled switcher this tool replaces.
+  let working = stripI18nBlocks(currentHtml).html
+  let legacyRemoved = 0
+  let legacyChars = 0
+  const legacyFound = findLegacyTranslationScripts(working).length
+  if (legacyFound && input.removeLegacy !== false) {
+    const cleaned = removeLegacyTranslationScripts(working)
+    working = cleaned.html
+    legacyRemoved = cleaned.removed
+    legacyChars = cleaned.chars
+  }
+
+  const block = buildI18nBlock({ base, selector, langs })
+  const masked = working
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, m => '<script>' + ' '.repeat(m.length - 17) + '</script>')
+    .replace(/<!--[\s\S]*?-->/g, m => ' '.repeat(m.length))
+  const idx = masked.lastIndexOf('</body>')
+  if (idx === -1) {
+    return { success: false, error: `Could not find "</body>" in "${input.nodeId}" — this page may be an HTML fragment. Wrap it in a full document before translating.` }
+  }
+  const newHtml = `${working.slice(0, idx)}\n${block}\n${working.slice(idx)}`
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: newHtml,
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email || null,
+  })
+
+  const dictSize = Object.keys(dict).length
+  const coverage = extracted.strings.length ? Math.round((dictSize / extracted.strings.length) * 100) : 0
+  const untranslated = extracted.strings.filter(s => !dict[s.text])
+  const toggleWarning = extracted.languageToggle.found && !extracted.languageToggle.values.includes(lang)
+    ? ` WARNING: the page's language buttons carry ${extracted.languageToggle.values.map(v => `"${v}"`).join(', ')} — none of them is "${lang}", so no button on the page can select this dictionary. Either translate under one of those values or change the button's data-lang.`
+    : ''
+  const legacyNote = legacyRemoved
+    ? ` Removed ${legacyRemoved} hand-written translation script(s) (${legacyChars} chars) that would have fought this one.`
+    : ''
+
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    lang,
+    base,
+    buttonSelector: selector,
+    applied: applied.length,
+    appliedEntries: applied.slice(0, 40),
+    rejected,
+    dictionarySize: dictSize,
+    pageStringCount: extracted.strings.length,
+    coveragePercent: coverage,
+    untranslatedCount: untranslated.length,
+    untranslatedSample: untranslated.slice(0, 15).map(s => ({ id: s.id, text: s.text.slice(0, 90) })),
+    languages: Object.keys(langs),
+    legacyScriptsRemoved: legacyRemoved,
+    changed: true,
+    charDelta: newHtml.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: newHtml,
+    savedNotLive: true,
+    publishHostHints: Array.isArray(node.references) ? node.references : [],
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}") AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
+    message: `"${lang}" dictionary now covers ${dictSize} of ${extracted.strings.length} strings (${coverage}%) in "${input.nodeId}" — saved as v${patchData.newVersion}.${rejected.length ? ` ${rejected.length} entry/entries REJECTED (not written): ${rejected.slice(0, 3).map(r => `${r.id || 'entry'} — ${r.reason}`).join('; ')}.` : ''}${legacyNote}${toggleWarning} ${untranslated.length ? `${untranslated.length} string(s) are still untranslated, so those stay in ${base} when the user switches — call list_html_text again and translate the rest, or tell the user exactly what is left.` : 'Every string on the page is translated.'} Verify by opening the page and clicking the "${lang}" button.`,
   }
 }
 
@@ -3483,6 +3687,17 @@ async function resolveWorldInfraContext(input, env) {
     if (!founderEmail) founderEmail = String((wf && wf.founder_email) || '').toLowerCase()
     wfAccount = String((wf && wf.cf_account_id) || '').trim()
   }
+  // No World registered for this domain and no founder named. Fall back to the CALLER'S OWN
+  // Cloudflare account: they are already proven Superadmin above, and the common case is the
+  // platform owner setting up a domain in their own account that is not (yet) somebody else's
+  // World. Requiring a world_founders row first was a made-up precondition — hagal.no hit it on
+  // 2026-08-17 and the agent asked for a "World Founder email" that does not exist. This branch
+  // only rescues a path that previously hard-failed, so no working caller changes behaviour.
+  let selfServed = false
+  if (!founderEmail) {
+    founderEmail = String((callerProfile && callerProfile.email) || '').toLowerCase()
+    selfServed = true
+  }
   if (!founderEmail) return { error: 'founder_email (or a domain with a registered founder) is required' }
 
   const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
@@ -3492,7 +3707,7 @@ async function resolveWorldInfraContext(input, env) {
   const cfToken = row && row.cf_api_token
   if (!cfAccount) return { error: `No cf_account_id for ${founderEmail} — run set_world_credentials first.` }
   if (!cfToken) return { error: `No cf_api_token stored for ${founderEmail} — run set_world_credentials first.` }
-  return { founderEmail, cfAccount, cfToken, domain }
+  return { founderEmail, cfAccount, cfToken, domain, selfServed }
 }
 
 const cfApi = async (path, token, init = {}) => {
@@ -11102,6 +11317,281 @@ async function executeGenerateAppShowcase(input, env) {
   }
 }
 
+// Give a World a working inbox: post@<domain> via Cloudflare Email Routing, in the founder's
+// OWN Cloudflare account. This is the routine that was previously five manual dashboard steps
+// — the same gap provision_world_kv closed for KV (Lesson 44).
+//
+// Contracts read from developers.cloudflare.com, not from memory:
+//   POST /zones/{zone}/email/routing/enable            {}
+//   POST /accounts/{acct}/email/routing/addresses      { email }
+//   POST /zones/{zone}/email/routing/rules             { actions:[{type:'forward',value:[…]}],
+//                                                        matchers:[{type:'literal',field:'to',value:…}],
+//                                                        enabled, name }
+//
+// Enabling routing makes Cloudflare write the MX/SPF records itself — do NOT add them by hand.
+// The ONE step that cannot be automated: Cloudflare emails the destination a verification link
+// and a human must click it. That is deliberate — otherwise a system could silently forward a
+// domain's mail anywhere. Mail only flows after the click.
+async function executeProvisionWorldEmail(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { founderEmail, cfAccount, cfToken, domain, selfServed } = ctx
+  if (!cfToken) return { success: false, error: `No Cloudflare token stored for ${founderEmail} — run set_world_credentials first.` }
+
+  const local = String(input.address || 'post').trim().replace(/@.*$/, '')
+  const forwardTo = String(input.forward_to || founderEmail).trim().toLowerCase()
+  const address = `${local}@${domain}`
+
+  // 1. Zone id for the domain.
+  const zr = await cfApi(`/zones?name=${encodeURIComponent(domain)}`, cfToken)
+  const zone = zr.ok && zr.json.result && zr.json.result[0]
+  if (!zone) {
+    return { success: false, error: `Zone ${domain} not found in account ${cfAccount} (${zr.status}): ${zr.error || 'add the domain to Cloudflare and point its nameservers there first'}` }
+  }
+  const zoneId = zone.id
+
+  // 2. GUARD: enabling Email Routing makes Cloudflare REPLACE the zone's MX records. If the domain
+  // already has mail somewhere else (a registrar's hosted mailbox, Google Workspace, …), turning
+  // routing on silently kills it. Found live on hagal.no 2026-08-17, whose MX pointed at
+  // mx1.no1.essentialhosting.net. Refuse unless the caller says so explicitly.
+  let existingMx = []
+  let cloudflareMx = []
+  const dns = await cfApi(`/zones/${zoneId}/dns_records?type=MX&per_page=50`, cfToken)
+  if (dns.ok) {
+    const all = (dns.json.result || []).map((r) => String(r.content || '')).filter(Boolean)
+    const isCf = (c) => /\.mx\.cloudflare\.net\.?$/i.test(c)
+    cloudflareMx = all.filter(isCf)
+    existingMx = all.filter((c) => !isCf(c))
+  }
+  if (existingMx.length && !input.replace_existing_mx) {
+    return {
+      success: false,
+      error: `${domain} already delivers mail elsewhere — MX points to ${existingMx.join(', ')}. Enabling Cloudflare Email Routing REPLACES these records and that mail stops arriving. Re-run with replace_existing_mx: true if that is intended.`,
+      existing_mx: existingMx,
+    }
+  }
+
+  // 3. Enable Email Routing. The status/settings endpoints (/email/routing, /dns, /enable) are NOT
+  // covered by the "Email Routing Rules" permission — that grant only reaches /rules*. So a token
+  // can legitimately be able to write rules while being unable to read status or flip the switch
+  // (verified against hagal.no 2026-08-17). Treat a denied status read as UNKNOWN rather than
+  // fatal, and never fail the whole run on it — the rule step below reports the real outcome.
+  //
+  // When the status read is denied, do NOT report "not enabled" — that is a false alarm dressed up
+  // as a blocker, and on hagal.no 2026-08-17 it told the user to go click something that was
+  // already done. Fall back to the observable fact the token CAN read: Cloudflare implements
+  // "Email Routing is on" by owning the zone's MX records. MX pointing at *.mx.cloudflare.net is
+  // the mechanism itself, not a proxy for it.
+  const status = await cfApi(`/zones/${zoneId}/email/routing`, cfToken)
+  const statusKnown = !!(status.ok && status.json.result)
+  const mxSaysOn = cloudflareMx.length > 0
+  const alreadyEnabled = statusKnown ? !!status.json.result.enabled : mxSaysOn
+  let enabled = statusKnown
+    ? { ok: alreadyEnabled, already: alreadyEnabled, known: true, source: 'status endpoint' }
+    : mxSaysOn
+      ? { ok: true, already: true, known: true, source: 'MX records', note: `Status endpoint not readable with this token, but the zone's MX point to Cloudflare (${cloudflareMx.join(', ')}) — which is how Email Routing is switched on.` }
+      : { ok: false, known: false, source: 'none', note: 'Status endpoint not readable with this token (the Email Routing Rules permission reaches /rules* only, not the settings endpoints) and no Cloudflare MX records found.' }
+  if (!alreadyEnabled) {
+    const en = await cfApi(`/zones/${zoneId}/email/routing/enable`, cfToken, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    enabled = en.ok
+      ? { ok: true, already: false, known: true, note: 'Email Routing enabled — Cloudflare wrote the MX and SPF records itself.' }
+      : { ok: false, known: statusKnown, error: `${en.status}: ${en.error || 'unknown'}`, note: `Could not enable Email Routing via API. Turn it on once by hand: Cloudflare dashboard -> ${domain} -> Email -> Email Routing -> Enable. Everything after that step is automated.` }
+  }
+
+  // 4. Destination address (account-level). Idempotent: list first.
+  const dl = await cfApi(`/accounts/${cfAccount}/email/routing/addresses?per_page=100`, cfToken)
+  let dest = dl.ok && (dl.json.result || []).find((d) => String(d.email).toLowerCase() === forwardTo)
+  let destinationCreated = false
+  if (!dest) {
+    const dc = await cfApi(`/accounts/${cfAccount}/email/routing/addresses`, cfToken, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: forwardTo }),
+    })
+    if (!dc.ok) return { success: false, error: `Could not register destination ${forwardTo} (${dc.status}): ${dc.error || 'unknown'}` }
+    dest = dc.json.result
+    destinationCreated = true
+  }
+  const destVerified = !!(dest && dest.verified)
+
+  // 5. Routing rule. Idempotent: skip if a rule already matches this address.
+  const rl = await cfApi(`/zones/${zoneId}/email/routing/rules?per_page=100`, cfToken)
+  const existingRule = rl.ok && (rl.json.result || []).find((r) =>
+    (r.matchers || []).some((m) => String(m.value).toLowerCase() === address.toLowerCase()))
+  let rule = existingRule ? { ok: true, already: true, id: existingRule.id } : null
+  if (!rule) {
+    const rc = await cfApi(`/zones/${zoneId}/email/routing/rules`, cfToken, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        actions: [{ type: 'forward', value: [forwardTo] }],
+        matchers: [{ type: 'literal', field: 'to', value: address }],
+        enabled: true,
+        name: `${address} -> ${forwardTo}`,
+      }),
+    })
+    if (!rc.ok) return { success: false, error: `Could not create routing rule for ${address} (${rc.status}): ${rc.error || 'unknown'}` }
+    rule = { ok: true, already: false, id: rc.json.result && rc.json.result.id }
+  }
+
+  // Two things can still hold mail back, and they are different: the destination not yet verified
+  // by a human click, and Email Routing not switched on for the zone. Name whichever applies —
+  // reporting "done" while either is open would be a lie the user only discovers by losing mail.
+  const blockers = []
+  if (!enabled.ok) blockers.push(`Email Routing is not confirmed ON for ${domain}. ${enabled.note || ''}`.trim())
+  if (!destVerified) blockers.push(`${forwardTo} has not clicked Cloudflare's verification link yet (check that inbox and its spam folder).`)
+
+  return {
+    success: true,
+    domain,
+    address,
+    forward_to: forwardTo,
+    zone_id: zoneId,
+    cf_account: cfAccount,
+    // Say WHOSE Cloudflare account was used. When no World is registered for the domain this falls
+    // back to the caller's own account — correct, but it must never be silent.
+    account_owner: selfServed ? `${founderEmail} (caller's own account — no World Founder registered for ${domain})` : founderEmail,
+    routing_enabled: enabled,
+    replaced_mx: existingMx.length ? existingMx : null,
+    destination: { email: forwardTo, created: destinationCreated, verified: destVerified },
+    rule,
+    mail_flows: blockers.length === 0,
+    blockers,
+    message: blockers.length === 0
+      ? `${address} now forwards to ${forwardTo} — routing on, destination verified, mail flows immediately.`
+      : `The rule for ${address} -> ${forwardTo} is in place, but mail will NOT flow yet: ${blockers.join(' ')}`,
+    next: blockers.length === 0
+      ? `Send a test message to ${address} and confirm it arrives at ${forwardTo}.`
+      : `Clear the blocker(s) above, then re-run provision_world_email for ${domain} to confirm mail_flows:true.`,
+  }
+}
+
+// ── Billing (catalog-only) ────────────────────────────────────────
+// Thin clients over billing-worker at api.vegvisr.org/billing/*. billing-worker holds
+// the Stripe secret; nothing here talks to Stripe directly. No tool creates a Stripe
+// product or price — the catalog decides what is SOLD, a human decides what it COSTS.
+
+// Reached through the BILLING_WORKER service binding, never a public fetch: a Worker
+// subrequest to api.vegvisr.org does not re-enter Worker routing on our own zone, so it
+// hunts for a nonexistent origin and returns 522. The hostname below is a placeholder the
+// binding ignores — only the path matters, and billing-worker routes on /billing/*.
+const BILLING_BASE = 'https://billing-worker/billing'
+
+// Same caller resolution as executeEditHtmlNode — the one Superadmin gate pattern.
+async function resolveBillingCaller(input, env) {
+  const ac = input.authContext || {}
+  const callerUserId = input.userId || ac.userId || ac.profile?.user_id || ac.session?.id || null
+  let callerRole = String(ac.role || ac.profile?.role || ac.session?.role || '').trim()
+  let callerEmail = String(ac.email || ac.profile?.email || ac.session?.email || '').trim()
+  if ((!callerRole || !callerEmail) && callerUserId) {
+    try {
+      const p = await resolveUserProfile(callerUserId, env)
+      if (!callerRole) callerRole = String(p?.Role || p?.role || '').trim()
+      if (!callerEmail) callerEmail = String(p?.email || '').trim()
+    } catch (e) { /* fall through to the role check */ }
+  }
+  return { callerUserId, callerRole, callerEmail }
+}
+
+function billingHeaders(caller) {
+  return {
+    'Content-Type': 'application/json',
+    'x-user-email': caller.callerEmail,
+    'x-user-role': caller.callerRole,
+  }
+}
+
+async function executeListStripePrices(input, env) {
+  const caller = await resolveBillingCaller(input, env)
+  if (caller.callerRole.toLowerCase() !== 'superadmin') {
+    return { success: false, error: `Superadmin role required to read Stripe prices. Resolved role=${caller.callerRole || 'unknown'}.` }
+  }
+  const res = await env.BILLING_WORKER.fetch(`${BILLING_BASE}/admin/stripe-prices`, { headers: billingHeaders(caller) })
+  const data = await res.json()
+  if (!res.ok) return { success: false, error: data.error || `HTTP ${res.status}` }
+  const prices = data.prices || []
+  return {
+    success: true,
+    message: `${prices.length} active Stripe price(s): ` +
+      prices.slice(0, 8).map(p => `${p.product_name || p.stripe_price_id} (${p.kind}${p.recurring_interval ? '/' + p.recurring_interval : ''})`).join(', ') +
+      (prices.length > 8 ? ', …' : ''),
+    prices,
+  }
+}
+
+async function executeListProducts(input, env) {
+  // Public endpoint — no identity needed to see what is for sale.
+  const res = await env.BILLING_WORKER.fetch(`${BILLING_BASE}/products`)
+  const data = await res.json()
+  if (!res.ok) return { success: false, error: data.error || `HTTP ${res.status}` }
+  const products = data.products || []
+  return {
+    success: true,
+    message: products.length
+      ? `${products.length} product(s) sellable: ` + products.map(p => `${p.id} — ${p.name} (${p.kind})`).join('; ')
+      : 'The billing catalog is empty — nothing is currently sellable.',
+    products,
+  }
+}
+
+async function executeSetProduct(input, env) {
+  const caller = await resolveBillingCaller(input, env)
+  if (caller.callerRole.toLowerCase() !== 'superadmin') {
+    return { success: false, error: `Superadmin role required to change the billing catalog. Resolved role=${caller.callerRole || 'unknown'}.` }
+  }
+  const res = await env.BILLING_WORKER.fetch(`${BILLING_BASE}/admin/products`, {
+    method: 'POST',
+    headers: billingHeaders(caller),
+    body: JSON.stringify({
+      id: input.id,
+      name: input.name,
+      stripe_price_id: input.stripe_price_id,
+      description: input.description,
+      price_nok: input.price_nok,
+      grants: input.grants,
+      active: input.active,
+    }),
+  })
+  const data = await res.json()
+  if (!res.ok) return { success: false, error: data.error || `HTTP ${res.status}` }
+  const p = data.product || {}
+  return {
+    success: true,
+    message: `Product "${p.id}" is now ${p.active ? 'sellable' : 'inactive'} — ${p.name} (${p.kind}${p.price_nok ? `, ${p.price_nok} ${String(p.currency || '').toUpperCase()}` : ''}). A page sells it with data-stripe-link mapped to "${p.id}".`,
+    product: p,
+  }
+}
+
+async function executeListOrders(input, env) {
+  const caller = await resolveBillingCaller(input, env)
+  if (!caller.callerEmail) {
+    return { success: false, error: 'Could not resolve the calling user — billing activity requires an identified caller.' }
+  }
+  const headers = billingHeaders(caller)
+  const [oRes, sRes] = await Promise.all([
+    env.BILLING_WORKER.fetch(`${BILLING_BASE}/orders`, { headers }),
+    env.BILLING_WORKER.fetch(`${BILLING_BASE}/subscriptions`, { headers }),
+  ])
+  const oData = await oRes.json()
+  const sData = await sRes.json()
+  if (!oRes.ok) return { success: false, error: oData.error || `HTTP ${oRes.status}` }
+  const orders = oData.orders || []
+  const subs = sData.subscriptions || []
+  const paid = orders.filter(o => o.status === 'paid').length
+  const active = subs.filter(s => s.status === 'active').length
+  return {
+    success: true,
+    message: `${orders.length} order(s) — ${paid} paid, ${orders.length - paid} pending. ` +
+      `${subs.length} supporter subscription(s) — ${active} active.`,
+    orders,
+    subscriptions: subs,
+  }
+}
+
 // ── Tool dispatcher ───────────────────────────────────────────────
 
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
@@ -11147,6 +11637,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReadHtmlSection(toolInput, env)
     case 'read_html_head':
       return await executeReadHtmlHead(toolInput, env)
+    case 'list_html_text':
+      return await executeListHtmlText(toolInput, env)
+    case 'translate_html_node':
+      return await executeTranslateHtmlNode(toolInput, env)
     case 'append_to_section':
       return await executeAppendToSection(toolInput, env)
     case 'insert_in_element':
@@ -11859,6 +12353,16 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeProffTool('person', toolInput)
     case 'proff_find_business_network':
       return await executeProffTool('network', toolInput)
+    case 'provision_world_email':
+      return await executeProvisionWorldEmail(toolInput, env)
+    case 'list_stripe_prices':
+      return await executeListStripePrices(toolInput, env)
+    case 'list_products':
+      return await executeListProducts(toolInput, env)
+    case 'set_product':
+      return await executeSetProduct(toolInput, env)
+    case 'list_orders':
+      return await executeListOrders(toolInput, env)
     default:
       // Fall through to the OpenAPI dispatcher for any tool registered via
       // the registry walk in loadOpenAPITools (not just kg_*). The presence
