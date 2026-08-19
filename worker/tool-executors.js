@@ -7889,6 +7889,17 @@ function registryNodesByType(graph, type) {
 // no graph_system_registry indirection). Change this constant if the registry graph moves.
 const COMPONENT_REGISTRY_GRAPH_ID = '4072b898-f111-42a9-b5ca-0d901bb17d26'
 
+// Delivery mode. A registry node whose metadata.delivery contains 'graph-js' is SERVED as
+// JavaScript from api-worker's /components/<label>.js route — that handler reads THIS SAME
+// registry graph and returns the node's metadata.impl as application/javascript
+// (vegvisr-frontend/api-worker/component-handlers.js). For such a component a page must
+// REFERENCE the url; pasting the source inline freezes a copy per page (no central update)
+// and pushes hundreds of lines of JS through a JSON tool call — the escaping trap that
+// produced two `Invalid regular expression` failures on the SlowYou page (2026-08-19).
+// Small, static, HTML-fragment components (theme-toggle) have no delivery flag and stay inline.
+const COMPONENT_SERVE_BASE = 'https://api.vegvisr.org/components'
+const isGraphJsDelivery = meta => String((meta && meta.delivery) || '').includes('graph-js')
+
 // Upload a sound file to voice-worker (R2 hallo-vegvisr-voice) → returns a permanent audioUrl.
 async function executeUploadAudio(input, env) {
   if (!env.VOICE_WORKER) return { success: false, error: 'VOICE_WORKER service binding is not configured' }
@@ -8004,9 +8015,10 @@ async function executeListComponents(input, env) {
         props: m.schema ? Object.keys(m.schema.props || {}) : [],
         verified: m.verify?.verdict === 'PASS',
         verifiedDate: m.verify?.verifiedDate || null,
+        delivery: isGraphJsDelivery(m) ? 'graph-js' : 'inline',
       }
     }),
-    usage: 'Call get_component(name) to fetch a component\'s verified impl and insert it intact. Do NOT hand-write a component that exists here.',
+    usage: 'Call get_component(name) to fetch what to insert. delivery "inline" returns the impl HTML — insert it intact. delivery "graph-js" returns ONE <script src> line — insert that line, never the source. Do NOT hand-write a component that exists here.',
   }
 }
 
@@ -8019,8 +8031,40 @@ async function executeGetComponent(input, env) {
   if (!node) return { success: false, error: `Component "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
   const m = node.metadata || {}
   if (!m.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
+
+  // REFERENCE delivery — hand back one <script src> line, never the source. The served
+  // file is generated from this very node, so editing the node updates every page that
+  // references it with no republish. includeImpl:true is the escape hatch for when the
+  // caller needs to READ the source in order to change it.
+  if (isGraphJsDelivery(m) && input.includeImpl !== true) {
+    const src = `${COMPONENT_SERVE_BASE}/${encodeURIComponent(node.label)}.js`
+    const line = `<script src="${src}" defer></script>`
+    return {
+      success: true, name: node.label, graphId,
+      delivery: 'graph-js', servedFrom: src,
+      schema: m.schema || null, verify: m.verify || null,
+      impl: line, snippet: line,
+      implOmitted: true, implChars: String(m.impl).length,
+      instructions: `Insert this ONE line and nothing else: insert_html_at(position:'before_body_end', html:'${line.replace(/'/g, "\\'")}'). It IS the whole component. Do NOT paste the component source into the page and do NOT re-implement it — the ${String(m.impl).length}-char source is omitted on purpose. To CHANGE the component, edit this registry node's metadata.impl (save_component); every page referencing it updates without a republish.`,
+      message: `"${node.label}" is served from ${src} (${String(m.impl).length} chars, delivery: graph-js). Insert the one-line <script src> — the source is omitted on purpose. Pass includeImpl:true only to read the source for editing.`,
+    }
+  }
+
+  // includeImpl on a graph-js component returns the SOURCE for editing — never for pasting
+  // into a page. Say so, or the escape hatch becomes the very inlining it exists to prevent.
+  if (isGraphJsDelivery(m)) {
+    const src = `${COMPONENT_SERVE_BASE}/${encodeURIComponent(node.label)}.js`
+    return {
+      success: true, name: node.label, graphId,
+      delivery: 'graph-js', servedFrom: src, sourceForEditing: true,
+      schema: m.schema || null, impl: m.impl, verify: m.verify || null,
+      instructions: `This is the SOURCE of a graph-js component, returned for EDITING only. Do NOT insert it into a page — a page references it with <script src="${src}" defer></script> (call get_component without includeImpl to get that line). Edit this text and save it back to the registry node's metadata.impl with save_component; the served url then updates for every page at once.`,
+      message: `Source of "${node.label}" (${String(m.impl).length} chars) for editing. Pages must reference ${src}, not carry a copy.`,
+    }
+  }
+
   return {
-    success: true, name: node.label, graphId,
+    success: true, name: node.label, graphId, delivery: 'inline',
     schema: m.schema || null, impl: m.impl, verify: m.verify || null,
     instructions: 'Insert the impl HTML intact (it carries its own <style>, markup, and <script>). Parameterize per schema props if needed. This component was verified in a real browser — do not rewrite its wiring.',
   }
@@ -8091,7 +8135,25 @@ async function executeSaveRegistryItem(input, env, kind) {
   const v = (input.verify && typeof input.verify === 'object') ? input.verify : {}
   const verdict = String(v.verdict || 'UNVERIFIED').toUpperCase()
   const verifyMeta = { verdict, verifiedDate: v.verifiedDate || null, method: v.method || null, note: v.note || null }
+
+  // Delivery mode. 'graph-js' makes api-worker serve metadata.impl VERBATIM as
+  // application/javascript from /components/<name>.js (it reads this same registry graph),
+  // so pages reference one <script src> line instead of each carrying a frozen copy.
+  // The impl must therefore be PLAIN JS: an HTML fragment served as JS is a SyntaxError on
+  // every page that references it, all at once.
+  const delivery = String(input.delivery || '').trim().toLowerCase()
+  if (delivery && delivery !== 'graph-js' && delivery !== 'inline') {
+    return { success: false, error: `delivery must be 'graph-js' or 'inline' (omit it for inline).` }
+  }
+  if (delivery === 'graph-js' && /^\s*</.test(impl)) {
+    return { success: false, error: `delivery:'graph-js' serves impl verbatim as application/javascript from ${COMPONENT_SERVE_BASE}/${name}.js, but this impl starts with '<' (markup). Store PLAIN JavaScript — no <script> wrapper, no HTML — or omit delivery to register it as an inline HTML component.` }
+  }
+
   const itemMeta = { schema, impl, verify: verifyMeta, updatedAt: new Date().toISOString(), updatedBy: gate.email || null }
+  if (delivery) itemMeta.delivery = delivery
+  const deliveryNote = delivery === 'graph-js'
+    ? ` Served as JS from ${COMPONENT_SERVE_BASE}/${name}.js (max-age 300s) — get_${kind}("${name}") now returns a one-line <script src> and pages reference it instead of inlining a copy. Editing this node updates every referencing page with no republish; a broken edit breaks them all at once, so verify before saving.`
+    : ''
 
   const graphId = COMPONENT_REGISTRY_GRAPH_ID
   const { items, error } = await fetchRegistryItems(env, kind)
@@ -8112,7 +8174,7 @@ async function executeSaveRegistryItem(input, env, kind) {
       metadata: { ...(existing.metadata || {}), ...itemMeta },
       info: input.description || existing.info || `${kind}: ${name}`,
     })
-    return { success: true, graphId, name, kind, nodeId: existing.id, overwritten: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Updated ${kind} "${name}" in the Component Registry (${impl.length} chars).${unverifiedNote}` }
+    return { success: true, graphId, name, kind, nodeId: existing.id, overwritten: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Updated ${kind} "${name}" in the Component Registry (${impl.length} chars).${deliveryNote}${unverifiedNote}` }
   }
 
   const nodeId = `${kind}-${name}`
@@ -8126,7 +8188,7 @@ async function executeSaveRegistryItem(input, env, kind) {
   })
   const data = await res.json()
   if (!res.ok) return { success: false, error: data.error || `addNode failed (${res.status})` }
-  return { success: true, graphId, name, kind, nodeId, created: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Registered new ${kind} "${name}" in the Component Registry (${impl.length} chars), reusable via get_${kind}("${name}").${unverifiedNote}` }
+  return { success: true, graphId, name, kind, nodeId, created: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Registered new ${kind} "${name}" in the Component Registry (${impl.length} chars), reusable via get_${kind}("${name}").${deliveryNote}${unverifiedNote}` }
 }
 
 // Assembly primitive: fetch a registered component's verified impl and splice it into a

@@ -2171,12 +2171,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_component',
-    description: 'Fetch one verified component from the Component Registry by name (e.g. "theme-toggle"). Returns its schema (contract/props), its vetted implementation HTML (impl — contains its own <style>, markup and <script>; insert intact), and its real-browser verification proof. Use this instead of hand-writing components that exist in the registry. Call list_components first to see what exists.',
+    description: 'Fetch one verified component from the Component Registry by name (e.g. "theme-toggle"). ALWAYS insert what the `impl` field returns, verbatim — the tool decides the delivery mode for you. delivery "inline" (small, static components): impl is the component HTML with its own <style>/markup/<script>; insert it intact. delivery "graph-js" (large shared renderers, e.g. a fulltext-element renderer): impl is ONE <script src="https://api.vegvisr.org/components/<name>.js"> line and the source is deliberately omitted (implOmitted:true, implChars tells you how much was withheld) — insert that single line, never paste or re-implement the source. That url is served from this same registry node, so editing the node updates every page with no republish; pasting a copy freezes it per page and pushes hundreds of lines of JS through a tool call, which is how regex/escaping syntax errors get introduced. Also returns schema (contract/props) and real-browser verification proof. Use this instead of hand-writing components that exist in the registry. Call list_components first to see what exists (each entry reports its delivery mode).',
     input_schema: {
       type: 'object',
       required: ['name'],
       properties: {
-        name: { type: 'string', description: 'Component name, e.g. "theme-toggle". Case-insensitive.' }
+        name: { type: 'string', description: 'Component name, e.g. "theme-toggle". Case-insensitive.' },
+        includeImpl: { type: 'boolean', description: 'Escape hatch for graph-js components only: return the full JS source instead of the one-line <script src>. Use ONLY when you must read the source in order to EDIT the registry node. Never use it just to put the component on a page.' }
       }
     }
   },
@@ -2233,6 +2234,7 @@ const TOOL_DEFINITIONS = [
         schema: { type: 'object', description: 'The contract: { description, props: {name: "..."} }. Optional but recommended.' },
         description: { type: 'string', description: 'One-line human description (stored in node info).' },
         verify: { type: 'object', description: "Proof of real-browser verification: { verdict: 'PASS'|'UNVERIFIED', verifiedDate, method, note }. Defaults to UNVERIFIED. Only PASS after an actual rendered-page observation." },
+        delivery: { type: 'string', enum: ['inline', 'graph-js'], description: "How pages get this component. Omit (or 'inline') for a small self-contained HTML fragment that is pasted into each page — the default and right choice for buttons/widgets like theme-toggle. Use 'graph-js' ONLY when impl is PLAIN JavaScript (no <script> wrapper, no markup) that should be SERVED from https://api.vegvisr.org/components/<name>.js: api-worker reads this same registry node and returns metadata.impl as application/javascript, so pages carry one <script src> line and a single edit here updates every page with no republish. Correct for large shared renderers; a broken edit breaks every referencing page at once, so verify first." },
         overwrite: { type: 'boolean', description: 'Replace an existing component of this name. Default false.' }
       }
     }
