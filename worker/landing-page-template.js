@@ -1075,6 +1075,42 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
 
     // ========== VEGVISR ELEMENT PARSER ==========
     function parseVegvisrElements(html) {
+      // Turn a [NAME | ...] parameter string into a safe inline style.
+      // The canonical contract (knowledge.vegvisr.org/plugin/fulltext-elements) documents these
+      // as CSS declarations -- FANCY: font-size; color; text-align -- and SECTION allows quoted
+      // values (color: 'black'). Both were previously dropped or emitted as invalid CSS. The
+      // older background='url' form stays supported for content already written that way.
+      function paramsToStyle(params) {
+        var out = '';
+        // parseVegvisrElements runs on marked's OUTPUT, so quotes in the parameter string are
+        // already HTML-escaped. &#39; ENDS IN A SEMICOLON, so splitting on ';' first would cut
+        // the entity in half and every quoted value would be lost -- which is why SECTION's
+        // documented form (color: 'black') never produced working CSS. Decode, then split.
+        var decoded = String(params || '')
+          .replace(/&#39;/g, "'").replace(/&#x27;/gi, "'")
+          .replace(/&quot;/g, '"').replace(/&#34;/g, '"')
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&amp;/g, '&');
+        var parts = decoded.split(';');
+        for (var pi = 0; pi < parts.length; pi++) {
+          var d = parts[pi].trim();
+          if (!d) continue;
+          var eq = d.indexOf('=');
+          var colon = d.indexOf(':');
+          if (eq > -1 && (colon === -1 || eq < colon)) {
+            var k = d.slice(0, eq).trim().toLowerCase();
+            var kv = d.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
+            if (k === 'background' && kv) out += "background-image: url('" + kv + "');";
+            continue;
+          }
+          if (colon === -1) continue;
+          var prop = d.slice(0, colon).trim();
+          var val = d.slice(colon + 1).trim().replace(/^['"]|['"]$/g, '');
+          if (!prop || !val) continue;
+          out += prop + ': ' + val + ';';
+        }
+        return out.replace(/[<>"]/g, '');
+      }
       // Work notes
       html = html.replace(/\\[WNOTE\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+WNOTE\\]/gi, function(m, params, content) {
         var cited = (params.match(/Cited\\s*=\\s*['"]?([^'"\\];]+)/i) || [])[1] || '';
@@ -1087,14 +1123,11 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       });
       // Sections
       html = html.replace(/\\[SECTION\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+SECTION\\]/gi, function(m, style, content) {
-        return '<div class="section" style="' + style + '">' + marked.parse(content.trim()) + '</div>';
+        return '<div class="section" style="' + paramsToStyle(style) + '">' + marked.parse(content.trim()) + '</div>';
       });
       // Fancy titles
       html = html.replace(/\\[FANCY\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+FANCY\\]/gi, function(m, params, content) {
-        var bgMatch = params.match(/background\\s*=\\s*['"]?([^'"\\];]+)/i);
-        var bg = bgMatch ? bgMatch[1] : '';
-        var style = bg ? "background-image: url('" + bg + "');" : '';
-        return '<div class="fancy-title" style="' + style + '">' + marked.parse(content.trim()) + '</div>';
+        return '<div class="fancy-title" style="' + paramsToStyle(params) + '">' + marked.parse(content.trim()) + '</div>';
       });
       // Image quotes
       html = html.replace(/\\[IMAGEQUOTE\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+IMAGEQUOTE\\]/gi, function(m, params, content) {
