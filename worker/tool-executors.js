@@ -3749,12 +3749,26 @@ async function resolveWorldInfraContext(input, env) {
   // gated on hosting_model === 'central': an own_account World whose founder has no token must
   // still fail loudly rather than silently borrowing whoever the holder happens to be.
   let credentialEmail = founderEmail
+  let credentialSource = `config row for ${founderEmail}`
   const central = hostingModel === 'central'
-  if (central && holderEmail && holderEmail !== founderEmail && (!row || !row.cf_api_token)) {
-    const holderRow = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(holderEmail).first()
-    if (holderRow && holderRow.cf_api_token) {
-      row = holderRow
-      credentialEmail = holderEmail
+  if (central && (!row || !row.cf_api_token)) {
+    // A CENTRAL World runs in the PLATFORM's own Cloudflare account, and this worker already holds
+    // that account's credentials as bindings (env.CF_ACCOUNT_ID / env.CF_API_TOKEN, the same pair
+    // executeRunCloudflareSelftest calls "platform CF_API_TOKEN"). Use them instead of demanding a
+    // duplicate copy in somebody's config row: the copy is an unnecessary second home for a token
+    // that grants the whole account, and config rows are known-unreliable here — torarnehave@gmail.com's
+    // own row was found cross-wired to lydmorah.net@gmail.com's account (see cloudflare_api's note).
+    if (env.CF_API_TOKEN && env.CF_ACCOUNT_ID) {
+      row = { cf_account_id: env.CF_ACCOUNT_ID, cf_api_token: env.CF_API_TOKEN }
+      credentialEmail = holderEmail || founderEmail
+      credentialSource = 'platform CF_API_TOKEN binding'
+    } else if (holderEmail && holderEmail !== founderEmail) {
+      const holderRow = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(holderEmail).first()
+      if (holderRow && holderRow.cf_api_token) {
+        row = holderRow
+        credentialEmail = holderEmail
+        credentialSource = `config row for ${holderEmail} (account holder)`
+      }
     }
   }
   // Fall back to the world_founders registry's cf_account_id when config doesn't carry it, so a bare
@@ -3766,7 +3780,7 @@ async function resolveWorldInfraContext(input, env) {
     : ''
   if (!cfAccount) return { error: `No cf_account_id for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
   if (!cfToken) return { error: `No cf_api_token stored for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
-  return { founderEmail, cfAccount, cfToken, domain, selfServed, credentialEmail, hostingModel, holderEmail }
+  return { founderEmail, cfAccount, cfToken, domain, selfServed, credentialEmail, credentialSource, hostingModel, holderEmail }
 }
 
 const cfApi = async (path, token, init = {}) => {
