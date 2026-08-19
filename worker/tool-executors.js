@@ -3224,38 +3224,74 @@ async function executeRegisterWorldFounder(input, env) {
   const hostingModel = (input.hosting_model || 'own_account').trim()
   const holder = (input.account_holder_email || '').trim().toLowerCase() || founderEmail
 
+  // Re-registering an EXISTING (founder, domain) used to be a silent no-op that still returned
+  // success with the INPUT echoed back — so correcting hosting_model / account_holder_email looked
+  // applied while the row never changed (slowyou.training, 2026-08-19: the agent reported
+  // "central / torarnehave@gmail.com" while the row stayed "own_account / slowyou.net@gmail.com").
+  // Now: apply exactly the fields the caller actually supplied, and echo what is STORED.
   const existingWF = await env.DB
     .prepare('SELECT id FROM world_founders WHERE founder_email = ? AND domain = ?')
     .bind(founderEmail, domain).first()
   let wfCreated = false
+  let wfUpdated = false
   if (!existingWF) {
     await env.DB.prepare(
       `INSERT INTO world_founders (id, founder_email, world_name, domain, cf_account_id, meta_area_tag, account_holder_email, hosting_model, founder_role, status)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'World Founder', 'active')`
     ).bind(crypto.randomUUID(), founderEmail, worldName, domain, cfAccount, metaTag, holder, hostingModel).run()
     wfCreated = true
+  } else {
+    const sets = []
+    const binds = []
+    if (input.world_name) { sets.push('world_name = ?'); binds.push(worldName) }
+    if (input.meta_area_tag) { sets.push('meta_area_tag = ?'); binds.push(metaTag) }
+    if (cfAccount) { sets.push('cf_account_id = ?'); binds.push(cfAccount) }
+    if (input.account_holder_email) { sets.push('account_holder_email = ?'); binds.push(holder) }
+    if (input.hosting_model) { sets.push('hosting_model = ?'); binds.push(hostingModel) }
+    if (sets.length) {
+      await env.DB.prepare(`UPDATE world_founders SET ${sets.join(', ')} WHERE id = ?`).bind(...binds, existingWF.id).run()
+      wfUpdated = true
+    }
   }
 
   const existingDom = await env.DB.prepare('SELECT id FROM domains WHERE domain = ?').bind(domain).first()
   let domCreated = false
+  let domUpdated = false
   if (!existingDom) {
     await env.DB.prepare(
       `INSERT INTO domains (id, domain, cf_account_id, hosting_model, kind, status)
        VALUES (?, ?, ?, ?, 'world', 'active')`
     ).bind(crypto.randomUUID(), domain, cfAccount, hostingModel).run()
     domCreated = true
+  } else {
+    const dSets = []
+    const dBinds = []
+    if (cfAccount) { dSets.push('cf_account_id = ?'); dBinds.push(cfAccount) }
+    if (input.hosting_model) { dSets.push('hosting_model = ?'); dBinds.push(hostingModel) }
+    if (dSets.length) {
+      await env.DB.prepare(`UPDATE domains SET ${dSets.join(', ')} WHERE id = ?`).bind(...dBinds, existingDom.id).run()
+      domUpdated = true
+    }
   }
 
+  // Read the row back so the caller sees what the DATABASE holds, never the input echoed.
+  const stored = await env.DB
+    .prepare('SELECT world_name, domain, cf_account_id, meta_area_tag, account_holder_email, hosting_model, status FROM world_founders WHERE founder_email = ? AND domain = ?')
+    .bind(founderEmail, domain).first()
+
+  const wfState = wfCreated ? 'created' : wfUpdated ? 'updated' : 'already present (nothing to change)'
   return {
     success: true,
     founder_email: founderEmail,
     domain,
-    world_name: worldName,
-    meta_area_tag: metaTag,
-    cf_account_id: cfAccount,
-    hosting_model: hostingModel,
-    world_founders: wfCreated ? 'created' : 'already present',
-    domains: domCreated ? 'created' : 'already present',
+    world_name: (stored && stored.world_name) || worldName,
+    meta_area_tag: (stored && stored.meta_area_tag) || metaTag,
+    cf_account_id: (stored && stored.cf_account_id) || null,
+    account_holder_email: (stored && stored.account_holder_email) || null,
+    hosting_model: (stored && stored.hosting_model) || hostingModel,
+    world_founders: wfState,
+    domains: domCreated ? 'created' : domUpdated ? 'updated' : 'already present (nothing to change)',
+    stored,
     next: `Verify with onboarding_status for ${founderEmail} — domain should resolve via world-founder-registry and the login allowlist now permits this founder.`,
   }
 }
@@ -3681,11 +3717,16 @@ async function resolveWorldInfraContext(input, env) {
   const domain = (input.domain || '').trim().toLowerCase()
   let founderEmail = (input.founder_email || '').trim().toLowerCase()
   let wfAccount = ''
+  let holderEmail = ''
+  let hostingModel = ''
   if (domain) {
-    let wf = await env.DB.prepare("SELECT founder_email, cf_account_id FROM world_founders WHERE domain = ? AND cf_account_id IS NOT NULL AND cf_account_id != '' ORDER BY created_at LIMIT 1").bind(domain).first()
-    if (!wf) wf = await env.DB.prepare('SELECT founder_email, cf_account_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+    const WF_COLS = 'SELECT founder_email, account_holder_email, hosting_model, cf_account_id FROM world_founders WHERE domain = ?'
+    let wf = await env.DB.prepare(`${WF_COLS} AND cf_account_id IS NOT NULL AND cf_account_id != '' ORDER BY created_at LIMIT 1`).bind(domain).first()
+    if (!wf) wf = await env.DB.prepare(`${WF_COLS} ORDER BY created_at LIMIT 1`).bind(domain).first()
     if (!founderEmail) founderEmail = String((wf && wf.founder_email) || '').toLowerCase()
     wfAccount = String((wf && wf.cf_account_id) || '').trim()
+    holderEmail = String((wf && wf.account_holder_email) || '').trim().toLowerCase()
+    hostingModel = String((wf && wf.hosting_model) || '').trim().toLowerCase()
   }
   // No World registered for this domain and no founder named. Fall back to the CALLER'S OWN
   // Cloudflare account: they are already proven Superadmin above, and the common case is the
@@ -3700,14 +3741,32 @@ async function resolveWorldInfraContext(input, env) {
   }
   if (!founderEmail) return { error: 'founder_email (or a domain with a registered founder) is required' }
 
-  const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+  let row = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+  // A CENTRAL-hosted World lives in the account holder's Cloudflare account, not the founder's, so
+  // its credentials are stored against account_holder_email. Without this the registry accepted
+  // hosting_model='central' and then every World infra tool still looked the founder up in config
+  // and failed with "No cf_account_id for <founder>" (slowyou.training, 2026-08-19). Deliberately
+  // gated on hosting_model === 'central': an own_account World whose founder has no token must
+  // still fail loudly rather than silently borrowing whoever the holder happens to be.
+  let credentialEmail = founderEmail
+  const central = hostingModel === 'central'
+  if (central && holderEmail && holderEmail !== founderEmail && (!row || !row.cf_api_token)) {
+    const holderRow = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(holderEmail).first()
+    if (holderRow && holderRow.cf_api_token) {
+      row = holderRow
+      credentialEmail = holderEmail
+    }
+  }
   // Fall back to the world_founders registry's cf_account_id when config doesn't carry it, so a bare
   // `set_world_credentials … token` (no account id) still resolves — the registry is authoritative.
   const cfAccount = (input.cf_account_id || (row && row.cf_account_id) || wfAccount || '').trim()
   const cfToken = row && row.cf_api_token
-  if (!cfAccount) return { error: `No cf_account_id for ${founderEmail} — run set_world_credentials first.` }
-  if (!cfToken) return { error: `No cf_api_token stored for ${founderEmail} — run set_world_credentials first.` }
-  return { founderEmail, cfAccount, cfToken, domain, selfServed }
+  const centralHint = central && holderEmail && holderEmail !== founderEmail
+    ? ` This World is hosting_model='central', so credentials are read from the account holder ${holderEmail} — store them there.`
+    : ''
+  if (!cfAccount) return { error: `No cf_account_id for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
+  if (!cfToken) return { error: `No cf_api_token stored for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
+  return { founderEmail, cfAccount, cfToken, domain, selfServed, credentialEmail, hostingModel, holderEmail }
 }
 
 const cfApi = async (path, token, init = {}) => {
