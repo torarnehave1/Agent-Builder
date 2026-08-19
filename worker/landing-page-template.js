@@ -1138,10 +1138,12 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         var style = bg ? "background-image: url('" + bg + "');" : '';
         return '<div class="imagequote-element" style="' + style + '"><div class="imagequote-content">' + marked.parse(content.trim()) + '</div>' + (cited ? '<div class="imagequote-citation">\\u2014 ' + cited + '</div>' : '') + '</div>';
       });
-      // Images
-      html = html.replace(/\\[IMAGE\\]\\(([^\\)]+)\\)/gi, function(m, url) {
-        return '<img src="' + url + '" alt="Image" style="max-width: 100%; border-radius: 12px; border: 1px solid rgba(255,255,255,0.10); margin: 16px 0;" />';
-      });
+      // NOTE: there is deliberately no [IMAGE](url) handler. That syntax is NOT a registered
+      // fulltext element (graphTemplates, category='Fulltext Elements' -- 26 rows, none with
+      // trigger '[IMAGE]'), no palette offers it, and zero nodes contain it as content. It also
+      // cannot work: without the leading '!' it is valid markdown LINK syntax, so marked turns
+      // it into an <a> before any element handler runs. Images use the registered markdown forms
+      // ![Header|...], ![Center|...], ![Leftside-N|...], ![Rightside-N|...] and bare ![Image](url).
 
       return html;
     }
