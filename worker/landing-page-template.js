@@ -21,8 +21,10 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
   <meta name="template-id" content="landing-page" />
   <title>{{TITLE}}</title>
 
-  <!-- Marked for Markdown rendering -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
+  <!-- Shared Vegvisr fulltext renderer: built from GNewDefaultNode.vue (the viewer), served
+       from our own origin, and it loads marked itself. One line replaces this page\u2019s copy of
+       the renderer, so a fix reaches every page without a republish. -->
+  <script src="https://api.vegvisr.org/components/vegvisr-fulltext.js" defer><\/script>
   <!-- Mermaid for diagrams -->
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"><\/script>
 
@@ -952,201 +954,13 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
     }
 
     // ========== CONTENT RENDERER ==========
-    // Handles FLEXBOX blocks on raw content BEFORE marked.parse(),
-    // then runs marked + Vegvisr element parsing on the rest.
-    function renderContent(raw) {
-      // Extract FLEXBOX blocks before markdown processing.
-      // ALL string-based — no regex — to avoid template-literal escaping nightmares.
-      var parts = [];
-      var remaining = raw;
-
-      while (true) {
-        // Find earliest [FLEXBOX- marker (case-insensitive)
-        var lower = remaining.toLowerCase();
-        var startIdx = -1;
-        var markers = ['[flexbox-cards', '[flexbox-grid', '[flexbox-gallery'];
-        for (var m = 0; m < markers.length; m++) {
-          var pos = lower.indexOf(markers[m]);
-          if (pos !== -1 && (startIdx === -1 || pos < startIdx)) startIdx = pos;
-        }
-        if (startIdx === -1) break;
-
-        // Find the closing ] of the opening tag
-        var tagEnd = remaining.indexOf(']', startIdx);
-        if (tagEnd === -1) break;
-
-        // Find the closing [END FLEXBOX] tag (case-insensitive)
-        var endTag = lower.indexOf('[end flexbox]', tagEnd);
-        if (endTag === -1) break;
-        var endTagEnd = remaining.indexOf(']', endTag) + 1;
-
-        // Text before FLEXBOX block — run through markdown + Vegvisr parser
-        var before = remaining.slice(0, startIdx);
-        if (before.trim()) {
-          parts.push(parseVegvisrElements(marked.parse(before)));
-        }
-
-        // Extract type from the opening tag (e.g. "FLEXBOX-CARDS-3" → "CARDS-3")
-        var openTag = remaining.slice(startIdx + 1, tagEnd).toUpperCase();
-        var flexType = openTag.indexOf('FLEXBOX-') === 0 ? openTag.slice(8) : 'CARDS';
-
-        // Extract content between opening and closing tags
-        var innerContent = remaining.slice(tagEnd + 1, endTag);
-
-        // Render the FLEXBOX block
-        parts.push(renderFlexboxBlock(flexType, innerContent));
-
-        remaining = remaining.slice(endTagEnd);
-      }
-
-      // Remaining text after last FLEXBOX block
-      if (remaining.trim()) {
-        parts.push(parseVegvisrElements(marked.parse(remaining)));
-      }
-      return parts.join('');
-    }
-
-    function renderFlexboxBlock(type, content) {
-      var upperType = type.toUpperCase();
-
-      // FLEXBOX-CARDS or FLEXBOX-CARDS-N
-      if (upperType.indexOf('CARDS') === 0) {
-        var colNum = upperType.replace('CARDS', '').replace('-', '');
-        var colCount = colNum ? parseInt(colNum) : 3;
-        var lines = content.trim().split('\\n');
-        var cards = [];
-        var cur = null;
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim();
-          if (!line) continue;
-
-          // Check for **title** pattern
-          if (line.indexOf('**') === 0 && line.lastIndexOf('**') === line.length - 2 && line.length > 4) {
-            if (cur && (cur.title || cur.image || cur.text)) cards.push(cur);
-            cur = { title: line.slice(2, -2), image: '', text: '' };
-            continue;
-          }
-          // Check for ![alt](url) image pattern
-          if (line.indexOf('![') === 0 && cur) {
-            var closeBracket = line.indexOf('](');
-            var closeParen = line.lastIndexOf(')');
-            if (closeBracket > 0 && closeParen > closeBracket) {
-              var imgUrl = line.slice(closeBracket + 2, closeParen);
-              var imgAlt = line.slice(2, closeBracket).split('|')[0].trim();
-              cur.image = '<div class="card-image"><img src="' + imgUrl + '" alt="' + imgAlt + '"></div>';
-              continue;
-            }
-          }
-          // Everything else is text
-          if (line && cur) {
-            cur.text += (cur.text ? ' ' : '') + line;
-          }
-        }
-        if (cur && (cur.title || cur.image || cur.text)) cards.push(cur);
-
-        var out = '<div class="flexbox-cards-container flexbox-cards-' + colCount + '">';
-        for (var c = 0; c < cards.length; c++) {
-          out += '<div class="flexbox-card">';
-          if (cards[c].image) out += cards[c].image;
-          if (cards[c].title) out += '<div class="card-title">' + cards[c].title + '</div>';
-          if (cards[c].text) out += '<div class="card-text">' + cards[c].text + '</div>';
-          out += '</div>';
-        }
-        out += '</div>';
-        return out;
-      }
-
-      // FLEXBOX-GRID or FLEXBOX-GALLERY
-      var isGallery = (upperType === 'GALLERY');
-      var containerClass = isGallery ? 'flexbox-gallery-container' : 'flexbox-grid-container';
-      var images = [];
-      var imgLines = content.split('\\n');
-      for (var j = 0; j < imgLines.length; j++) {
-        var imgLine = imgLines[j].trim();
-        if (imgLine.indexOf('![') !== 0) continue;
-        var cb = imgLine.indexOf('](');
-        var cp = imgLine.lastIndexOf(')');
-        if (cb > 0 && cp > cb) {
-          images.push('<img src="' + imgLine.slice(cb + 2, cp) + '" alt="' + imgLine.slice(2, cb) + '">');
-        }
-      }
-      return '<div class="' + containerClass + '">' + images.join('') + '</div>';
-    }
-
-    // ========== VEGVISR ELEMENT PARSER ==========
-    function parseVegvisrElements(html) {
-      // Turn a [NAME | ...] parameter string into a safe inline style.
-      // The canonical contract (knowledge.vegvisr.org/plugin/fulltext-elements) documents these
-      // as CSS declarations -- FANCY: font-size; color; text-align -- and SECTION allows quoted
-      // values (color: 'black'). Both were previously dropped or emitted as invalid CSS. The
-      // older background='url' form stays supported for content already written that way.
-      function paramsToStyle(params) {
-        var out = '';
-        // parseVegvisrElements runs on marked's OUTPUT, so quotes in the parameter string are
-        // already HTML-escaped. &#39; ENDS IN A SEMICOLON, so splitting on ';' first would cut
-        // the entity in half and every quoted value would be lost -- which is why SECTION's
-        // documented form (color: 'black') never produced working CSS. Decode, then split.
-        var decoded = String(params || '')
-          .replace(/&#39;/g, "'").replace(/&#x27;/gi, "'")
-          .replace(/&quot;/g, '"').replace(/&#34;/g, '"')
-          .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-          .replace(/&amp;/g, '&');
-        var parts = decoded.split(';');
-        for (var pi = 0; pi < parts.length; pi++) {
-          var d = parts[pi].trim();
-          if (!d) continue;
-          var eq = d.indexOf('=');
-          var colon = d.indexOf(':');
-          if (eq > -1 && (colon === -1 || eq < colon)) {
-            var k = d.slice(0, eq).trim().toLowerCase();
-            var kv = d.slice(eq + 1).trim().replace(/^['"]|['"]$/g, '');
-            if (k === 'background' && kv) out += "background-image: url('" + kv + "');";
-            continue;
-          }
-          if (colon === -1) continue;
-          var prop = d.slice(0, colon).trim();
-          var val = d.slice(colon + 1).trim().replace(/^['"]|['"]$/g, '');
-          if (!prop || !val) continue;
-          out += prop + ': ' + val + ';';
-        }
-        return out.replace(/[<>"]/g, '');
-      }
-      // Work notes
-      html = html.replace(/\\[WNOTE\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+WNOTE\\]/gi, function(m, params, content) {
-        var cited = (params.match(/Cited\\s*=\\s*['"]?([^'"\\];]+)/i) || [])[1] || '';
-        return '<div class="work-note">' + marked.parse(content.trim()) + (cited ? '<cite>\\u2014 ' + cited + '</cite>' : '') + '</div>';
-      });
-      // Quotes
-      html = html.replace(/\\[QUOTE\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+QUOTE\\]/gi, function(m, params, content) {
-        var cited = (params.match(/Cited\\s*=\\s*['"]?([^'"\\];]+)/i) || [])[1] || '';
-        return '<div class="fancy-quote">' + marked.parse(content.trim()) + (cited ? '<cite>\\u2014 ' + cited + '</cite>' : '') + '</div>';
-      });
-      // Sections
-      html = html.replace(/\\[SECTION\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+SECTION\\]/gi, function(m, style, content) {
-        return '<div class="section" style="' + paramsToStyle(style) + '">' + marked.parse(content.trim()) + '</div>';
-      });
-      // Fancy titles
-      html = html.replace(/\\[FANCY\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+FANCY\\]/gi, function(m, params, content) {
-        return '<div class="fancy-title" style="' + paramsToStyle(params) + '">' + marked.parse(content.trim()) + '</div>';
-      });
-      // Image quotes
-      html = html.replace(/\\[IMAGEQUOTE\\s*\\|([^\\]]*)\\]([\\s\\S]*?)\\[END\\s+IMAGEQUOTE\\]/gi, function(m, params, content) {
-        var bgMatch = params.match(/background\\s*=\\s*['"]?([^'"\\];]+)/i);
-        var citedMatch = params.match(/Cited\\s*=\\s*['"]?([^'"\\];]+)/i);
-        var bg = bgMatch ? bgMatch[1] : '';
-        var cited = citedMatch ? citedMatch[1] : '';
-        var style = bg ? "background-image: url('" + bg + "');" : '';
-        return '<div class="imagequote-element" style="' + style + '"><div class="imagequote-content">' + marked.parse(content.trim()) + '</div>' + (cited ? '<div class="imagequote-citation">\\u2014 ' + cited + '</div>' : '') + '</div>';
-      });
-      // NOTE: there is deliberately no [IMAGE](url) handler. That syntax is NOT a registered
-      // fulltext element (graphTemplates, category='Fulltext Elements' -- 26 rows, none with
-      // trigger '[IMAGE]'), no palette offers it, and zero nodes contain it as content. It also
-      // cannot work: without the leading '!' it is valid markdown LINK syntax, so marked turns
-      // it into an <a> before any element handler runs. Images use the registered markdown forms
-      // ![Header|...], ![Center|...], ![Leftside-N|...], ![Rightside-N|...] and bare ![Image](url).
-
-      return html;
-    }
+    // This page no longer carries its own renderer. renderContent / renderFlexboxBlock /
+    // parseVegvisrElements lived here and were a partial, drifting reimplementation of the
+    // canonical one in GNewDefaultNode.vue: 19 of the 26 registered fulltext elements, plus an
+    // invented [IMAGE](url) element that no palette offers and marked destroys anyway.
+    // Rendering now goes through VegvisrFulltext (api.vegvisr.org/components/vegvisr-fulltext.js),
+    // which is built from the viewer and covers all 26. Element syntax is defined by
+    // knowledge.vegvisr.org/plugin/fulltext-elements \u2014 never author it from memory.
 
     // ========== YOUTUBE FUNCTIONS ==========
     function extractYouTubeVideoId(url) {
@@ -1417,7 +1231,7 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
         } else {
           var info = normalizeStr(node.info);
           if (info.trim()) {
-            content.innerHTML = renderContent(info);
+            await VegvisrFulltext.renderInto(content, info);
           } else {
             content.innerHTML = '<p style="color:var(--soft);">No content.</p>';
           }
@@ -1694,7 +1508,7 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       } else {
         var info = normalizeStr(node.info);
         if (info.trim()) {
-          contentDiv.innerHTML = renderContent(info);
+          await VegvisrFulltext.renderInto(contentDiv, info);
         } else {
           contentDiv.innerHTML = '<p style="color:var(--soft);">No content.</p>';
         }

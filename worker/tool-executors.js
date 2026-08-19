@@ -8140,7 +8140,23 @@ async function executeSaveRegistryItem(input, env, kind) {
     if (!ALLOWED.includes(u.hostname)) {
       return { success: false, error: `fromUrl host "${u.hostname}" is not allowed. A registry component is served onto user pages, so it may only be read from: ${ALLOWED.join(', ')}.` }
     }
-    const r = await fetch(u.toString(), { headers: { 'cache-control': 'no-cache' } })
+    // MUST go through the service binding for our own Worker-routed hosts. A plain fetch to
+    // https://api.vegvisr.org/... from inside a Worker does not re-enter Worker routing on our
+    // own zone, so it looks for an origin that does not exist and 522s (same reason
+    // BILLING_WORKER is a binding — see wrangler.toml). Pages hosts are fine over plain fetch.
+    const BOUND = {
+      'api.vegvisr.org': [env.API_WORKER, 'https://vegvisr-api-worker'],
+      'knowledge.vegvisr.org': [env.KG_WORKER, 'https://knowledge-graph-worker'],
+    }
+    const bound = BOUND[u.hostname]
+    let r
+    if (bound && bound[0]) {
+      r = await bound[0].fetch(bound[1] + u.pathname + u.search, { headers: { 'cache-control': 'no-cache' } })
+    } else if (bound && !bound[0]) {
+      return { success: false, error: `fromUrl host "${u.hostname}" needs its service binding, which is not configured on this worker.` }
+    } else {
+      r = await fetch(u.toString(), { headers: { 'cache-control': 'no-cache' } })
+    }
     if (!r.ok) return { success: false, error: `fromUrl fetch failed: ${u} -> HTTP ${r.status}` }
     impl = await r.text()
     if (!impl.trim()) return { success: false, error: `fromUrl returned an empty body: ${u}` }
