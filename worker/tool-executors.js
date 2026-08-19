@@ -8127,7 +8127,25 @@ async function executeSaveRegistryItem(input, env, kind) {
     if (!src.node) return { success: false, error: `fromNodeId "${input.fromNodeId}" not found in graph "${srcGraph}".` }
     impl = String(src.node.info || '')
   }
-  if (!impl) return { success: false, error: `impl (the reusable HTML/CSS/JS to store) is required — pass it inline, or pass fromGraphId+fromNodeId to read it from a node you already built.` }
+  // Read the impl from a URL on one of OUR origins. Symmetric with fromNodeId, and the only
+  // sane path for a BUILD ARTEFACT: a generated component is tens of thousands of characters,
+  // and pushing that through a JSON tool-call argument is the exact escaping hazard this whole
+  // delivery mode exists to remove. Allowlisted — a registry component is served onto user
+  // pages, so it must never be able to pull in third-party JavaScript.
+  if (!impl && input.fromUrl) {
+    const ALLOWED = ['api.vegvisr.org', 'knowledge.vegvisr.org', 'www.vegvisr.org', 'vegvisr.org']
+    let u
+    try { u = new URL(String(input.fromUrl)) } catch { return { success: false, error: `fromUrl is not a valid URL: ${input.fromUrl}` } }
+    if (u.protocol !== 'https:') return { success: false, error: 'fromUrl must be https.' }
+    if (!ALLOWED.includes(u.hostname)) {
+      return { success: false, error: `fromUrl host "${u.hostname}" is not allowed. A registry component is served onto user pages, so it may only be read from: ${ALLOWED.join(', ')}.` }
+    }
+    const r = await fetch(u.toString(), { headers: { 'cache-control': 'no-cache' } })
+    if (!r.ok) return { success: false, error: `fromUrl fetch failed: ${u} -> HTTP ${r.status}` }
+    impl = await r.text()
+    if (!impl.trim()) return { success: false, error: `fromUrl returned an empty body: ${u}` }
+  }
+  if (!impl) return { success: false, error: `impl (the reusable HTML/CSS/JS to store) is required — pass it inline, pass fromGraphId+fromNodeId to read it from a node you already built, or pass fromUrl to read it from a built artefact served on a vegvisr origin.` }
   if (kind === 'layout' && !/data-slot=/.test(impl)) {
     return { success: false, error: `A layout impl must contain <div data-slot="NAME"> containers. This impl has none.` }
   }

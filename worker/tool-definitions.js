@@ -2231,6 +2231,7 @@ const TOOL_DEFINITIONS = [
         impl: { type: 'string', description: 'The self-contained HTML/CSS/JS to store and later insert intact (its own <style>, markup, <script>). Provide this OR fromNodeId.' },
         fromNodeId: { type: 'string', description: "Instead of pasting a large impl inline, read it from an html-node you already built + verified: pass fromNodeId (+ fromGraphId) and the node's full HTML becomes the impl. This is the build→verify→register-from-node workflow." },
         fromGraphId: { type: 'string', description: 'The graph containing fromNodeId (defaults to graphId if omitted).' },
+        fromUrl: { type: 'string', description: "Read the impl from an https URL on a vegvisr origin (api.vegvisr.org, knowledge.vegvisr.org, vegvisr.org). The right way to register a BUILD ARTEFACT — a generated component is tens of thousands of characters and must not travel through a tool-call argument. Other hosts are refused: a registry component is served onto user pages." },
         schema: { type: 'object', description: 'The contract: { description, props: {name: "..."} }. Optional but recommended.' },
         description: { type: 'string', description: 'One-line human description (stored in node info).' },
         verify: { type: 'object', description: "Proof of real-browser verification: { verdict: 'PASS'|'UNVERIFIED', verifiedDate, method, note }. Defaults to UNVERIFIED. Only PASS after an actual rendered-page observation." },
