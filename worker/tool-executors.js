@@ -8090,6 +8090,50 @@ async function executeListComponents(input, env) {
   }
 }
 
+// Derive HOW a component mounts, by reading its own code.
+//
+// This closed the hole that cost a whole afternoon: get_component returned the <script src> line
+// and a schema listing prop->attribute names, but NOTHING said which ELEMENT those attributes
+// belong on. The agent had to guess the marker, guessed <contact-form> from the component's name
+// (the most natural guess there is), and the real component — which self-mounts on
+// [data-vegvisr-contact] — silently did nothing. Worse: withholding the impl hid the usage comment
+// that documented the marker, so the one place the contract existed was the place we stopped showing.
+//
+// Derived from the code rather than a hand-maintained schema field, so every component describes
+// itself and nothing has to be migrated. Two mount styles exist in this codebase:
+//   customElements.define('x-y', …)          -> the marker is the custom tag <x-y>
+//   querySelectorAll('[data-foo]')            -> the marker is any element carrying data-foo
+function deriveMountSpec(impl, schema) {
+  const src = String(impl || '')
+  const custom = src.match(/customElements\.define\(\s*['"]([a-z][a-z0-9-]*)['"]/i)
+  const marker = src.match(/querySelectorAll\(\s*['"]\[([a-z-]+)\]['"]/i)
+
+  // Attribute names come from the schema's prop->attr map when present.
+  const props = (schema && schema.props) || {}
+  const attrs = []
+  for (const k of Object.keys(props)) {
+    const a = props[k] && props[k].attr
+    if (a && a !== 'data-vgc-init') attrs.push({ attr: a, note: props[k].description || '', def: props[k].default })
+  }
+  const attrText = attrs.map(a => `\n     ${a.attr}="${a.def != null ? String(a.def) : '…'}"`).join('')
+
+  if (custom) {
+    return {
+      style: 'custom-element',
+      marker: `<${custom[1]}>`,
+      snippet: `<${custom[1]}${attrText}></${custom[1]}>`,
+    }
+  }
+  if (marker) {
+    return {
+      style: 'self-mounting',
+      marker: `[${marker[1]}]`,
+      snippet: `<div ${marker[1]}${attrText}></div>`,
+    }
+  }
+  return { style: 'unknown', marker: null, snippet: null }
+}
+
 async function executeGetComponent(input, env) {
   const name = (input.name || '').trim()
   if (!name) return { success: false, error: 'name is required (e.g. "theme-toggle"). Call list_components to see what exists.' }
@@ -8107,14 +8151,21 @@ async function executeGetComponent(input, env) {
   if (isGraphJsDelivery(m) && input.includeImpl !== true) {
     const src = `${COMPONENT_SERVE_BASE}/${encodeURIComponent(node.label)}.js`
     const line = `<script src="${src}" defer></script>`
+    // A script tag alone renders NOTHING. Give the mount markup too, derived from the code.
+    const mount = deriveMountSpec(m.impl, m.schema)
+    const full = mount.snippet ? `${line}\n${mount.snippet}` : line
     return {
       success: true, name: node.label, graphId,
       delivery: 'graph-js', servedFrom: src,
       schema: m.schema || null, verify: m.verify || null,
-      impl: line, snippet: line,
+      mount: mount.style === 'unknown' ? null : mount,
+      scriptTag: line,
+      impl: full, snippet: full,
       implOmitted: true, implChars: String(m.impl).length,
-      instructions: `Insert this ONE line and nothing else: insert_html_at(position:'before_body_end', html:'${line.replace(/'/g, "\\'")}'). It IS the whole component. Do NOT paste the component source into the page and do NOT re-implement it — the ${String(m.impl).length}-char source is omitted on purpose. To CHANGE the component, edit this registry node's metadata.impl (save_component); every page referencing it updates without a republish.`,
-      message: `"${node.label}" is served from ${src} (${String(m.impl).length} chars, delivery: graph-js). Insert the one-line <script src> — the source is omitted on purpose. Pass includeImpl:true only to read the source for editing.`,
+      instructions: mount.snippet
+        ? `TWO pieces, both required, both given to you verbatim in \`impl\`. 1) the <script src> — insert once with insert_html_at(position:'before_body_end'). 2) the mount markup \`${mount.snippet.replace(/\n\s+/g, ' ')}\` — insert where the component should APPEAR (insert_in_element). The script alone renders nothing: this component mounts on ${mount.marker}, so a different tag or attribute silently does nothing, with no console error. Do NOT invent the marker or extra attributes — only the ones above exist. Fill each value; leave out any you do not have. The ${String(m.impl).length}-char source is omitted on purpose; to CHANGE the component edit this registry node's metadata.impl (save_component).`
+        : `Insert \`impl\` verbatim with insert_html_at(position:'before_body_end'). NOTE: the mount marker could not be derived from this component's code — call get_component again with includeImpl:true and READ the usage comment at the top before placing anything, rather than guessing a tag name.`,
+      message: `"${node.label}" is served from ${src} (${String(m.impl).length} chars, delivery: graph-js). ${mount.snippet ? `Mounts on ${mount.marker} (${mount.style}) — insert the <script src> AND the mount markup; the script alone renders nothing.` : 'Mount marker NOT derivable — read the source with includeImpl:true before placing it.'} Source omitted on purpose.`,
     }
   }
 
