@@ -2242,15 +2242,16 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_contact_route',
-    description: "Point the contact-form on ONE html-node at ONE chat group. The <contact-form> component has NO group attribute and never did — do not invent one. Its data-graph + data-node ARE the route key: brand-worker's /__contact/submit looks up KV c:route:<graphId>:<nodeId> and posts the submission to that route's group as its bot. With no route registered the submission silently falls back to a default group, which is why a new contact form appears to work but nothing arrives. This tool writes the route; the page and the component are not touched. Needs a botId as well as a groupId — brand-worker posts as a BOT, so a group without one cannot receive submissions. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Point the contact-form on ONE html-node at ONE chat group. The <contact-form> component has NO group attribute and never did — do not invent one. Its data-graph + data-node ARE the route key: brand-worker's /__contact/submit looks up KV c:route:<graphId>:<nodeId> and posts the submission to that route's group as its bot. With no route registered the submission silently falls back to a default group, which is why a new contact form appears to work but nothing arrives. This tool writes the route; the page and the component are not touched. Give the group BY NAME (groupName) — it is resolved, and the bot is chosen and checked for you. The tool refuses when the group has no active bot or the given bot is not a member, because brand-worker posts as a BOT and group-chat-worker answers 403 otherwise — a failure that would otherwise surface only as a 502 AFTER the sender received an SMS code. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
-      required: ['graphId', 'nodeId', 'groupId', 'botId'],
+      required: ['graphId', 'nodeId'],
       properties: {
-        graphId: { type: 'string', description: 'Graph holding the html-node with the contact-form. Must match the element\'s data-graph.' },
-        nodeId: { type: 'string', description: 'The html-node id. Must match the element\'s data-node.' },
-        groupId: { type: 'string', description: 'Chat group that receives submissions. Look it up by name with delegate_to_chat.' },
-        botId: { type: 'string', description: 'Bot that posts into the group. brand-worker posts via bot-message, so this is required.' }
+        graphId: { type: 'string', description: 'Graph holding the html-node with the contact-form. Must match the mount element data-graph.' },
+        nodeId: { type: 'string', description: 'The html-node id. Must match the mount element data-node.' },
+        groupName: { type: 'string', description: 'Chat group that receives submissions, BY NAME (e.g. "SlowYou Kontakt"). Resolved for you — no need to look the id up first. Give this or groupId.' },
+        groupId: { type: 'string', description: 'Chat group id, if you already have it. Otherwise use groupName.' },
+        botId: { type: 'string', description: 'Optional. The bot that posts into the group. Omit when the group has exactly one bot — it is chosen and verified for you. The tool REFUSES if the bot is not an active member, because group-chat-worker would reject every submission with 403.' }
       }
     }
   },

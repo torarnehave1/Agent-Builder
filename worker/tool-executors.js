@@ -1452,11 +1452,46 @@ async function executeSetContactRoute(input, env) {
 
   const graphId = String(input.graphId || '').trim()
   const nodeId = String(input.nodeId || '').trim()
-  const groupId = String(input.groupId || input.group_id || '').trim()
-  const botId = String(input.botId || input.bot_id || '').trim()
+  let groupId = String(input.groupId || input.group_id || '').trim()
+  let botId = String(input.botId || input.bot_id || '').trim()
+  const groupName = String(input.groupName || input.group || '').trim()
   if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId are required — they are the route key the contact-form posts under.' }
-  if (!groupId) return { success: false, error: 'groupId is required (the chat group that receives submissions). Use delegate_to_chat to look it up by name.' }
-  if (!botId) return { success: false, error: 'botId is required — brand-worker posts as a BOT, so the group needs one. A group id alone is not enough.' }
+  if (!groupId && !groupName) return { success: false, error: 'Give groupName (e.g. "SlowYou Kontakt") or groupId. groupName is resolved for you.' }
+
+  // Resolve the group by NAME and pick/verify the bot, against the chat DB. Requiring two raw
+  // UUIDs pushed the work onto the caller, and the one failure mode that matters — the bot not
+  // being a member of the group — was invisible until a real submission returned 502 AFTER the
+  // user had already received an SMS code. Fail here instead, with the fix in the message.
+  if (env.CHAT_DB) {
+    try {
+      if (!groupId) {
+        const g = await env.CHAT_DB.prepare('SELECT id, name FROM groups WHERE name = ?1 COLLATE NOCASE').bind(groupName).all()
+        const rows = (g && g.results) || []
+        if (rows.length === 0) return { success: false, error: `No chat group named "${groupName}". Check the name, or pass groupId.` }
+        if (rows.length > 1) return { success: false, error: `Several chat groups are named "${groupName}" (${rows.map(r => r.id).join(', ')}). Pass groupId to disambiguate.` }
+        groupId = String(rows[0].id)
+      }
+      const bots = await env.CHAT_DB.prepare(
+        'SELECT b.id, b.name, b.is_active FROM group_bot_members m JOIN chat_bots b ON b.id = m.bot_id WHERE m.group_id = ?1'
+      ).bind(groupId).all()
+      const members = ((bots && bots.results) || []).filter(b => b.is_active !== 0)
+      if (members.length === 0) {
+        return { success: false, error: `The chat group ${groupName || groupId} has no active bot. brand-worker posts submissions as a BOT, so without one every submission fails with 502 AFTER the sender has received an SMS code. Add a bot to the group first, then retry.` }
+      }
+      if (!botId) {
+        if (members.length > 1) {
+          return { success: false, error: `The group has ${members.length} bots (${members.map(b => `${b.name}=${b.id}`).join(', ')}). Pass botId to choose which one posts.` }
+        }
+        botId = String(members[0].id)
+      } else if (!members.some(b => String(b.id) === botId)) {
+        return { success: false, error: `Bot ${botId} is NOT an active member of group ${groupId}, so group-chat-worker will reject every submission with 403. Members: ${members.map(b => `${b.name}=${b.id}`).join(', ') || '(none)'}.` }
+      }
+    } catch (e) {
+      return { success: false, error: `Could not verify the group/bot in the chat database: ${e.message}` }
+    }
+  } else if (!groupId || !botId) {
+    return { success: false, error: 'CHAT_DB binding missing on agent-worker, so groupName/bot lookup is unavailable — pass both groupId and botId explicitly.' }
+  }
 
   if (!env.API_WORKER) return { success: false, error: 'API_WORKER service binding missing on agent-worker — cannot mint a contact-route token.' }
   if (!env.BRAND_WORKER) return { success: false, error: 'BRAND_WORKER service binding missing on agent-worker — cannot write the route.' }
