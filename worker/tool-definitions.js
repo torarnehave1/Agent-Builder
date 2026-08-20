@@ -2241,6 +2241,20 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'set_contact_route',
+    description: "Point the contact-form on ONE html-node at ONE chat group. The <contact-form> component has NO group attribute and never did — do not invent one. Its data-graph + data-node ARE the route key: brand-worker's /__contact/submit looks up KV c:route:<graphId>:<nodeId> and posts the submission to that route's group as its bot. With no route registered the submission silently falls back to a default group, which is why a new contact form appears to work but nothing arrives. This tool writes the route; the page and the component are not touched. Needs a botId as well as a groupId — brand-worker posts as a BOT, so a group without one cannot receive submissions. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId', 'groupId', 'botId'],
+      properties: {
+        graphId: { type: 'string', description: 'Graph holding the html-node with the contact-form. Must match the element\'s data-graph.' },
+        nodeId: { type: 'string', description: 'The html-node id. Must match the element\'s data-node.' },
+        groupId: { type: 'string', description: 'Chat group that receives submissions. Look it up by name with delegate_to_chat.' },
+        botId: { type: 'string', description: 'Bot that posts into the group. brand-worker posts via bot-message, so this is required.' }
+      }
+    }
+  },
+  {
     name: 'save_layout',
     description: "REGISTER a reusable page LAYOUT into the Component Registry (apply_layout / get_layout will then offer it). `impl` MUST be a CSS-grid skeleton containing <div data-slot=\"NAME\"> containers (that is what apply_layout fills). Same verification contract as save_component: stored UNVERIFIED unless you pass verify:{verdict:'PASS',...} after a real rendered-browser test at multiple widths. Pass overwrite:true to replace. Superadmin only. Stored in the Component Registry graph (4072b898).",
     input_schema: {

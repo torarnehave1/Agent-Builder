@@ -1435,6 +1435,74 @@ async function executeInsertHtmlAt(input, env) {
   }
 }
 
+// Point a contact-form on ONE html-node at ONE chat group.
+//
+// The <contact-form> component carries no group id and never did — its data-graph/data-node are the
+// ROUTE KEY. brand-worker's /__contact/submit looks up KV "c:route:<graphId>:<nodeId>" and posts the
+// submission to group-chat-worker/bot-message with that route's group_id + bot_id; with no route it
+// falls back to env.CONTACT_GROUP_ID, which is why a form on a new node silently lands elsewhere.
+// This tool writes that route. Nothing about the page or the component changes.
+//
+// Two bindings, both deliberate: api-worker mints the token because brand-worker verifies against
+// API-WORKER's HTML_PUBLISH_SECRET (agent-worker's differs, so a locally signed token 401s), and
+// both hops go over service bindings because a plain fetch to our own zone 522s.
+async function executeSetContactRoute(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'set a contact route')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const graphId = String(input.graphId || '').trim()
+  const nodeId = String(input.nodeId || '').trim()
+  const groupId = String(input.groupId || input.group_id || '').trim()
+  const botId = String(input.botId || input.bot_id || '').trim()
+  if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId are required — they are the route key the contact-form posts under.' }
+  if (!groupId) return { success: false, error: 'groupId is required (the chat group that receives submissions). Use delegate_to_chat to look it up by name.' }
+  if (!botId) return { success: false, error: 'botId is required — brand-worker posts as a BOT, so the group needs one. A group id alone is not enough.' }
+
+  if (!env.API_WORKER) return { success: false, error: 'API_WORKER service binding missing on agent-worker — cannot mint a contact-route token.' }
+  if (!env.BRAND_WORKER) return { success: false, error: 'BRAND_WORKER service binding missing on agent-worker — cannot write the route.' }
+
+  const ac = input.authContext || {}
+  const callerToken = String(ac.profile?.emailVerificationToken || ac.authToken || input.userToken || '').trim()
+  if (!callerToken) return { success: false, error: 'No caller API token available to mint a contact-route token. Sign in (or pass authToken) and retry.' }
+
+  let token
+  try {
+    const mintRes = await env.API_WORKER.fetch('https://vegvisr-api-worker/api/contact/route-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-API-Token': callerToken },
+      body: JSON.stringify({ graphId, nodeId, ttlMinutes: 15 }),
+    })
+    const j = await mintRes.json().catch(() => null)
+    if (!mintRes.ok || !j?.success || !j?.token) {
+      return { success: false, error: `Could not mint contact-route token: ${(j && j.error) || `HTTP ${mintRes.status}`}` }
+    }
+    token = j.token
+  } catch (e) {
+    return { success: false, error: `contact-route token mint failed: ${e.message}` }
+  }
+
+  let res, body
+  try {
+    res = await env.BRAND_WORKER.fetch('https://brand-worker/__contact/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId, nodeId, group_id: groupId, bot_id: botId, token }),
+    })
+    body = await res.json().catch(() => null)
+  } catch (e) {
+    return { success: false, error: `brand-worker /__contact/route failed: ${e.message}` }
+  }
+  if (!res.ok || !body?.ok) {
+    return { success: false, error: `brand-worker refused the route: ${(body && body.error) || `HTTP ${res.status}`}` }
+  }
+
+  return {
+    success: true, graphId, nodeId, groupId, botId,
+    routeKey: `c:route:${graphId}:${nodeId}`,
+    message: `Contact route set: submissions from the contact-form on "${nodeId}" now post to chat group ${groupId} as bot ${botId} (KV c:route:${graphId}:${nodeId}). The page needs NO change — <contact-form data-graph="${graphId}" data-node="${nodeId}"> already routes here; that pair IS the key. Verify by submitting the live form and checking the group.`,
+  }
+}
+
 // Auth for a PUBLISHED page (served from any domain by brand-worker / a client brand-proxy).
 // We inject the standard <vegvisr-auth> component from the components registry rather than an
 // inline bridge, so:
@@ -11798,6 +11866,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executePublishHtmlNode(toolInput, env)
     case 'replace_html_section':
       return await executeReplaceHtmlSection(toolInput, env)
+    case 'set_contact_route':
+      return await executeSetContactRoute(toolInput, env)
     case 'insert_html_at':
       return await executeInsertHtmlAt(toolInput, env)
     case 'list_html_anchors':
