@@ -1440,6 +1440,141 @@ async function executeAppendToSection(input, env) {
 // page is read in full across calls instead of silently losing its tail.
 const RHS_WINDOW = 9000
 
+// A page PLAN: what each section of an html-node is supposed to be, stored on the node itself.
+//
+// The gap this fills, stated plainly: on 2026-08-20 an agent rewrote a page's script and pointed
+// two different tabs at the same graph node. Nothing in the system disagreed, because nothing
+// anywhere said what those tabs were FOR. The page was its own only specification, so once the
+// code drifted there was no fact to drift from. A plan makes the intent a stored fact: the agent
+// reads it instead of guessing, and check_page_plan can say "the page no longer matches".
+//
+// Kept on the node (metadata.plan) rather than in a separate node: it can never be orphaned,
+// never needs an edge, and travels with the thing it describes.
+const PLAN_KINDS = ['static', 'graph-content', 'component']
+
+function validatePlanSections(sections) {
+  if (!Array.isArray(sections) || sections.length === 0) return 'sections must be a non-empty array.'
+  const ids = new Set()
+  for (const sec of sections) {
+    const id = String(sec?.id || '').trim()
+    if (!id) return 'every section needs an id (the element id it renders into, e.g. "principles").'
+    if (ids.has(id)) return `duplicate section id "${id}" — each section id must be unique.`
+    ids.add(id)
+    const kind = String(sec?.kind || '').trim()
+    if (!PLAN_KINDS.includes(kind)) return `section "${id}": kind must be one of ${PLAN_KINDS.join(', ')}.`
+    if (kind === 'graph-content') {
+      if (!sec.graphId || !sec.nodeId) return `section "${id}": kind "graph-content" needs graphId and nodeId — WHICH node supplies its text. This is the field whose absence let two tabs silently share one source.`
+    }
+    if (kind === 'component' && !sec.component) return `section "${id}": kind "component" needs component (a name from list_components).`
+  }
+  return null
+}
+
+async function executeSavePagePlan(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'save a page plan')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const err = validatePlanSections(input.sections)
+  if (err) return { success: false, error: `Invalid plan — ${err}` }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+
+  const plan = {
+    version: 1,
+    title: String(input.title || node.label || input.nodeId),
+    sections: input.sections.map(sec => ({
+      id: String(sec.id).trim(),
+      kind: String(sec.kind).trim(),
+      label: sec.label ? String(sec.label) : null,
+      graphId: sec.graphId ? String(sec.graphId) : null,
+      nodeId: sec.nodeId ? String(sec.nodeId) : null,
+      component: sec.component ? String(sec.component) : null,
+      note: sec.note ? String(sec.note) : null,
+    })),
+    updatedAt: new Date().toISOString(),
+    updatedBy: gate.email || null,
+  }
+  const data = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    metadata: { ...(node.metadata || {}), plan },
+  })
+  return {
+    success: true, graphId: input.graphId, nodeId: input.nodeId, sections: plan.sections.length, version: data.newVersion,
+    message: `Page plan saved for "${input.nodeId}" — ${plan.sections.length} section(s). Read it with get_page_plan BEFORE changing this page, and run check_page_plan after, to catch a section that has drifted off its source.`,
+  }
+}
+
+async function executeGetPagePlan(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const plan = (node.metadata || {}).plan
+  if (!plan) {
+    return {
+      success: true, hasPlan: false, graphId: input.graphId, nodeId: input.nodeId,
+      message: `No plan stored for "${input.nodeId}". This page is its own only specification, so nothing can tell you whether its sections still point where they should. Before changing it: read the page (read_html_source), then save what you find with save_page_plan.`,
+    }
+  }
+  return { success: true, hasPlan: true, graphId: input.graphId, nodeId: input.nodeId, plan }
+}
+
+// Compare the plan against what the page ACTUALLY does, and report the difference.
+async function executeCheckPagePlan(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const plan = (node.metadata || {}).plan
+  if (!plan) return { success: false, error: `No plan stored for "${input.nodeId}" — save one first with save_page_plan.` }
+  const html = String(node.info || '')
+
+  const findings = []
+  const sources = new Map()
+
+  for (const sec of plan.sections || []) {
+    const present = new RegExp('id=["\']' + sec.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '["\']').test(html)
+    if (!present) findings.push({ section: sec.id, issue: 'missing', detail: `the plan lists section "${sec.id}" but no element with that id is on the page` })
+
+    if (sec.kind === 'graph-content' && sec.graphId && sec.nodeId) {
+      const key = `${sec.graphId}:${sec.nodeId}`
+      sources.set(key, [...(sources.get(key) || []), sec.id])
+      if (!html.includes(sec.graphId)) {
+        findings.push({ section: sec.id, issue: 'wrong-source', detail: `the plan says this section renders ${sec.graphId}/${sec.nodeId}, but that graphId does not appear anywhere in the page` })
+      }
+    }
+    if (sec.kind === 'component' && sec.component && !html.includes(sec.component)) {
+      findings.push({ section: sec.id, issue: 'missing-component', detail: `the plan says this section uses the "${sec.component}" component, but nothing on the page references it` })
+    }
+  }
+
+  // Two sections planned to show DIFFERENT sources, both wired to the same one, is exactly the
+  // failure this exists for: it renders as three tabs showing identical text and nothing errors.
+  const planned = (plan.sections || []).filter(s => s.kind === 'graph-content')
+  const calls = [...html.matchAll(/loadContent\(\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]\s*,\s*['"]([^'"]+)['"]/g)]
+    .map(m => ({ container: m[1], graphId: m[2], nodeId: m[3] }))
+  for (const c of calls) {
+    const sec = planned.find(s => c.container.startsWith(s.id))
+    if (!sec) continue
+    if (sec.graphId !== c.graphId || sec.nodeId !== c.nodeId) {
+      findings.push({
+        section: sec.id, issue: 'source-mismatch',
+        detail: `the page loads ${c.graphId}/${c.nodeId} into "${c.container}", but the plan says this section should show ${sec.graphId}/${sec.nodeId}`,
+      })
+    }
+  }
+  const shared = [...sources.entries()].filter(([, ids]) => ids.length > 1)
+  for (const [key, ids] of shared) {
+    findings.push({ section: ids.join(', '), issue: 'shared-source', detail: `sections ${ids.join(' and ')} are both planned to render ${key} — they will show identical content` })
+  }
+
+  return {
+    success: true, graphId: input.graphId, nodeId: input.nodeId,
+    matches: findings.length === 0, findingCount: findings.length, findings,
+    message: findings.length === 0
+      ? `"${input.nodeId}" matches its plan — ${(plan.sections || []).length} section(s) checked.`
+      : `"${input.nodeId}" has DRIFTED from its plan: ${findings.length} finding(s). ${findings.map(f => `[${f.section}] ${f.detail}`).join(' | ')}`,
+  }
+}
+
 async function executeReadHtmlSource(input, env) {
   if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
   const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
@@ -12117,6 +12252,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReplaceHtmlSection(toolInput, env)
     case 'set_contact_route':
       return await executeSetContactRoute(toolInput, env)
+    case 'save_page_plan':
+      return await executeSavePagePlan(toolInput, env)
+    case 'get_page_plan':
+      return await executeGetPagePlan(toolInput, env)
+    case 'check_page_plan':
+      return await executeCheckPagePlan(toolInput, env)
     case 'read_html_source':
       return await executeReadHtmlSource(toolInput, env)
     case 'insert_html_at':

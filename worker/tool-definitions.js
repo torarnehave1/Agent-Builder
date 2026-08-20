@@ -452,6 +452,46 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'save_page_plan',
+    description: "Record WHAT EACH SECTION of an html-node is supposed to be. Stored on the node (metadata.plan). Without a plan a page is its own only specification: when its code drifts there is no fact to compare against, which is how a rewritten script came to point two different tabs at the same graph node while nothing anywhere disagreed. Save a plan when you BUILD a page, and whenever you learn what an existing page's sections are for. Each section: id (the element id it renders into), kind ('static' | 'graph-content' | 'component'), and for graph-content the graphId + nodeId that supply its text, for component the component name. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId', 'sections'],
+      properties: {
+        graphId: { type: 'string' },
+        nodeId: { type: 'string', description: 'The html-node the plan describes.' },
+        title: { type: 'string' },
+        sections: {
+          type: 'array',
+          description: "One entry per section/tab. graph-content REQUIRES graphId+nodeId — that pair is what stops two sections silently sharing one source.",
+          items: {
+            type: 'object',
+            required: ['id', 'kind'],
+            properties: {
+              id: { type: 'string', description: 'The element id this section renders into, e.g. "principles".' },
+              kind: { type: 'string', enum: ['static', 'graph-content', 'component'] },
+              label: { type: 'string', description: 'Human name, e.g. the tab caption.' },
+              graphId: { type: 'string', description: 'graph-content: which graph supplies the text.' },
+              nodeId: { type: 'string', description: 'graph-content: which node in that graph.' },
+              component: { type: 'string', description: 'component: a name from list_components.' },
+              note: { type: 'string' }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    name: 'get_page_plan',
+    description: "Read an html-node's stored plan — what each of its sections is supposed to be. Call this BEFORE changing a page, so you change it against its stated intent rather than your impression of it. Returns hasPlan:false when none is stored, which itself is worth telling the user: that page has no specification but its own code. Read-only. Code-hardcoded (not in registry).",
+    input_schema: { type: 'object', required: ['graphId', 'nodeId'], properties: { graphId: { type: 'string' }, nodeId: { type: 'string' } } }
+  },
+  {
+    name: 'check_page_plan',
+    description: "Compare an html-node against its stored plan and report where the page has DRIFTED: a planned section whose element is gone, a section wired to a different graph node than planned, a component the page no longer references, or two sections sharing one source (which renders as tabs showing identical text, with no error anywhere). Run this after editing a page, and before telling the user it is done. Read-only. Code-hardcoded (not in registry).",
+    input_schema: { type: 'object', required: ['graphId', 'nodeId'], properties: { graphId: { type: 'string' }, nodeId: { type: 'string' } } }
+  },
+  {
     name: 'read_html_source',
     description: "Read an html-node's SOURCE in windows that always fit inside the agent's result limit. USE THIS, NOT read_node, before editing or deleting anything inside a <script>. read_node returns the whole page, and a page over ~12 000 chars is CUT OFF before its scripts ever reach you — which is how an edit gets attempted against text that was never seen, fails to match, and ends in the script being deleted and rewritten from memory with invented behaviour. part:'scripts' lists every script block with its index, size and the names it declares. part:'script' + index returns ONE script in full, chunked with nextOffset — keep calling until nextOffset is null, and do not edit on a partial read. part:'window' + offset returns a raw slice of the whole page. Read-only. Code-hardcoded (not in registry).",
     input_schema: {
