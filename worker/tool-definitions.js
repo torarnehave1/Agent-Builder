@@ -386,7 +386,8 @@ const TOOL_DEFINITIONS = [
         target: { type: 'string', description: "Selector for the element to insert into: tag ('nav'), class ('.card'), tag+class ('div.card'), id ('#hero'), or combo ('section.hero#main')." },
         html: { type: 'string', description: 'The HTML to insert inside that element (e.g. a <button>).' },
         position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) inserts before the element's closing tag; 'start' just after its opening tag." },
-        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to insert into. Omit for the first; the result reports matchCount if there were more.' }
+        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to insert into. Omit for the first; the result reports matchCount if there were more.' },
+        force: { type: 'boolean', description: 'Override the duplicate guard. The tool REFUSES an insert that would add a second copy of something the page already has — the same <script src>, a function/window.X/custom element already defined, a data-vegvisr-* mount marker already present, or an id already in use — because inserting is additive and the old copy stays. Read the node and remove or replace the existing one instead; use force only when a second copy is genuinely intended.' }
       },
       required: ['graphId', 'nodeId', 'target', 'html']
     }
@@ -462,7 +463,8 @@ const TOOL_DEFINITIONS = [
           enum: ['before_body_end', 'after_body_start', 'before_head_end', 'append_to_style', 'after_head_start'],
           description: "Where to insert. 'before_body_end' for scripts & body widgets; 'append_to_style' to add CSS to the existing <style>; 'before_head_end' for <link>/<meta>/<style>."
         },
-        html: { type: 'string', description: 'The HTML/CSS/JS to insert at that position (for append_to_style, give raw CSS rules — no <style> wrapper).' }
+        html: { type: 'string', description: 'The HTML/CSS/JS to insert at that position (for append_to_style, give raw CSS rules — no <style> wrapper).' },
+        force: { type: 'boolean', description: 'Override the duplicate guard. The tool REFUSES an insert that would add a second copy of something the page already has — the same <script src>, a function/window.X/custom element already defined, a data-vegvisr-* mount marker already present, or an id already in use — because inserting is additive and the old copy stays. Read the node and remove or replace the existing one instead; use force only when a second copy is genuinely intended.' }
       },
       required: ['graphId', 'nodeId', 'position', 'html']
     }

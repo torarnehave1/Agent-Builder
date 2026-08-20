@@ -1104,6 +1104,73 @@ function isUnwrappedJs(snippet) {
   if (/<script[\s>]/i.test(s)) return false // already wrapped (or a <script src=…>)
   return /\bfunction\s+[A-Za-z_$][\w$]*\s*\(|\baddEventListener\s*\(|\b(?:document|window)\.(?:querySelector|getElementById|createElement|addEventListener)\s*\(/.test(s)
 }
+// Refuse an insert that ADDS A SECOND COPY of something the page already has.
+//
+// The insert tools are additive by design — that is what makes them loss-proof — but additive
+// also means nothing stops the same thing going in twice. Both halves bit hard on 2026-08-20:
+// a fulltext renderer stacked SIX <script> blocks redefining the same functions (last one wins,
+// the rest dead weight), and a contact form ended up with THREE copies of the same <script src>
+// plus a hand-written customElements.define shadowing the real component — which fails SILENTLY,
+// because a duplicate define throws inside the script and the page simply shows nothing.
+//
+// Only identity-carrying things are checked. A second card, row or paragraph is normal and stays
+// unblocked; a second definition of one NAME never is.
+function findDuplicateInserts(currentHtml, snippet) {
+  const html = String(currentHtml || '')
+  const snip = String(snippet || '')
+  const hits = []
+  const bodies = t => [...String(t).matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map(x => x[1]).join('\n')
+  const pageJs = bodies(html)
+  const snipJs = bodies(snip)
+  const esc = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  let m
+
+  const srcRe = /<script[^>]*\ssrc=["']([^"']+)["']/gi
+  while ((m = srcRe.exec(snip)) !== null) {
+    if (html.includes(m[1])) hits.push('the script "' + m[1] + '" is ALREADY loaded on this page — a second tag fetches and runs it twice')
+  }
+
+  const ceRe = /customElements\.define\(\s*['"]([a-z][a-z0-9-]*)['"]/gi
+  while ((m = ceRe.exec(snipJs)) !== null) {
+    const n = m[1]
+    if (new RegExp('customElements\\.define\\(\\s*[\'"]' + esc(n) + '[\'"]', 'i').test(pageJs)) {
+      hits.push('<' + n + '> is ALREADY defined on this page — a custom element name can only be registered once, so the second define throws and the element silently stays empty')
+    }
+  }
+
+  const declRe = /(?:^|\n)[ \t]{0,4}(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*\(|(?:^|\n)[ \t]{0,4}(?:const|let|var)[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*=|window\.([A-Za-z_$][\w$]{2,})[ \t]*=/g
+  const seen = new Set()
+  while ((m = declRe.exec(snipJs)) !== null) {
+    const n = m[1] || m[2] || m[3]
+    if (!n || seen.has(n)) continue
+    seen.add(n)
+    const e = esc(n)
+    const decl = new RegExp('(?:function[ \\t]+' + e + '[ \\t]*\\(|(?:const|let|var)[ \\t]+' + e + '[ \\t]*=|window\\.' + e + '[ \\t]*=)')
+    if (decl.test(pageJs)) hits.push('"' + n + '" is ALREADY defined in a script on this page — the later definition wins and the earlier one becomes dead code')
+  }
+
+  const markerRe = /\sdata-(?:vegvisr|vgc)-[a-z-]+/gi
+  while ((m = markerRe.exec(snip)) !== null) {
+    const a = m[0].trim()
+    if (new RegExp('\\s' + esc(a) + '\\b').test(html)) hits.push('a "' + a + '" mount marker is ALREADY on this page — that component self-mounts on it, so a second marker renders a second copy')
+  }
+
+  const idRe = /\sid=["']([^"']+)["']/gi
+  while ((m = idRe.exec(snip)) !== null) {
+    if (new RegExp('\\sid=["\']' + esc(m[1]) + '["\']').test(html)) {
+      hits.push('id="' + m[1] + '" is ALREADY used on this page — duplicate ids break getElementById and every selector that relies on it')
+    }
+  }
+  return hits
+}
+
+const dupeError = (tool, nodeId, hits) =>
+  'Refusing this ' + tool + ' on "' + nodeId + '" — it would DUPLICATE something the page already has:\n' +
+  hits.map(h => '  • ' + h).join('\n') +
+  '\n\nInserting is additive, so the old copy stays. Remove or replace the existing one first ' +
+  '(read the node, then remove_html_element / replace_html_section), or pass force:true if a ' +
+  'second copy really is intended.'
+
 const JS_WRAPPER_HINT = 'The content looks like JavaScript but has NO <script> wrapper — inserted here it lands OUTSIDE any <script> block and renders as DEAD TEXT that never executes (declared functions end up "undefined" at runtime, with no error). Wrap it in <script>\n…your JS…\n</script> and insert again (position "before_body_end" is the usual spot for a script). If you meant to add to the page\'s EXISTING script, there is no in-place-script insert — wrap this JS in its own <script> tag; multiple <script> blocks are fine.'
 
 async function executeInsertInElement(input, env) {
@@ -1125,6 +1192,10 @@ async function executeInsertInElement(input, env) {
   }
   const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
   const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  if (input.force !== true) {
+    const dupes = findDuplicateInserts(currentHtml, snippet)
+    if (dupes.length) return { success: false, blocked: 'duplicate_insert', duplicates: dupes, error: dupeError('insert_in_element', input.nodeId, dupes) }
+  }
   const r = spliceInElement(currentHtml, target, snippet, where, nth)
   if (r.error) return { success: false, error: r.error }
 
@@ -1407,6 +1478,11 @@ async function executeInsertHtmlAt(input, env) {
       hint = ' This page may be an HTML fragment without that tag — use replace_html_section on an existing anchor, or edit_html_node.'
     }
     return { success: false, error: `Could not find "${missing}" in "${input.nodeId}" for position "${position}".${hint}` }
+  }
+
+  if (input.force !== true) {
+    const dupes = findDuplicateInserts(currentHtml, snippet)
+    if (dupes.length) return { success: false, blocked: 'duplicate_insert', duplicates: dupes, error: dupeError('insert_html_at', input.nodeId, dupes) }
   }
 
   const before = currentHtml.slice(0, idx)
