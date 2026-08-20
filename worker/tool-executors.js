@@ -995,6 +995,23 @@ async function executeRemoveHtmlElement(input, env) {
   const r = findElementRange(currentHtml, target, nth)
   if (r.error) return { success: false, error: r.error }
   const removed = currentHtml.slice(r.start, r.end)
+
+  // Deleting a code-bearing <script> is how a page loses behaviour it can never get back:
+  // the agent that cannot READ the script (result cap) deletes it and rewrites it from memory,
+  // inventing functions that were never there. That happened on 2026-08-20 — a rewritten script
+  // pointed two different tabs at the same graph node. Removal is fine; removal as a PRELUDE to
+  // reconstruction is not. Refuse unless the caller confirms with force, and name the cost.
+  if (input.force !== true && /^<script\b/i.test(removed.trim()) && !/\ssrc=/i.test(removed.slice(0, 200))) {
+    const declares = [...new Set([...removed.matchAll(/(?:function\s+([A-Za-z_$][\w$]*)|window\.([A-Za-z_$][\w$]*)\s*=)/g)].map(x => x[1] || x[2]))]
+    if (declares.length) {
+      return {
+        success: false, blocked: 'script_removal',
+        declares,
+        error: `Refusing to remove this inline <script> from "${input.nodeId}" — it DEFINES ${declares.length} function(s) the page uses: ${declares.join(', ')}. Deleting it removes that behaviour, and rewriting it afterwards means writing it from memory, which is how invented code gets in. To CHANGE something inside it: read_html_source(part:"script") to get the exact bytes, then edit_html_node on just the lines that must change. Pass force:true only if the whole script really is meant to go, and you are not planning to recreate it.`,
+      }
+    }
+  }
+
   const newHtml = currentHtml.slice(0, r.start) + currentHtml.slice(r.end)
 
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
@@ -1411,6 +1428,76 @@ async function executeAppendToSection(input, env) {
 // <head>/<body>/<style> tags. Unlike edit_html_node it never needs an exact
 // old_string match, so "add a button + CSS + script" (e.g. a theme toggle) is a
 // few clean calls instead of a 20-turn exact-match thrash on a large page.
+// Read an html-node's SOURCE in windows that always fit the agent loop's result cap.
+//
+// This is the root cause of the 2026-08-20 mess. agent-loop caps every tool result at 12 000
+// chars (MAX_RESULT_SIZE). A 13 720-char page therefore reached the model CUT OFF just before
+// its <script> — the exact code it had been asked to edit. edit_html_node then failed to match
+// (it had never seen the text), and with nothing else to try the agent deleted the whole script
+// and rewrote it FROM MEMORY, inventing behaviour. It was not careless; it was blind.
+//
+// Every response here stays under the cap on purpose, and reports what comes next, so a large
+// page is read in full across calls instead of silently losing its tail.
+const RHS_WINDOW = 9000
+
+async function executeReadHtmlSource(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const html = String(node.info || '')
+  const part = String(input.part || 'scripts').trim().toLowerCase()
+
+  const blocks = []
+  const re = /<script([^>]*)>([\s\S]*?)<\/script>/gi
+  let m
+  while ((m = re.exec(html)) !== null) {
+    const srcM = m[1].match(/src=["']([^"']+)["']/i)
+    blocks.push({ start: m.index, end: m.index + m[0].length, attrs: m[1], body: m[2], src: srcM ? srcM[1] : null })
+  }
+
+  if (part === 'scripts') {
+    return {
+      success: true, graphId: input.graphId, nodeId: input.nodeId,
+      totalChars: html.length, scriptCount: blocks.length,
+      scripts: blocks.map((b, i) => ({
+        index: i + 1,
+        kind: b.src ? 'external' : 'inline',
+        src: b.src,
+        chars: b.body.length,
+        declares: [...new Set([...b.body.matchAll(/(?:^|\n)[ \t]{0,4}(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]*)|window\.([A-Za-z_$][\w$]*)[ \t]*=/g)].map(x => x[1] || x[2]))],
+        firstLine: (b.body.trim().split('\n')[0] || '').slice(0, 90),
+      })),
+      instructions: 'Call read_html_source(part:"script", index:N) to get script N IN FULL (chunked if long — follow nextOffset until done). NEVER edit or delete a script you have not read in full here first, and NEVER rewrite one from memory: read it, then change the exact bytes you got back.',
+    }
+  }
+
+  if (part === 'script') {
+    const i = Number(input.index || 0)
+    if (!i || i < 1 || i > blocks.length) return { success: false, error: `index must be 1..${blocks.length}. Call read_html_source(part:"scripts") to list them.` }
+    const body = blocks[i - 1].body
+    const off = Math.max(0, Number(input.offset || 0))
+    const text = body.slice(off, off + RHS_WINDOW)
+    const nextOffset = off + text.length < body.length ? off + text.length : null
+    return {
+      success: true, graphId: input.graphId, nodeId: input.nodeId,
+      index: i, chars: body.length, offset: off, returned: text.length, nextOffset,
+      text,
+      instructions: nextOffset
+        ? `PARTIAL — ${body.length - (off + text.length)} chars remain. Call again with offset:${nextOffset} BEFORE editing. Do not act on a partial read.`
+        : 'Complete: this is the whole script. Use these exact bytes as old_string in edit_html_node.',
+    }
+  }
+
+  if (part === 'window') {
+    const off = Math.max(0, Number(input.offset || 0))
+    const text = html.slice(off, off + RHS_WINDOW)
+    const nextOffset = off + text.length < html.length ? off + text.length : null
+    return { success: true, graphId: input.graphId, nodeId: input.nodeId, totalChars: html.length, offset: off, returned: text.length, nextOffset, text }
+  }
+
+  return { success: false, error: `part must be "scripts" (list), "script" (one, in full) or "window" (raw slice).` }
+}
+
 async function executeInsertHtmlAt(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -12030,6 +12117,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeReplaceHtmlSection(toolInput, env)
     case 'set_contact_route':
       return await executeSetContactRoute(toolInput, env)
+    case 'read_html_source':
+      return await executeReadHtmlSource(toolInput, env)
     case 'insert_html_at':
       return await executeInsertHtmlAt(toolInput, env)
     case 'list_html_anchors':

@@ -445,9 +445,25 @@ const TOOL_DEFINITIONS = [
         graphId: { type: 'string', description: 'The graph ID' },
         nodeId: { type: 'string', description: 'The html-node ID' },
         target: { type: 'string', description: "Selector for the element to REMOVE: tag, class ('.drop-zone'), id ('#dropZone'), tag+class, or combo." },
-        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to remove. Omit for the first; matchCount is reported.' }
+        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based) to remove. Omit for the first; matchCount is reported.' },
+        force: { type: 'boolean', description: 'Required to remove an inline <script> that DEFINES functions. Without it the tool refuses and lists the functions that would disappear, because deleting a script and rewriting it afterwards means writing it from memory — the way invented behaviour gets into a page. To change something inside a script, use read_html_source then edit_html_node instead.' }
       },
       required: ['graphId', 'nodeId', 'target']
+    }
+  },
+  {
+    name: 'read_html_source',
+    description: "Read an html-node's SOURCE in windows that always fit inside the agent's result limit. USE THIS, NOT read_node, before editing or deleting anything inside a <script>. read_node returns the whole page, and a page over ~12 000 chars is CUT OFF before its scripts ever reach you — which is how an edit gets attempted against text that was never seen, fails to match, and ends in the script being deleted and rewritten from memory with invented behaviour. part:'scripts' lists every script block with its index, size and the names it declares. part:'script' + index returns ONE script in full, chunked with nextOffset — keep calling until nextOffset is null, and do not edit on a partial read. part:'window' + offset returns a raw slice of the whole page. Read-only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId'],
+      properties: {
+        graphId: { type: 'string' },
+        nodeId: { type: 'string' },
+        part: { type: 'string', enum: ['scripts', 'script', 'window'], description: "'scripts' = list them (start here), 'script' = one in full, 'window' = raw slice of the page." },
+        index: { type: 'integer', description: "1-based script number, required for part:'script'. Get it from part:'scripts'." },
+        offset: { type: 'integer', description: 'Continue a chunked read from the nextOffset the previous call returned.' }
+      }
     }
   },
   {

@@ -9,7 +9,7 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
-import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate } from './html-builder-subagent.js'
+import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate, executeValidateHtmlSyntax } from './html-builder-subagent.js'
 
 /**
  * PLAN MODE — read-only allowlist (fail-closed).
@@ -1530,6 +1530,30 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             ])
             if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml
+            }
+
+            // Syntax-check the page after every mutation, and tell the MODEL, not just the user.
+            // The subagent has done this since it was written; the main loop never did, so an
+            // agent editing directly got "saved as vNN — verified by splice" for a page whose
+            // JavaScript no longer parsed. It read that as success and moved on; the breakage
+            // surfaced later as a blank tab or a console error the agent could not see.
+            // Costs no extra turn: the verdict rides along on the tool result it belongs to.
+            if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.success !== false && toolUse.input?.graphId && toolUse.input?.nodeId) {
+              try {
+                const val = await executeValidateHtmlSyntax(
+                  { graphId: toolUse.input.graphId, nodeId: toolUse.input.nodeId }, env,
+                )
+                if (val && val.valid === false) {
+                  result.syntaxValid = false
+                  result.syntaxIssues = (val.issues || []).slice(0, 5).map(i => i.message)
+                  result.message = `${result.message || ''}\n\n⚠ SYNTAX BROKEN after this edit — ${val.issueCount} issue(s): ${result.syntaxIssues.join('; ')}. The page will NOT run as written. Fix this before doing anything else, and before telling the user it is done.`
+                  log(`auto-validate after ${toolUse.name}: ${val.issueCount} issue(s)`)
+                } else if (val) {
+                  result.syntaxValid = true
+                }
+              } catch (e) {
+                log(`auto-validate after ${toolUse.name} failed: ${e.message}`)
+              }
             }
             // Pass the email body for set_world_email_template so the frontend can open it in HtmlPreview
             if (toolUse.name === 'set_world_email_template' && result.html) {
