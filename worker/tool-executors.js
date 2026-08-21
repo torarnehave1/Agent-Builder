@@ -4172,15 +4172,44 @@ async function resolveWorldInfraContext(input, env) {
       }
     }
   }
-  // Fall back to the world_founders registry's cf_account_id when config doesn't carry it, so a bare
-  // `set_world_credentials … token` (no account id) still resolves — the registry is authoritative.
-  const cfAccount = (input.cf_account_id || (row && row.cf_account_id) || wfAccount || '').trim()
+  // The REGISTRY is authoritative about which account a World lives in; a config row is not.
+  // config.cf_account_id is per-PERSON — for a founder who runs someone else's World it names
+  // THEIR own account — and letting it win silently retargeted lydmorah.net (registry
+  // c8bf14ee…, held by lydmorah.net@gmail.com) at the platform account 5d9b2060…, because its
+  // oldest world_founders row names torarnehave@gmail.com as founder (2026-08-21). Registry
+  // first, config only when the registry carries no account.
+  const cfAccount = (input.cf_account_id || wfAccount || (row && row.cf_account_id) || '').trim()
+
+  // Credentials have to belong to THAT account. A config row naming a different account is the
+  // wrong person's token, so drop it rather than deploy into whichever account it opens.
+  let accountMismatch = ''
+  if (cfAccount && row && row.cf_account_id && String(row.cf_account_id).trim() !== cfAccount) {
+    accountMismatch = ` The config row for ${credentialEmail} is for account ${String(row.cf_account_id).trim()}, not this World's ${cfAccount}, so its token was not used.`
+    row = null
+    credentialSource = ''
+  }
+  // A World can be own_account and still be HELD by someone other than its founder — lydmorah.net
+  // is founded by torarnehave@gmail.com and held by lydmorah.net@gmail.com — so the account-holder
+  // lookup must not stay gated on hosting_model === 'central' (the central branch above covers only
+  // that case). Accept the holder's token only if it opens the account the registry named.
+  if ((!row || !row.cf_api_token) && holderEmail && holderEmail !== founderEmail) {
+    const holderRow = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(holderEmail).first()
+    const holderAcct = String((holderRow && holderRow.cf_account_id) || '').trim()
+    if (holderRow && holderRow.cf_api_token && (!holderAcct || !cfAccount || holderAcct === cfAccount)) {
+      row = holderRow
+      credentialEmail = holderEmail
+      credentialSource = `config row for ${holderEmail} (account holder)`
+    } else if (holderRow && !holderRow.cf_api_token) {
+      credentialEmail = holderEmail
+    }
+  }
+
   const cfToken = row && row.cf_api_token
   const centralHint = central && holderEmail && holderEmail !== founderEmail
     ? ` This World is hosting_model='central', so credentials are read from the account holder ${holderEmail} — store them there.`
     : ''
   if (!cfAccount) return { error: `No cf_account_id for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
-  if (!cfToken) return { error: `No cf_api_token stored for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
+  if (!cfToken) return { error: `No cf_api_token stored for ${credentialEmail} that opens account ${cfAccount} — run set_world_credentials for ${credentialEmail}.${accountMismatch}${centralHint}` }
   return { founderEmail, cfAccount, cfToken, domain, selfServed, credentialEmail, credentialSource, hostingModel, holderEmail }
 }
 
