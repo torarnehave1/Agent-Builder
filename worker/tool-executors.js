@@ -4398,6 +4398,72 @@ async function inspectBrandProxy(cfAccount, cfToken, host, guessedName) {
   return out
 }
 
+// Write what this deploy actually observed back into the System Registry, so the inventory node
+// stays true without anyone maintaining it. A hand-maintained row goes stale the same way
+// template:brand-proxy drifted seven months from its source; a row the tool rewrites on every run
+// cannot. The node carries a machine-readable JSON block between INVENTORY_DATA markers and a table
+// generated from it — upsert the block, regenerate the table.
+const REGISTRY_GRAPH_ID = 'graph_system_registry'
+const REGISTRY_INVENTORY_NODE = 'system-worker-world-brand-proxy-inventory'
+
+function renderBrandProxyTable(data) {
+  const rows = [
+    '| World | worker | variant | account | credential under | custom domains | KV | CORS | /__favicon | verified |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+  ]
+  for (const dom of Object.keys(data).sort()) {
+    const e = data[dom] || {}
+    const kv = Object.entries(e.kv || {}).map(([k, v]) => `${k}=${String(v).slice(0, 8)}\u2026`).join(', ')
+    const hosts = (e.hosts || []).join(', ') || '(none \u2014 routed by Workers Route)'
+    rows.push(
+      `| ${dom} | \`${e.worker}\` | ${e.variant} | ${String(e.account || '').slice(0, 12)}\u2026 | ` +
+      `${e.credential_email} | ${hosts} | ${kv} | ${e.has_cors} | ${e.has_favicon} | ` +
+      `${String(e.verified_at || '').slice(0, 10)} |`
+    )
+  }
+  return rows.join('\n')
+}
+
+// Never throws: registry bookkeeping must not turn a successful deploy into a reported failure.
+// Returns a short status the caller surfaces as `registry`.
+async function recordBrandProxyInRegistry(env, domain, entry) {
+  try {
+    if (!env.KG_WORKER) return { ok: false, note: 'KG_WORKER not bound — registry not updated.' }
+    const res = await env.KG_WORKER.fetch(
+      `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(REGISTRY_GRAPH_ID)}`
+    )
+    if (!res.ok) return { ok: false, note: `could not read ${REGISTRY_GRAPH_ID} (${res.status})` }
+    const g = await res.json()
+    const gd = g.graphData || g
+    const node = (gd.nodes || []).find((n) => n.id === REGISTRY_INVENTORY_NODE)
+    if (!node) return { ok: false, note: `${REGISTRY_INVENTORY_NODE} not found in the registry` }
+
+    const info = String(node.info || '')
+    const dataRe = /<!--INVENTORY_DATA:START-->\s*```json\s*([\s\S]*?)```\s*<!--INVENTORY_DATA:END-->/
+    const tableRe = /<!--INVENTORY_TABLE:START-->[\s\S]*?<!--INVENTORY_TABLE:END-->/
+    const m = info.match(dataRe)
+    if (!m) return { ok: false, note: 'INVENTORY_DATA block missing — node shape changed, not updating blindly' }
+
+    let data
+    try {
+      data = JSON.parse(m[1])
+    } catch {
+      return { ok: false, note: 'INVENTORY_DATA block is not valid JSON — left untouched' }
+    }
+
+    data[domain] = { ...(data[domain] || {}), ...entry }
+
+    const nextInfo = info
+      .replace(dataRe, `<!--INVENTORY_DATA:START-->\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\`\n<!--INVENTORY_DATA:END-->`)
+      .replace(tableRe, `<!--INVENTORY_TABLE:START-->\n${renderBrandProxyTable(data)}\n<!--INVENTORY_TABLE:END-->`)
+
+    await patchNodeWithVersionRetry(env, REGISTRY_GRAPH_ID, REGISTRY_INVENTORY_NODE, { info: nextInfo })
+    return { ok: true, node: REGISTRY_INVENTORY_NODE, worlds: Object.keys(data).length }
+  } catch (e) {
+    return { ok: false, note: `registry update failed: ${e.message}` }
+  }
+}
+
 async function executeDeployWorldProxy(input, env) {
   const ctx = await resolveWorldInfraContext(input, env)
   if (ctx.error) return { success: false, error: ctx.error }
@@ -4494,11 +4560,29 @@ async function executeDeployWorldProxy(input, env) {
   }
 
   const route = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, input.host)
+
+  // Re-read the account so the registry records what IS deployed, not what we intended to deploy.
+  const after = await inspectBrandProxy(cfAccount, cfToken, targetHost, workerName)
+  const registry = await recordBrandProxyInRegistry(env, domain, {
+    worker: workerName,
+    variant: after.templateDerived === false ? (after.customMarkers.length ? 'route-proxy' : 'bespoke') : 'template',
+    account: cfAccount,
+    credential_email: ctx.credentialEmail || founderEmail,
+    hosts: after.routedName ? [targetHost] : [],
+    kv: { HTML_PAGES: htmlNs.id, BRAND_CONFIG: brandNs.id },
+    has_cors: after.source ? after.source.includes('Access-Control-Allow-Origin') : null,
+    has_favicon: after.source ? after.source.includes('__favicon') : null,
+    default_origin: defaultOrigin,
+    verified_at: new Date().toISOString(),
+    verified_by: 'deploy_world_proxy',
+  })
+
   return {
     success: true,
     domain,
     worker_name: workerName,
     created: true,
+    registry,
     kv: { HTML_PAGES: htmlNs.id, BRAND_CONFIG: brandNs.id },
     publish_secret: 'set',
     routed_worker: probe.routedName || null,
