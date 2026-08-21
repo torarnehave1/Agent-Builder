@@ -496,6 +496,149 @@ function getLatestUserText(messages) {
   return ''
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVE TASK TRACKING (L55) — the fix for "the agent forgets what we were doing"
+//
+// The old code used getLatestUserText() as THE goal and re-injected it in the
+// self-check. That breaks the moment the user's latest message is a bare
+// acknowledgement: "kjør", "ja", "Jeg er i auto mode". The goal became the
+// acknowledgement, the real task (with its graph/node ids) was gone from the
+// 10-message window, and the agent asked "what do you want me to do?" while
+// standing on a fully specified task (observed 2026-08-21).
+//
+// deriveActiveTask() separates ACKNOWLEDGEMENT from TASK: it walks the real user
+// turns backwards, drops pure acks, and keeps the last few substantive ones.
+// buildTaskSlot() renders that (plus every id the user has named) into an
+// explicit block the worker fills in — so the ids can never scroll out of the
+// history window.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Whole-message acknowledgements. Must match the ENTIRE normalized message —
+// "Ja, kopier menyen til node X" is a task, "Ja" is not.
+const CONTINUATION_ACK_RE = new RegExp(
+  '^(?:' + [
+    'ja', 'nei', 'jo', 'ok', 'ok[ae]y', 'yes', 'no', 'yep', 'jepp', 'greit',
+    'bra', 'flott', 'perfekt', 'supert', 'fint', 'takk', 'tusen takk',
+    'thanks', 'thank you', 'stemmer', 'det stemmer', 'riktig', 'correct',
+    'det virker', 'it works', 'works', 'virker', 'den virker',
+    'fortsett', 'fortsett da', 'fortsett n[åa]', 'continue', 'proceed',
+    'go', 'go ahead', 'go on', 'kj[øo]r', 'kj[øo]r p[åa]', 'run', 'do it',
+    'gj[øo]r det', 'vent', 'auto', 'auto mode', 'jeg er i auto mode',
+    'ja takk', 'nei takk', 'ok takk', 'ja da', 'det er riktig',
+    "i am in auto mode", "i'm in auto mode", 'plan mode',
+  ].join('|') + ')[\\s.!?,…]*$',
+  'i'
+)
+
+function normalizeUserText(text) {
+  return String(text || '').replace(/\s+/g, ' ').trim()
+}
+
+function isContinuationAck(text) {
+  const t = normalizeUserText(text)
+  if (!t) return true
+  // Cheap length guard first: a long message is never a bare ack.
+  if (t.length > 40) return false
+  return CONTINUATION_ACK_RE.test(t)
+}
+
+// Real user turns only. A message with role "user" that carries tool_result
+// blocks is the loop feeding itself — not something the human said.
+function getUserTurnTexts(messages) {
+  const out = []
+  for (const m of messages || []) {
+    if (!m || m.role !== 'user') continue
+    if (Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')) continue
+    const text = normalizeUserText(getTextContent(m.content))
+    if (text) out.push(text)
+  }
+  return out
+}
+
+// Ids the user has named, newest first. Node ids are arbitrary slugs
+// ("html-interactive-viewer"), so they only count when explicitly labelled.
+const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi
+const LABELLED_ID_RE = /\b(node|graf|graph)[\s_-]*(?:id)?\s*[:=]\s*`?([A-Za-z0-9][\w.-]{2,80})`?/gi
+
+function collectUserIds(userTexts, limit = 8) {
+  const seen = new Map()
+  // Newest first: walk the turns in reverse.
+  for (let i = userTexts.length - 1; i >= 0; i--) {
+    const text = userTexts[i]
+    let m
+    LABELLED_ID_RE.lastIndex = 0
+    while ((m = LABELLED_ID_RE.exec(text)) !== null) {
+      const kind = m[1].toLowerCase().startsWith('node') ? 'node' : 'graph'
+      const value = m[2]
+      if (!seen.has(value)) seen.set(value, kind)
+    }
+    UUID_RE.lastIndex = 0
+    while ((m = UUID_RE.exec(text)) !== null) {
+      if (!seen.has(m[0])) seen.set(m[0], 'graph')
+    }
+    if (seen.size >= limit) break
+  }
+  return [...seen.entries()].slice(0, limit).map(([value, kind]) => ({ kind, value }))
+}
+
+/**
+ * The task the user is actually on — not merely their last message.
+ *
+ * @returns {{ primary: string, priorSteps: string[], latest: string,
+ *             latestIsAck: boolean, ids: {kind: string, value: string}[] }}
+ *   primary      — the most recent SUBSTANTIVE user request (the goal)
+ *   priorSteps   — up to 2 earlier substantive turns, oldest first (the setup)
+ *   latest       — the raw latest user text (may be "kjør")
+ *   latestIsAck  — true when the latest message only says "go ahead"
+ */
+function deriveActiveTask(messages, options = {}) {
+  const maxPriorSteps = options.maxPriorSteps ?? 3
+  const userTexts = getUserTurnTexts(messages)
+  const latest = userTexts.length ? userTexts[userTexts.length - 1] : ''
+  const substantive = userTexts.filter((t) => !isContinuationAck(t))
+  // Fallback: if the user has ONLY ever acknowledged, the ack is the request.
+  const primary = substantive.length ? substantive[substantive.length - 1] : latest
+  const priorSteps = substantive.slice(Math.max(0, substantive.length - 1 - maxPriorSteps), substantive.length - 1)
+  return {
+    primary,
+    priorSteps,
+    latest,
+    latestIsAck: isContinuationAck(latest),
+    ids: collectUserIds(userTexts),
+  }
+}
+
+const TASK_SLOT_HEADING = '## ACTIVE TASK (filled in by the worker — this is fact, do not guess)'
+
+/**
+ * The explicit task slot (fix D). Rendered into the system prompt every request
+ * so the goal and its ids survive the MAX_HISTORY window, which a long tool loop
+ * fills with its own messages in ~5 calls.
+ */
+function buildTaskSlot(activeTask, options = {}) {
+  if (!activeTask || !activeTask.primary) return ''
+  const clip = (s, n) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
+  const lines = [TASK_SLOT_HEADING]
+  lines.push(`Current request: "${clip(activeTask.primary, 500)}"`)
+  if (activeTask.priorSteps.length) {
+    lines.push('Earlier steps of the same task (oldest first):')
+    for (const step of activeTask.priorSteps) lines.push(`  - "${clip(step, 300)}"`)
+  }
+  if (activeTask.ids.length) {
+    lines.push('IDs the user has named (newest first): ' +
+      activeTask.ids.map((id) => `${id.kind}=${id.value}`).join(' · '))
+  }
+  const ctx = []
+  if (options.graphId) ctx.push(`graphId=${options.graphId}`)
+  if (options.activeHtmlNodeId) ctx.push(`activeHtmlNodeId=${options.activeHtmlNodeId}`)
+  if (ctx.length) lines.push(`Selected context in the UI: ${ctx.join(' ')} (this is the UI selection, NOT necessarily the task target — the IDs above win)`)
+  if (activeTask.latestIsAck) {
+    lines.push(`The user's latest message ("${clip(activeTask.latest, 60)}") is an acknowledgement, not a new request. It means: proceed with the current request above.`)
+  }
+  lines.push('This block is authoritative. Never answer "what do you want me to do?" or ask the user to repeat ids while it is filled in — the task and its ids are right here.')
+  return lines.join('\n')
+}
+
 function isGraphWriteIntent(userText) {
   const text = String(userText || '').toLowerCase()
   if (!text) return false
@@ -741,7 +884,13 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
   // = the user explicitly asked to create a graph (tightened regex so "create a NODE in this
   // graph" does NOT trigger); createdGraphId = the id create_graph returns this turn.
   const contextGraphId = options.graphId || null
-  const latestUserText = getLatestUserText(messages)
+  // Same active-task treatment as the Claude path (L55): an ack must not become the goal.
+  const activeTask = deriveActiveTask(messages)
+  const taskSlot = buildTaskSlot(activeTask, {
+    graphId: options.graphId,
+    activeHtmlNodeId: options.activeHtmlNodeId,
+  })
+  const latestUserText = activeTask.latestIsAck ? activeTask.primary : (activeTask.latest || getLatestUserText(messages))
   const requiresNewGraph = /\b(create|build|make|generate|start)\s+(a\s+|an\s+|the\s+)?(new\s+)?(knowledge\s+)?graph\b/i.test(latestUserText) || /\bnew graph\b/i.test(latestUserText)
   let createdGraphId = null
   const GRAPH_WRITE_TOOLS = new Set(['create_node', 'create_html_node', 'add_edge', 'patch_node', 'patch_graph_metadata'])
@@ -764,7 +913,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       `${systemPrompt}\n\n` +
       `## ${provider.label} AgentChat Tooling\n` +
       `You are running through the ${provider.label} provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
-      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this ${provider.label} tool list, say that this provider path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.`
+      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this ${provider.label} tool list, say that this provider path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.` +
+      (taskSlot ? `\n\n${taskSlot}` : '')
 
     const openAIMessages = [
       { role: 'system', content: openAIToolPrompt },
@@ -1034,13 +1184,23 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   let functionalGateRetries = 0
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
-  const latestUserRequest = getLatestUserText(messages)
-  const requiresGraphWrite = isGraphWriteIntent(latestUserRequest)
-  const requiresCreateGraph = isExplicitCreateGraphIntent(latestUserRequest)
+  // Fix A: the GOAL is the latest SUBSTANTIVE user request, not the latest message.
+  // "kjør" / "ja" / "Jeg er i auto mode" are acknowledgements of the standing task.
+  const activeTask = deriveActiveTask(messages, { graphId: options.graphId })
+  const latestUserRequest = activeTask.primary || getLatestUserText(messages)
+  // Intent detection reads the acknowledged task only when the latest message IS an
+  // ack — otherwise a new message always wins, so a finished task can never re-fire.
+  const intentText = activeTask.latestIsAck ? activeTask.primary : activeTask.latest
+  const requiresGraphWrite = isGraphWriteIntent(intentText)
+  const requiresCreateGraph = isExplicitCreateGraphIntent(intentText)
   const requiresCalendarQuery = isCalendarQueryIntent(messages)
   const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
   const graphWriteVerificationStartIndex = messages.length
   const calendarQueryStartIndex = messages.length
+  const taskSlot = buildTaskSlot(activeTask, {
+    graphId: options.graphId,
+    activeHtmlNodeId: options.activeHtmlNodeId,
+  })
 
   // Stats accumulation — written to STATS_DB in finally block
   const stats = { inputTokens: 0, outputTokens: 0, toolCalls: [], success: true, error: null, maxTurnsReached: false }
@@ -1089,6 +1249,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   let calendarGuardRetries = 0
 
   log(`started | model=${model} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length} userId=${userId?.slice(0,8)}...`)
+  log(`active task${activeTask.latestIsAck ? ' (latest msg is an ACK — carrying the standing task)' : ''}: "${activeTask.primary.slice(0, 120)}" | ids=[${activeTask.ids.map(i => `${i.kind}=${i.value}`).join(', ')}]`)
 
   try {
     // Emit agent identity info if available (avatar, etc.)
@@ -1105,8 +1266,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       // We intentionally DO NOT pin messages[0]: when the first conversation message is a
       // one-shot imperative (e.g. "set the token on post@universi.no"), pinning it makes the
       // model re-execute that command on every later turn and narrate "re-read the original
-      // request" (observed 2026-07-13, L54). The current request lives in the recent window,
-      // and the self-check below re-injects latestUserRequest for goal continuity.
+      // request" (observed 2026-07-13, L54). Goal continuity instead comes from the ACTIVE
+      // TASK slot in the system prompt (built once per request, OUTSIDE this window) plus the
+      // self-check below — both carry the latest SUBSTANTIVE request, not merely the latest
+      // message. See deriveActiveTask()/buildTaskSlot() (L55).
       const MAX_HISTORY = 10
       let cappedMessages
       if (messages.length > MAX_HISTORY) {
@@ -1171,7 +1334,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           model,
           max_tokens: 16384,
           temperature: 0.3,
-          system: systemPrompt,
+          system: taskSlot
+            ? [
+                { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
+                { type: 'text', text: taskSlot },
+              ]
+            : systemPrompt,
           tools: allTools,
         }),
       })
