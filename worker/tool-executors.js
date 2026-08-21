@@ -4347,18 +4347,76 @@ async function attachBrandProxyDomain(cfAccount, cfToken, domain, workerNameOver
 // bindings (created if missing) and HTML_PUBLISH_SECRET, then attaches me.<domain>. Fixes the
 // "HTTP 530 (worker not reachable)" case where no brand proxy exists yet. Idempotent: skips an
 // existing worker unless force=true (protects working proxies — Lesson 11). Superadmin only.
+// Which worker ACTUALLY serves a hostname, and what is it running? deploy_world_proxy used to
+// guess the script name from the domain (<stem>-brand-proxy) and force-write it. Both assumptions
+// were wrong in production on 2026-08-21: me.stineoksvolddesign.no is served by `stine-brand-proxy`
+// and me.iamazing.page by `vegvisr-brand-proxy`, so the guessed name built a SECOND worker that no
+// hostname routed to while the tool reported success. Read the route, then read the script.
+async function inspectBrandProxy(cfAccount, cfToken, host, guessedName) {
+  const out = { host, guessedName, routedName: null, name: guessedName, exists: false, bindings: [], source: '', templateDerived: null, customMarkers: [] }
+
+  const doms = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken)
+  if (doms.ok) {
+    const hit = (doms.json.result || []).find((d) => String(d.hostname || '').toLowerCase() === String(host).toLowerCase())
+    if (hit && hit.service) {
+      out.routedName = hit.service
+      out.name = hit.service
+    }
+  }
+
+  const settings = await cfApi(`/accounts/${cfAccount}/workers/scripts/${out.name}/settings`, cfToken)
+  if (settings.ok) {
+    out.exists = true
+    out.bindings = (settings.json.result && settings.json.result.bindings) || []
+    out.compatibilityDate = settings.json.result && settings.json.result.compatibility_date
+  }
+  if (!out.exists) return out
+
+  // The script body comes back as multipart; we only need to grep it, so the raw text is enough.
+  try {
+    const res = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${out.name}`, {
+      headers: { Authorization: `Bearer ${cfToken}` },
+    })
+    out.source = res.ok ? await res.text() : ''
+  } catch {
+    out.source = ''
+  }
+
+  // Markers for behaviour the canonical template does NOT have. Overwriting a script that has any
+  // of these silently deletes a live feature — vegvisr-brand-proxy's `route:<host>` mapping serves
+  // chat/realtime/vemotion.iamazing.page, none of which exist in the template.
+  const MARKERS = [
+    ['route:<host> origin mapping', /route:\$\{|`route:|HOST_ORIGIN_MAP/],
+    ['/__html/list endpoint', /__html\/list/],
+    ['websocket upgrade proxying', /Upgrade[^\n]{0,40}websocket/i],
+  ]
+  if (out.source) {
+    for (const [label, re] of MARKERS) if (re.test(out.source)) out.customMarkers.push(label)
+    // A template-derived script always carries this guard as its first statement.
+    out.templateDerived = /DEFAULT_ORIGIN\s*\|\|\s*env\.TARGET_ORIGIN|Missing DEFAULT_ORIGIN/.test(out.source) && out.customMarkers.length === 0
+  }
+  return out
+}
+
 async function executeDeployWorldProxy(input, env) {
   const ctx = await resolveWorldInfraContext(input, env)
   if (ctx.error) return { success: false, error: ctx.error }
   const { founderEmail, cfAccount, cfToken, domain } = ctx
   const stem = (domain || '').split('.')[0]
-  const workerName = (input.worker_name || `${stem}-brand-proxy`).trim()
+  const targetHost = (input.host || `me.${domain}`).trim().toLowerCase()
 
   if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
   const script = await env.WORLD_TEMPLATES.get('template:brand-proxy')
   if (!script) return { success: false, error: 'Brand-proxy script not found in WORLD_TEMPLATES (key "template:brand-proxy").' }
   const secret = env.HTML_PUBLISH_SECRET
   if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+
+  // READ BEFORE WRITE. An explicit worker_name still wins, but otherwise the worker that actually
+  // owns the hostname beats the <stem>-brand-proxy guess — the guess creates an orphan worker that
+  // nothing routes to and reports success (Stine + iamazing, 2026-08-21).
+  const probe = await inspectBrandProxy(cfAccount, cfToken, targetHost, `${stem}-brand-proxy`)
+  const workerName = (input.worker_name || probe.name || `${stem}-brand-proxy`).trim()
+  const renamedFromGuess = !input.worker_name && probe.routedName && probe.routedName !== `${stem}-brand-proxy`
 
   const scriptUrl = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}`
 
@@ -4368,9 +4426,26 @@ async function executeDeployWorldProxy(input, env) {
     const dom = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, input.host)
     return {
       success: true, domain, worker_name: workerName, created: false,
+      routed_worker: probe.routedName || null,
       route: dom.ok ? { ok: true, host: dom.host } : { ok: false, host: dom.host, error: `${dom.status}: ${dom.detail}` },
       note: `Brand proxy ${workerName} already exists — left as is (pass force=true to redeploy).`,
       next: `Run provision_world_kv for ${domain} (confirms KV + secret), then publish_world_page.`,
+    }
+  }
+
+  // A force overwrite of a script that is NOT template-derived deletes whatever else it does.
+  // vegvisr-brand-proxy serves chat/realtime/vemotion.iamazing.page from `route:` keys the template
+  // has no code for; overwriting it would have taken those three subdomains down. Refuse and say
+  // what would be lost, unless the caller explicitly accepts it.
+  if (existing.ok && input.force && probe.exists && probe.templateDerived === false && !input.overwrite_custom) {
+    return {
+      success: false,
+      error: `${workerName} is NOT running the canonical brand-proxy template — overwriting it would delete behaviour the template does not have.`,
+      worker_name: workerName,
+      routed_worker: probe.routedName || null,
+      would_lose: probe.customMarkers,
+      bindings: probe.bindings.map((b) => ({ name: b.name, type: b.type, namespace_id: b.namespace_id })),
+      note: 'Read the script first (cloudflare_api /workers/scripts/<name>), port the change into IT, or pass overwrite_custom=true to replace it anyway.',
     }
   }
 
@@ -4393,7 +4468,11 @@ async function executeDeployWorldProxy(input, env) {
   try { await env.DB.prepare('UPDATE config SET cf_kv_namespace_id = ? WHERE email = ?').bind(htmlNs.id, founderEmail).run() } catch (e) { console.error('record kv ns failed:', e) }
 
   // Upload the ESM module worker with its bindings + the publish secret stamped in at deploy.
-  const defaultOrigin = (input.default_origin || `https://${domain}`).trim()
+  // Keep whatever the live worker already passed through to. Falling back to https://<domain> on a
+  // redeploy points an apex-routed proxy at itself; iamazing.page really passed through to
+  // https://www.vegvisr.org, and only the existing binding knows that.
+  const existingOrigin = (probe.bindings.find((b) => b.name === 'DEFAULT_ORIGIN') || {}).text
+  const defaultOrigin = (input.default_origin || existingOrigin || `https://${domain}`).trim()
   const metadata = {
     main_module: 'index.js',
     compatibility_date: '2025-01-15',
@@ -4422,6 +4501,12 @@ async function executeDeployWorldProxy(input, env) {
     created: true,
     kv: { HTML_PAGES: htmlNs.id, BRAND_CONFIG: brandNs.id },
     publish_secret: 'set',
+    routed_worker: probe.routedName || null,
+    worker_name_source: input.worker_name ? 'caller' : (probe.routedName ? `resolved from the ${targetHost} route` : 'guessed from the domain'),
+    default_origin: defaultOrigin,
+    warning: renamedFromGuess
+      ? `${targetHost} is served by ${probe.routedName}, not ${stem}-brand-proxy — deployed to ${probe.routedName} so the live host is the one that changed.`
+      : undefined,
     route: route.ok ? { ok: true, host: route.host } : { ok: false, host: route.host, error: `${route.status}: ${route.detail}`, note: route.note },
     next: route.ok
       ? `Brand proxy ${workerName} deployed + ${route.host} routed + secret set. Run publish_world_page for ${domain}.`
