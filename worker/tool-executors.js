@@ -8650,6 +8650,28 @@ async function executeSaveRegistryItem(input, env, kind) {
     : ` STORED AS UNVERIFIED — it will NOT count as verified (and list_${kind}s shows verified:false) until a REAL-BROWSER test sets verify.verdict='PASS'. Verification is the system's open frontier; do not mark PASS without an actual rendered-page observation.`
 
   if (existing) {
+    // A registry component that is SERVED (delivery graph-js) is load-bearing: every page that
+    // references it breaks the moment the node stops being servable. On 2026-08-20 this node lost
+    // its delivery flag and shrank from 42 575 to 11 227 chars, and the url started returning 500
+    // — because without the flag api-worker skips the registry branch and falls through to legacy
+    // code that throws. Nothing warned. Guard both regressions: dropping the flag, and a large
+    // unexplained shrink. force:true is the deliberate override.
+    const prevDelivery = String(existing.metadata?.delivery || '')
+    const prevImplLen = String(existing.metadata?.impl || '').length
+    if (input.force !== true) {
+      if (prevDelivery.includes('graph-js') && !delivery) {
+        return {
+          success: false, blocked: 'delivery_would_be_dropped',
+          error: `Refusing to overwrite "${name}" — it is currently SERVED as JavaScript (delivery: graph-js) from ${COMPONENT_SERVE_BASE}/${name}.js, and this save does not pass delivery. Dropping the flag makes the url return an error and breaks EVERY page that references it, with no warning anywhere. Pass delivery:"graph-js" to keep it served, or force:true if you really mean to stop serving it.`,
+        }
+      }
+      if (prevImplLen > 2000 && impl.length < prevImplLen * 0.6) {
+        return {
+          success: false, blocked: 'impl_shrank',
+          error: `Refusing to overwrite "${name}" — the stored impl is ${prevImplLen} chars and this save is ${impl.length}, a ${Math.round((1 - impl.length / prevImplLen) * 100)}% reduction. For a component other pages depend on that usually means a partial or wrong build was passed. Check what you are saving; pass force:true if the shrink is intended.`,
+        }
+      }
+    }
     if (input.overwrite !== true) {
       return { success: false, error: `A ${kind} named "${name}" already exists (verify=${existing.metadata?.verify?.verdict || '?'}). Pass overwrite:true to replace its impl/schema/verify.` }
     }
