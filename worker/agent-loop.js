@@ -608,6 +608,130 @@ function deriveActiveTask(messages, options = {}) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HISTORY WINDOW (L88) — count TOKENS, not messages, and guarantee user turns
+//
+// The old window was `messages.slice(-10)`. A message is not a unit of meaning:
+// every tool call costs TWO of them (assistant tool_use + user tool_result), so
+// five reads evicted the entire conversation while a ten-turn chat of one-liners
+// used a fraction of the same budget. Worse, the eviction was blind to WHAT was
+// being dropped — a 12KB tool_result and the user's correction cost the same one
+// slot, and the tool_result usually won on recency.
+//
+// buildHistoryWindow() fixes both halves:
+//   C — size the window by estimated tokens, and compact the payloads of OLDER
+//       tool_results first, so verbose reads stop evicting conversation.
+//   B — never close the window before it holds MIN_USER_TURNS real user turns,
+//       regardless of how many tool messages sit between them.
+//
+// We still do NOT pin messages[0] (L54: a pinned one-shot imperative gets
+// re-executed every turn). The goal travels in the ACTIVE TASK system block.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ~4 chars per token. Deliberately rough: this budgets a window, it does not bill.
+function estimateTokens(content) {
+  if (content == null) return 0
+  const text = typeof content === 'string' ? content : JSON.stringify(content)
+  return Math.ceil(text.length / 4)
+}
+
+// A real user turn. A "user" message carrying tool_result blocks is the loop
+// feeding itself, and must not count toward the user-turn guarantee.
+function isCleanUserTurn(message) {
+  if (!message || message.role !== 'user') return false
+  return !(Array.isArray(message.content) && message.content.some((b) => b && b.type === 'tool_result'))
+}
+
+// Older tool_results are evidence already acted upon: the decision they drove is
+// in the assistant text that followed. Keep the head of the payload (ids, status,
+// error) and drop the body.
+function compactToolResults(message, maxChars) {
+  if (!message || !Array.isArray(message.content)) return message
+  let changed = false
+  const content = message.content.map((block) => {
+    if (!block || block.type !== 'tool_result') return block
+    const text = typeof block.content === 'string' ? block.content : null
+    if (text === null || text.length <= maxChars) return block
+    changed = true
+    return { ...block, content: text.slice(0, maxChars) + `… [${text.length - maxChars} chars trimmed from history]` }
+  })
+  return changed ? { ...message, content } : message
+}
+
+// The OpenAI/Grok path keeps its own flat message array and never dropped anything.
+// Dropping messages there is riskier (an assistant `tool_calls` must keep its matching
+// `tool` replies), so apply only the safe half of C: shrink the payload of OLDER tool
+// replies. No message is removed, nothing is reordered, the system message stays first.
+function compactOpenAIToolMessages(messages, options = {}) {
+  const recentFull = options.recentFull ?? 6
+  const maxChars = options.maxChars ?? 400
+  const cutoff = messages.length - recentFull
+  return messages.map((m, i) => {
+    if (i >= cutoff || !m || m.role !== 'tool') return m
+    if (typeof m.content !== 'string' || m.content.length <= maxChars) return m
+    return { ...m, content: m.content.slice(0, maxChars) + `… [${m.content.length - maxChars} chars trimmed from history]` }
+  })
+}
+
+/**
+ * The message window sent to the model.
+ *
+ * @returns {{ messages: object[], tokens: number, userTurns: number, dropped: number, compacted: boolean }}
+ */
+function buildHistoryWindow(messages, options = {}) {
+  const tokenBudget = options.tokenBudget ?? 24000
+  const minUserTurns = options.minUserTurns ?? 3
+  const maxMessages = options.maxMessages ?? 40
+  const recentFull = options.recentFull ?? 6
+  const oldToolResultChars = options.oldToolResultChars ?? 400
+
+  // C: compact the payloads of tool_results outside the most recent exchanges.
+  const cutoff = messages.length - recentFull
+  let compacted = false
+  const prepared = messages.map((m, i) => {
+    if (i >= cutoff) return m
+    const next = compactToolResults(m, oldToolResultChars)
+    if (next !== m) compacted = true
+    return next
+  })
+
+  // Walk backwards. Stop only once BOTH the token budget is spent AND the
+  // user-turn floor is met — the floor is what keeps the human in the window.
+  let tokens = 0
+  let userTurns = 0
+  let start = prepared.length
+  for (let i = prepared.length - 1; i >= 0; i--) {
+    const kept = prepared.length - i
+    const cost = estimateTokens(prepared[i].content)
+    const budgetSpent = tokens + cost > tokenBudget && userTurns >= minUserTurns
+    if (kept > 1 && (budgetSpent || kept > maxMessages)) break
+    tokens += cost
+    start = i
+    if (isCleanUserTurn(prepared[i])) userTurns++
+  }
+
+  // The Anthropic API requires the window to begin on a "user" message and
+  // forbids an orphaned tool_result whose tool_use parent was trimmed away.
+  while (start < prepared.length && !isCleanUserTurn(prepared[start])) start++
+
+  let window = prepared.slice(start)
+  if (window.length === 0) {
+    // Fallback: everything from the last clean user turn, else the last message.
+    for (let i = prepared.length - 1; i >= 0; i--) {
+      if (isCleanUserTurn(prepared[i])) { window = prepared.slice(i); break }
+    }
+    if (window.length === 0) window = prepared.slice(-1)
+  }
+
+  return {
+    messages: window,
+    tokens: window.reduce((sum, m) => sum + estimateTokens(m.content), 0),
+    userTurns: window.filter(isCleanUserTurn).length,
+    dropped: messages.length - window.length,
+    compacted,
+  }
+}
+
 const TASK_SLOT_HEADING = '## ACTIVE TASK (filled in by the worker — this is fact, do not guess)'
 
 /**
@@ -930,7 +1054,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       const requestBody = {
         userId,
         model: providerModel,
-        messages: openAIMessages,
+        messages: compactOpenAIToolMessages(openAIMessages),
         temperature: 0.3,
         tools: openAITools,
         tool_choice: 'auto',
@@ -1262,7 +1386,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       log(`turn ${turn}/${maxTurns} — calling Anthropic`)
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
-      // Cap history to the most recent window to limit input token growth.
+      // Size the history window by estimated TOKENS, not message count, and never close
+      // it before it holds a floor of real user turns — a tool call costs two messages, so
+      // the old slice(-10) let five reads evict the whole conversation (L88).
       // We intentionally DO NOT pin messages[0]: when the first conversation message is a
       // one-shot imperative (e.g. "set the token on post@universi.no"), pinning it makes the
       // model re-execute that command on every later turn and narrate "re-read the original
@@ -1270,32 +1396,13 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       // TASK slot in the system prompt (built once per request, OUTSIDE this window) plus the
       // self-check below — both carry the latest SUBSTANTIVE request, not merely the latest
       // message. See deriveActiveTask()/buildTaskSlot() (L55).
-      const MAX_HISTORY = 10
-      let cappedMessages
-      if (messages.length > MAX_HISTORY) {
-        const tail = messages.slice(-MAX_HISTORY)
-        // The Anthropic API requires the first message to be role "user" and forbids an
-        // orphaned tool_result (whose tool_use parent was trimmed). Advance the window start
-        // until it begins on a clean user turn (user role, no tool_result blocks).
-        let startIdx = 0
-        while (startIdx < tail.length) {
-          const m = tail[startIdx]
-          const hasToolResult = Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')
-          if (m.role === 'user' && !hasToolResult) break
-          startIdx++
-        }
-        cappedMessages = tail.slice(startIdx)
-        // Fallback: if trimming emptied the window, keep from the last clean user message.
-        if (cappedMessages.length === 0) {
-          for (let i = messages.length - 1; i >= 0; i--) {
-            const m = messages[i]
-            const hasToolResult = Array.isArray(m.content) && m.content.some((b) => b && b.type === 'tool_result')
-            if (m.role === 'user' && !hasToolResult) { cappedMessages = messages.slice(i); break }
-          }
-          if (!cappedMessages || cappedMessages.length === 0) cappedMessages = messages.slice(-1)
-        }
-      } else {
-        cappedMessages = [...messages]
+      const historyWindow = buildHistoryWindow(messages, {
+        tokenBudget: options.historyTokenBudget ?? 24000,
+        minUserTurns: options.historyMinUserTurns ?? 3,
+      })
+      let cappedMessages = [...historyWindow.messages]
+      if (historyWindow.dropped > 0 || historyWindow.compacted) {
+        log(`history window: ${historyWindow.messages.length}/${messages.length} msgs, ~${historyWindow.tokens} tok, ${historyWindow.userTurns} user turn(s)${historyWindow.compacted ? ', old tool_results compacted' : ''}`)
       }
 
       // Self-check at every 3rd turn: inject a progress review instruction.
