@@ -9,6 +9,7 @@
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { DEFAULT_MODEL } from './models.js'
+import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused on chat group operations only
@@ -179,6 +180,12 @@ async function runChatSubagent(input, env, onProgress, executeTool) {
     log(`turn ${turn}/${maxTurns}`)
     progress(thinkingMessages[turn - 1] || `Still working... (${turn})`)
 
+    // The Anthropic API rejects the whole conversation if any tool_use went
+    // unanswered (a max_tokens turn used to leave orphans and poison every later
+    // request). Repair before sending — idempotent, no-op on a clean history.
+    const repaired = repairToolPairing(messages)
+    if (repaired > 0) log(`repaired  unanswered tool_use block(s) before send`)
+
     const response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -271,6 +278,16 @@ async function runChatSubagent(input, env, onProgress, executeTool) {
       messages.push(
         { role: 'assistant', content: data.content },
         { role: 'user', content: toolResults },
+      )
+    } else if (data.stop_reason === 'max_tokens') {
+      // Cut off mid-output. Any tool_use in this turn has TRUNCATED arguments and
+      // was never executed — feeding it back used to orphan it and 400 the whole
+      // conversation. Keep the finished text, drop the partial calls, ask for
+      // smaller steps (writing six long nodes in one turn is what blew the limit).
+      log(`stop_reason: max_tokens — reply truncated, requesting smaller steps`)
+      messages.push(
+        { role: 'assistant', content: textBlocksOnly(data.content) },
+        { role: 'user', content: 'Your previous reply hit the output token limit and was cut off. Any tool calls in it did NOT run — nothing was created or saved. Continue in SMALLER steps: one tool call per turn, with shorter content per call.' },
       )
     } else {
       log(`stop_reason: ${data.stop_reason}`)

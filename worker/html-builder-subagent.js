@@ -9,6 +9,7 @@
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { detectTranslationGap } from './html-i18n.js'
 import { DEFAULT_MODEL } from './models.js'
+import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
 // ---------------------------------------------------------------------------
 // System Prompt — focused, ~2K tokens, HTML rules only
@@ -70,6 +71,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 - If you've made 3 edits that didn't solve the problem: call \`rollback_html_node\` to restore the last working version, then re-read and try a different, more surgical approach.
 - NEVER rewrite large sections from scratch. The version history has working code — rollback and patch.
 - Every edit_html_node creates a new version automatically. You always have a safety net.
+- **SCRIPT ORDER: markup first, script second.** An inline \`<script>\` runs the moment the parser reaches it, so it can only see markup ABOVE it. When you add a feature with \`insert_html_at before_body_end\`, the MARKUP must go in before the script, or the script must wrap its init in \`document.addEventListener('DOMContentLoaded', () => { … })\`. Inserting a new \`<section>\` AFTER an existing init script silently kills that feature: \`getElementById\` returns null, every \`addEventListener\` is skipped, no error is logged, and the syntax is perfectly valid. If a control "does nothing" and validate_html_syntax says the brackets are fine, check the ORDER before you hunt for a syntax error — there usually isn't one.
 
 ## HTML creation rules
 - **Converting an EXISTING page to a layout? Use \`apply_layout\` — do NOT hand-restructure.** To make an existing html-node use a layout (holy-grail, app-shell, two-column, etc.), call \`list_layouts\` for the slot names, then ONE \`apply_layout(nodeId, layout, slots)\` call: it inserts the verified skeleton and MOVES your mapped sections into its slots deterministically (e.g. \`slots:[{slot:'nav',target:'.sidebar'},{slot:'main',target:'.grid-builder'},{slot:'header',target:'h1'}]\`, plus \`removeEmpty:['.main-layout','.container']\` to drop the empty old wrappers). Moving all the markup by hand with edit_html_node/replace_html_section overruns the turn budget and loses functionality — never do that for a whole-page restructure.
@@ -813,6 +815,48 @@ function detectDuplicateImplementation(html) {
   return gaps
 }
 
+// Detect an init script that runs BEFORE the markup it queries (2026-09-02).
+// The Gong Gallery failure: `insert_html_at before_body_end` appended the gallery
+// <section> AFTER the <script> that calls init(). Inline scripts execute at parse
+// time, so getElementById('gong-file-input') returned null, every addEventListener
+// was skipped, and the feature was dead — with VALID syntax. validate_html_syntax
+// said "brackets balanced" over and over while the builder hunted a syntax error
+// that never existed and burned three full turn budgets.
+//
+// Deterministic and conservative — only flags an id that DOES exist in the page but
+// appears after the script's own closing tag. Scripts that defer their work
+// (type=module, defer, DOMContentLoaded, window.onload) are skipped entirely, so a
+// correctly written page can never trip this.
+function detectPrematureInit(html) {
+  const h = String(html || '')
+  const gaps = []
+  const reported = new Set()
+  const sre = /<script([^>]*)>([\s\S]*?)<\/script>/gi
+  let m
+  while ((m = sre.exec(h)) !== null) {
+    const attrs = m[1] || ''
+    const body = m[2] || ''
+    const scriptEnd = m.index + m[0].length
+    // Deferred one way or another — the DOM is complete before this code runs.
+    if (/\btype\s*=\s*["']module["']/i.test(attrs) || /\bdefer\b/i.test(attrs)) continue
+    if (/DOMContentLoaded|window\.onload|window\.addEventListener\(\s*["']load/.test(body)) continue
+
+    const ids = new Set()
+    const idre = /(?:getElementById\(\s*["'`]([\w-]+)["'`]|querySelector(?:All)?\(\s*["'`]#([\w-]+)["'`])/g
+    let im
+    while ((im = idre.exec(body)) !== null) ids.add(im[1] || im[2])
+
+    for (const id of ids) {
+      if (reported.has(id)) continue
+      const idPos = h.search(new RegExp(`id\\s*=\\s*["']${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`))
+      if (idPos === -1) continue          // may be created dynamically — do not guess
+      if (idPos > scriptEnd) reported.add(id)
+    }
+  }
+  if (!reported.size) return []
+  return [`Init script runs BEFORE the markup it queries, so the feature is DEAD despite valid syntax: ${[...reported].map(i => '#' + i).join(', ')} ${reported.size === 1 ? 'is' : 'are'} defined LATER in the document than the <script> that looks ${reported.size === 1 ? 'it' : 'them'} up. An inline script executes at parse time, so getElementById returns null and every addEventListener on ${reported.size === 1 ? 'that element' : 'those elements'} is silently skipped — no console error, the buttons just do nothing. Fix it one of two ways: (a) move the <script> BELOW the markup (e.g. just before </body>), or (b) wrap the init in document.addEventListener('DOMContentLoaded', () => { ... }). Do NOT go looking for a syntax error — there isn't one.`]
+}
+
 function detectFunctionalGaps(html) {
   const h = String(html || '')
   const gaps = []
@@ -851,6 +895,9 @@ function detectFunctionalGaps(html) {
   const translationGap = detectTranslationGap(h)
   if (translationGap) gaps.push(translationGap)
 
+  // 5. Init script placed above the markup it wires up — present but dead.
+  gaps.push(...detectPrematureInit(h))
+
   return gaps
 }
 
@@ -861,7 +908,10 @@ function detectFunctionalGaps(html) {
 async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const { graphId, nodeId, task, consoleErrors, userId } = input
   const maxTurns = 20
-  const WALL_TIME_LIMIT_MS = 180_000  // 3 minutes — paired with maxTurns=20 so the turn budget is actually reachable
+  const WALL_TIME_LIMIT_MS = 240_000  // 4 minutes — one page-sized generation can take >60s on its own
+  const MODEL_CALL_TIMEOUT_MS = 120_000  // per call; page creation legitimately runs long
+  const MAX_TIMEOUT_RETRIES = 1
+  let timeoutRetries = 0
   const startTime = Date.now()
   const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
@@ -973,8 +1023,20 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
     log(`turn ${turn}/${maxTurns} (${(elapsed / 1000).toFixed(1)}s elapsed)`)
     progress(thinkingMessages[turn - 1] || `Still working... (${turn})`)
 
+    // The Anthropic API rejects the whole conversation if any tool_use went
+    // unanswered (a max_tokens turn used to leave orphans and poison every later
+    // request). Repair before sending — idempotent, no-op on a clean history.
+    const repaired = repairToolPairing(messages)
+    if (repaired > 0) log(`repaired ${repaired} unanswered tool_use block(s) before send`)
+
+    // Per-call timeout, sized to the wall-time budget that is actually left.
+    // A flat 25s was a FALSE NEGATIVE on the one call that matters most: writing a
+    // whole page is ~8K output tokens and legitimately runs a minute or more, so
+    // "create a beautiful page" aborted at 25s and the run died with all work lost
+    // (2026-09-02). Generation time is not a failure — only the wall budget is.
+    const callBudget = Math.max(30_000, Math.min(MODEL_CALL_TIMEOUT_MS, WALL_TIME_LIMIT_MS - (Date.now() - startTime)))
     const controller = new AbortController()
-    const fetchTimeout = setTimeout(() => controller.abort(), 25000)
+    const fetchTimeout = setTimeout(() => controller.abort(), callBudget)
     let response
     try {
       response = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
@@ -994,12 +1056,25 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
     } catch (fetchErr) {
       clearTimeout(fetchTimeout)
       const isTimeout = fetchErr.name === 'AbortError'
-      log(`ANTHROPIC fetch ${isTimeout ? 'timed out after 25s' : `failed: ${fetchErr.message}`}`)
+      const secs = Math.round(callBudget / 1000)
+      log(`ANTHROPIC fetch ${isTimeout ? `timed out after ${secs}s` : `failed: ${fetchErr.message}`}`)
+      // A timeout is not automatically fatal — retry the same turn once before
+      // giving up, so a single slow/hung call doesn't discard the whole run.
+      if (isTimeout && timeoutRetries < MAX_TIMEOUT_RETRIES && Date.now() - startTime < WALL_TIME_LIMIT_MS - 30_000) {
+        timeoutRetries++
+        log(`retrying after timeout (${timeoutRetries}/${MAX_TIMEOUT_RETRIES})`)
+        progress('That took too long — trying again...')
+        continue
+      }
       return {
         success: false,
-        error: isTimeout ? 'Anthropic API timed out after 25s — try a smaller or more focused task' : `Anthropic fetch error: ${fetchErr.message}`,
+        error: isTimeout
+          ? `Anthropic API timed out after ${secs}s (${timeoutRetries} retr${timeoutRetries === 1 ? 'y' : 'ies'}) — try a smaller or more focused task`
+          : `Anthropic fetch error: ${fetchErr.message}`,
         turns: turn,
         actions,
+        graphId,
+        nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
         inputTokens,
         outputTokens,
       }
@@ -1122,6 +1197,18 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
               : `\n\n⚠ AUTO-VALIDATION: ${autoValidation.issueCount} syntax issue(s) found:\n${(autoValidation.issues || []).slice(0, 5).map(i => `  - ${i.message}`).join('\n')}\nFix these before continuing.`
             content += valSummary
 
+            // Balanced brackets are NOT a working feature. An insert placed after an
+            // init script leaves perfect syntax and a dead button, and "syntax OK"
+            // then sends the builder hunting a bug that does not exist. Say it here,
+            // in the same turn as the edit that caused it.
+            if (typeof result.updatedHtml === 'string' && result.updatedHtml) {
+              const orderGaps = detectPrematureInit(result.updatedHtml)
+              if (orderGaps.length) {
+                content += `\n\n⚠ ORDERING: ${orderGaps[0]}`
+                log(`premature-init detected right after ${toolUse.name}`)
+              }
+            }
+
             // Track edit success/failure for budget awareness
             if (autoValidation.valid) {
               consecutiveFailedEdits = 0
@@ -1211,4 +1298,4 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   }
 }
 
-export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, detectOrphanScript, detectDuplicateImplementation, detectDeadEndpoints, fetchNodeHtmlForGate }
+export { runHtmlBuilderSubagent, executeValidateHtmlSyntax, executeGetHtmlStructure, executeRollbackHtmlNode, detectFunctionalGaps, detectOrphanScript, detectDuplicateImplementation, detectPrematureInit, detectDeadEndpoints, fetchNodeHtmlForGate }

@@ -9,6 +9,7 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
+import { repairToolPairing } from './message-history.js'
 import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate, executeValidateHtmlSyntax } from './html-builder-subagent.js'
 
 /**
@@ -1396,6 +1397,13 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       // TASK slot in the system prompt (built once per request, OUTSIDE this window) plus the
       // self-check below — both carry the latest SUBSTANTIVE request, not merely the latest
       // message. See deriveActiveTask()/buildTaskSlot() (L55).
+      // The Anthropic API rejects the ENTIRE conversation when a tool_use went
+      // unanswered — one bad turn poisons every later request until the run dies
+      // (2026-09-02). Repair the live history first, so both this call and the
+      // window built from it are well-formed. Idempotent; no-op when clean.
+      const repairedPairs = repairToolPairing(messages)
+      if (repairedPairs > 0) log(`repaired ${repairedPairs} unanswered tool_use block(s) before send`)
+
       const historyWindow = buildHistoryWindow(messages, {
         tokenBudget: options.historyTokenBudget ?? 24000,
         minUserTurns: options.historyMinUserTurns ?? 3,
@@ -2006,6 +2014,9 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       type: 'agent_thinking',
       timestamp: new Date().toISOString()
     })
+
+    // Same invariant as the /chat loop: no unanswered tool_use may reach the API.
+    repairToolPairing(messages)
 
     const modelEvent = await wal.begin('model_call', model, {
       turn,
