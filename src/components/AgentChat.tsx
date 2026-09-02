@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { findToolCallIndex } from '../lib/toolCallPairing';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
@@ -55,6 +56,11 @@ interface Props {
 
 interface ToolCall {
   id: string;
+  // The model's own tool-call id, echoed by the worker on tool_call / tool_progress /
+  // tool_result. Pairing by NAME alone put a result on the wrong call whenever two
+  // calls to the same tool ran in parallel (2026-09-02). Optional: an older worker,
+  // or a replayed history, may not send it.
+  callId?: string;
   tool: string;
   input: unknown;
   status: 'running' | 'success' | 'error';
@@ -62,6 +68,7 @@ interface ToolCall {
   result?: unknown;
   progress?: string;
 }
+
 
 interface ImageAttachment {
   type: 'url' | 'base64';
@@ -2229,6 +2236,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               next.thinking = false;
               next.toolCalls.push({
                 id: `tc_${Date.now()}_${next.toolCalls.length}`,
+                callId: typeof ev.data.callId === 'string' ? ev.data.callId : undefined,
                 tool: ev.data.tool as string,
                 input: ev.data.input,
                 status: 'running',
@@ -2245,28 +2253,22 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               ) {
                 setSubagentProgress(progressMsg);
               }
-              for (let i = next.toolCalls.length - 1; i >= 0; i--) {
-                if (next.toolCalls[i].tool === progressTool && next.toolCalls[i].status === 'running') {
-                  next.toolCalls[i] = { ...next.toolCalls[i], progress: progressMsg };
-                  break;
-                }
-              }
+              const pi = findToolCallIndex(next.toolCalls, ev.data.callId, progressTool);
+              if (pi !== -1) next.toolCalls[pi] = { ...next.toolCalls[pi], progress: progressMsg };
               break;
             }
 
             case 'tool_result': {
               const tool = ev.data.tool as string;
-              for (let i = next.toolCalls.length - 1; i >= 0; i--) {
-                if (next.toolCalls[i].tool === tool && next.toolCalls[i].status === 'running') {
-                  next.toolCalls[i] = {
-                    ...next.toolCalls[i],
-                    status: ev.data.success ? 'success' : 'error',
-                    summary: (ev.data.summary as string) || undefined,
-                    result: ev.data,
-                    progress: undefined,
-                  };
-                  break;
-                }
+              const ri = findToolCallIndex(next.toolCalls, ev.data.callId, tool);
+              if (ri !== -1) {
+                next.toolCalls[ri] = {
+                  ...next.toolCalls[ri],
+                  status: ev.data.success ? 'success' : 'error',
+                  summary: (ev.data.summary as string) || undefined,
+                  result: ev.data,
+                  progress: undefined,
+                };
               }
               break;
             }

@@ -1163,7 +1163,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         if (!openAIAllowedTools.has(toolName)) {
           const message = `The OpenAI AgentChat path did not expose "${toolName}" in this request. Available OpenAI tools include: ${Array.from(openAIAllowedTools).slice(0, 40).join(', ')}${openAIAllowedTools.size > 40 ? ', ...' : ''}.`
           toolEvent.settle('blocked', `not exposed on the ${provider.name} path`)
-          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
           continue
         }
@@ -1171,7 +1171,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         if (planMode && !READ_ONLY_TOOLS.has(toolName)) {
           const message = `PLAN MODE is active (read-only). The "${toolName}" tool was not executed. Present a concise plan instead.`
           toolEvent.settle('blocked', 'Plan mode (read-only)')
-          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: 'Blocked — Plan mode (read-only).' })}\n\n`))
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, summary: 'Blocked — Plan mode (read-only).' })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ blocked: true, planMode: true, message }) })
           continue
         }
@@ -1190,15 +1190,20 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           const message = `This request is to create a NEW graph, but "${toolName}" would modify the current context graph${contextGraphId ? ` (${contextGraphId})` : ''}. Call create_graph FIRST — it returns a new graphId — then use THAT id for create_node / add_edge / patch_node. Do NOT patch or add to the context graph.`
           log(`blocked ${toolName} on context graph before create_graph (explicit new-graph intent)`)
           toolEvent.settle('blocked', 'would mutate the context graph before create_graph ran')
-          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, summary: message })}\n\n`))
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
           continue
         }
 
         const toolStart = Date.now()
-        writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolName, input })}\n\n`))
+        // callId is the model's own tool-call id, echoed on tool_call/tool_progress/
+        // tool_result so the UI can pair them exactly. Without it the client matched a
+        // result to the last RUNNING call of the same name, which rotates results
+        // between parallel calls (three read_graph_content calls showed each other's
+        // graphs — 2026-09-02).
+        writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, input })}\n\n`))
         const onProgress = (msg) => {
-          writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ tool: toolName, message: msg })}\n\n`))
+          writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, message: msg })}\n\n`))
         }
 
         try {
@@ -1237,7 +1242,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
             ).run().catch(e => console.error('[stats] openai tool insert failed:', e.message))
           }
 
-          const ssePayload = { tool: toolName, success: !toolFailed, summary }
+          const ssePayload = { callId: call.id, tool: toolName, success: !toolFailed, summary }
           if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
           const capabilityPayload = buildCapabilityToolPayload(toolName, result)
           if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
@@ -1276,7 +1281,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
               toolDuration, new Date().toISOString(), selectedModel,
             ).run().catch(e => console.error('[stats] openai tool insert failed:', e.message))
           }
-          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolName, success: false, error: error.message })}\n\n`))
+          writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, error: error.message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error.message }) })
         }
       }
@@ -1724,7 +1729,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const message = `PLAN MODE is active (read-only). The "${toolUse.name}" tool makes changes and was NOT executed. Do not retry it or any other write/create/modify/generate/delegate tool. Instead, present a concise step-by-step PLAN of exactly what you would do — which tools, in what order, on which graph/nodes/data — and then STOP and wait. The user will switch to Auto mode to approve and run it.`
             log(`PLAN MODE blocked ${toolUse.name}`)
             toolEvent.settle('blocked', 'Plan mode (read-only)')
-            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: 'Blocked — Plan mode (read-only). Proposed, not executed.' })}\n\n`))
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, success: false, summary: 'Blocked — Plan mode (read-only). Proposed, not executed.' })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ blocked: true, planMode: true, message }) }
           }
 
@@ -1737,7 +1742,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const message = 'This request is to create a new graph. Call create_graph first, then create_node/add_edge as needed. Do not search existing graphs first.'
             log(`blocked ${toolUse.name} before create_graph for explicit create request`)
             toolEvent.settle('blocked', 'graph discovery before create_graph on an explicit create request')
-            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, summary: message })}\n\n`))
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, success: false, summary: message })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: message }) }
           }
 
@@ -1789,10 +1794,15 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           }
           const toolStart = Date.now()
           log(`executing ${toolUse.name} (input: ${JSON.stringify(toolUse.input).slice(0, 200)})`)
-          writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ tool: toolUse.name, input: toolUse.input })}\n\n`))
+          // callId is the model's own tool_use id, echoed on tool_call/tool_progress/
+          // tool_result so the UI can pair them exactly. Without it the client matched a
+          // result to the last RUNNING call of the same name — with tools running in
+          // parallel that rotates the results between calls, and the chat log shows each
+          // call carrying another call's answer (2026-09-02).
+          writer.write(encoder.encode(`event: tool_call\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, input: toolUse.input })}\n\n`))
           // Progress callback for long-running tools
           const onProgress = (msg) => {
-            writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ tool: toolUse.name, message: msg })}\n\n`))
+            writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, message: msg })}\n\n`))
           }
           try {
             const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap, onProgress)
@@ -1841,7 +1851,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
 
-            const ssePayload = { tool: toolUse.name, success: !toolFailed, summary }
+            const ssePayload = { callId: toolUse.id, tool: toolUse.name, success: !toolFailed, summary }
             if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
             const capabilityPayload = buildCapabilityToolPayload(toolUse.name, result)
             if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
@@ -1923,7 +1933,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
                 toolDuration, new Date().toISOString(), model
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
-            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ tool: toolUse.name, success: false, error: error.message })}\n\n`))
+            writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, success: false, error: error.message })}\n\n`))
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
           }
         }
