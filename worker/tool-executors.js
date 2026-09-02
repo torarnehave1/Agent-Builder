@@ -63,10 +63,54 @@ async function fetchGraphForVersion(graphId, env) {
   }
 }
 
+// A 200 from patchNode is the SERVER'S CLAIM, not proof. On 2026-09-02 it answered
+// {newVersion: 38} for a write that never landed: the graph stayed on v37, the node
+// kept the old image URL, and every one of the 24 call sites below dutifully told the
+// user "saved as v38 — verified". The user found the truth by looking at the page.
+//
+// A version number we did not read back is a rumour. After every accepted patch,
+// re-read the graph: the version must actually have advanced past the version we
+// wrote against, or the write did NOT happen and this throws instead of returning a
+// number the caller will print. When the patch carried `info`, the stored bytes are
+// compared too — a mismatch does not throw (the KG worker may normalise) but is
+// reported so a caller can stop saying "verified".
+async function confirmPatchLanded(env, graphId, nodeId, fields, data, baseVersion) {
+  let actual
+  try {
+    actual = await fetchGraphForVersion(graphId, env)
+  } catch (err) {
+    // Cannot verify — say so rather than inventing confidence.
+    return { ...data, versionVerified: false, verifyError: err.message }
+  }
+
+  const claimed = Number(data?.newVersion)
+  const real = actual.version
+
+  if (Number.isFinite(baseVersion) && real <= baseVersion) {
+    throw new Error(
+      `patchNode reported success${Number.isFinite(claimed) ? ` (newVersion ${claimed})` : ''} but the write did NOT land: ` +
+      `the graph is still on v${real}. NOTHING was saved — do not tell the user it is done. Read the node and try again.`
+    )
+  }
+
+  const result = { ...data, newVersion: real, versionVerified: true }
+  if (Number.isFinite(claimed) && claimed !== real) result.versionClaimed = claimed
+
+  if (typeof fields?.info === 'string') {
+    const stored = (actual.graph?.nodes || []).find((n) => n && n.id === nodeId)
+    if (stored && typeof stored.info === 'string') {
+      result.contentVerified = stored.info === fields.info
+      if (!result.contentVerified) result.storedLength = stored.info.length
+    }
+  }
+  return result
+}
+
 async function patchNodeWithVersionRetry(env, graphId, nodeId, fields, options = {}) {
   let expectedVersion = Number.isInteger(options.expectedVersion)
     ? options.expectedVersion
     : (await fetchGraphForVersion(graphId, env)).version
+  const baseVersion = expectedVersion
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/patchNode', {
@@ -75,7 +119,7 @@ async function patchNodeWithVersionRetry(env, graphId, nodeId, fields, options =
       body: JSON.stringify({ graphId, nodeId, fields, expectedVersion }),
     })
     const data = await res.json()
-    if (res.ok) return data
+    if (res.ok) return await confirmPatchLanded(env, graphId, nodeId, fields, data, baseVersion)
 
     const isConflict = res.status === 409 || String(data?.error || '').toLowerCase().includes('version mismatch')
     if (!isConflict || attempt === 1) {
@@ -1296,8 +1340,28 @@ async function executeReplaceHtmlSection(input, env) {
   const after = currentHtml.slice(e)
   const newHtml = `${before}\n${newInner}\n${after}`
 
-  if (newHtml === currentHtml) {
-    return { success: true, graphId: input.graphId, nodeId: input.nodeId, anchorId, changed: false, charDelta: 0, message: `Section "${anchorId}" already matched the given content — no change.` }
+  // A replace that changes nothing must NOT report success. The model that meant to
+  // swap an image URL sent back content whose only difference was whitespace, got
+  // "saved as v38 — Verified: content between the anchors was swapped", and told the
+  // user it was fixed. The wrong image was still on the page (2026-09-02). Compare on
+  // collapsed whitespace, and when nothing meaningful differs, say exactly that — and
+  // name the attribute values that are still identical, since a stale src/href is the
+  // usual thing the caller thought it was changing.
+  const squash = (t) => t.replace(/\s+/g, ' ').trim()
+  if (newHtml === currentHtml || squash(oldInner) === squash(newInner)) {
+    const attrValues = (t) => (t.match(/(?:src|href)="([^"]*)"/g) || []).map((m) => m.slice(m.indexOf('"') + 1, -1))
+    const sameAttrs = attrValues(oldInner).filter((v) => attrValues(newInner).includes(v))
+    return {
+      success: false,
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      anchorId,
+      changed: false,
+      charDelta: 0,
+      error: `NOTHING CHANGED. The replacement for "${anchorId}" is identical to what is already there (only whitespace differs), so no version was created and nothing was saved.` +
+        (sameAttrs.length ? ` These values are unchanged: ${[...new Set(sameAttrs)].slice(0, 6).join(', ')}.` : '') +
+        ` If you meant to change a value (an image URL, a caption, a price), the new HTML you sent still carries the OLD one — read_html_section("${anchorId}"), find the exact string, and send content that actually differs. Do NOT report this as done.`,
+    }
   }
 
   // CONTENT-LOSS GUARD (Lesson 38): replace_html_section overwrites the ENTIRE
@@ -1342,7 +1406,8 @@ async function executeReplaceHtmlSection(input, env) {
     savedNotLive: true,
     publishHostHints: Array.isArray(node.references) ? node.references : [],
     publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live on any domain until published. Tell the user the new version ("nå på v${patchData.newVersion}", roll back any time with restore_html_node_version) AND that it is saved-but-not-live — ask whether to publish (publish_html_node). Do not auto-publish.`,
-    message: `Replaced section "${anchorId}" in "${input.nodeId}" (${newHtml.length > currentHtml.length ? '+' : ''}${newHtml.length - currentHtml.length} chars) — saved as v${patchData.newVersion}. Verified: content between the anchors was swapped. Tell the user "nå på v${patchData.newVersion}" and that it is saved in the graph, not live until published.`,
+    contentVerified: patchData.contentVerified,
+    message: `Replaced section "${anchorId}" in "${input.nodeId}" (${newHtml.length > currentHtml.length ? '+' : ''}${newHtml.length - currentHtml.length} chars) — saved as v${patchData.newVersion}, re-read from the graph after the write.${patchData.contentVerified === false ? ' WARNING: the stored bytes do not match what was sent — re-read the node before reporting anything.' : ''} Tell the user "nå på v${patchData.newVersion}" and that it is saved in the graph, not live until published.`,
   }
 }
 

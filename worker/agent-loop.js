@@ -733,6 +733,32 @@ function buildHistoryWindow(messages, options = {}) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PHANTOM-WRITE DETECTION (2026-09-02)
+//
+// "Image 2 appended to the gallery grid — Urd no 2. Now at v35." — no tool was
+// called. The graph was untouched, v35 already belonged to an earlier edit, and the
+// user only found out by looking at the page ("I can not see the 2 images"). It
+// happened three times in one session.
+//
+// The other guards ask whether the USER requested a write. This asks whether the
+// ASSISTANT claimed one, which catches the fabrication however the request was
+// phrased. Both signals are required — a version claim AND an action verb — so
+// reporting a version that was merely read ("the page is on v37") does not trip it.
+// ─────────────────────────────────────────────────────────────────────────────
+const WRITE_TOOL_PREFIX_RE = /^(create_|add_|patch_|insert_|append_|replace_|remove_|move_|edit_|delete_|apply_layout|translate_html_node|restore_|publish_|save_|set_|upload_|setup_|deploy_|delegate_to_kg|delegate_to_html_builder)/
+
+function claimsUnbackedWrite(text, toolCallNames) {
+  const t = String(text || '')
+  // The emphasis characters matter: every real fabrication was written "now at **v35**",
+  // and a pattern that did not step over the markdown matched none of them.
+  const claimsVersion = /\b(?:now at|now on|nå på|saved as|lagret som|updated to|oppdatert til)\s*[*_`~\s]*v(?:ersion)?[.\s*_`~]*\d+/i.test(t)
+  if (!claimsVersion) return false
+  const claimsAction = /\b(added|appended|inserted|updated|replaced|removed|saved|created|fixed|corrected|lagt til|lagret|oppdatert|fikset|endret)\b/i.test(t)
+  if (!claimsAction) return false
+  return !(toolCallNames || []).some((name) => WRITE_TOOL_PREFIX_RE.test(String(name || '')))
+}
+
 const TASK_SLOT_HEADING = '## ACTIVE TASK (filled in by the worker — this is fact, do not guess)'
 
 /**
@@ -1369,6 +1395,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   // over-eager guard shows the user nothing at all while costing a full run of model calls.
   // After the cap the guard stands down and the turn is allowed to finish and speak.
   const MAX_GUARD_RETRIES = 2
+  let phantomWriteRetries = 0
   let graphWriteGuardRetries = 0
   let graphVerifyGuardRetries = 0
   let calendarGuardRetries = 0
@@ -1504,6 +1531,27 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       }
 
       if (data.stop_reason === 'end_turn') {
+        // PHANTOM-WRITE GUARD (2026-09-02). Three times in one session the agent
+        // answered "Image 2 appended to the gallery — now at v35" having called no
+        // tool at all; the user had to notice each time ("I can not see the 2 images",
+        // "You did not add the last one"). The existing guards ask "did the USER ask
+        // for a write?" — this one asks "did the ASSISTANT claim one?", which catches
+        // the fabrication regardless of how the request was phrased. Fires only when a
+        // version/save claim AND an action verb are both present, so reporting a
+        // version read from the graph ("the page is on v37") does not trip it.
+        if (phantomWriteRetries < MAX_GUARD_RETRIES) {
+          const finalText = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
+          if (claimsUnbackedWrite(finalText, stats.toolCalls)) {
+            phantomWriteRetries++
+            log(`end_turn blocked: claimed a saved version with NO write tool this request (retry ${phantomWriteRetries}/${MAX_GUARD_RETRIES})`)
+            messages.push(
+              { role: 'assistant', content: data.content },
+              { role: 'user', content: 'STOP — you just told the user something was saved at a version number, but you did not call a single write tool during this request. Nothing was written and that version does not exist. Do the actual write now with the right tool (insert_in_element / replace_html_section / append_to_section / create_node …), read the tool result, and report ONLY the version the tool actually returned. If you cannot do the write, say plainly that nothing was saved.' }
+            )
+            continue
+          }
+        }
+
         // Guardrail: if user asked for graph creation/modification but no write was completed,
         // force one continuation turn with a direct tool-routing reminder.
         if (enforceGraphWrite && graphWriteGuardRetries < MAX_GUARD_RETRIES && countGraphWriteCompletions(messages) <= graphWriteCompletionBaseline) {
@@ -2285,4 +2333,4 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
   }
 }
 
-export { streamingAgentLoop, executeAgent }
+export { streamingAgentLoop, executeAgent, claimsUnbackedWrite }
