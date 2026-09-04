@@ -270,6 +270,14 @@ export async function loadOpenAPITools(env) {
     'kg_get_contract',       // → get_contract
     'kg_patch_node',         // → patch_node
     'kg_add_node',           // → create_node
+    // Added 2026-09-04. Both shadowed their hardcoded twins and the model preferred them,
+    // losing what the twins do: executeAddEdge persists the edge label and validates that
+    // both endpoints exist; executePatchGraphMetadata goes through
+    // patchGraphMetadataWithVersionRetry, so the caller never has to guess the
+    // expectedVersion that /patchGraphMetadata requires. Through the raw operations a run
+    // dropped every edge label and a metadata patch reported success while writing nothing.
+    'kg_add_edge',           // → add_edge
+    'kg_patch_graph_metadata', // → patch_graph_metadata
     'kg_add_a_i_template',   // broken handler
     'kg_get_a_i_templates',  // redundant
     'kg_get_tool_templates', // redundant

@@ -272,7 +272,31 @@ export const SEQUENTIAL_TOOLS = new Set([
   // run_cloudflare_selftest saveGraphWithHistory's its whole fixed report graph with
   // override:true — two concurrent runs of the latter overwrite each other wholesale.
   'migrate_app_markers', 'run_cloudflare_selftest',
+  // Added 2026-09-04 — the guard test flagged both as node writers.
+  'deploy_world_proxy', 'save_page_plan',
 ])
+
+/**
+ * Must this tool run alone, before the parallel batch?
+ *
+ * Two sources, because SEQUENTIAL_TOOLS only knows the HARDCODED tool names:
+ *   1. SEQUENTIAL_TOOLS — hand-maintained, guarded by test-sequential-tools.mjs.
+ *   2. operationMap — the OpenAPI-derived tools (kg_*, and every other registry worker's
+ *      prefix). Any non-GET operation is a write, so it races the same way.
+ *
+ * Source 2 is not optional. On 2026-09-04 the model picked the dynamic `kg_add_edge` and
+ * `kg_patch_graph_metadata` over their hardcoded twins. Neither name is in the set, so both
+ * went into Promise.all(): four add_edge calls issued as two parallel pairs each read the
+ * same graph version, and each pair's second write overwrote the first — two of four edges
+ * vanished, edge labels were lost, and a patchGraphMetadata returned success while its write
+ * was clobbered by a concurrent edge save. The agent then reported all of it as done.
+ * The hardcoded-name test could never have caught this; deriving from the HTTP method can.
+ */
+export function isSequentialTool(name, operationMap = {}) {
+  if (SEQUENTIAL_TOOLS.has(name)) return true
+  const method = operationMap && operationMap[name] && operationMap[name].method
+  return !!method && method !== 'GET' && method !== 'HEAD'
+}
 
 function isOpenAIModel(model) {
   return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
@@ -1698,10 +1722,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
 
-        // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
-        // SEQUENTIAL_TOOLS is the single module-level set (defined near the top) — no per-loop copy.
-        const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
-        const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
+        // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions.
+        // isSequentialTool covers BOTH the hardcoded set and every non-GET OpenAPI tool.
+        const sequentialTools = toolUses.filter(t => isSequentialTool(t.name, operationMap))
+        const parallelTools = toolUses.filter(t => !isSequentialTool(t.name, operationMap))
         let inferredGraphId = null
 
         const GRAPH_ID_AWARE_TOOLS = new Set([
@@ -2206,10 +2230,10 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         })
       }
 
-      // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions
-      // SEQUENTIAL_TOOLS is the single module-level set (defined near the top) — no per-loop copy.
-      const sequentialTools = toolUses.filter(t => SEQUENTIAL_TOOLS.has(t.name))
-      const parallelTools = toolUses.filter(t => !SEQUENTIAL_TOOLS.has(t.name))
+      // Graph-mutating tools must run sequentially to avoid D1 read-modify-write race conditions.
+      // isSequentialTool covers BOTH the hardcoded set and every non-GET OpenAPI tool.
+      const sequentialTools = toolUses.filter(t => isSequentialTool(t.name, operationMap))
+      const parallelTools = toolUses.filter(t => !isSequentialTool(t.name, operationMap))
       let inferredGraphId = null
 
       const GRAPH_ID_AWARE_TOOLS = new Set([
