@@ -6851,8 +6851,73 @@ Vurder:
 
 Hold tilbakemeldingen støttende, konkret og fremadrettet.`
 
+const TRANSCRIPTION_PROMPT_SENTIMENT = `Gjør en SENTIMENTANALYSE av denne samtalen fra Enkel Endring-programmet.
+Dette er IKKE en temarapport – det er en analyse av følelser, stemning og emosjonell bevegelse.
+Svar på norsk.
+
+Transkripsjonen er merket med tidsstempler i formatet [mm:ss - mm:ss]. Bruk disse til å bygge
+følelsesbuen. Bygg ALT på det som faktisk sies – siter som bevis. Ikke diagnostiser, ikke
+spekuler i psykiske lidelser, ikke gi behandlingsråd.
+
+---
+
+## 1. 📊 Samlet stemningsbilde
+Én oppsummerende vurdering: dominerende følelsestone, energinivå og åpenhet i samtalen.
+Oppgi en samlet valens på skalaen −5 (svært tung/lukket) til +5 (svært lys/åpen), og begrunn
+tallet med 2–3 setninger.
+
+---
+
+## 2. 📈 Følelsesbue over tid
+Gå gjennom samtalen kronologisk med utgangspunkt i tidsstemplene. Slå sammen tilstøtende
+tidsrom med samme stemning til faser (typisk 5–9 faser for en lang samtale).
+
+| Tidsrom | Dominerende følelse | Valens (−5…+5) | Hva drev den |
+|---|---|---|---|
+
+Etter tabellen: beskriv formen på buen i 3–5 setninger (stiger den? faller den? svinger den?
+hvor ligger tyngdepunktet?).
+
+---
+
+## 3. 🔀 Vendepunkt
+Identifiser 2–5 øyeblikk der stemningen tydelig skiftet. For hvert vendepunkt:
+- **Tidsrom:** [mm:ss]
+- **Fra → til:** hvilken følelse gikk over i hvilken
+- **Utløser:** hva som ble sagt eller spurt
+- **Sitat:** > "det utløsende sitatet"
+
+---
+
+## 4. 🎭 Per taler
+Beskriv tonen hos hver part hver for seg:
+- **Deltager(e):** følelsesmessig register, hvor åpen/lukket, hvor mye selvkritikk vs. selvaksept,
+  endring fra start til slutt.
+- **Mentor:** tone, tempo, hvor mye ro som formidles, hvordan mentors tone påvirket deltagerens.
+
+---
+
+## 5. 🗣️ Følelsesspråket
+Plukk ut de faktiske ordene deltageren bruker om egne følelser (f.eks. "ubehagelig", "trygg",
+"redd", "glede"). List dem gruppert som negativt / nøytralt / positivt ladet, og kommenter
+hva ordvalget avslører om hvor personen er.
+
+---
+
+## 6. ⚠️ Åpne spenninger
+Hvilke følelser ble berørt men ikke bearbeidet? Hvor stoppet samtalen opp, ble avbrutt av et
+temaskifte, eller gled over i noe lettere? List 2–4 punkter med tidsrom og kort begrunnelse.
+
+---
+
+## 7. 🧭 Retning
+Sammenlign starten og slutten av samtalen. Startvalens → sluttvalens, og hva den differansen
+sier om utbyttet av samtalen. Avslutt med én setning om hva sentimentet peker mot for neste
+samtale.`
+
 async function executeAnalyzeTranscription(input, env, progress = () => {}) {
-  const { graphId, nodeId, conversationType = '1-1', saveToGraph = true } = input
+  const { graphId, nodeId, conversationType = '1-1', analysisType = 'report', saveToGraph = true } = input
+  const isSentiment = analysisType === 'sentiment'
 
   // 1. Fetch graph and find transcription node
   progress('Henter transkripsjon fra graf...')
@@ -6868,9 +6933,13 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
     node = nodes.find(n => n.id === nodeId)
     if (!node) throw new Error(`Node "${nodeId}" not found in graph`)
   } else {
-    // Find first fulltext node
-    node = nodes.find(n => n.type === 'fulltext')
-    if (!node) throw new Error('No fulltext node found in graph. Provide a nodeId.')
+    // Pick the transcription node, not just the first fulltext node — a graph that already
+    // holds an analysis/summary has several fulltext nodes, and the first is rarely the
+    // transcript. Prefer a transcription-looking label, else the longest fulltext node.
+    const fulltexts = nodes.filter(n => n.type === 'fulltext')
+    if (!fulltexts.length) throw new Error('No fulltext node found in graph. Provide a nodeId.')
+    node = fulltexts.find(n => /transcript|transkripsjon/i.test(n.label || ''))
+      || fulltexts.reduce((a, b) => ((b.info || '').length > (a.info || '').length ? b : a))
   }
 
   const transcriptionText = (node.info || '').trim()
@@ -6878,13 +6947,15 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
     return { graphId, nodeId: node.id, message: 'Node has no transcription text to analyze' }
   }
 
-  // 2. Select prompt template based on conversation type
-  const systemPrompt = conversationType === 'group'
-    ? TRANSCRIPTION_PROMPT_GROUP
-    : TRANSCRIPTION_PROMPT_1_1
+  // 2. Select prompt template — sentiment overrides the conversation-type report
+  const systemPrompt = isSentiment
+    ? TRANSCRIPTION_PROMPT_SENTIMENT
+    : conversationType === 'group'
+      ? TRANSCRIPTION_PROMPT_GROUP
+      : TRANSCRIPTION_PROMPT_1_1
 
   // 3. Send to Claude for analysis
-  progress('Analyserer samtalen med Claude...')
+  progress(isSentiment ? 'Kjører sentimentanalyse med Claude...' : 'Analyserer samtalen med Claude...')
   const claudeRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -6892,7 +6963,7 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
       userId: input.userId || 'system-analysis',
       messages: [{ role: 'user', content: `${systemPrompt}\n\n---\n\nTranskripsjon:\n\n${transcriptionText}` }],
       model: ANALYSIS_MODEL,
-      max_tokens: 4000,
+      max_tokens: isSentiment ? 6000 : 4000,
       temperature: 0.3,
     }),
   })
@@ -6907,8 +6978,8 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
 
   // 4. Optionally save analysis as a new fulltext node in the same graph
   if (saveToGraph) {
-    progress('Lagrer analyse i grafen...')
-    const analysisNodeId = `node-analysis-${Date.now()}`
+    progress(isSentiment ? 'Lagrer sentimentanalyse i grafen...' : 'Lagrer analyse i grafen...')
+    const analysisNodeId = `node-${isSentiment ? 'sentiment' : 'analysis'}-${Date.now()}`
     const typeLabel = conversationType === 'group' ? 'Gruppesamtale' : '1-1 Samtale'
     await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
       method: 'POST',
@@ -6917,10 +6988,10 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
         graphId,
         node: {
           id: analysisNodeId,
-          label: `# Analyse – ${typeLabel}`,
+          label: isSentiment ? `# Sentimentanalyse – ${typeLabel}` : `# Analyse – ${typeLabel}`,
           type: 'fulltext',
           info: analysisText,
-          color: '#E8A838',
+          color: isSentiment ? '#9B59B6' : '#E8A838',
         }
       }),
     })
@@ -6930,9 +7001,12 @@ async function executeAnalyzeTranscription(input, env, progress = () => {}) {
     graphId,
     nodeId: node.id,
     conversationType,
+    analysisType,
     savedToGraph: saveToGraph,
     analysisText,
-    message: `Analyserte ${conversationType === 'group' ? 'gruppesamtale' : '1-1 samtale'} transkripsjon${saveToGraph ? ' og lagret analysen i grafen' : ''}`
+    message: isSentiment
+      ? `Kjørte sentimentanalyse av transkripsjonen${saveToGraph ? ' og lagret den som egen node i grafen' : ''}`
+      : `Analyserte ${conversationType === 'group' ? 'gruppesamtale' : '1-1 samtale'} transkripsjon${saveToGraph ? ' og lagret analysen i grafen' : ''}`
   }
 }
 

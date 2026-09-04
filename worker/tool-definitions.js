@@ -1559,16 +1559,21 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'analyze_transcription',
-    description: 'Analyze a conversation transcription from the Enkel Endring program. Fetches the transcription from a graph node and produces a structured Norwegian-language report with: key themes, success indicators, powerful quotes, action points, and mentor feedback. Use this when the user asks for a "vurdering", "analyse", or "rapport" of a transcription.',
+    description: 'Analyze a conversation transcription from the Enkel Endring program. Two modes via analysisType. "report" (default): structured Norwegian report with key themes, success indicators, powerful quotes, action points and mentor feedback — use for "vurdering", "analyse", "rapport". "sentiment": a real sentiment analysis — overall mood with a valence score, an emotional arc across the transcript timestamps, turning points, per-speaker tone, emotional vocabulary and unresolved tensions — use whenever the user asks for "sentiment", "sentimentanalyse", "stemning", "følelser" or an emotional read of a conversation. Do NOT substitute the report for a sentiment request.',
     input_schema: {
       type: 'object',
       properties: {
         graphId: { type: 'string', description: 'The graph containing the transcription node' },
-        nodeId: { type: 'string', description: 'The node with the transcription text. If not provided, uses the first fulltext node in the graph.' },
+        nodeId: { type: 'string', description: 'The node with the transcription text. If not provided, picks the fulltext node whose label looks like a transcription, else the longest fulltext node.' },
         conversationType: {
           type: 'string',
           enum: ['1-1', 'group'],
           description: 'Type of conversation. "1-1" for individual sessions, "group" for group sessions. Affects analysis focus. Default: "1-1"'
+        },
+        analysisType: {
+          type: 'string',
+          enum: ['report', 'sentiment'],
+          description: 'Which analysis to produce. "report" (default) = the structured mentor report. "sentiment" = emotional/sentiment analysis with valence scoring and an arc over time. Saved node is labelled "# Sentimentanalyse – ..." in sentiment mode.'
         },
         saveToGraph: {
           type: 'boolean',
