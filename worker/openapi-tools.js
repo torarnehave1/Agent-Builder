@@ -290,6 +290,9 @@ export async function loadOpenAPITools(env) {
     // restore_graph_version, which reads the full stored version server-side.
     'kg_save_graph_with_history', // → create_node / patch_node / add_edge / patch_graph_metadata
     'kg_save_know_graph_legacy',  // → same, legacy endpoint
+    'kg_update_know_graph_legacy', // → same. Reached for on 2026-09-04 the moment patch_node
+                                   //   failed twice: a blocked whole-graph write is not enough
+                                   //   if a second one is still on the shelf.
     'kg_restore_graph',           // → restore_graph_version (which is superadmin-gated)
     'kg_add_a_i_template',   // broken handler
     'kg_get_a_i_templates',  // redundant

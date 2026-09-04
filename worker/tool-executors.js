@@ -329,14 +329,31 @@ async function executeReadNode(input, env) {
 }
 
 async function executePatchNode(input, env) {
+  // Same normalisation as executePatchGraphMetadata, for the same reason. Models pass `fields`
+  // as a JSON STRING (and reach for `updates`/`patch`). Unnormalised it arrives undefined,
+  // JSON.stringify drops the key, and the KG worker replies with its generic "graphId, nodeId,
+  // fields (object), and expectedVersion (integer) are required" — blaming expectedVersion, which
+  // the caller never supplies and patchNodeWithVersionRetry always sets. Fixing that for
+  // patch_graph_metadata earlier the same day and not here cost a run: the model retried the
+  // identical wrong call, then reached for a whole-graph legacy write instead (2026-09-04).
+  let fields = input.fields ?? input.updates ?? input.patch
+  if (typeof fields === 'string') {
+    try { fields = JSON.parse(fields) } catch {
+      throw new Error('patch_node: "fields" was a string that is not valid JSON. Pass an object, e.g. fields: { "info": "..." }.')
+    }
+  }
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new Error(`patch_node: "fields" must be an object of node fields (info, label, path, color, metadata). Received arguments: [${Object.keys(input).join(', ')}]. Correct call: { graphId: "...", nodeId: "...", fields: { "info": "..." } }.`)
+  }
+
   try {
-    const data = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, input.fields)
+    const data = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, fields)
     return {
       graphId: input.graphId,
       nodeId: input.nodeId,
-      updatedFields: Object.keys(input.fields),
+      updatedFields: Object.keys(fields),
       version: data.newVersion,
-      message: `Node "${input.nodeId}" updated: ${Object.keys(input.fields).join(', ')}`,
+      message: `Node "${input.nodeId}" updated: ${Object.keys(fields).join(', ')}`,
     }
   } catch (error) {
     const errMsg = error.message || 'patchNode failed'
@@ -384,6 +401,22 @@ async function executePatchNodeMetadata(input, env) {
     const ids = (graph.nodes || []).map(n => `"${n.id}"`).join(', ')
     return { success: false, error: `Node ${nodeId} not found. Valid node IDs: ${ids}` }
   }
+  // A key that is a TOP-LEVEL Node field is almost always a mistargeted call: the caller meant
+  // patch_node, and merging it here buries the value in node.metadata where nothing reads it.
+  // On 2026-09-04 a header image was "updated" this way — success=true, "metadata merged: path,
+  // info" — while node.path still pointed at the old image. Refuse, and name the right tool.
+  const TOP_LEVEL_NODE_FIELDS = ['path', 'info', 'label', 'type', 'color', 'visible', 'bibl', 'position']
+  const misplaced = Object.keys(patch).filter(k => TOP_LEVEL_NODE_FIELDS.includes(k))
+  if (misplaced.length) {
+    return {
+      success: false,
+      error: `${misplaced.join(', ')} ${misplaced.length === 1 ? 'is a top-level node field' : 'are top-level node fields'}, not metadata. `
+        + `Writing ${misplaced.length === 1 ? 'it' : 'them'} here would nest ${misplaced.length === 1 ? 'it' : 'them'} under node.metadata, where the viewer never looks. `
+        + `Use patch_node with fields: { ${misplaced.map(k => `"${k}": ...`).join(', ')} }. `
+        + `patch_node_metadata is only for custom keys of your own.`,
+    }
+  }
+
   const merged = { ...(node.metadata || {}), ...patch }
   try {
     const data = await patchNodeWithVersionRetry(env, graphId, nodeId, { metadata: merged })
