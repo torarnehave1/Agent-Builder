@@ -26,10 +26,14 @@ import {
   type AutomationSummary,
   type RunResult,
 } from '../lib/automationToGraph';
+import type { AutomationDraft } from '../lib/logToAutomation';
 
 interface Props {
   userEmail: string;
   userId: string; // the caller's user_id (UUID) — the identity tools/keys are stored under
+  /** A draft handed over from the chat tab ("Make Automation"). Applied once, then cleared. */
+  draft?: AutomationDraft | null;
+  onDraftApplied?: () => void;
 }
 
 const AUTOMATION_NODE_TYPES: NodeTypes = {
@@ -50,7 +54,7 @@ function seedNodes(): Node[] {
   return [createAutomationNode('start', { x: 320, y: 80 })];
 }
 
-export default function AutomationTab({ userEmail, userId }: Props) {
+export default function AutomationTab({ userEmail, userId, draft, onDraftApplied }: Props) {
   const [nodes, setNodes] = useState<Node[]>(seedNodes);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
@@ -199,6 +203,27 @@ export default function AutomationTab({ userEmail, userId }: Props) {
       setBuilding(false);
     }
   }, [describePrompt, userId, userEmail]);
+
+  // A draft arriving from the chat tab replaces the canvas, exactly as a Describe build does.
+  // It is unsaved on purpose: the conversion cannot know which literals are per-run values, so
+  // the user reviews and edits before Save/Run.
+  useEffect(() => {
+    if (!draft) return;
+    const { nodes: n, edges: e } = specToReactFlow(draft);
+    setNodes(n.length ? n : seedNodes());
+    setEdges(e);
+    setSelectedNode(null);
+    setTestStates({});
+    setAutomationId(null);
+    setTitle(draft.title || 'Automation from chat');
+    setDescription(draft.description || '');
+    const actions = draft.steps.filter((s) => s.stepType === 'action').length;
+    setStatus(
+      `From chat: ${actions} step${actions === 1 ? '' : 's'} — review, then Save/Run.`
+      + (draft.notes?.length ? ` ${draft.notes.join(' ')}` : ''),
+    );
+    onDraftApplied?.();
+  }, [draft, onDraftApplied]);
 
   const openPicker = useCallback(async () => {
     setPickerOpen(true);

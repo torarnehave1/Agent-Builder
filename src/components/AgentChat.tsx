@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { findToolCallIndex } from '../lib/toolCallPairing';
+import { logToAutomation, type AutomationDraft, type LoggedCall } from '../lib/logToAutomation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
@@ -52,6 +53,8 @@ interface Props {
   pendingGraphContext?: { id: string; title: string } | null;
   onPendingGraphContextProcessed?: () => void;
   activeContext?: { title: string; description?: string; starterPrompts: string[]; capabilities?: { name: string; summary: string }[] } | null;
+  /** Hand a draft automation, built from this session's tool calls, to the Automation tab. */
+  onCreateAutomation?: (draft: AutomationDraft) => void;
 }
 
 interface ToolCall {
@@ -835,7 +838,7 @@ function ThinkingIndicator() {
 
 // ---------- Main Component ----------
 
-export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed, activeContext }: Props) {
+export default function AgentChat({ userId, userEmail, graphId, onGraphChange, agentId, agentAvatarUrl, onPreview, consoleErrors, onConsoleErrorsHandled, onActiveHtmlNode, model, pendingGraphContext, onPendingGraphContextProcessed, activeContext, onCreateAutomation }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -1134,6 +1137,31 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       prompt('Copy this log:', log);
     });
   }, [buildLog]);
+
+  // Flatten this session's tool calls, oldest first, for the automation converter. A run that
+  // worked is a working automation — its params executed, unlike the ones /automation/build asks
+  // Claude to plan against a schema. `result` here is the SSE payload, not the full tool output;
+  // logToAutomation is written against that limit.
+  const sessionCalls = useCallback((): LoggedCall[] => {
+    const out: LoggedCall[] = [];
+    for (const m of messages) {
+      for (const tc of m.toolCalls || []) {
+        out.push({ tool: tc.tool, input: tc.input, status: tc.status, result: tc.result });
+      }
+    }
+    return out;
+  }, [messages]);
+
+  const automatableCount = useMemo(
+    () => sessionCalls().filter((c) => c.status === 'success').length,
+    [sessionCalls],
+  );
+
+  const makeAutomation = useCallback(() => {
+    if (!onCreateAutomation) return;
+    const firstUser = messages.find((m) => m.role === 'user');
+    onCreateAutomation(logToAutomation(sessionCalls(), { prompt: firstUser?.content }));
+  }, [onCreateAutomation, sessionCalls, messages]);
 
   // Parse SSE stream
   const parseSSE = useCallback(async (
@@ -2641,6 +2669,16 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               >
                 Copy Log
               </button>
+              {onCreateAutomation && automatableCount > 0 && (
+                <button
+                  type="button"
+                  onClick={makeAutomation}
+                  className="px-3 py-1 rounded-md border app-border app-surface app-text-muted text-xs app-hover-surface-strong app-hover-text-strong transition-colors"
+                  title="Turn this session's successful tool calls into a draft automation"
+                >
+                  Make Automation
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowLog(p => !p)}

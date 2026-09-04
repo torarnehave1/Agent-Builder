@@ -11,6 +11,7 @@ import GitHubConnect from './GitHubConnect';
 import UsageDashboard from './UsageDashboard';
 import WorkContextTab, { type WorkContext } from './WorkContextTab';
 import AutomationTab from './AutomationTab';
+import type { AutomationDraft } from '../lib/logToAutomation';
 import type { ResolvedTheme, ThemeMode } from '../lib/theme';
 
 type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'usage';
@@ -53,6 +54,8 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
   const [activeHtmlGraphId, setActiveHtmlGraphId] = useState<string | null>(null);
   const [model, setModel] = useState(getStoredModel);
   const [pendingGraphContext, setPendingGraphContext] = useState<PendingGraphContext | null>(null);
+  // A draft handed over from the chat tab; consumed once by AutomationTab, then cleared.
+  const [automationDraft, setAutomationDraft] = useState<AutomationDraft | null>(null);
 
   const isLight = resolvedTheme === 'light';
 
@@ -155,6 +158,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
               pendingGraphContext={pendingGraphContext}
               onPendingGraphContextProcessed={() => setPendingGraphContext(null)}
               activeContext={activeContext}
+              onCreateAutomation={(d) => { setAutomationDraft(d); setView('automation'); }}
             />
           </div>
           {previewHtml && (
@@ -193,7 +197,14 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           onSelectAgent={setEditingAgentId}
         />
       )}
-      {view === 'automation' && <AutomationTab userEmail={userEmail} userId={userId} />}
+      {view === 'automation' && (
+        <AutomationTab
+          userEmail={userEmail}
+          userId={userId}
+          draft={automationDraft}
+          onDraftApplied={() => setAutomationDraft(null)}
+        />
+      )}
       {view === 'data' && <DataExplorer />}
       {view === 'usage' && <UsageDashboard userId={userId} />}
       {view === 'settings' && (
