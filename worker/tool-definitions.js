@@ -158,6 +158,32 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'remove_edge',
+    description: 'Delete an edge from a knowledge graph. Address it EITHER by edgeId OR by sourceId+targetId. Removing by edgeId deletes every edge carrying that id — that is how you clear edges corrupted by an older bug, which all share the id "undefined_undefined" within a graph and have no endpoints left to name them by. Use this to clean up dead or wrong connections; the nodes themselves are untouched.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: {
+          type: 'string',
+          description: 'The ID of the graph containing the edge'
+        },
+        edgeId: {
+          type: 'string',
+          description: 'The edge id to remove (removes ALL edges with this id). Use this OR sourceId+targetId.'
+        },
+        sourceId: {
+          type: 'string',
+          description: 'Source node ID of the edge to remove (use together with targetId)'
+        },
+        targetId: {
+          type: 'string',
+          description: 'Target node ID of the edge to remove (use together with sourceId)'
+        }
+      },
+      required: ['graphId']
+    }
+  },
+  {
     name: 'get_contract',
     description: 'Retrieve a contract that specifies how to generate content. The contract contains node type descriptions, templates, CSS design tokens, feature flags, validation rules, and guidelines. Always fetch the contract BEFORE generating content.',
     input_schema: {

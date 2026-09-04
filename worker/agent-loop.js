@@ -247,7 +247,7 @@ const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
 // against THIS single set (no per-loop copies that can drift). A test
 // (test-sequential-tools.mjs) fails if any KG-writing tool is missing here.
 export const SEQUENTIAL_TOOLS = new Set([
-  'create_graph', 'create_node', 'create_html_node', 'add_edge',
+  'create_graph', 'create_node', 'create_html_node', 'add_edge', 'remove_edge',
   'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',

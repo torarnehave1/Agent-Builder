@@ -277,6 +277,7 @@ export async function loadOpenAPITools(env) {
     // expectedVersion that /patchGraphMetadata requires. Through the raw operations a run
     // dropped every edge label and a metadata patch reported success while writing nothing.
     'kg_add_edge',           // → add_edge
+    'kg_remove_edge',        // → remove_edge
     'kg_patch_graph_metadata', // → patch_graph_metadata
     // Whole-graph overwrite from the model's own hands. The model's view of a graph comes
     // from read_graph, which TRUNCATES node info by type (fulltext 2000, html 200) and says

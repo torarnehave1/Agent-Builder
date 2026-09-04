@@ -2807,6 +2807,52 @@ async function executeAddEdge(input, env) {
   }
 }
 
+async function executeRemoveEdge(input, env) {
+  const graphId = String(input.graphId || '').trim()
+  if (!graphId) throw new Error('graphId is required')
+
+  // Accept both the tool's own sourceId/targetId naming (matching add_edge) and the raw
+  // source/target the endpoint uses, so either shape works.
+  const sourceId = String(input.sourceId ?? input.source ?? '').trim()
+  const targetId = String(input.targetId ?? input.target ?? '').trim()
+  const edgeId = String(input.edgeId ?? '').trim()
+
+  const body = { graphId }
+  if (edgeId) {
+    body.edgeId = edgeId
+  } else if (sourceId && targetId) {
+    body.source = sourceId
+    body.target = targetId
+  } else {
+    throw new Error('remove_edge needs either edgeId, or both sourceId and targetId.')
+  }
+
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/removeEdge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    const known = Array.isArray(data.edgeIdsInGraph) && data.edgeIdsInGraph.length
+      ? ` Edges in this graph: ${data.edgeIdsInGraph.join(', ')}.`
+      : ''
+    throw new Error(`${data.error || `removeEdge failed (${res.status})`}${known}`)
+  }
+
+  const removed = (data.removedEdges || [])
+    .map(e => `${e.source ?? '?'} -> ${e.target ?? '?'}${e.label ? ` ("${e.label}")` : ''}`)
+    .join('; ')
+  return {
+    success: true,
+    graphId,
+    removedCount: data.removedCount,
+    removedEdges: data.removedEdges,
+    version: data.newVersion,
+    message: `Removed ${data.removedCount} edge${data.removedCount === 1 ? '' : 's'}${removed ? `: ${removed}` : ''} (graph now at v${data.newVersion})`,
+  }
+}
+
 // ── Contract & template operations ────────────────────────────────
 
 function deepMerge(source, target) {
@@ -12609,6 +12655,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeCreateHtmlNode(toolInput, env)
     case 'create_node':
       return await executeCreateNode(toolInput, env)
+    case 'remove_edge':
+      return await executeRemoveEdge(toolInput, env)
     case 'add_edge':
       return await executeAddEdge(toolInput, env)
     case 'get_contract':
