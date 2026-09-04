@@ -2751,17 +2751,26 @@ async function executeAddEdge(input, env) {
   }
 
   const edgeId = `${input.sourceId}_${input.targetId}`
+  const label = input.label || ''
   const existingEdge = graphData.edges.find(e => e.id === edgeId)
+  let action = 'added'
   if (existingEdge) {
-    return { graphId: input.graphId, edgeId, message: 'Edge already exists' }
+    // Upsert the label rather than refusing outright. An edge written by some other path may
+    // carry no label at all, and with no remove_edge/patch_edge tool this was the only way to
+    // fix one — i.e. it could not be fixed through the app at all (2026-09-04).
+    if (!label || existingEdge.label === label) {
+      return { graphId: input.graphId, edgeId, label: existingEdge.label || '', message: 'Edge already exists' }
+    }
+    existingEdge.label = label
+    action = 'relabelled'
+  } else {
+    graphData.edges.push({
+      id: edgeId,
+      source: input.sourceId,
+      target: input.targetId,
+      label
+    })
   }
-
-  graphData.edges.push({
-    id: edgeId,
-    source: input.sourceId,
-    target: input.targetId,
-    label: input.label || ''
-  })
 
   const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
     method: 'POST',
@@ -2776,8 +2785,9 @@ async function executeAddEdge(input, env) {
   return {
     graphId: input.graphId,
     edgeId,
+    label,
     version: saveData.newVersion,
-    message: `Edge ${input.sourceId} -> ${input.targetId} added`
+    message: `Edge ${input.sourceId} -> ${input.targetId} ${action}${label ? ` ("${label}")` : ''}`
   }
 }
 

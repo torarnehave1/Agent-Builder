@@ -133,7 +133,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'add_edge',
-    description: 'Connect two nodes in a knowledge graph with a directed edge. Both nodes must already exist in the graph.',
+    description: 'Connect two nodes in a knowledge graph with a directed edge. Both nodes must already exist in the graph. If the edge already exists and you pass a different label, the label is updated — this is also how you fix an edge that was saved without one.',
     input_schema: {
       type: 'object',
       properties: {
