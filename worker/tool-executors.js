@@ -2406,12 +2406,28 @@ async function executeRestoreHtmlNodeVersion(input, env) {
 }
 
 async function executePatchGraphMetadata(input, env) {
-  const data = await patchGraphMetadataWithVersionRetry(env, input.graphId, input.fields)
+  // Normalise the argument shape before calling. Models reach for `metadata` instead of
+  // `fields`, and serialise the object as a JSON string. Unnormalised, `fields` arrived
+  // undefined, JSON.stringify dropped the key, and the KG worker answered with its generic
+  // "graphId, fields (object), and expectedVersion (integer) are required" — which points at
+  // expectedVersion, a field the caller never supplies and this helper always sets. A run on
+  // 2026-09-04 retried the identical wrong call three times on the strength of that message,
+  // then reached for a whole-graph save instead and truncated four nodes.
+  let fields = input.fields ?? input.metadata ?? input.updates
+  if (typeof fields === 'string') {
+    try { fields = JSON.parse(fields) } catch {
+      throw new Error('patch_graph_metadata: "fields" was a string that is not valid JSON. Pass an object, e.g. fields: { "title": "...", "metaArea": "#AREA" }.')
+    }
+  }
+  if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+    throw new Error(`patch_graph_metadata: "fields" must be an object of metadata keys (title, description, category, metaArea, ...). Received arguments: [${Object.keys(input).join(', ')}]. Correct call: { graphId: "...", fields: { title: "..." } }.`)
+  }
+  const data = await patchGraphMetadataWithVersionRetry(env, input.graphId, fields)
   return {
     graphId: input.graphId,
-    updatedFields: data.updatedFields || Object.keys(input.fields),
+    updatedFields: data.updatedFields || Object.keys(fields),
     version: data.newVersion,
-    message: `Graph metadata updated: ${Object.keys(input.fields).join(', ')}`,
+    message: `Graph metadata updated: ${Object.keys(fields).join(', ')}`,
   }
 }
 

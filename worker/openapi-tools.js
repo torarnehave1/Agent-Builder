@@ -278,6 +278,18 @@ export async function loadOpenAPITools(env) {
     // dropped every edge label and a metadata patch reported success while writing nothing.
     'kg_add_edge',           // → add_edge
     'kg_patch_graph_metadata', // → patch_graph_metadata
+    // Whole-graph overwrite from the model's own hands. The model's view of a graph comes
+    // from read_graph, which TRUNCATES node info by type (fulltext 2000, html 200) and says
+    // so with info_truncated. Handing that same model a save-the-whole-graph tool means one
+    // read then one save silently replaces every node's content with its own preview. That
+    // is not hypothetical: on 2026-09-04 a run did exactly this and a 32,392-character
+    // transcription came back 956 characters long, along with three other nodes.
+    // Targeted writes (patch_node, create_node, add_edge, patch_graph_metadata) touch only
+    // the field they are given and cannot lose content this way; graph-wide rollback is
+    // restore_graph_version, which reads the full stored version server-side.
+    'kg_save_graph_with_history', // → create_node / patch_node / add_edge / patch_graph_metadata
+    'kg_save_know_graph_legacy',  // → same, legacy endpoint
+    'kg_restore_graph',           // → restore_graph_version (which is superadmin-gated)
     'kg_add_a_i_template',   // broken handler
     'kg_get_a_i_templates',  // redundant
     'kg_get_tool_templates', // redundant
