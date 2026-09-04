@@ -8075,10 +8075,32 @@ async function executeGenerateImage(input, env) {
 
   const startTime = Date.now()
 
-  // Run Stable Diffusion XL Lightning — returns a ReadableStream of JPEG bytes
+  // Run Stable Diffusion XL Lightning — returns a ReadableStream of JPEG bytes.
+  //
+  // width/height/seed are documented in this tool's input_schema and were being DROPPED here:
+  // the object only forwarded prompt and negative_prompt, so every request fell back to the
+  // model's 1024x1024 default. Asked for a 16:9 header the agent sent width:1024, height:576,
+  // was told the call succeeded, and got a square file — twice, before the user measured it
+  // (2026-09-04). A schema that advertises a parameter the executor discards is worse than one
+  // that never offered it: the caller has no way to see the request was ignored.
+  //
+  // Diffusion latents are 1/8 scale, so a side must be a multiple of 8; the schema's own
+  // 256-1024 range is the clamp.
+  const pixelSide = (v) => {
+    const n = Math.round(Number(v))
+    if (!Number.isFinite(n)) return undefined
+    return Math.min(1024, Math.max(256, Math.round(n / 8) * 8))
+  }
+  const width = pixelSide(input.width)
+  const height = pixelSide(input.height)
+  const seed = Number.isFinite(Number(input.seed)) ? Math.round(Number(input.seed)) : undefined
+
   const aiInput = {
     prompt: input.prompt,
     ...(input.negative_prompt ? { negative_prompt: input.negative_prompt } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
+    ...(seed !== undefined ? { seed } : {}),
   }
 
   // env.AI.run() returns a ReadableStream of JPEG bytes — use Response.arrayBuffer() to buffer it
@@ -8139,10 +8161,15 @@ async function executeGenerateImage(input, env) {
     ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
   }
 
+  // Echo the dimensions actually SENT to the model. The bytes are not measured here, but a
+  // caller that asked for 16:9 can at least see whether the request carried it.
+  const size = width && height ? ` (${width}x${height} requested)` : ''
   return {
     url,
     prompt: input.prompt,
-    message: `Generated image: ${url}`,
+    width: width || null,
+    height: height || null,
+    message: `Generated image${size}: ${url}`,
   }
 }
 
