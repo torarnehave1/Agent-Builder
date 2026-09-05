@@ -2032,6 +2032,56 @@ async function probeDeadBackendUrls(html) {
   return results.filter(Boolean)
 }
 
+// WHICH PROXY SERVES A HOST. Two different workers, in two different Cloudflare accounts, each with
+// its OWN HTML_PAGES KV and its OWN publish secret:
+//   * the SHARED Vegvisr brand-worker  — serves the zones below, KV in the Vegvisr account
+//   * a World-Founder brand-proxy      — serves everything else, KV in the FOUNDER'S own account
+// The zone list is api-worker's DOMAIN_ZONE_MAPPING (the same set create_subdomain provisions
+// without an explicit zone_id; mirrored in tool-definitions.js and in executeCreateSubdomain's
+// hint). Treating every host as shared is what silently wrote charlie.iamazing.page's page into the
+// Vegvisr account's KV while the founder's proxy — the one actually serving the host — never saw it
+// (2026-09-05). The classification only PICKS a path; readPublishedKey below is what proves it.
+const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'vegr.ai', 'alivenesslab.org']
+const isSharedBrandHost = (host) => SHARED_BRAND_ZONES.some((z) => host === z || host.endsWith(`.${z}`))
+
+// Ask a brand proxy what it holds for `hostname`. BOTH proxies expose /__html/check and answer it
+// from the SAME KV they serve pages out of, so this is the only trustworthy proof that the bytes
+// landed in the store that actually serves the host. A 200 from the host itself proves nothing: a
+// proxy with no key falls through to DEFAULT_ORIGIN and cheerfully serves the vegvisr.org SPA,
+// which is exactly how charlie.iamazing.page got reported "live" while showing somebody else's
+// homepage. The endpoint keys off the ?hostname= parameter, not the request Host, so the shared
+// brand-worker can be asked about any host over the service binding — which it MUST be for a
+// vegvisr.org host, since a public fetch from inside agent-worker hits the same-zone 522 loopback
+// and would leave every good vegvisr.org publish reported as unverified.
+// Returns exists:null when the answer is undeterminable.
+async function readPublishedKey(host, env, viaBinding) {
+  const path = `/__html/check?hostname=${encodeURIComponent(host)}`
+  try {
+    const res = viaBinding
+      ? await env.BRAND_WORKER.fetch(`https://brand-worker${path}`)
+      : await fetch(`https://${host}${path}`, { redirect: 'manual' })
+    const routed = res.status !== 530 && res.status !== 1016
+    if (!res.ok) return { reachable: routed, exists: null, status: res.status }
+    const j = await res.json().catch(() => null)
+    if (!j || typeof j.exists !== 'boolean') return { reachable: true, exists: null, status: res.status }
+    return { reachable: true, exists: j.exists, metadata: j.metadata || null, status: res.status }
+  } catch (e) {
+    return { reachable: false, exists: null, error: e.message }
+  }
+}
+
+// Does `host` actually resolve to a worker? Only needed when the key was read over the service
+// binding (which bypasses DNS entirely and so says nothing about routing). 530/1016 or a thrown
+// fetch = not routed yet; a same-zone 522 loopback is a REAL routed host and counts as routed.
+async function probeHostRoutes(host) {
+  try {
+    const r = await fetch(`https://${host}/`, { method: 'HEAD', redirect: 'manual' })
+    return r.status !== 530 && r.status !== 1016
+  } catch (e) {
+    return false
+  }
+}
+
 async function executePublishHtmlNode(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'publish an html-node')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -2084,44 +2134,64 @@ async function executePublishHtmlNode(input, env) {
     }
   }
 
-  // 2. Mint a host-scoped publish token via api-worker's canonical minter, NOT by signing locally.
-  //    The shared brand-worker verifies tokens against api-worker's HTML_PUBLISH_SECRET (tokens are
-  //    normally minted by api-worker's /api/html/publish-token — same path the viewer's Publish button
-  //    uses). agent-worker's own HTML_PUBLISH_SECRET differs from that, so a locally-signed token is
-  //    rejected 401. Minting through api-worker (reached via the API_WORKER service binding) needs no
-  //    secret parity: api-worker signs with the secret brand-worker trusts. The caller's own
-  //    emailVerificationToken authenticates the mint; Superadmin may publish to any host.
-  const ac = input.authContext || {}
-  const callerToken = String(ac.profile?.emailVerificationToken || ac.authToken || input.userToken || '').trim()
-  if (!callerToken) {
-    return { success: false, error: 'No caller API token available to mint a publish token. Sign in (or pass authToken) and retry.' }
-  }
-  if (!env.API_WORKER) {
-    return { success: false, error: 'API_WORKER service binding missing on agent-worker — cannot mint a publish token. Add it to wrangler.toml + redeploy.' }
-  }
+  // 2. Mint a host-scoped publish token. WHICH SECRET signs it depends on WHICH proxy serves the
+  //    host — the two proxies do not share one:
+  //    * SHARED brand-worker (vegvisr.org & friends) verifies against API-WORKER's
+  //      HTML_PUBLISH_SECRET, so the token must be minted through api-worker's canonical minter
+  //      (/api/html/publish-token — the same path the viewer's Publish button uses). agent-worker's
+  //      own secret differs from that, so a locally-signed token is rejected 401 there. The caller's
+  //      emailVerificationToken authenticates the mint; Superadmin may publish to any host.
+  //    * WORLD-FOUNDER brand-proxy (any other domain) verifies against AGENT-WORKER's
+  //      HTML_PUBLISH_SECRET: agent-worker signs here AND stamps the same value into every proxy
+  //      (provision_world_kv / set_world_publish_secret), so signer and verifier cannot drift
+  //      (Lesson 44). This is the path publish_world_page has always used.
+  const sharedHost = isSharedBrandHost(host)
   let publishToken
-  try {
-    const mintRes = await env.API_WORKER.fetch('https://vegvisr-api-worker/api/html/publish-token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Token': callerToken },
-      body: JSON.stringify({ appId: input.nodeId, hostname: host, ttlDays: 30 }),
-    })
-    const mintJson = await mintRes.json().catch(() => null)
-    if (!mintRes.ok || !mintJson?.success || !mintJson?.token) {
-      const detail = (mintJson && mintJson.error) || `HTTP ${mintRes.status}`
-      return { success: false, error: `Could not mint publish token via api-worker: ${detail}` }
+  if (sharedHost) {
+    const ac = input.authContext || {}
+    const callerToken = String(ac.profile?.emailVerificationToken || ac.authToken || input.userToken || '').trim()
+    if (!callerToken) {
+      return { success: false, error: 'No caller API token available to mint a publish token. Sign in (or pass authToken) and retry.' }
     }
-    publishToken = mintJson.token
-  } catch (e) {
-    return { success: false, error: `Publish-token mint failed: ${e.message}` }
+    if (!env.API_WORKER) {
+      return { success: false, error: 'API_WORKER service binding missing on agent-worker — cannot mint a publish token. Add it to wrangler.toml + redeploy.' }
+    }
+    try {
+      const mintRes = await env.API_WORKER.fetch('https://vegvisr-api-worker/api/html/publish-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': callerToken },
+        body: JSON.stringify({ appId: input.nodeId, hostname: host, ttlDays: 30 }),
+      })
+      const mintJson = await mintRes.json().catch(() => null)
+      if (!mintRes.ok || !mintJson?.success || !mintJson?.token) {
+        const detail = (mintJson && mintJson.error) || `HTTP ${mintRes.status}`
+        return { success: false, error: `Could not mint publish token via api-worker: ${detail}` }
+      }
+      publishToken = mintJson.token
+    } catch (e) {
+      return { success: false, error: `Publish-token mint failed: ${e.message}` }
+    }
+  } else {
+    const secret = env.HTML_PUBLISH_SECRET
+    if (!secret) {
+      return { success: false, error: `${host} is not a vegvisr.org-family host, so it is served by a World brand-proxy that verifies publish tokens against agent-worker's HTML_PUBLISH_SECRET — and agent-worker has no such binding. One-time setup: run \`wrangler secret put HTML_PUBLISH_SECRET\` in the Agent-Builder/worker dir (the same secret provision_world_kv stamps into each proxy).` }
+    }
+    const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+    publishToken = await signPublishToken(
+      { uid: gate.userId || gate.email || 'agent-worker', appId: input.nodeId, hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp },
+      secret
+    )
   }
 
-  // 3. POST the HTML to the brand-worker's publish endpoint.
-  //    Prefer the BRAND_WORKER service binding: agent-worker and vegvisr.org subdomains share the
-  //    vegvisr.org zone, so a public-hostname fetch loopback-fails with HTTP 522. The binding routes
-  //    worker→worker internally, bypassing DNS/zone entirely. brand-worker keys the KV entry off the
-  //    BODY hostname (not the request Host), so the internal URL host is irrelevant. Public fetch is
-  //    the fallback for a foreign host passed via proxy_url (e.g. a cross-zone domain).
+  // 3. POST the HTML to the proxy that ACTUALLY SERVES `host` — see the classification note above.
+  //    Shared host: prefer the BRAND_WORKER service binding. agent-worker and vegvisr.org subdomains
+  //    share the vegvisr.org zone, so a public-hostname fetch loopback-fails with HTTP 522; the
+  //    binding routes worker→worker internally, bypassing DNS/zone entirely, and brand-worker keys
+  //    the KV entry off the BODY hostname (not the request Host), so the internal URL is irrelevant.
+  //    World-Founder host: the binding is the WRONG STORE — it writes into the Vegvisr account's KV,
+  //    which nothing serving that domain ever reads. POST over the public internet to
+  //    https://<host>/__html/publish instead, exactly as publish_world_page does. There is no
+  //    loopback risk because the host is in a foreign zone.
   // GATE (fail-closed, NO override): never publish a page that fetches a backend host that does
   // not exist — an invented/guessed endpoint (Cloudflare 530 / connection failure). A nonexistent
   // backend is never a legitimate publish, so the agent CANNOT force past this. Deterministic stop
@@ -2150,7 +2220,7 @@ async function executePublishHtmlNode(input, env) {
   })
   const publishBody = JSON.stringify({ hostname: host, html: htmlToPublish, overwrite, graphId: input.graphId, nodeId: input.nodeId })
   const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
-  const useBinding = env.BRAND_WORKER && !input.proxy_url
+  const useBinding = sharedHost && env.BRAND_WORKER && !input.proxy_url
   const proxyUrl = useBinding ? 'brand-worker service binding' : (input.proxy_url || `https://${host}/__html/publish`).trim()
   let pubRes, pubJson
   try {
@@ -2159,7 +2229,10 @@ async function executePublishHtmlNode(input, env) {
       : await fetch(proxyUrl, { method: 'POST', headers: publishHeaders, body: publishBody })
     pubJson = await pubRes.json().catch(() => null)
   } catch (e) {
-    return { success: false, error: `Could not reach ${proxyUrl}: ${e.message}. If ${host} does not route to brand-worker yet, run create_subdomain first.` }
+    const routeHint = sharedHost
+      ? `If ${host} does not route to brand-worker yet, run create_subdomain first.`
+      : `If ${host} does not route to the World's brand proxy yet, attach it as a Workers custom domain (deploy_world_proxy for ${host}), or pass proxy_url=https://<brand-proxy>.workers.dev/__html/publish.`
+    return { success: false, error: `Could not reach ${proxyUrl}: ${e.message}. ${routeHint}` }
   }
   if (!pubRes.ok || !pubJson || !pubJson.ok) {
     const detail = (pubJson && pubJson.error) || `HTTP ${pubRes.status}`
@@ -2194,17 +2267,36 @@ async function executePublishHtmlNode(input, env) {
     }
   } catch (e) { /* bookkeeping only — publish already succeeded */ }
 
-  // LIVENESS CHECK — the KV write goes through the brand-worker service binding, which
-  // bypasses DNS entirely, so "publish accepted" does NOT mean the host serves anything.
-  // Publishing to a host with no subdomain/DNS used to report "It is now live" while the
-  // browser got NXDOMAIN (2026-07-24 themetest). Probe the public host: 530/1016 or a
-  // thrown fetch = not routed (needs create_subdomain); 522 = same-zone worker loopback
-  // on a REAL routed host (fine); anything else = serving.
-  let hostRoutes = true
-  try {
-    const probe = await fetch(`https://${host}/`, { method: 'HEAD', redirect: 'manual' })
-    if (probe.status === 530 || probe.status === 1016) hostRoutes = false
-  } catch (e) { hostRoutes = false }
+  // PROOF OF LIFE — read the key back FROM THE HOST ITSELF (Lesson 49). "Publish accepted" only
+  // proves that SOME store took the bytes; it does not prove that store is the one serving `host`.
+  // The previous check merely rejected 530/1016, which passed happily for charlie.iamazing.page
+  // while the page it served came from the fallback origin. /__html/check answers out of the same
+  // KV the proxy serves from, so it distinguishes the three outcomes that actually differ:
+  //   not reachable      -> no DNS/route yet
+  //   reachable, absent  -> WRONG STORE: routed to a proxy that does not hold this page
+  //   reachable, present -> live, and the nodeId confirms it is THIS page
+  // Shared host: ask brand-worker over the binding (a public read-back 522s on our own zone), then
+  // probe routing separately since the binding bypasses DNS. World host: the public read-back
+  // answers BOTH questions at once — it only succeeds if the host resolves to its proxy.
+  const verifyViaBinding = sharedHost && !!env.BRAND_WORKER
+  const verify = await readPublishedKey(host, env, verifyViaBinding)
+  const hostRoutes = verifyViaBinding ? await probeHostRoutes(host) : verify.reachable !== false
+  const verifiedNodeId = verify.metadata && verify.metadata.nodeId ? String(verify.metadata.nodeId) : ''
+  // Live needs BOTH: the serving store holds this node's page, AND the host resolves to it.
+  const isLive = hostRoutes && verify.exists === true && (!verifiedNodeId || verifiedNodeId === input.nodeId)
+  const sub = host.split('.')[0]
+  const root = host.split('.').slice(1).join('.')
+
+  let message
+  if (isLive) {
+    message = `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/ and verified it serves from that host's own store. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`
+  } else if (!hostRoutes) {
+    message = `Content for "${input.nodeId}" (${html.length} chars) is stored for https://${host}/, but ${host} DOES NOT RESOLVE yet — the site is NOT reachable in a browser. ${sharedHost ? `Run create_subdomain('${sub}', '${root}') to provision DNS + routing` : `Attach ${host} to the World's brand proxy as a Workers custom domain (deploy_world_proxy)`}, after which the stored page serves immediately (no republish needed). Do NOT tell the user it is live.`
+  } else if (verify.exists === false) {
+    message = `NOT LIVE — WRONG STORE. The publish was accepted, but ${host} answers that it holds NO page for itself, so the bytes went into a store that does not serve this host. ${host} routes to ${sharedHost ? 'a proxy other than the shared Vegvisr brand-worker' : "the World's own brand-proxy"}; visitors currently get that proxy's fallback origin, not this page. ${sharedHost ? `If ${host} is really a World-Founder domain, it must publish through its own proxy — check the zone classification.` : `Re-run with proxy_url=https://<brand-proxy>.workers.dev/__html/publish, or confirm the proxy holds agent-worker's HTML_PUBLISH_SECRET (set_world_publish_secret for ${root}).`} Do NOT tell the user it is live.`
+  } else {
+    message = `Publish accepted for https://${host}/ (${html.length} chars), but the read-back could not confirm the page is served from that host (${verify.error || `HTTP ${verify.status}`}). State this as UNVERIFIED — open the URL before calling it live.`
+  }
 
   return {
     success: true,
@@ -2215,11 +2307,12 @@ async function executePublishHtmlNode(input, env) {
     url: `https://${host}/`,
     html_bytes: html.length,
     via: proxyUrl,
+    servedBy: sharedHost ? 'shared-brand-worker' : 'world-brand-proxy',
     hostRecorded,
     hostRoutes,
-    message: hostRoutes
-      ? `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`
-      : `Content for "${input.nodeId}" (${html.length} chars) is stored for https://${host}/, but ${host} DOES NOT RESOLVE yet — the site is NOT reachable in a browser. Run create_subdomain('${host.split('.')[0]}', '${host.split('.').slice(1).join('.')}') to provision DNS + routing, after which the stored page serves immediately (no republish needed). Do NOT tell the user it is live.`,
+    verified: isLive,
+    verification: verify,
+    message,
   }
 }
 
@@ -2247,7 +2340,7 @@ async function resolveSuperadminCaller(input, env, action) {
   if (callerRole.toLowerCase() !== 'superadmin') {
     return { ok: false, error: `Superadmin role required to ${action}. Resolved caller userId=${callerUserId || 'none'}, role=${callerRole || 'unknown'}.` }
   }
-  return { ok: true, email: callerEmail || null }
+  return { ok: true, email: callerEmail || null, userId: callerUserId || null }
 }
 
 // Create a subdomain (CNAME + route -> brand-worker) via api-worker's /create-custom-domain.
