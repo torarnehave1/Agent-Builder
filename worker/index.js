@@ -2177,7 +2177,9 @@ export default {
       }
 
       // POST /automation/run — Execute an automation graph (Phase 1: synchronous, run-now).
-      // Body: { graphId, dryRun=true, userId }. dryRun simulates action steps (no side effects).
+      // Body: { graphId, dryRun=true, userId, inputs }. dryRun simulates action steps (no side
+      // effects). `inputs` is the run-parameter map resolved as {{input.<key>}} inside step
+      // configs; unsupplied keys fall back to the defaults declared on the Start step.
       // Appends an 'automation-run' node to the same graph as run history.
       if (pathname === '/automation/run' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
@@ -2216,6 +2218,7 @@ export default {
           if (body.stepId) {
             const single = await runSingleStep(graph, body.stepId, {
               userId: effectiveUserId, authContext, env, operationMap, callerEmail,
+              inputs: body.inputs || null,
             })
             return new Response(JSON.stringify(single), {
               status: single.step ? 200 : 404, headers: corsHeaders
@@ -2229,14 +2232,19 @@ export default {
             env,
             operationMap,
             callerEmail,
+            inputs: body.inputs || null,
           })
 
           // Append a run-history node (does not rewrite the graph, so canvas steps are untouched).
           const runNodeId = `run_${Date.now()}`
           const runLabel = `Run ${dryRun ? '(dry)' : ''} — ${run.summary.errors ? 'errors' : 'ok'}`.trim()
+          const usedInputs = run.inputs && Object.keys(run.inputs).length ? run.inputs : null
           const runInfo = [
             `**Automation run** ${dryRun ? '(dry-run)' : '(live)'}`,
             `Steps: ${run.summary.total} · executed ${run.summary.executed} · simulated ${run.summary.simulated} · errors ${run.summary.errors}`,
+            ...(usedInputs
+              ? ['', `Parameters: ${Object.entries(usedInputs).map(([k, v]) => `${k}=${String(v).slice(0, 80)}`).join(' · ')}`]
+              : []),
             '',
             ...run.steps.map((s) => `- [${s.status}] ${s.label}: ${s.detail}`),
           ].join('\n')
@@ -2260,6 +2268,7 @@ export default {
                     ranBy: effectiveUserId,
                     summary: run.summary,
                     steps: run.steps,
+                    ...(usedInputs ? { inputs: usedInputs } : {}),
                   },
                 },
               }),
@@ -2320,6 +2329,33 @@ export default {
         }, env)
         return new Response(JSON.stringify(result), {
           status: result.success ? 200 : 400, headers: corsHeaders
+        })
+      }
+
+      // POST /save-component — register/update a Component Registry entry from a build artefact.
+      // Thin wrapper over the vetted save_component tool. Exists because a graph-js component is
+      // tens of thousands of characters: pushing that through a chat tool-call argument is the
+      // escaping hazard the graph-js delivery mode exists to remove (two `Invalid regular
+      // expression` failures, 2026-08-19), and save_component's fromUrl escape hatch cannot
+      // bootstrap a component that is not served yet. An HTTP body carries the source verbatim.
+      // Body: { name, impl, schema?, verify?, delivery?, kind?, authToken }.
+      if (pathname === '/save-component' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { name, impl, schema, verify, delivery, kind, authToken } = body
+        if (!name || !impl) {
+          return new Response(JSON.stringify({ success: false, error: 'name and impl are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const result = await executeTool(kind === 'layout' ? 'save_layout' : 'save_component', {
+          name, impl, schema, verify, delivery,
+          authContext, userId: authContext.userId || body.userId || null,
+        }, env)
+        return new Response(JSON.stringify(result), {
+          status: result.success === false ? 400 : 200, headers: corsHeaders
         })
       }
 
