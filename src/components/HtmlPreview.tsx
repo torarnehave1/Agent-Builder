@@ -357,6 +357,18 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [srSaving, setSrSaving] = useState(false);
   const [srMsg, setSrMsg] = useState('');
 
+  // Full-source editor (deterministic, no agent) — see the WHOLE page, edit it as text, or
+  // paste a completely new page over it. The section editor above only reaches anchored
+  // regions, and most pages carry no anchors at all; this reaches every byte of node.info.
+  const [codeOpen, setCodeOpen] = useState(false);
+  const [codeValue, setCodeValue] = useState('');
+  const [codeSaving, setCodeSaving] = useState(false);
+  const [codeMsg, setCodeMsg] = useState('');
+  // A SNAPSHOT of the buffer rendered in the iframe without saving, so a pasted page can be
+  // seen before it is written. A snapshot, not a live binding — typing must not re-render.
+  const [codeDraft, setCodeDraft] = useState<string | null>(null);
+  const codeLoadedRef = useRef<string>(''); // bytes last loaded into the buffer (dirty check)
+
   const anchorIds = useMemo(() => (html ? listAnchorIds(html) : []), [html]);
   const isEmailTpl = useMemo(() => isEmailTemplateHtml(html), [html]);
   // Real brand vars (from the World's email-brand node) win over the generic samples.
@@ -371,6 +383,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     if (id) setEditValue(getSectionInner(html, id) ?? '');
   }, [editOpen, editAnchor, html, anchorIds]);
 
+  // Keep the source buffer on the bytes it is editing: load them when the panel opens, and
+  // re-load when the stored HTML changes underneath (another panel saved, a version was
+  // picked). Unsaved edits are never discarded — a touched buffer stays as it is, and the
+  // user decides with «Hent på nytt».
+  useEffect(() => {
+    if (!codeOpen) return;
+    const base = versionHtml || html || '';
+    // Capture the ref BEFORE moving it: the updater below runs during the next render, so
+    // reading `codeLoadedRef.current` inside it would read the value we just wrote and the
+    // buffer would never adopt anything (verified in-browser: the panel opened empty).
+    const loaded = codeLoadedRef.current;
+    codeLoadedRef.current = base;
+    setCodeValue(prev => (prev === loaded ? base : prev));
+  }, [codeOpen, versionHtml, html]);
+
   // Visual "click-on-the-page" edit mode
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const baselineRef = useRef<string[]>([]); // clean innerHTML at load, keyed by SOURCE index (V_IDX)
@@ -383,6 +410,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   // it rendered before (email templates get their send-time placeholders filled in), so
   // normal previewing and publishing are byte-for-byte unaffected by the stamping.
   const previewHtml = useMemo(() => {
+    if (codeDraft !== null) return codeDraft; // unsaved source draft — render it exactly as typed
     const base = versionHtml || html || '';
     if (!base) return base;
     if (visualEdit) {
@@ -390,7 +418,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       try { return stampEditable(base); } catch { return base; } // no stamps → save says so
     }
     return isEmailTpl ? fillPreviewSampleVars(base, effPreviewVars) : base;
-  }, [versionHtml, html, visualEdit, isEmailTpl, effPreviewVars]);
+  }, [codeDraft, versionHtml, html, visualEdit, isEmailTpl, effPreviewVars]);
 
   // Publishing — where the node is live + one-click publish/republish.
   const [publishedHosts, setPublishedHosts] = useState<string[]>([]);
@@ -687,6 +715,79 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     }
   };
 
+  // One deterministic write of the node's whole `info`, with the optimistic-version dance the
+  // other panels do inline (read version → patch → on 409 re-read the version and retry once).
+  const patchNodeInfo = async (
+    newHtml: string,
+  ): Promise<{ ok: true; version: number } | { ok: false; error: string }> => {
+    if (!graphId || !nodeId) return { ok: false, error: 'Ingen node valgt' };
+    const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+    if (!gRes.ok) return { ok: false, error: 'Lesing feilet' };
+    const g = await gRes.json();
+    const miss = nodeMissingMsg(g, nodeId, graphId);
+    if (miss) return { ok: false, error: miss };
+    const headers = {
+      'Content-Type': 'application/json',
+      'x-user-role': 'Superadmin',
+      ...(userEmail ? { 'x-user-email': userEmail } : {}),
+    };
+    const put = (expectedVersion: number) =>
+      fetch('https://knowledge.vegvisr.org/patchNode', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
+      });
+    let res = await put(Number(g?.metadata?.version || 0));
+    if (res.status === 409) {
+      const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json();
+      res = await put(Number(latest?.metadata?.version || 0));
+    }
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok) return { ok: false, error: String(data?.error || `Lagring feilet (${res.status})`) };
+    return { ok: true, version: Number(data.newVersion) };
+  };
+
+  // Write the ENTIRE buffer as the node's HTML — an edit of the whole page, or a paste that
+  // replaces it outright. Refuses an empty buffer: that is a mis-paste, never an intent.
+  const saveCode = async () => {
+    if (!graphId || !nodeId) { setCodeMsg('Ikke knyttet til en node — kan ikke lagre'); return; }
+    if (versionHtml) { setCodeMsg('Avslutt versjonsvisningen før du lagrer'); return; }
+    const next = codeValue;
+    if (next === html) { setCodeMsg('Ingen endring'); return; }
+    if (next.trim() === '') { setCodeMsg('Tom kildekode — avbrutt'); return; }
+    setCodeSaving(true);
+    setCodeMsg('');
+    try {
+      const r = await patchNodeInfo(next);
+      if (!r.ok) { setCodeMsg(r.error); return; }
+      codeLoadedRef.current = next;
+      setCodeDraft(null); // the saved bytes are what the iframe renders from here on
+      onHtmlChange?.(next);
+      setCodeMsg(`Lagret · v${r.version}`);
+    } catch (e) {
+      setCodeMsg(e instanceof Error ? e.message : 'Lagringsfeil');
+    } finally {
+      setCodeSaving(false);
+    }
+  };
+
+  const reloadCode = () => {
+    const base = versionHtml || html || '';
+    setCodeValue(base);
+    codeLoadedRef.current = base;
+    setCodeDraft(null);
+    setCodeMsg('Hentet på nytt fra grafen');
+  };
+
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(codeValue);
+      setCodeMsg('Kopiert til utklippstavlen');
+    } catch {
+      setCodeMsg('Kunne ikke kopiere — merk teksten og kopier manuelt');
+    }
+  };
+
   const fetchVersions = async () => {
     if (!graphId) return;
     if (versions) { setVersions(null); setVersionHtml(null); setActiveVersion(null); return; }
@@ -814,6 +915,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
   const errorCount = entries.filter(e => e.level === 'error' || e.level === 'network').length;
   const srCount = html ? countMatches(html, srFind, srWholeWord) : 0;
+  const codeDirty = codeOpen && codeValue !== (versionHtml || html || '');
 
   return (
     <div className="flex-1 flex flex-col min-w-0">
@@ -886,13 +988,26 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           {graphId && nodeId && activeVersion === null && (
             <button
               type="button"
-              onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); }}
+              onClick={() => { setVisualEdit(v => !v); if (editOpen) setEditOpen(false); setCodeOpen(false); setCodeDraft(null); }}
               className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${visualEdit ? 'bg-orange-500/40 text-orange-200' : 'bg-orange-500/15 text-orange-300 hover:bg-orange-500/30'}`}
               title="Rediger tekst ved å klikke direkte på siden (ingen agent)"
             >
               {visualEdit ? '● Rediger av' : '✎ Rediger'}
             </button>
           )}
+          <button
+            type="button"
+            onClick={() => {
+              const next = !codeOpen;
+              setCodeOpen(next);
+              if (!next) setCodeDraft(null);
+              setVisualEdit(false); setEditOpen(false); setSrOpen(false);
+            }}
+            className={`text-[10px] px-2 py-0.5 rounded font-medium transition-colors ${codeOpen ? 'bg-violet-500/40 text-violet-100' : 'bg-violet-500/15 text-violet-300 hover:bg-violet-500/30'}`}
+            title="Vis og rediger hele HTML-kilden — eller lim inn en helt ny side"
+          >
+            {'</> Kildekode'}
+          </button>
           {graphId && nodeId && anchorIds.length > 0 && (
             <button
               type="button"
@@ -1012,6 +1127,66 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           </button>
           {visualMsg && <span className="text-[11px] text-white/60">{visualMsg}</span>}
           <span className="ml-auto text-[9px] text-white/25">visuell redigering · ingen agent</span>
+        </div>
+      )}
+      {codeOpen && (
+        <div className="px-3 py-2 border-b border-white/10 bg-violet-950/25 flex-shrink-0 flex flex-col gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-white/40">
+              Hele siden{activeVersion !== null ? ` · v${activeVersion} (skrivebeskyttet)` : ''} · {codeValue.length} tegn
+            </span>
+            {codeDirty && <span className="text-[10px] text-amber-400">● ulagret</span>}
+            <button
+              type="button"
+              onClick={saveCode}
+              disabled={codeSaving || !graphId || !nodeId || activeVersion !== null || !codeDirty}
+              className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+              title="Skriv hele denne HTML-en til noden (ingen agent)"
+            >
+              {codeSaving ? 'Lagrer…' : 'Lagre hele siden'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCodeDraft(codeDraft === null ? codeValue : null)}
+              className={`text-[10px] px-2 py-0.5 rounded transition-colors ${codeDraft !== null ? 'bg-sky-500/40 text-sky-100' : 'bg-sky-500/15 text-sky-300 hover:bg-sky-500/30'}`}
+              title="Rendre utkastet i forhåndsvisningen uten å lagre det"
+            >
+              {codeDraft !== null ? 'Vis lagret igjen' : 'Prøv uten å lagre'}
+            </button>
+            <button
+              type="button"
+              onClick={reloadCode}
+              className="text-[10px] px-2 py-0.5 rounded text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+              title="Forkast endringene i feltet og hent bytene fra grafen på nytt"
+            >
+              Hent på nytt
+            </button>
+            <button
+              type="button"
+              onClick={copyCode}
+              className="text-[10px] px-2 py-0.5 rounded text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+              title="Kopier hele kilden til utklippstavlen"
+            >
+              Kopier
+            </button>
+            {codeMsg && <span className="text-[10px] text-white/60">{codeMsg}</span>}
+            <span className="ml-auto text-[9px] text-white/25">hele kilden · ingen agent</span>
+          </div>
+          {(!graphId || !nodeId) && (
+            <span className="text-[10px] text-amber-300/70">
+              Ikke knyttet til en node — kun visning. Åpne siden med «Develop» for å kunne lagre.
+            </span>
+          )}
+          <textarea
+            value={codeValue}
+            onChange={e => { setCodeValue(e.target.value); if (codeMsg) setCodeMsg(''); }}
+            onKeyDown={e => {
+              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveCode(); }
+            }}
+            spellCheck={false}
+            className="w-full h-[38vh] min-h-[160px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y"
+            placeholder="Hele HTML-kilden for denne noden — rediger, eller lim inn en helt ny side…"
+          />
         </div>
       )}
       {editOpen && (
