@@ -277,8 +277,12 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
               log(`tracked graphId=${graphId} from create_graph result — will auto-inject into future tools`)
             }
           }
+          // `input` is what makes this record REPLAYABLE: the exact arguments that produced
+          // the effect. Without it a delegate step can only be re-planned by the subagent at
+          // run time; with it, Make Automation expands the delegation into concrete steps.
           actions.push({
             tool: toolUse.name,
+            input: toolUse.input,
             success: true,
             graphId: result.graphId || toolUse.input.graphId,
             nodeId: toolUse.input.nodeId || result.nodeId,

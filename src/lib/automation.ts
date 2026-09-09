@@ -9,12 +9,20 @@
  */
 import type { Node } from '@xyflow/react';
 import { TOOL_CATALOG } from './toolCatalog';
+import type { AutomationInput } from './logToAutomation';
+
+export type { AutomationInput };
 
 export type StepType = 'start' | 'action' | 'delay' | 'loop' | 'notify' | 'note';
 
 // Per-step data shapes (also the React Flow node `data`). Index signature keeps
 // them assignable to React Flow's Record<string, unknown> node data.
-export interface StartData { label: string; [key: string]: unknown }
+/**
+ * Start also declares the automation's RUN PARAMETERS. They live here rather than in graph
+ * metadata because a step's config already round-trips through save/load untouched, and the
+ * runner reads them from the same place (automation-runner.js resolveAutomationInputs).
+ */
+export interface StartData { label: string; inputs?: AutomationInput[]; [key: string]: unknown }
 export interface ActionData { label: string; toolName: string; params: Record<string, unknown>; [key: string]: unknown }
 export interface DelayData { label: string; amount: number; unit: 'seconds' | 'minutes' | 'hours'; [key: string]: unknown }
 export interface LoopData { label: string; over: string; times: number; [key: string]: unknown }

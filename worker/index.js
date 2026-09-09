@@ -26,6 +26,8 @@ import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
+import { affiliationEdges, interactionEdges, buildNetwork } from './network-analysis.js'
+import { buildInstagramAuthorizeUrl, connectInstagram, getInstagramConnection, getInstagramConnectionByIgUserId, disconnectInstagram, verifyInstagramWebhookSignature, subscribeAccountToWebhooks, getAccountSubscriptions, sendInstagramMessage, ingestInboundMessage, getThreadByGroupId, relayGroupMessageToInstagram, replyWindowState, backfillThreadParticipant } from './instagram.js'
 
 // ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
@@ -444,6 +446,313 @@ export default {
           }
         } catch (err) {
           console.error('[/github/webhook] handling failed', err)
+        }
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
+      }
+
+      // ---------------------------------------------------------------------
+      // Instagram connector (Business Login + webhooks)
+      // Mirrors the /github/* routes above. See instagram.js for the contracts.
+      // ---------------------------------------------------------------------
+
+      // GET /instagram/status — is the current user connected?
+      if (pathname === '/instagram/status' && request.method === 'GET') {
+        const queryToken = url.searchParams.get('authToken') || ''
+        const auth = queryToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: queryToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        const conn = await getInstagramConnection(env, auth.userId).catch(() => null)
+        // Meta requires a per-account POST /me/subscribed_apps on top of the
+        // app-level field subscription; report what the account is actually
+        // subscribed to rather than trusting the dashboard toggle.
+        let subscriptions = null
+        if (conn?.access_token && !conn.expired) {
+          subscriptions = await getAccountSubscriptions(env, conn.access_token).catch(() => null)
+        }
+        return new Response(JSON.stringify({
+          connected: !!conn && !conn.expired,
+          expired: !!conn?.expired,
+          username: conn?.username || null,
+          igUserId: conn?.ig_user_id || null,
+          permissions: conn?.permissions || null,
+          tokenExpiresAt: conn?.token_expires_at || null,
+          subscriptions: subscriptions?.data ?? null,
+        }), { headers: corsHeaders })
+      }
+
+      // POST /instagram/subscribe — (re)run the per-account webhook subscription.
+      // Needed when a connection predates the subscribed_apps call, or after
+      // Advanced Access is granted and the field set should be re-applied.
+      if (pathname === '/instagram/subscribe' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        const conn = await getInstagramConnection(env, auth.userId).catch(() => null)
+        if (!conn || conn.expired) {
+          return new Response(JSON.stringify({ error: 'No usable Instagram connection — connect or reconnect first.' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await subscribeAccountToWebhooks(env, conn.access_token)
+          const after = await getAccountSubscriptions(env, conn.access_token).catch(() => null)
+          return new Response(JSON.stringify({ success: true, result, subscriptions: after?.data ?? null }), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), { status: 502, headers: corsHeaders })
+        }
+      }
+
+      // GET /instagram/oauth/start — top-level browser redirect to Instagram's
+      // authorize page. Same one-time ?authToken= trick as /github/oauth/start:
+      // a full-page navigation cannot carry an Authorization header.
+      if (pathname === '/instagram/oauth/start' && request.method === 'GET') {
+        const queryToken = url.searchParams.get('authToken') || ''
+        const auth = queryToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: queryToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response('Not signed in to Agent-Builder.', { status: 401 })
+        }
+        const state = btoa(JSON.stringify({ userId: auth.userId, ts: Date.now() }))
+        return Response.redirect(buildInstagramAuthorizeUrl(env, state), 302)
+      }
+
+      // GET /instagram/oauth/callback — Instagram redirects here with ?code=&state=
+      // (or ?error=&error_reason= if the user denied).
+      if (pathname === '/instagram/oauth/callback' && request.method === 'GET') {
+        const denied = url.searchParams.get('error')
+        if (denied) {
+          const reason = url.searchParams.get('error_description') || denied
+          return new Response(`Instagram connection cancelled: ${reason}`, { status: 400 })
+        }
+        const code = url.searchParams.get('code')
+        const state = url.searchParams.get('state')
+        let userId = null
+        try { userId = JSON.parse(atob(state || '')).userId } catch { userId = null }
+        if (!code || !userId) {
+          return new Response('Missing code or invalid state from Instagram.', { status: 400 })
+        }
+        try {
+          const { username } = await connectInstagram(env, userId, code)
+          const base = env.FRONTEND_BASE_URL || 'https://builder.vegvisr.org'
+          const redirectTarget = `${base}/?instagram=connected${username ? `&as=${encodeURIComponent(username)}` : ''}`
+          return Response.redirect(redirectTarget, 302)
+        } catch (err) {
+          console.error('[/instagram/oauth/callback] failed', err)
+          return new Response(`Instagram connection failed: ${err.message}`, { status: 500 })
+        }
+      }
+
+      // POST /instagram/send — reply as the connected professional account.
+      // Body: { recipientId } or { commentId }, plus { text }.
+      // Meta only permits this within 24h of the recipient's last message (or
+      // within 7 days and once only, for a private reply to a comment), so the
+      // failure here is usually policy, not plumbing — the error is passed
+      // through verbatim rather than flattened into a generic message.
+      if (pathname === '/instagram/send' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        const conn = await getInstagramConnection(env, auth.userId).catch(() => null)
+        if (!conn || conn.expired) {
+          return new Response(JSON.stringify({ error: 'No usable Instagram connection — connect or reconnect first.' }), { status: 400, headers: corsHeaders })
+        }
+        const recipient = body.commentId
+          ? { comment_id: String(body.commentId) }
+          : (body.recipientId ? { id: String(body.recipientId) } : null)
+        if (!recipient) {
+          return new Response(JSON.stringify({ error: 'Provide recipientId (an IGSID) or commentId.' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await sendInstagramMessage(env, conn.access_token, conn.ig_user_id, recipient, body.text)
+          return new Response(JSON.stringify({ success: true, from: conn.username, ...result }), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), { status: 502, headers: corsHeaders })
+        }
+      }
+
+      // GET /network — organizational network analysis over the chat data.
+      //
+      // SYSTEM OWNER ONLY. The tab being hidden in the UI is not access control;
+      // this is. The response maps relationships between identifiable people,
+      // inferred from behaviour rather than declared by them, so it is gated on
+      // role and not merely on being signed in.
+      if (pathname === '/network' && request.method === 'GET') {
+        const queryToken = url.searchParams.get('authToken') || ''
+        const auth = queryToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: queryToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        if (auth.role !== 'Superadmin') {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: corsHeaders })
+        }
+        try {
+          const [affiliations, interactions] = await Promise.all([
+            affiliationEdges(env),
+            interactionEdges(env),
+          ])
+          const network = buildNetwork(affiliations, interactions)
+          return new Response(JSON.stringify(network), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/network] failed', err.message)
+          return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders })
+        }
+      }
+
+      // POST /instagram/relay — internal. group-chat-worker calls this after a
+      // message is stored in a group marked external_kind='instagram', so ANY
+      // client that posts to the thread reaches Instagram: the chat UI, the
+      // agent, and bots via /bot-message alike. Wiring this into the frontend
+      // instead would leave bot replies stranded in the chat DB.
+      //
+      // Authenticated by the shared internal secret, not a user session — the
+      // caller is a worker, and the message has already been authorised by
+      // group-chat-worker's own validateUser/ensureMember checks.
+      if (pathname === '/instagram/relay' && request.method === 'POST') {
+        const provided = request.headers.get('x-internal-secret') || ''
+        const expected = env.INTERNAL_SHARED_SECRET || ''
+        if (!expected || provided !== expected) {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const groupId = (body.groupId || '').trim()
+        const text = (body.text || '').trim()
+        // media: { url, messageType } for image/video/voice/pdf messages.
+        const media = body.mediaUrl ? { url: String(body.mediaUrl), messageType: String(body.messageType || '') } : null
+        // The chat row id is the idempotency key for the outgoing send.
+        const messageId = body.messageId ? String(body.messageId) : null
+        if (!groupId || (!text && !media)) {
+          return new Response(JSON.stringify({ error: 'groupId and text or mediaUrl required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await relayGroupMessageToInstagram(env, groupId, text, media, messageId)
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/instagram/relay] failed', err.message)
+          return new Response(JSON.stringify({ relayed: false, error: err.message }), { status: 502, headers: corsHeaders })
+        }
+      }
+
+      // GET /instagram/thread?groupId= — reply target and window state, so a
+      // composer can tell an open conversation from a closed one.
+      if (pathname === '/instagram/thread' && request.method === 'GET') {
+        const queryToken = url.searchParams.get('authToken') || ''
+        const auth = queryToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: queryToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        let thread = await getThreadByGroupId(env, url.searchParams.get('groupId') || '')
+        if (!thread) {
+          return new Response(JSON.stringify({ isInstagramThread: false }), { headers: corsHeaders })
+        }
+        // Fill in a missing name/avatar on read, so threads created before the
+        // avatar existed pick one up without a migration.
+        thread = await backfillThreadParticipant(env, thread).catch(() => thread)
+        return new Response(JSON.stringify({
+          isInstagramThread: true,
+          participantUsername: thread.participant_username,
+          participantAvatarUrl: thread.participant_avatar_url || null,
+          participantIgsid: thread.participant_igsid,
+          lastInboundAt: thread.last_inbound_at,
+          window: replyWindowState(thread.last_inbound_at),
+        }), { headers: corsHeaders })
+      }
+
+      // POST /instagram/disconnect
+      if (pathname === '/instagram/disconnect' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        await disconnectInstagram(env, auth.userId)
+        return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
+      }
+
+      // GET /instagram/webhook — Meta's subscription handshake. Echo hub.challenge
+      // as PLAIN TEXT once hub.verify_token matches the value configured on the app.
+      if (pathname === '/instagram/webhook' && request.method === 'GET') {
+        const mode = url.searchParams.get('hub.mode')
+        const token = url.searchParams.get('hub.verify_token')
+        const challenge = url.searchParams.get('hub.challenge')
+        if (mode === 'subscribe' && token && token === env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN) {
+          return new Response(challenge || '', { status: 200, headers: { 'Content-Type': 'text/plain' } })
+        }
+        console.warn('[/instagram/webhook] handshake rejected', { mode, tokenMatched: false })
+        return new Response('Forbidden', { status: 403 })
+      }
+
+      // POST /instagram/webhook — inbound comments / DMs from Meta. Authenticated by
+      // HMAC signature over the RAW body, not by caller identity: Meta is the caller,
+      // there is no Agent-Builder session here.
+      //
+      // Slice B scope: verify + log only. Meta retries on non-2xx and disables a
+      // consistently failing subscription, so this always returns 200 once the
+      // signature checks out, even if downstream handling would fail.
+      if (pathname === '/instagram/webhook' && request.method === 'POST') {
+        const rawBody = await request.text()
+        const signature = request.headers.get('x-hub-signature-256')
+        const valid = await verifyInstagramWebhookSignature(env, rawBody, signature).catch(() => false)
+        if (!valid) {
+          console.warn('[/instagram/webhook] invalid signature', { hasHeader: !!signature, bytes: rawBody.length })
+          return new Response(JSON.stringify({ error: 'Invalid signature' }), { status: 401, headers: corsHeaders })
+        }
+        let payload
+        try { payload = JSON.parse(rawBody) } catch { payload = {} }
+        // object is 'instagram'; entry[].id is the IG account id; each entry carries
+        // either `changes` (comments/mentions) or `messaging` (DMs).
+        //
+        // Every entry is resolved to a stored connection first. A subscription at
+        // Meta can outlive our token — reconnecting as a different account replaces
+        // the row while the old account stays subscribed — so an unrecognised
+        // ig_user_id means we hold no token, cannot act on the event, and must not
+        // process it. Still returns 200: Meta disables subscriptions that keep
+        // failing, and the fix belongs on our side, not in a retry loop.
+        for (const entry of payload.entry || []) {
+          const owner = await getInstagramConnectionByIgUserId(env, entry.id).catch(() => null)
+          if (!owner || owner.expired) {
+            console.warn('[/instagram/webhook] orphaned delivery — no usable connection', JSON.stringify({
+              igUserId: entry.id,
+              reason: owner ? 'token expired' : 'no stored connection',
+              changes: (entry.changes || []).length,
+              messaging: (entry.messaging || []).length,
+            }))
+            continue
+          }
+          for (const change of entry.changes || []) {
+            console.log('[/instagram/webhook] change', JSON.stringify({ igUserId: entry.id, owner: owner.username, field: change.field, value: change.value }))
+          }
+          for (const msg of entry.messaging || []) {
+            console.log('[/instagram/webhook] messaging', JSON.stringify({ igUserId: entry.id, owner: owner.username, senderId: msg.sender?.id, text: msg.message?.text, mid: msg.message?.mid }))
+            // Persist genuine inbound messages into their conversation group.
+            // ingestInboundMessage drops echoes of our own sends and non-message
+            // events (read receipts, reactions) — both observed in real traffic.
+            try {
+              const stored = await ingestInboundMessage(env, owner, msg.sender?.id, msg)
+              if (stored) {
+                console.log('[/instagram/webhook] ingested', JSON.stringify({ groupId: stored.groupId, participant: stored.participantIgsid }))
+              }
+            } catch (err) {
+              // Never fail the delivery over a storage error — Meta disables
+              // subscriptions that keep erroring, and a retry would not help.
+              console.error('[/instagram/webhook] ingest failed', err.message)
+            }
+          }
         }
         return new Response(JSON.stringify({ success: true }), { headers: corsHeaders })
       }
@@ -2341,7 +2650,7 @@ export default {
       // Body: { name, impl, schema?, verify?, delivery?, kind?, authToken }.
       if (pathname === '/save-component' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
-        const { name, impl, schema, verify, delivery, kind, authToken } = body
+        const { name, impl, schema, verify, delivery, kind, overwrite, authToken } = body
         if (!name || !impl) {
           return new Response(JSON.stringify({ success: false, error: 'name and impl are required' }), {
             status: 400, headers: corsHeaders
@@ -2350,8 +2659,11 @@ export default {
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
+        // overwrite must ride along: a served graph-js component is load-bearing, so the tool
+        // refuses to replace an existing verified one without it. Dropping the flag here made a
+        // legitimate update look like a failure while the old bytes kept serving.
         const result = await executeTool(kind === 'layout' ? 'save_layout' : 'save_component', {
-          name, impl, schema, verify, delivery,
+          name, impl, schema, verify, delivery, overwrite: overwrite === true,
           authContext, userId: authContext.userId || body.userId || null,
         }, env)
         return new Response(JSON.stringify(result), {

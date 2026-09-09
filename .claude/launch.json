@@ -12,6 +12,46 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 5173
+    },
+    {
+      "name": "gallery-harness",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "7655",
+        "--directory",
+        "/private/tmp/claude-501/-Users-torarnehave-Documents-GitHub-Agent-Builder/01fb1702-1a50-4e43-8d14-6cb3e5685329/scratchpad/gallery-test"
+      ],
+      "port": 7655
+    },
+    {
+      "name": "photos-vegvisr",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Volumes/T7/photos-vegvisr",
+        "run",
+        "dev",
+        "--",
+        "--port",
+        "5174"
+      ],
+      "port": 5174
+    },
+    {
+      "name": "vegvisr-frontend-vue",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "/Users/torarnehave/Documents/GitHub/vegvisr-frontend",
+        "run",
+        "dev:vue",
+        "--",
+        "--port",
+        "5199"
+      ],
+      "port": 5199
     }
   ]
 }

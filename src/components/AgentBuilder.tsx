@@ -11,10 +11,11 @@ import GitHubConnect from './GitHubConnect';
 import UsageDashboard from './UsageDashboard';
 import WorkContextTab, { type WorkContext } from './WorkContextTab';
 import AutomationTab from './AutomationTab';
+import NetworkTab from './NetworkTab';
 import type { AutomationDraft } from '../lib/logToAutomation';
 import type { ResolvedTheme, ThemeMode } from '../lib/theme';
 
-type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'usage';
+type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'usage' | 'network';
 
 interface Props {
   userId: string;
@@ -33,7 +34,7 @@ interface PendingGraphContext {
   title: string;
 }
 
-export default function AgentBuilder({ userId, userEmail, language, onLanguageChange, onLogout, themeMode, resolvedTheme, onThemeChange }: Props) {
+export default function AgentBuilder({ userId, userEmail, role, language, onLanguageChange, onLogout, themeMode, resolvedTheme, onThemeChange }: Props) {
   const [graphId, setGraphId] = useState('');
   // Chat persona for the main Chat tab. null = the default agent = FULL toolbox.
   // Kept separate from `editingAgentId` so editing/creating a scoped bot in the
@@ -66,7 +67,11 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           <span className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['context', 'chat', 'graphs', 'automation', 'agents', 'data', 'usage', 'settings'] as const).map((tab) => (
+            {(['context', 'chat', 'graphs', 'automation', 'agents', 'data', 'usage', 'settings', 'network'] as const)
+              // Network maps relationships between identifiable people. Owner only;
+              // /network returns 403 for anyone else regardless of what is rendered.
+              .filter((tab) => tab !== 'network' || role === 'Superadmin')
+              .map((tab) => (
               <button
                 type="button"
                 key={tab}
@@ -91,6 +96,7 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
                   : tab === 'agents' ? 'Agents'
                   : tab === 'data' ? 'Data'
                   : tab === 'usage' ? 'Usage'
+                  : tab === 'network' ? 'Network'
                   : 'Settings'}
               </button>
             ))}
@@ -204,6 +210,9 @@ export default function AgentBuilder({ userId, userEmail, language, onLanguageCh
           draft={automationDraft}
           onDraftApplied={() => setAutomationDraft(null)}
         />
+      )}
+      {view === 'network' && role === 'Superadmin' && (
+        <NetworkTab authToken={JSON.parse(localStorage.getItem('user') || '{}').emailVerificationToken || ''} />
       )}
       {view === 'data' && <DataExplorer />}
       {view === 'usage' && <UsageDashboard userId={userId} />}

@@ -27,7 +27,17 @@ const DEFAULT_NOTIFY_FROM = 'noreply@vegr.ai'
 //   {{stepId.result}}          → that step's whole tool result (object)
 //   {{stepId.result.<field>}}  → a nested field (e.g. {{a1.result.content}})
 //   {{stepId.summary}}         → the step's one-line summary
+//   {{input.<key>}}            → a RUN PARAMETER supplied per run (see below)
 // Unknown refs resolve to '' (e.g. when testing a step in isolation).
+//
+// RUN PARAMETERS. Without these an automation could only ever repeat the exact run it was
+// built from — a graphId captured from a chat session was frozen into every step. `input` is
+// a reserved pseudo-step seeded before the walk, so it needs no new template syntax: the
+// existing resolveRef splits on the first dot and finds outputs.input.<key>.
+// Declarations live on the START step's config as
+//   inputs: [{ key, label, default, required }]
+// which round-trips through the existing metadata.config save/load with no schema change.
+// `input` is therefore a RESERVED step id — a step called "input" would shadow the namespace.
 
 function getByPath(root, path) {
   return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), root)
@@ -195,12 +205,43 @@ async function runNotify(cfg, ctx) {
 }
 
 /**
+ * Merge a run's supplied parameters with the defaults declared on the Start step.
+ *
+ * A supplied value wins; an empty or absent one falls back to the declared default, so an
+ * automation built from a chat session reproduces that session exactly when run with no
+ * parameters at all. Undeclared keys are still honoured — a hand-written {{input.x}} works
+ * without adding a declaration row first.
+ *
+ * @returns {{values:Object, declared:Array, missing:string[]}} missing = required, no value
+ */
+export function resolveAutomationInputs(graph, provided) {
+  const start = (graph?.nodes || []).find(
+    (n) => n.type === 'automation-step' && (n?.metadata?.stepType || '') === 'start'
+  )
+  const declared = Array.isArray(start?.metadata?.config?.inputs) ? start.metadata.config.inputs : []
+  const values = {}
+  const missing = []
+  for (const d of declared) {
+    const key = String(d?.key || '').trim()
+    if (!key) continue
+    const supplied = provided && Object.prototype.hasOwnProperty.call(provided, key) ? provided[key] : undefined
+    const value = supplied === undefined || supplied === '' ? d?.default : supplied
+    if (d?.required && (value === undefined || value === '')) missing.push(key)
+    values[key] = value === undefined ? '' : value
+  }
+  for (const [k, v] of Object.entries(provided || {})) {
+    if (!Object.prototype.hasOwnProperty.call(values, k)) values[k] = v
+  }
+  return { values, declared, missing }
+}
+
+/**
  * @param {{nodes:Array, edges:Array, metadata:Object}} graph  KG graphData
  * @param {{dryRun:boolean, userId:string, authContext:any, env:any, operationMap:any}} opts
  * @returns run result: { success, dryRun, steps, summary }
  */
 export async function runAutomation(graph, opts) {
-  const { dryRun = true, userId = null, authContext = null, env, operationMap = {}, callerEmail = null } = opts || {}
+  const { dryRun = true, userId = null, authContext = null, env, operationMap = {}, callerEmail = null, inputs = null } = opts || {}
 
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
   // Only automation-step nodes participate; run-history / other nodes are ignored.
@@ -242,7 +283,9 @@ export async function runAutomation(graph, opts) {
 
   const ctx = { dryRun, userId, authContext, env, operationMap, callerEmail }
   // Per-step outputs, so downstream {{stepId.result...}} refs resolve to live data.
-  const outputs = {}
+  // Seeded with the run parameters under the reserved `input` key (see the note above).
+  const resolvedInputs = resolveAutomationInputs(graph, inputs)
+  const outputs = { input: resolvedInputs.values }
 
   const runStep = async (node) => {
     if (log.length >= MAX_STEPS) return
@@ -267,6 +310,17 @@ export async function runAutomation(graph, opts) {
     const node = byId.get(nodeId)
     if (!node) return
     await runStep(node)
+  }
+
+  if (!dryRun && resolvedInputs.missing.length > 0) {
+    return {
+      success: false,
+      dryRun,
+      steps: [],
+      summary: { total: 0, executed: 0, simulated: 0, errors: 1, capped: false },
+      error: `Missing required run parameter${resolvedInputs.missing.length === 1 ? '' : 's'}: ${resolvedInputs.missing.join(', ')}`,
+      inputs: resolvedInputs.values,
+    }
   }
 
   if (!startNode) {
@@ -295,6 +349,10 @@ export async function runAutomation(graph, opts) {
     dryRun,
     steps: log,
     summary: { total: log.length, executed, simulated, errors, capped },
+    inputs: resolvedInputs.values,
+    ...(dryRun && resolvedInputs.missing.length
+      ? { missingInputs: resolvedInputs.missing }
+      : {}),
   }
 }
 
@@ -304,11 +362,14 @@ export async function runAutomation(graph, opts) {
  * @returns {{success:boolean, step:object|null, error?:string}}
  */
 export async function runSingleStep(graph, stepId, opts = {}) {
-  const { userId = null, authContext = null, env, operationMap = {}, callerEmail = null } = opts
+  const { userId = null, authContext = null, env, operationMap = {}, callerEmail = null, inputs = null } = opts
   const node = (graph?.nodes || []).find((n) => n.id === stepId && n.type === 'automation-step')
   if (!node) return { success: false, step: null, error: 'Step not found' }
-  // Isolated test: no upstream outputs, so {{refs}} resolve to '' rather than leak literally.
-  const eff = await executeStepEffect(withResolvedConfig(node, {}), { dryRun: false, userId, authContext, env, operationMap, callerEmail })
+  // Isolated test: no upstream step outputs, so {{aN.result...}} refs resolve to '' rather than
+  // leak literally. Run parameters ARE available — testing a step that reads {{input.graphId}}
+  // against an empty string would only ever prove that the empty string fails.
+  const { values: inputValues } = resolveAutomationInputs(graph, inputs)
+  const eff = await executeStepEffect(withResolvedConfig(node, { input: inputValues }), { dryRun: false, userId, authContext, env, operationMap, callerEmail })
   const step = {
     nodeId: node.id,
     stepType: node?.metadata?.stepType || 'note',

@@ -448,8 +448,12 @@ async function runVideoSubagent(input, env, onProgress, executeTool) {
             result = await executeTool(toolUse.name, { ...toolUse.input, userId }, env, {})
           }
 
+          // `input` is what makes this record REPLAYABLE: the exact arguments that produced
+          // the effect. Without it a delegate step can only be re-planned by the subagent at
+          // run time; with it, Make Automation expands the delegation into concrete steps.
           actions.push({
             tool: toolUse.name,
+            input: toolUse.input,
             success: true,
             graphId: toolUse.input.graphId || result.graphId,
             nodeId: toolUse.input.nodeId || result.nodeId,

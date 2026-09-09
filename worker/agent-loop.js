@@ -366,6 +366,44 @@ async function loadAllTools(env) {
 }
 
 /**
+ * A delegation's INNER tool calls, for the browser.
+ *
+ * A `delegate_to_*` step in an automation is a whole subagent conversation every run: its own
+ * system prompt, its own tool schemas, its own turns. The calls that subagent actually made are
+ * already recorded (subagent `actions`), so forwarding them lets "Make Automation" expand one
+ * delegation into concrete steps that cost no model tokens to re-run.
+ *
+ * Only successful calls with real arguments are forwarded, and only within a size budget — this
+ * rides an SSE frame, and an html-builder's `input` can hold an entire page. Over budget, the
+ * client keeps the delegate step as-is rather than receiving a truncated, unreplayable list.
+ */
+const MAX_ACTIONS_FORWARDED = 40
+const MAX_ACTIONS_BYTES = 96 * 1024
+
+export function replayableActions(toolName, result) {
+  if (!toolName.startsWith('delegate_to_') || !Array.isArray(result?.actions)) return null
+  const usable = result.actions
+    .filter((a) => a && a.success !== false && a.tool && a.input && typeof a.input === 'object')
+    .slice(0, MAX_ACTIONS_FORWARDED)
+    // graphId/nodeId ride along: they are what the subagent's create_* calls PRODUCED
+    // (server-assigned, not the arguments), which is what lets the client rewire a flattened
+    // step to {{aN.result.graphId}} instead of freezing one run's ids.
+    .map((a) => ({
+      tool: a.tool,
+      input: a.input,
+      ...(a.graphId ? { graphId: a.graphId } : {}),
+      ...(a.nodeId ? { nodeId: a.nodeId } : {}),
+    }))
+  if (!usable.length) return null
+  try {
+    if (JSON.stringify(usable).length > MAX_ACTIONS_BYTES) return null
+  } catch {
+    return null
+  }
+  return usable
+}
+
+/**
  * Truncate large tool results to prevent context window overflow
  */
 function truncateResult(result) {
@@ -1267,6 +1305,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           }
 
           const ssePayload = { callId: call.id, tool: toolName, success: !toolFailed, summary }
+          const delegateActions = replayableActions(toolName, result)
+          if (delegateActions) ssePayload.actions = delegateActions
           if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
           const capabilityPayload = buildCapabilityToolPayload(toolName, result)
           if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)
@@ -1876,6 +1916,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             }
 
             const ssePayload = { callId: toolUse.id, tool: toolUse.name, success: !toolFailed, summary }
+            const delegateActions = replayableActions(toolUse.name, result)
+            if (delegateActions) ssePayload.actions = delegateActions
             if (toolFailed && typeof result.error === 'string') ssePayload.error = result.error
             const capabilityPayload = buildCapabilityToolPayload(toolUse.name, result)
             if (capabilityPayload) Object.assign(ssePayload, capabilityPayload)

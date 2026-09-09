@@ -21,6 +21,7 @@ import {
   listAutomations,
   runAutomation,
   buildAutomation,
+  declaredInputs,
   specToReactFlow,
   testStep,
   type AutomationSummary,
@@ -72,6 +73,15 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
   const [describePrompt, setDescribePrompt] = useState('');
   const [building, setBuilding] = useState(false);
   const [testStates, setTestStates] = useState<Record<string, StepTestState>>({});
+  /** Values typed for this run, keyed by parameter. Empty → the Start step's default. */
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+
+  // What this automation asks for per run, read off the Start step (same place the runner reads).
+  const inputs = useMemo(() => declaredInputs(nodes), [nodes]);
+  const missingRequired = useMemo(
+    () => inputs.filter((i) => i.required && !(inputValues[i.key] || i.default)).map((i) => i.key),
+    [inputs, inputValues],
+  );
 
   // Latest nodes, read (not subscribed) by add handlers so we don't nest setState.
   const nodesRef = useRef(nodes);
@@ -113,7 +123,8 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
     setEdges([]);
     setSelectedNode(null);
     setTestStates({});
-    setAutomationId(null);
+    setInputValues({});
+      setAutomationId(null);
     setTitle('Untitled automation');
     setDescription('');
     setStatus(null);
@@ -139,6 +150,12 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
   }, [automationId, nodes, edges, title, description, userEmail]);
 
   const handleRun = useCallback(async () => {
+    // The worker refuses this too, but stopping here keeps a half-filled sheet from being
+    // saved over the canvas first.
+    if (runForReal && missingRequired.length) {
+      setStatus(`Fill in: ${missingRequired.join(', ')}`);
+      return;
+    }
     setRunning(true);
     setStatus(null);
     setRunResult(null);
@@ -147,7 +164,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       const id = automationId || crypto.randomUUID();
       await saveAutomation(id, nodes, edges, { title, description, createdBy: userEmail });
       setAutomationId(id);
-      const result = await runAutomation(id, !runForReal, userId, userEmail);
+      const result = await runAutomation(id, !runForReal, userId, userEmail, inputValues);
       setRunResult(result);
       setStatus(
         `Ran ${result.dryRun ? '(dry)' : '(live)'} · ${result.summary.executed} run / ${result.summary.simulated} sim / ${result.summary.errors} err`
@@ -157,7 +174,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
     } finally {
       setRunning(false);
     }
-  }, [automationId, nodes, edges, title, description, userId, userEmail, runForReal]);
+  }, [automationId, nodes, edges, title, description, userId, userEmail, runForReal, inputValues, missingRequired]);
 
   const handleTestStep = useCallback(async (nodeId: string) => {
     setTestStates((prev) => ({ ...prev, [nodeId]: { status: 'testing' } }));
@@ -166,7 +183,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       const id = automationId || crypto.randomUUID();
       await saveAutomation(id, nodesRef.current, edges, { title, description, createdBy: userEmail });
       setAutomationId(id);
-      const { step, success } = await testStep(id, nodeId, userId, userEmail);
+      const { step, success } = await testStep(id, nodeId, userId, userEmail, inputValues);
       setTestStates((prev) => ({
         ...prev,
         [nodeId]: { status: success ? 'passed' : 'failed', detail: step?.detail },
@@ -177,7 +194,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
         [nodeId]: { status: 'failed', detail: err instanceof Error ? err.message : 'Test failed' },
       }));
     }
-  }, [automationId, edges, title, description, userId, userEmail]);
+  }, [automationId, edges, title, description, userId, userEmail, inputValues]);
 
   const handleBuild = useCallback(async () => {
     const prompt = describePrompt.trim();
@@ -193,6 +210,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       setEdges(builtEdges);
       setSelectedNode(null);
       setTestStates({});
+      setInputValues({});
       setAutomationId(null); // a fresh draft; Save mints a new id
       if (spec.title) setTitle(spec.title);
       if (spec.description) setDescription(spec.description);
@@ -214,6 +232,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
     setEdges(e);
     setSelectedNode(null);
     setTestStates({});
+    setInputValues({});
     setAutomationId(null);
     setTitle(draft.title || 'Automation from chat');
     setDescription(draft.description || '');
@@ -246,6 +265,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       setEdges(loaded.edges);
       setSelectedNode(null);
       setTestStates({});
+      setInputValues({});
       setAutomationId(id);
       setTitle(loaded.meta.title);
       setDescription(loaded.meta.description || '');
@@ -332,6 +352,31 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
             </a>
           )}
         </div>
+
+        {/* Run parameters — what this automation asks for each time it runs. */}
+        {inputs.length > 0 && (
+          <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-purple-950/20 flex-shrink-0 overflow-x-auto">
+            <span className="text-[11px] text-purple-300/80 flex-shrink-0" title="Declared on the Start step">
+              ⚙ This run
+            </span>
+            {inputs.map((i) => (
+              <label key={i.key} className="flex items-center gap-1.5 flex-shrink-0">
+                <span className="text-[10px] text-white/45" title={`{{input.${i.key}}}`}>
+                  {i.label || i.key}{i.required ? ' *' : ''}
+                </span>
+                <input
+                  value={inputValues[i.key] ?? ''}
+                  onChange={(e) => setInputValues((prev) => ({ ...prev, [i.key]: e.target.value }))}
+                  placeholder={i.default ? String(i.default).slice(0, 28) : 'value'}
+                  className={`w-[190px] rounded bg-slate-950/60 border px-2 py-1 text-[11px] text-white font-mono focus:outline-none focus:border-purple-500/50 ${
+                    missingRequired.includes(i.key) ? 'border-rose-500/50' : 'border-white/8'
+                  }`}
+                />
+              </label>
+            ))}
+            <span className="text-[10px] text-white/30 flex-shrink-0">empty = default</span>
+          </div>
+        )}
 
         {/* Describe-it bar: plain language → the agent builds the automation onto the canvas */}
         <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0">

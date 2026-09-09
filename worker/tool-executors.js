@@ -3450,7 +3450,20 @@ async function executeAlbumList(input, env) {
   const data = await albumsApiFetch({ env, authToken, path })
   const albums = data?.albums || data?.names || data
   const count = Array.isArray(albums) ? albums.length : 0
-  return { message: `Found ${count} album(s)`, count, albums }
+  // With metadata, each row carries isShared/shareId — the shareId is what an image-gallery
+  // needs, so surface the published ones in the summary rather than making the agent
+  // re-read every album to find out which can go on a page.
+  const shared = Array.isArray(albums)
+    ? albums.filter((a) => a && typeof a === 'object' && a.isShared).map((a) => ({ name: a.name, shareId: a.shareId, imageCount: a.imageCount, hiddenCount: a.hiddenCount }))
+    : []
+  return {
+    message: shared.length
+      ? `Found ${count} album(s); ${shared.length} published for public viewing: ${shared.map((a) => `"${a.name}" (${a.shareId})`).join(', ')}. A published album's shareId is what the image-gallery component reads.`
+      : `Found ${count} album(s)${input?.includeMeta ? ' — none published for public viewing yet. An album must be published with album_publish before an image-gallery can show it.' : ''}`,
+    count,
+    albums,
+    sharedAlbums: shared,
+  }
 }
 
 async function executeAlbumGet(input, env) {
@@ -3538,44 +3551,89 @@ async function executeAlbumRemoveImages(input, env) {
   }
 }
 
+// Sharing goes through /photo-album/share, NEVER /photo-album. The upsert endpoint REPLACES the
+// images array with whatever the body carries, and these tools send no images — so publishing an
+// album through it emptied the album. Proven on a throwaway 2026-09-06: 3 images in, POST
+// {name, isShared:true}, 0 images out. /photo-album/share changes only the sharing fields.
 async function executeAlbumPublish(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
   if (!authToken) throw new Error('You must be logged in to publish an album.')
   const name = typeof input?.name === 'string' ? input.name.trim() : ''
   if (!name) throw new Error('name is required')
   const data = await albumsApiFetch({
-    env, authToken, method: 'POST', path: '/photo-album',
+    env, authToken, method: 'POST', path: '/photo-album/share',
     body: { name, isShared: true },
   })
-  const shareId = data?.shareId || data?.album?.shareId || null
+  const shareId = data?.shareId || null
   return {
-    message: shareId ? `Album "${name}" published` : `Publish requested for "${name}" (shareId not in response)`,
+    message: shareId
+      ? `Album "${name}" published — ${data.visibleImages} of ${data.totalImages} photo(s) visible publicly. Gallery shareId: ${shareId}`
+      : `Publish requested for "${name}" (shareId not in response)`,
     name,
     shareId,
-    shareUrl: shareId ? `https://seo.vegvisr.org/album/${shareId}` : null,
-    album: data,
+    shareUrl: data?.shareUrl || (shareId ? `https://photos.vegvisr.org/share/${shareId}` : null),
+    seoUrl: shareId ? `https://seo.vegvisr.org/album/${shareId}` : null,
+    totalImages: data?.totalImages ?? null,
+    visibleImages: data?.visibleImages ?? null,
+    hiddenImages: data?.hiddenImages || [],
+    galleryMarkup: shareId ? `<div data-vegvisr-gallery="${shareId}"></div>` : null,
+    next: shareId
+      ? `To put this album on a page: get_component("image-gallery") for the <script src> line, then insert that plus <div data-vegvisr-gallery="${shareId}"> where the gallery should appear, and publish_html_node.`
+      : null,
   }
 }
 
-async function executeAlbumRotateShare(input, env) {
+async function executeAlbumUnpublish(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
-  if (!authToken) throw new Error('You must be logged in to rotate a share link.')
+  if (!authToken) throw new Error('You must be logged in to unpublish an album.')
   const name = typeof input?.name === 'string' ? input.name.trim() : ''
   if (!name) throw new Error('name is required')
   const data = await albumsApiFetch({
-    env, authToken, method: 'POST', path: '/photo-album',
-    body: { name, isShared: true, regenerateShareId: true },
+    env, authToken, method: 'POST', path: '/photo-album/share',
+    body: { name, isShared: false },
   })
-  const shareId = data?.shareId || data?.album?.shareId || null
   return {
-    message: `ShareId rotated for "${name}"`,
+    message: `Album "${name}" is no longer shared. The previous link is dead for good — publishing again mints a new one. Any page carrying a gallery for the old shareId now shows "This album is no longer shared."`,
     name,
-    shareId,
-    shareUrl: shareId ? `https://seo.vegvisr.org/album/${shareId}` : null,
-    album: data,
+    isShared: data?.isShared === true,
+    shareId: data?.shareId || null,
   }
 }
 
+// Which photos an otherwise-shared album holds back from the public view. Empty by default: a
+// shared album shares everything it holds unless a key is listed here.
+async function executeAlbumHideImages(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to change album visibility.')
+  const name = typeof input?.name === 'string' ? input.name.trim() : ''
+  if (!name) throw new Error('name is required')
+  const hidden = Array.isArray(input?.hiddenImages) ? input.hiddenImages : null
+  if (!hidden) throw new Error('hiddenImages is required — an array of image keys to hold back. Pass [] to share every photo.')
+  const data = await albumsApiFetch({
+    env, authToken, method: 'POST', path: '/photo-album/share',
+    body: { name, hiddenImages: hidden },
+  })
+  return {
+    message: `"${name}": ${data.visibleImages} of ${data.totalImages} photo(s) now visible publicly (${(data.hiddenImages || []).length} held back). Hidden photos stay in the album and stay visible to you — only the public link drops them.`,
+    name,
+    totalImages: data?.totalImages ?? null,
+    visibleImages: data?.visibleImages ?? null,
+    hiddenImages: data?.hiddenImages || [],
+  }
+}
+
+// Rotation is gone. A shareId is permanent: pages embed it in an image-gallery marker, so minting
+// a new one silently breaks every page built on the album (charlie.iamazing.page, 2026-09-06).
+// Kept as a refusal rather than deleted so an older automation gets told why instead of a 'no such
+// tool' error. To cut off access, unpublish with album_unpublish — the id survives and republishing
+// turns the same link back on.
+async function executeAlbumRotateShare(input) {
+  const name = typeof input?.name === 'string' ? input.name.trim() : 'the album'
+  return {
+    success: false,
+    error: `Share links are permanent and cannot be rotated. "${name}" keeps the shareId it was first given, because pages embed it — a new id would break every page showing this album. To stop public access use album_unpublish (the id survives, and album_publish turns the same link back on).`,
+  }
+}
 async function executePhotosList(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
   const params = new URLSearchParams()
@@ -5481,14 +5539,25 @@ async function executeAddEmailDestination(input, env) {
 
   const addr = result.address || {}
   const isVerified = !!addr.verified
+  // The disambiguation belongs in the RESULT, not only in the tool description: the model
+  // narrates what the result string says. Haiku 4.5 read "registered with Cloudflare Email
+  // Routing" here and told the user forwarding was live (2026-09-08) — it was not, because a
+  // destination address is an OUTBOUND allow-list entry and creates no rule whatsoever.
+  const notForwarding =
+    ` NOTE: this created NO forwarding and NO routing rule — it is outbound permission only. ` +
+    `Mail sent TO ${email} is unaffected by this call. Do not tell the user forwarding is set up. ` +
+    `Inbound forwarding requires provision_world_email, and is only real when it returns mail_flows: true.`
   return {
     success: true,
+    success_scope: 'outbound-send-permission-only',
+    creates_forwarding: false,
     address: addr,
     message:
-      `Destination ${email} registered with Cloudflare Email Routing. ` +
+      `Destination ${email} added to the account's verified-send list (Cloudflare Email Routing destinations). ` +
       (isVerified
         ? `Already verified — env.EMAIL.send() can send to this address now.`
-        : `Cloudflare has sent a verification email to ${email}. Once the recipient clicks the link, sends to this address will succeed. Until then, attempts will fail.`),
+        : `Cloudflare has sent a verification email to ${email}. Once the recipient clicks the link, sends to this address will succeed. Until then, attempts will fail.`) +
+      notForwarding,
   }
 }
 
@@ -12940,6 +13009,10 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeAlbumRemoveImages(toolInput, env)
     case 'album_publish':
       return await executeAlbumPublish(toolInput, env)
+    case 'album_unpublish':
+      return await executeAlbumUnpublish(toolInput, env)
+    case 'album_hide_images':
+      return await executeAlbumHideImages(toolInput, env)
     case 'album_rotate_share':
       return await executeAlbumRotateShare(toolInput, env)
     case 'photos_list':

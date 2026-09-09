@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { findToolCallIndex } from '../lib/toolCallPairing';
-import { logToAutomation, type AutomationDraft, type LoggedCall } from '../lib/logToAutomation';
+import { logToAutomation, type AutomationDraft, type GraphTarget, type LoggedCall } from '../lib/logToAutomation';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
@@ -852,6 +852,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   const [analysisOpen, setAnalysisOpen] = useState(false);
   const [recordingsOpen, setRecordingsOpen] = useState(false);
   const [htmlNodePicker, setHtmlNodePicker] = useState<Array<{ id: string; label: string; info: string }> | null>(null);
+  const [automationDialog, setAutomationDialog] = useState(false);
+  // Choices for the conversion. Defaults: only this request's calls (a 100-message session is
+  // rarely one automation), and the graph as a run parameter so the result is reusable.
+  const [autoScope, setAutoScope] = useState<'session' | 'last'>('last');
+  const [autoGraphTarget, setAutoGraphTarget] = useState<GraphTarget>('ask');
+  const [autoParameterize, setAutoParameterize] = useState(true);
+  const [autoKeepReads, setAutoKeepReads] = useState(false);
+  const [autoFlatten, setAutoFlatten] = useState(true);
   const lastAgentGraphRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1142,9 +1150,17 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // worked is a working automation — its params executed, unlike the ones /automation/build asks
   // Claude to plan against a schema. `result` here is the SSE payload, not the full tool output;
   // logToAutomation is written against that limit.
-  const sessionCalls = useCallback((): LoggedCall[] => {
+  const sessionCalls = useCallback((scope: 'session' | 'last' = 'session'): LoggedCall[] => {
+    // 'last' starts at the final user message: one request's worth of work, which is what a
+    // long session usually means by "make this an automation".
+    let from = 0;
+    if (scope === 'last') {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].role === 'user') { from = i; break; }
+      }
+    }
     const out: LoggedCall[] = [];
-    for (const m of messages) {
+    for (const m of messages.slice(from)) {
       for (const tc of m.toolCalls || []) {
         out.push({ tool: tc.tool, input: tc.input, status: tc.status, result: tc.result });
       }
@@ -1153,15 +1169,51 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   }, [messages]);
 
   const automatableCount = useMemo(
-    () => sessionCalls().filter((c) => c.status === 'success').length,
+    () => sessionCalls('session').filter((c) => c.status === 'success').length,
     [sessionCalls],
+  );
+  const lastTurnCount = useMemo(
+    () => sessionCalls('last').filter((c) => c.status === 'success').length,
+    [sessionCalls],
+  );
+  // Delegated calls in the chosen scope. Each one left intact runs a whole AI subagent on
+  // every run of the automation, so the toggle only appears when there is one to decide about.
+  const delegateCount = useMemo(
+    () => sessionCalls(autoScope).filter((c) => c.status === 'success' && c.tool.startsWith('delegate_to_')).length,
+    [sessionCalls, autoScope],
+  );
+
+  // The prompt that titles the automation and seeds parameter detection: the request the
+  // converted calls belong to, not always the session's first message.
+  const automationPrompt = useCallback((scope: 'session' | 'last') => {
+    const users = messages.filter((m) => m.role === 'user');
+    return (scope === 'last' ? users[users.length - 1] : users[0])?.content;
+  }, [messages]);
+
+  const automationOptions = useMemo(() => {
+    const contextGraphId = graphId || lastAgentGraphRef.current || undefined;
+    return {
+      prompt: automationPrompt(autoScope),
+      graphTarget: autoGraphTarget,
+      contextGraphId,
+      contextGraphTitle: graphs.find((g) => g.id === contextGraphId)?.metadata_title,
+      parameterize: autoParameterize,
+      keepReads: autoKeepReads,
+      flattenDelegates: autoFlatten,
+    };
+  }, [automationPrompt, autoScope, autoGraphTarget, autoParameterize, autoKeepReads, autoFlatten, graphId, graphs]);
+
+  // Recomputed on every toggle: pure function, no network, no model.
+  const automationPreview = useMemo(
+    () => (automationDialog ? logToAutomation(sessionCalls(autoScope), automationOptions) : null),
+    [automationDialog, sessionCalls, autoScope, automationOptions],
   );
 
   const makeAutomation = useCallback(() => {
     if (!onCreateAutomation) return;
-    const firstUser = messages.find((m) => m.role === 'user');
-    onCreateAutomation(logToAutomation(sessionCalls(), { prompt: firstUser?.content }));
-  }, [onCreateAutomation, sessionCalls, messages]);
+    onCreateAutomation(logToAutomation(sessionCalls(autoScope), automationOptions));
+    setAutomationDialog(false);
+  }, [onCreateAutomation, sessionCalls, autoScope, automationOptions]);
 
   // Parse SSE stream
   const parseSSE = useCallback(async (
@@ -2672,7 +2724,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               {onCreateAutomation && automatableCount > 0 && (
                 <button
                   type="button"
-                  onClick={makeAutomation}
+                  onClick={() => setAutomationDialog(true)}
                   className="px-3 py-1 rounded-md border app-border app-surface app-text-muted text-xs app-hover-surface-strong app-hover-text-strong transition-colors"
                   title="Turn this session's successful tool calls into a draft automation"
                 >
@@ -3338,6 +3390,142 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         />
       </div>
       </div>
+      {automationDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={() => setAutomationDialog(false)}>
+          <div className="w-[520px] max-h-[80vh] overflow-y-auto rounded-xl border app-border app-panel p-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-sm font-semibold app-text mb-1">Make Automation</div>
+            <div className="text-[11px] app-text-muted mb-4">
+              This chat's successful tool calls become an editable flow. Nothing runs until you run it.
+            </div>
+
+            <div className="text-[10px] font-semibold app-text-muted tracking-wide mb-1.5">WHICH CALLS</div>
+            <div className="space-y-1 mb-4">
+              <DialogChoice
+                checked={autoScope === 'last'}
+                onSelect={() => setAutoScope('last')}
+                title="This request only"
+                detail={`${lastTurnCount} call${lastTurnCount === 1 ? '' : 's'} since your last message`}
+              />
+              <DialogChoice
+                checked={autoScope === 'session'}
+                onSelect={() => setAutoScope('session')}
+                title="The whole session"
+                detail={`${automatableCount} successful call${automatableCount === 1 ? '' : 's'}`}
+              />
+            </div>
+
+            <div className="text-[10px] font-semibold app-text-muted tracking-wide mb-1.5">WHICH GRAPH, EACH RUN</div>
+            <div className="space-y-1 mb-4">
+              <DialogChoice
+                checked={autoGraphTarget === 'ask'}
+                onSelect={() => setAutoGraphTarget('ask')}
+                title="Ask when it runs"
+                detail="A run parameter, defaulting to this chat's graph"
+              />
+              <DialogChoice
+                checked={autoGraphTarget === 'new'}
+                onSelect={() => setAutoGraphTarget('new')}
+                title="A new graph each run"
+                detail="Adds a Create Graph step; every step writes into that run's graph"
+              />
+              <DialogChoice
+                checked={autoGraphTarget === 'pin'}
+                onSelect={() => setAutoGraphTarget('pin')}
+                title="Always this same graph"
+                detail="Every run rewrites the graph from this chat"
+              />
+            </div>
+
+            {delegateCount > 0 && (
+              <>
+                <div className="text-[10px] font-semibold app-text-muted tracking-wide mb-1.5">
+                  DELEGATED STEPS ({delegateCount})
+                </div>
+                <div className="space-y-1 mb-4">
+                  <DialogChoice
+                    checked={autoFlatten}
+                    onSelect={() => setAutoFlatten(true)}
+                    title="Expand into the real calls"
+                    detail="Exactly what the subagent did, editable, and no AI cost per run"
+                  />
+                  <DialogChoice
+                    checked={!autoFlatten}
+                    onSelect={() => setAutoFlatten(false)}
+                    title="Keep as one delegated step"
+                    detail="Re-decides each run — adapts to new input, runs an AI subagent every time"
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="text-[10px] font-semibold app-text-muted tracking-wide mb-1.5">VALUES</div>
+            <label className="flex items-start gap-2 mb-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoParameterize}
+                onChange={(e) => setAutoParameterize(e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 accent-purple-500"
+              />
+              <span className="text-[11px] app-text-soft">
+                Turn this chat's values into parameters
+                <span className="block text-[10px] app-text-muted">
+                  Names, URLs and anything you typed become editable per run. Defaults reproduce this chat.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 mb-4 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={autoKeepReads}
+                onChange={(e) => setAutoKeepReads(e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 accent-purple-500"
+              />
+              <span className="text-[11px] app-text-soft">
+                Keep the look-up steps
+                <span className="block text-[10px] app-text-muted">
+                  Off: reads whose results nothing used are dropped.
+                </span>
+              </span>
+            </label>
+
+            {automationPreview && (
+              <div className="rounded-lg border app-border app-surface px-3 py-2 mb-3">
+                <div className="text-[11px] app-text">
+                  {automationPreview.steps.filter((s) => s.stepType === 'action').length} step
+                  {automationPreview.steps.filter((s) => s.stepType === 'action').length === 1 ? '' : 's'}
+                  {automationPreview.inputs.length > 0 && ` · asks for ${automationPreview.inputs.length} value${automationPreview.inputs.length === 1 ? '' : 's'}`}
+                  {' · '}
+                  <span className={automationPreview.modelSteps > 0 ? 'text-amber-500' : 'text-emerald-500'}>
+                    {automationPreview.modelSteps > 0
+                      ? `${automationPreview.modelSteps} AI call${automationPreview.modelSteps === 1 ? '' : 's'} per run`
+                      : 'no AI cost per run'}
+                  </span>
+                </div>
+                {automationPreview.notes.length > 0 && (
+                  <div className="text-[10px] app-text-muted mt-1">{automationPreview.notes.join(' ')}</div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={makeAutomation}
+                className="flex-1 rounded-md border border-purple-500 bg-purple-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-purple-500"
+              >
+                Build draft
+              </button>
+              <button
+                type="button"
+                onClick={() => setAutomationDialog(false)}
+                className="rounded-md border app-border app-surface px-3 py-1.5 text-[12px] app-text-muted hover:app-surface-strong"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {analysisOpen && <SessionAnalysisPanel userId={userId} onClose={() => setAnalysisOpen(false)} />}
       {recordingsOpen && (
         <RecordingsPanel
@@ -3359,5 +3547,28 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         />
       )}
     </div>
+  );
+}
+
+/** One radio-style choice in the Make Automation dialog. */
+function DialogChoice({ checked, onSelect, title, detail }: {
+  checked: boolean; onSelect: () => void; title: string; detail: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full text-left rounded-lg border px-3 py-2 transition-colors ${
+        checked
+          ? 'border-purple-500/50 bg-purple-500/15'
+          : 'app-border app-surface app-hover-surface-strong'
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span className={`w-2 h-2 rounded-full flex-shrink-0 ${checked ? 'bg-purple-400' : 'bg-white/20'}`} />
+        <span className="text-[12px] app-text">{title}</span>
+      </div>
+      <div className="text-[10px] app-text-muted pl-4">{detail}</div>
+    </button>
   );
 }

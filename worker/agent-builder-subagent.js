@@ -202,8 +202,12 @@ async function runAgentBuilderSubagent(input, env, onProgress, executeTool) {
           const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext: input.authContext || null }, env, {})
 
           const resultStr = JSON.stringify(result)
+          // `input` is what makes this record REPLAYABLE: the exact arguments that produced
+          // the effect. Without it a delegate step can only be re-planned by the subagent at
+          // run time; with it, Make Automation expands the delegation into concrete steps.
           actions.push({
             tool: toolUse.name,
+            input: toolUse.input,
             success: true,
             agentId: toolUse.input.agentId || result.agentId || result.id,
             summary: result.message || `${toolUse.name} ok`,

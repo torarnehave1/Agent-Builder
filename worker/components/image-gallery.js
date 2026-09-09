@@ -233,10 +233,12 @@
     try {
       var res = await fetch(url, { headers: { Accept: 'application/json' } })
       if (!res.ok) {
-        // 404 is the ordinary outcome for an album that was unpublished or a
-        // link that was regenerated — say so plainly instead of a broken grid.
+        // An album whose owner has unpublished it refuses the anonymous read (401/403) rather
+        // than vanishing (404) — the shareId is permanent, so the id still resolves to a real
+        // album that simply is not public right now. All three mean the same thing to a visitor.
         console.error('[image-gallery] album fetch failed', res.status, url)
-        message(root, res.status === 404 ? 'This album is no longer shared.' : 'Could not load the album.', true)
+        var notShared = res.status === 404 || res.status === 401 || res.status === 403
+        message(root, notShared ? 'This album is not shared.' : 'Could not load the album.', true)
         return
       }
       data = await res.json()

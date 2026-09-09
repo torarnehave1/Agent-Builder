@@ -1,7 +1,7 @@
 import type { Node } from '@xyflow/react';
 import { TOOL_CATALOG } from '../lib/toolCatalog';
 import ActionToolPicker from './ActionToolPicker';
-import type { ActionData, DelayData, LoopData, NotifyData, NoteData } from '../lib/automation';
+import type { ActionData, AutomationInput, DelayData, LoopData, NotifyData, NoteData, StartData } from '../lib/automation';
 
 export interface StepTestState {
   status: 'testing' | 'passed' | 'failed';
@@ -26,7 +26,7 @@ export default function AutomationInspector({ selectedNode, onUpdateNode, onDele
 
   return (
     <div className="rounded-xl border border-purple-600/30 bg-slate-900/50 p-4 space-y-3">
-      {type === 'start' && <div className="text-sm font-bold text-white">▶ Start</div>}
+      {type === 'start' && <StartInspector id={id} data={data as StartData} onUpdate={onUpdateNode} />}
       {type === 'action' && <ActionInspector id={id} data={data as ActionData} onUpdate={onUpdateNode} />}
       {type === 'delay' && <DelayInspector id={id} data={data as DelayData} onUpdate={onUpdateNode} />}
       {type === 'loop' && <LoopInspector id={id} data={data as LoopData} onUpdate={onUpdateNode} />}
@@ -65,6 +65,82 @@ export default function AutomationInspector({ selectedNode, onUpdateNode, onDele
         Delete Step
       </button>
     </div>
+  );
+}
+
+/**
+ * Start doubles as the automation's parameter sheet: what this flow asks for per run.
+ * A parameter's default is what the source chat used, so a run with nothing filled in
+ * reproduces that session — the values are prompts, not blanks.
+ */
+function StartInspector({ id, data, onUpdate }: { id: string; data: StartData; onUpdate: (id: string, data: Record<string, unknown>) => void }) {
+  const inputs: AutomationInput[] = Array.isArray(data.inputs) ? data.inputs : [];
+  const write = (next: AutomationInput[]) =>
+    onUpdate(id, { ...data, ...(next.length ? { inputs: next } : { inputs: undefined }) });
+  const patch = (i: number, field: keyof AutomationInput, value: string | boolean) =>
+    write(inputs.map((row, n) => (n === i ? { ...row, [field]: value } : row)));
+
+  return (
+    <>
+      <div className="text-sm font-bold text-white">▶ Start</div>
+      <FieldLabel label="RUN PARAMETERS" />
+      <div className="text-[9px] text-sky-400/70 mb-1">
+        Use one in any step as <code className="text-sky-300">{'{{input.key}}'}</code>. Empty on a run → the default below.
+      </div>
+      {inputs.length === 0 && (
+        <div className="text-[10px] text-white/35 italic">
+          None — every value in this automation is fixed.
+        </div>
+      )}
+      {inputs.map((row, i) => (
+        <div key={i} className="rounded border border-white/8 bg-slate-950/40 p-2 space-y-1">
+          <div className="flex items-center gap-1">
+            <input
+              value={row.key}
+              onChange={(e) => patch(i, 'key', e.target.value.replace(/[^A-Za-z0-9_]/g, ''))}
+              placeholder="key"
+              className="flex-1 rounded bg-slate-950/60 border border-white/8 px-2 py-1 text-[10px] text-emerald-300/90 font-mono focus:outline-none focus:border-purple-500/50"
+            />
+            <button
+              type="button"
+              onClick={() => write(inputs.filter((_, n) => n !== i))}
+              className="px-1.5 py-1 rounded border border-rose-500/30 text-rose-400 text-[10px] hover:bg-rose-500/15"
+              title="Remove parameter"
+            >
+              ✕
+            </button>
+          </div>
+          <input
+            value={row.label || ''}
+            onChange={(e) => patch(i, 'label', e.target.value)}
+            placeholder="What is this? (shown when running)"
+            className="w-full rounded bg-slate-950/60 border border-white/8 px-2 py-1 text-[10px] text-white focus:outline-none focus:border-purple-500/50"
+          />
+          <input
+            value={row.default || ''}
+            onChange={(e) => patch(i, 'default', e.target.value)}
+            placeholder="default value"
+            className="w-full rounded bg-slate-950/60 border border-white/8 px-2 py-1 text-[10px] text-white/80 font-mono focus:outline-none focus:border-purple-500/50"
+          />
+          <label className="flex items-center gap-1.5 text-[10px] text-white/50 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={row.required === true}
+              onChange={(e) => patch(i, 'required', e.target.checked)}
+              className="w-3 h-3 accent-purple-500"
+            />
+            Required — a live run stops if it is empty
+          </label>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => write([...inputs, { key: `input${inputs.length + 1}`, label: '', default: '' }])}
+        className="w-full rounded-lg border border-purple-500/30 bg-purple-500/10 px-3 py-1.5 text-[11px] font-semibold text-purple-200 hover:bg-purple-500/20"
+      >
+        + Add parameter
+      </button>
+    </>
   );
 }
 
@@ -200,7 +276,8 @@ function FieldLabel({ label }: { label: string }) {
 function RefHint() {
   return (
     <div className="text-[9px] text-sky-400/70 mb-1">
-      Insert a previous step's output: <code className="text-sky-300">{'{{a1.result.content}}'}</code>
+      Earlier step's output: <code className="text-sky-300">{'{{a1.result.content}}'}</code>
+      {' · '}run parameter: <code className="text-sky-300">{'{{input.graphId}}'}</code>
     </div>
   );
 }

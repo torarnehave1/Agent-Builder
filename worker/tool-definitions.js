@@ -907,7 +907,7 @@ const TOOL_DEFINITIONS = [
   // -------------------------------------------------------------------------
   {
     name: 'album_list',
-    description: 'List all photo albums. Returns just names by default; pass includeMeta:true to get an array of {name, createdBy, createdAt, updatedAt}. NOT owner-filtered server-side — every authenticated user sees every album. Filter client-side by createdBy if you only want the current user\'s albums.',
+    description: "List all photo albums. Returns just names by default; pass includeMeta:true to get {name, createdBy, createdAt, updatedAt, isShared, shareId, imageCount, hiddenCount} per album PLUS a sharedAlbums array of the published ones. Use includeMeta:true whenever the task involves putting an album on a page — a gallery needs a published album's shareId, and this is the one call that reveals which albums have one. NOT owner-filtered server-side — every authenticated user sees every album. Filter client-side by createdBy if you only want the current user's albums.",
     input_schema: {
       type: 'object',
       properties: {
@@ -988,7 +988,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'album_publish',
-    description: 'Publish an album for public sharing. Sets isShared:true and mints a shareId UUID if none exists. The shared album is then readable without auth via photos_list with the shareId, or in a browser at https://seo.vegvisr.org/album/{shareId}.',
+    description: "Publish an album for public sharing. Sets isShared:true and mints a shareId UUID if none exists, WITHOUT touching the album's photos. THIS IS THE STEP BEFORE PUTTING AN ALBUM ON A PAGE: the returned shareId is what the image-gallery component reads. After publishing, call get_component('image-gallery') for the one-line <script src>, insert it plus <div data-vegvisr-gallery=\"{shareId}\"> where the gallery should appear, then publish_html_node. A published album is readable with no auth via photos_list with the shareId, and in a browser at https://photos.vegvisr.org/share/{shareId}. Every photo in the album is shared unless held back with album_hide_images. Superadmin/owner only.",
     input_schema: {
       type: 'object',
       properties: {
@@ -999,15 +999,28 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: 'album_rotate_share',
-    description: 'Rotate the shareId of a shared album to a fresh UUID. Invalidates any previously-distributed share URL. Use when a share link needs to be revoked.',
+    name: 'album_unpublish',
+    description: 'Stop sharing an album. Clears isShared AND deletes the shareId, so the distributed link is dead for good — publishing again mints a different one. Any page carrying an image-gallery for the old shareId will render "This album is no longer shared." Use when a public album should become private again.',
     input_schema: {
       type: 'object',
       properties: {
-        name: { type: 'string', description: 'Album name whose shareId should be rotated.' },
+        name: { type: 'string', description: 'Album name to unpublish.' },
         authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
       },
       required: ['name']
+    }
+  },
+  {
+    name: 'album_hide_images',
+    description: "Choose which photos a shared album holds back from the public view. An album shares EVERYTHING it holds by default — this is the per-photo opt-out. Hidden photos stay in the album and stay visible to the owner; only the public share link and the image-gallery component drop them. Pass the complete list of keys to hide (it replaces the previous list), or [] to share every photo again. Get the keys from album_get or get_album_images. Does not change whether the album is shared.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Album name.' },
+        hiddenImages: { type: 'array', items: { type: 'string' }, description: 'Complete list of image keys to hold back from the public view. Replaces the previous list. Pass [] to share every photo. Keys not in the album are ignored.' },
+        authToken: { type: 'string', description: 'User emailVerificationToken. Auto-forwarded by the chat client.' }
+      },
+      required: ['name', 'hiddenImages']
     }
   },
   {
@@ -1432,7 +1445,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'add_email_destination',
-    description: 'Register a new RECIPIENT email address in Cloudflare Email Routing so the platform is allowed to send mail to it. Cloudflare will email the recipient a verification link; the address can only receive mail through env.EMAIL.send() AFTER the recipient clicks that link. Use this when the user asks to "add a destination", "register a recipient", "allow sending to X", or when a send fails with "destination not verified". This is different from add_email_account — that registers a SENDER (From: address) in the user\'s profile; this registers a RECIPIENT (To: address) at the account level.',
+    description: 'OUTBOUND ONLY — permission to SEND to an address. Adds the address to the account-wide verified-destination list so env.EMAIL.send() is allowed to deliver to it; Cloudflare mails it a verification link, and sends fail until a human clicks that link. THIS TOOL CREATES NO FORWARDING AND NO ROUTING RULE. Mail sent TO the address is completely unaffected by this call. Use it ONLY for: "allow sending to X", "add a destination", "register a recipient", or after a send fails with "destination not verified". DO NOT use it for "forward X to Y", "set up privacy@<domain>", "make an inbox", or any request about mail ARRIVING — inbound forwarding is provision_world_email, which is the ONLY tool that creates a routing rule. Registering an address on a domain you are trying to receive mail on is a wasted call: the verification mail goes to a mailbox that does not exist yet, so it can never be verified. Also different from add_email_account, which registers a SENDER (From: address) in the user\'s profile.',
     input_schema: {
       type: 'object',
       properties: {

@@ -242,8 +242,12 @@ async function runAlbumSubagent(input, env, onProgress, executeTool) {
           )
 
           const resultStr = JSON.stringify(result)
+          // `input` is what makes this record REPLAYABLE: the exact arguments that produced
+          // the effect. Without it a delegate step can only be re-planned by the subagent at
+          // run time; with it, Make Automation expands the delegation into concrete steps.
           actions.push({
             tool: toolUse.name,
+            input: toolUse.input,
             success: true,
             albumName: toolUse.input?.name || toolUse.input?.album || result?.albumName,
             summary: result?.message || `${toolUse.name} ok`,

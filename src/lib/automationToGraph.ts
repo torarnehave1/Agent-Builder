@@ -8,7 +8,7 @@
  * metadata.config, mirroring the email-template / data-node precedent for typed app nodes.
  */
 import type { Node, Edge } from '@xyflow/react';
-import type { StepData, StepType } from './automation';
+import type { AutomationInput, StepData, StepType } from './automation';
 import { stepSummary } from './automation';
 
 export const KG_API = 'https://knowledge.vegvisr.org';
@@ -31,6 +31,8 @@ export interface RunResult {
   summary: { total: number; executed: number; simulated: number; errors: number; capped: boolean };
   graphId?: string;
   runNodeId?: string;
+  /** The parameters this run actually used (supplied values merged over declared defaults). */
+  inputs?: Record<string, string>;
   error?: string;
 }
 
@@ -47,6 +49,16 @@ export interface AutomationSpec {
   steps: AutomationSpecStep[];
   edges: Array<{ source: string; target: string }>;
   error?: string;
+}
+
+/**
+ * The run parameters an automation declares, read off the Start step on the canvas.
+ * Single source of truth for the UI — the runner reads the same place server-side.
+ */
+export function declaredInputs(nodes: Node[]): AutomationInput[] {
+  const start = nodes.find((n) => n.type === 'start');
+  const raw = (start?.data as { inputs?: AutomationInput[] } | undefined)?.inputs;
+  return Array.isArray(raw) ? raw.filter((i) => i && typeof i.key === 'string' && i.key.trim()) : [];
 }
 
 /** NL → automation spec via the worker (agent authors it; nothing runs). */
@@ -85,36 +97,45 @@ export function specToReactFlow(spec: AutomationSpec): { nodes: Node[]; edges: E
   return { nodes, edges };
 }
 
-/** Test ONE step in isolation, for real (Zapier-style). Returns the step result. */
+/**
+ * Test ONE step in isolation, for real (Zapier-style). Returns the step result.
+ * `inputs` fill the step's {{input.*}} refs; unsupplied keys fall back to the Start
+ * declarations, so a step under test sees the same values a real run would give it.
+ */
 export async function testStep(
   graphId: string,
   stepId: string,
   userId: string,
   callerEmail?: string,
+  inputs?: Record<string, string>,
 ): Promise<{ success: boolean; step: RunStep | null; error?: string }> {
   const res = await fetch(`${AGENT_API}/automation/run`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, stepId, userId, callerEmail }),
+    body: JSON.stringify({ graphId, stepId, userId, callerEmail, inputs }),
   });
   const data = (await res.json()) as { success: boolean; step: RunStep | null; error?: string };
   if (!res.ok && !data.step) throw new Error(data.error || `Test failed: ${res.status}`);
   return data;
 }
 
-/** Execute an automation on the worker. dryRun (default) simulates action steps. */
+/**
+ * Execute an automation on the worker. dryRun (default) simulates action steps.
+ * `inputs` are this run's parameters, resolved as {{input.<key>}} inside step configs.
+ */
 export async function runAutomation(
   graphId: string,
   dryRun: boolean,
   userId: string,
   callerEmail?: string,
+  inputs?: Record<string, string>,
 ): Promise<RunResult> {
   const res = await fetch(`${AGENT_API}/automation/run`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, dryRun, userId, callerEmail }),
+    body: JSON.stringify({ graphId, dryRun, userId, callerEmail, inputs }),
   });
   const data = (await res.json()) as RunResult;
   if (!res.ok) throw new Error(data.error || `Run failed: ${res.status}`);
