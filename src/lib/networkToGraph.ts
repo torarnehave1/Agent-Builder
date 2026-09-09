@@ -134,14 +134,23 @@ export function networkToReactFlow(net: NetworkResponse): { nodes: Node[]; edges
       const total = parallelCount.get(k) || 1;
       const idx = seen.get(k) || 0;
       seen.set(k, idx + 1);
-      if (total > 1) curvature = 0.15 + idx * (0.6 / total);
+      if (total > 1) {
+        // Alternate sign so edges fan to BOTH sides of the straight line; all
+        // bowing the same way just makes a thicker bundle.
+        const step = 0.45;
+        const sign = idx % 2 === 0 ? 1 : -1;
+        curvature = sign * (0.2 + Math.floor(idx / 2) * step);
+      }
     }
 
     return {
       id: `${e.kind}_${e.source}_${e.target}_${i}`,
       source: e.source,
       target: e.target,
-      type: affiliation ? 'default' : 'simplebezier',
+      // MUST be 'default' (BezierEdge): pathOptions.curvature is read only by
+      // getBezierPath. 'simplebezier' silently ignores it, so every parallel
+      // edge renders on the identical path and they stack invisibly.
+      type: 'default',
       // Direction is often the whole point of a sociogram: replying to someone
       // seven times more than they reply to you is the finding, and without a
       // head the two directions are indistinguishable.
