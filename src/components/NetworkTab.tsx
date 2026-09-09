@@ -97,6 +97,24 @@ export default function NetworkTab({ authToken }: Props) {
         <div className="px-4 py-3 text-[12px] text-rose-300/90">{error}</div>
       )}
 
+      {/* Colour alone never distinguishes an edge kind — reply is solid, react
+          dashed — so the legend names both cues. */}
+      <div className="flex items-center gap-4 px-4 py-1.5 text-[10px] text-white/45 border-b border-white/5">
+        <span className="flex items-center gap-1.5">
+          <svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="#3B82C4" strokeWidth="3" opacity="0.6" /></svg>
+          posts in topic
+        </span>
+        <span className="flex items-center gap-1.5">
+          <svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="#8B7BB8" strokeWidth="2.5" /></svg>
+          replied to
+        </span>
+        <span className="flex items-center gap-1.5">
+          <svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="#C08A2E" strokeWidth="2.5" strokeDasharray="5 4" /></svg>
+          reacted to
+        </span>
+        <span className="text-white/30">arrow points at the person acted on</span>
+      </div>
+
       <div className="flex-1 min-h-[520px]">
         <ReactFlowProvider>
           <ContractCanvas

@@ -8,7 +8,7 @@
  * Layout is computed here rather than stored: unlike an automation, nobody
  * arranges this by hand, and the arrangement should follow the data.
  */
-import type { Node, Edge } from '@xyflow/react';
+import { MarkerType, type Node, type Edge } from '@xyflow/react';
 
 export const AGENT_API = 'https://agent.vegvisr.org';
 
@@ -104,23 +104,66 @@ export function networkToReactFlow(net: NetworkResponse): { nodes: Node[]; edges
 
   const maxWeight = Math.max(1, ...net.edges.map((e) => e.weight));
 
+  // Two people can have up to four edges between them — reply and react, each
+  // way. Drawn on the same anchors with the same style they stack into a single
+  // visible line, so the chart shows one number and hides three. Count the
+  // parallels per unordered pair and fan them apart.
+  const parallelCount = new Map<string, number>();
+  const pairKey = (a: string, b: string) => [a, b].sort().join('|');
+  for (const e of net.edges) {
+    if (e.kind === 'affiliation') continue;
+    const k = pairKey(e.source, e.target);
+    parallelCount.set(k, (parallelCount.get(k) || 0) + 1);
+  }
+  const seen = new Map<string, number>();
+
+  const STROKE = {
+    affiliation: '#3B82C4',
+    reply: '#8B7BB8',   // purple — a written response
+    react: '#C08A2E',   // amber — a tap, a lighter act
+  } as const;
+
   const edges: Edge[] = net.edges.map((e, i) => {
     const affiliation = e.kind === 'affiliation';
+    const stroke = STROKE[e.kind];
+
+    // Offset each parallel edge so they separate instead of overlapping.
+    let curvature = 0.25;
+    if (!affiliation) {
+      const k = pairKey(e.source, e.target);
+      const total = parallelCount.get(k) || 1;
+      const idx = seen.get(k) || 0;
+      seen.set(k, idx + 1);
+      if (total > 1) curvature = 0.15 + idx * (0.6 / total);
+    }
+
     return {
       id: `${e.kind}_${e.source}_${e.target}_${i}`,
       source: e.source,
       target: e.target,
-      // Weight is the whole point of these edges, so it is shown, not implied.
-      label: e.weight >= 10 ? String(e.weight) : undefined,
+      type: affiliation ? 'default' : 'simplebezier',
+      // Direction is often the whole point of a sociogram: replying to someone
+      // seven times more than they reply to you is the finding, and without a
+      // head the two directions are indistinguishable.
+      markerEnd: affiliation
+        ? undefined
+        : { type: MarkerType.ArrowClosed, width: 14, height: 14, color: stroke },
+      // Every interaction edge is labelled, not just the heavy ones — an
+      // unlabelled parallel edge is exactly what caused the confusion.
+      label: affiliation ? (e.weight >= 10 ? String(e.weight) : undefined) : `${e.kind} ${e.weight}`,
+      labelStyle: { fill: stroke, fontSize: 10 },
+      labelBgStyle: { fill: '#0B1220', fillOpacity: 0.85 },
       style: {
-        stroke: affiliation ? '#3B82C4' : '#8B7BB8',
+        stroke,
         strokeWidth: strokeWidth(e.weight, maxWeight),
-        opacity: affiliation ? 0.5 : 0.75,
-        // Reply/react edges are directed acts; affiliations are memberships.
-        strokeDasharray: affiliation ? undefined : '5 4',
+        opacity: affiliation ? 0.45 : 0.9,
+        // Affiliation = membership (solid). Reply = written (solid, purple).
+        // React = a tap (dashed, amber). Colour is never the only cue.
+        strokeDasharray: e.kind === 'react' ? '5 4' : undefined,
       },
+      pathOptions: affiliation ? undefined : { curvature },
       animated: false,
-    };
+    } as Edge;
   });
 
   return { nodes, edges };
