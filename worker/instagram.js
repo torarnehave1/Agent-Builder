@@ -400,18 +400,24 @@ async function findOrCreateThread(env, conn, participantIgsid) {
   // Channel prefix keeps every thread for an account together in the group list.
   const name = `IG ${conn.username || conn.ig_user_id} · ${username || participantIgsid}`
 
-  // external_kind is what lets group-chat-worker decide, without a subrequest on
-  // every message, whether an outgoing message must also be relayed to Instagram.
-  await env.CHAT_DB.prepare(
-    'INSERT INTO groups (id, name, created_by, created_at, updated_at, external_kind) VALUES (?, ?, ?, ?, ?, ?)'
-  ).bind(groupId, name, conn.user_id, now, now, 'instagram').run()
-
-  // The owner must be a member: ensureMember gates READING the group, and the
-  // Instagram participant deliberately gets no member row — they are an author
-  // string, not an account (mirrors how bot: authors work).
-  await env.CHAT_DB.prepare(
-    'INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
-  ).bind(groupId, conn.user_id, 'owner', now).run()
+  // ATOMIC. These two writes were separate statements, and a failure between
+  // them left a group with no members — invisible, because ensureMember gates
+  // reading, so the owner sees no new conversation at all while the row sits in
+  // the database. D1 batches commit all-or-nothing, so that state is now
+  // unreachable.
+  //
+  // external_kind lets group-chat-worker decide, without a subrequest on every
+  // message, whether an outgoing message must also be relayed to Instagram.
+  // The Instagram participant deliberately gets no member row — they are an
+  // author string, not an account (mirrors how bot: authors work).
+  await env.CHAT_DB.batch([
+    env.CHAT_DB.prepare(
+      'INSERT INTO groups (id, name, created_by, created_at, updated_at, external_kind) VALUES (?, ?, ?, ?, ?, ?)'
+    ).bind(groupId, name, conn.user_id, now, now, 'instagram'),
+    env.CHAT_DB.prepare(
+      'INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
+    ).bind(groupId, conn.user_id, 'owner', now),
+  ])
 
   await env.DB.prepare(
     `INSERT INTO instagram_threads (group_id, ig_user_id, participant_igsid, participant_username, participant_avatar_url, created_at)
@@ -518,14 +524,28 @@ export async function ingestInboundMessage(env, conn, senderId, msg) {
   // id BEFORE any insert, so a retry cannot half-duplicate a message that has
   // both an attachment and text.
   const mid = msg?.message?.mid
-  if (mid) {
-    const won = await claimMessageKey(env, `in:${mid}`, null, 'in')
+  const inKey = mid ? `in:${mid}` : null
+  if (inKey) {
+    const won = await claimMessageKey(env, inKey, null, 'in')
     if (!won) {
       console.log(`[instagram] duplicate delivery ignored mid=${mid}`)
       return null
     }
   }
 
+  // Everything after the claim runs inside this try. Claiming BEFORE the work
+  // means a mid-flight failure would otherwise leave the key held forever, and
+  // Meta's retry — the thing that would have healed it — gets dropped as a
+  // duplicate. The claim is released on failure so a retry can succeed.
+  try {
+    return await writeInbound(env, conn, senderId, msg, text, attachments)
+  } catch (err) {
+    if (inKey) await releaseMessageKey(env, inKey)
+    throw err
+  }
+}
+
+async function writeInbound(env, conn, senderId, msg, text, attachments) {
   const thread = await findOrCreateThread(env, conn, senderId)
   const now = Date.now()
   const author = `ig:${senderId}`
