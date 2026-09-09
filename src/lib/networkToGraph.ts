@@ -12,15 +12,18 @@ import type { Node, Edge } from '@xyflow/react';
 
 export const AGENT_API = 'https://agent.vegvisr.org';
 
-export interface PersonNode {
-  id: string; kind: 'person';
+export interface ActorNode {
+  // Bots participate but are not people — kept distinct so they can be coloured
+  // separately and so centrality over humans stays honest.
+  id: string; kind: 'person' | 'bot';
+  label: string; avatar?: string | null; role?: string | null;
   messages: number; topics: number; outDegree: number; inDegree: number;
 }
 export interface TopicNode {
   id: string; kind: 'topic'; label: string;
   messages: number; participants: number; shared: boolean;
 }
-export type NetworkNode = PersonNode | TopicNode;
+export type NetworkNode = ActorNode | TopicNode;
 
 export interface NetworkEdge {
   source: string; target: string;
@@ -29,13 +32,30 @@ export interface NetworkEdge {
 }
 
 export interface NetworkStats {
-  people: number; topics: number;
+  people: number; bots: number; topics: number;
   sharedTopics: number; soloTopics: number;
   interactionPairs: number; density: number;
 }
 
 export interface NetworkResponse {
   nodes: NetworkNode[]; edges: NetworkEdge[]; stats: NetworkStats;
+  /** Saved positions for this viewer, keyed by node id. */
+  layout?: Record<string, { x: number; y: number }>;
+}
+
+export async function saveLayout(
+  authToken: string,
+  positions: Record<string, { x: number; y: number }>,
+): Promise<void> {
+  const res = await fetch(`${AGENT_API}/network/layout`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ authToken, positions }),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error((d as { error?: string })?.error || `Save failed (${res.status})`);
+  }
 }
 
 export async function fetchNetwork(authToken: string): Promise<NetworkResponse> {
@@ -56,11 +76,9 @@ function strokeWidth(weight: number, max: number): number {
  * ones. Deliberately not force-directed: a stable layout is readable across
  * visits, and a springy one moves every time the data shifts slightly.
  */
-export function networkToReactFlow(
-  net: NetworkResponse,
-  displayName: (userId: string) => string,
-): { nodes: Node[]; edges: Edge[] } {
-  const people = net.nodes.filter((n): n is PersonNode => n.kind === 'person')
+export function networkToReactFlow(net: NetworkResponse): { nodes: Node[]; edges: Edge[] } {
+  const saved = net.layout || {};
+  const people = net.nodes.filter((n): n is ActorNode => n.kind === 'person' || n.kind === 'bot')
     .sort((a, b) => b.messages - a.messages);
   const topics = net.nodes.filter((n): n is TopicNode => n.kind === 'topic')
     // Shared first, then by volume — the connective tissue reads before the solo tail.
@@ -68,16 +86,18 @@ export function networkToReactFlow(
 
   const ROW = 92;
   const nodes: Node[] = [
+    // A saved position always wins over the computed one — once the owner has
+    // arranged the chart, recomputing the layout under them would be hostile.
     ...people.map((p, i) => ({
       id: p.id,
       type: 'personNode',
-      position: { x: 40, y: 40 + i * ROW },
-      data: { ...p, label: displayName(p.id) } as unknown as Record<string, unknown>,
+      position: saved[p.id] || { x: 40, y: 40 + i * ROW },
+      data: p as unknown as Record<string, unknown>,
     })),
     ...topics.map((t, i) => ({
       id: t.id,
       type: 'topicNode',
-      position: { x: 460, y: 40 + i * ROW },
+      position: saved[t.id] || { x: 460, y: 40 + i * ROW },
       data: t as unknown as Record<string, unknown>,
     })),
   ];

@@ -26,7 +26,7 @@ import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
-import { affiliationEdges, interactionEdges, buildNetwork } from './network-analysis.js'
+import { affiliationEdges, interactionEdges, buildNetwork, resolveNames, loadLayout, saveLayout } from './network-analysis.js'
 import { buildInstagramAuthorizeUrl, connectInstagram, getInstagramConnection, getInstagramConnectionByIgUserId, disconnectInstagram, verifyInstagramWebhookSignature, subscribeAccountToWebhooks, getAccountSubscriptions, sendInstagramMessage, ingestInboundMessage, getThreadByGroupId, relayGroupMessageToInstagram, replyWindowState, backfillThreadParticipant } from './instagram.js'
 
 // ---------------------------------------------------------------------------
@@ -603,9 +603,52 @@ export default {
             interactionEdges(env),
           ])
           const network = buildNetwork(affiliations, interactions)
-          return new Response(JSON.stringify(network), { headers: corsHeaders })
+
+          // Names and saved positions are attached here rather than in the
+          // client, so opening the tab is one request regardless of node count.
+          const actorIds = network.nodes.filter((n) => n.kind !== 'topic').map((n) => n.id)
+          const [names, layout] = await Promise.all([
+            resolveNames(env, actorIds).catch(() => new Map()),
+            loadLayout(env, auth.userId).catch(() => ({})),
+          ])
+          for (const n of network.nodes) {
+            const meta = names.get(n.id)
+            if (meta) {
+              n.label = meta.label
+              n.avatar = meta.avatar
+              n.role = meta.role
+            }
+          }
+          return new Response(JSON.stringify({ ...network, layout }), { headers: corsHeaders })
         } catch (err) {
           console.error('[/network] failed', err.message)
+          return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders })
+        }
+      }
+
+      // POST /network/layout — persist where the owner dragged the nodes.
+      // Scoped to the caller: a layout is one person's reading of the network,
+      // not a shared artefact.
+      if (pathname === '/network/layout' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const auth = body.authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.userId) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        if (auth.role !== 'Superadmin') {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: corsHeaders })
+        }
+        const positions = body.positions && typeof body.positions === 'object' ? body.positions : null
+        if (!positions) {
+          return new Response(JSON.stringify({ error: 'positions required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const saved = await saveLayout(env, auth.userId, positions)
+          return new Response(JSON.stringify({ success: true, saved }), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/network/layout] failed', err.message)
           return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: corsHeaders })
         }
       }
