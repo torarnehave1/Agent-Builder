@@ -20,6 +20,7 @@ import { buildAutomationSpec } from './automation-builder.js'
 import { analyzeSession, analyzeSessionDialog } from './analyze-session.js'
 import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
+import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { DEFAULT_MODEL, MODELS, KNOWN_MODELS } from './models.js'
 import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
@@ -2182,6 +2183,42 @@ export default {
         } catch (err) {
           console.error('[/analyze-session/chat] error', err)
           return new Response(JSON.stringify({ error: err?.message || 'analysis dialog failed' }), { status: 500, headers: corsHeaders })
+        }
+      }
+
+      // POST /meeting-graph — build a STRUCTURED meeting/podcast graph from a transcript that
+      // lives in the user's BROWSER.
+      //
+      // Transcription runs on the user's device and the text is deliberately never sent to the
+      // main agent (it is stripped from history — input tokens dominate cost). But this subagent
+      // has to READ the transcript to extract themes, decisions and quotes, so unlike
+      // save_transcript_to_graph it cannot be satisfied by a pure browser-side write. This
+      // endpoint is the seam: the browser posts its stored copy straight here, the subagent
+      // consumes it, and the main agent's context never carries the transcript at all.
+      // Body: { transcript, recordingName?, playUrl?, targetLanguage?, metaArea?, userId?, authToken? }
+      if (pathname === '/meeting-graph' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}))
+        const { transcript, recordingName, playUrl, targetLanguage, metaArea, userId: bodyUserId, authToken } = body
+        const authContext = authToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const effectiveUserId = authContext.userId || bodyUserId
+        if (!effectiveUserId) {
+          return new Response(JSON.stringify({ error: 'userId is required' }), { status: 400, headers: corsHeaders })
+        }
+        if (typeof transcript !== 'string' || !transcript.trim()) {
+          return new Response(JSON.stringify({ error: 'transcript is required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const result = await runMeetingGraphSubagent(
+            { transcript, recordingName, playUrl, targetLanguage, metaArea, userId: effectiveUserId },
+            env,
+            () => {},
+          )
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          console.error('[/meeting-graph] error', err)
+          return new Response(JSON.stringify({ error: err?.message || 'meeting graph failed' }), { status: 500, headers: corsHeaders })
         }
       }
 

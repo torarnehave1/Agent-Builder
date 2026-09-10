@@ -204,7 +204,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'album_list', 'album_get', 'album_create_or_update', 'album_add_images',
   'album_remove_images', 'album_publish',
   // Audio, analysis, generation
-  'transcribe_audio', 'list_recordings', 'analyze_transcription',
+  'transcribe_audio', 'list_recordings', 'analyze_transcription', 'save_transcript_to_graph',
   'upload_audio', 'upload_portfolio_recording',
   'analyze_node', 'analyze_graph', 'generate_with_ai', 'generate_image',
   // Vemotion
@@ -1323,8 +1323,27 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
             ssePayload.audioUrl = result.audioUrl
             ssePayload.language = result.language
             ssePayload.recordingId = result.recordingId
+            ssePayload.displayName = result.displayName || null
             ssePayload.saveToGraph = result.saveToGraph || false
             ssePayload.graphTitle = result.graphTitle || null
+          }
+          // The browser holds the transcript; this tells it which one to send to the
+          // meeting-graph subagent via POST /meeting-graph.
+          if (result.clientSideMeetingGraph) {
+            ssePayload.clientSideMeetingGraph = true
+            ssePayload.transcriptId = result.transcriptId || null
+            ssePayload.recordingName = result.recordingName || null
+            ssePayload.playUrl = result.playUrl || null
+            ssePayload.targetLanguage = result.targetLanguage || null
+            ssePayload.metaArea = result.metaArea || null
+          }
+          // The browser holds the transcript; this tells it which one to write where.
+          if (result.clientSideSaveTranscript) {
+            ssePayload.clientSideSaveTranscript = true
+            ssePayload.transcriptId = result.transcriptId || null
+            ssePayload.graphId = result.graphId || null
+            ssePayload.graphTitle = result.graphTitle || null
+            ssePayload.nodeLabel = result.nodeLabel || null
           }
           if (toolName === 'list_challenge_templates' && Array.isArray(result.templates)) {
             ssePayload.templates = result.templates
@@ -1836,6 +1855,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
                 // Match tagged messages (new frontend) OR legacy "**Audio Transcription**" messages
                 const hasTag = msgContent.includes('[TRANSCRIPTION_AVAILABLE')
                 const hasLegacy = msgContent.includes('**Audio Transcription**')
+                // The frontend strips the transcription body before sending history, leaving a
+                // `[transcript:tx_N]` handle and a note in its place. That note is NOT the
+                // transcript — injecting it would hand the subagent a paragraph about where the
+                // text lives instead of the text. Skip it; the agent must use
+                // save_transcript_to_graph, which the browser fulfils from its own copy.
+                if (msgContent.includes('[transcript:')) continue
                 if (hasTag || hasLegacy) {
                   let transcriptionText = ''
                   if (hasTag) {
@@ -1972,8 +1997,27 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ssePayload.audioUrl = result.audioUrl
               ssePayload.language = result.language
               ssePayload.recordingId = result.recordingId
+              ssePayload.displayName = result.displayName || null
               ssePayload.saveToGraph = result.saveToGraph || false
               ssePayload.graphTitle = result.graphTitle || null
+            }
+            // The browser holds the transcript; this tells it which one to send to the
+            // meeting-graph subagent via POST /meeting-graph.
+            if (result.clientSideMeetingGraph) {
+              ssePayload.clientSideMeetingGraph = true
+              ssePayload.transcriptId = result.transcriptId || null
+              ssePayload.recordingName = result.recordingName || null
+              ssePayload.playUrl = result.playUrl || null
+              ssePayload.targetLanguage = result.targetLanguage || null
+              ssePayload.metaArea = result.metaArea || null
+            }
+            // The browser holds the transcript; this tells it which one to write where.
+            if (result.clientSideSaveTranscript) {
+              ssePayload.clientSideSaveTranscript = true
+              ssePayload.transcriptId = result.transcriptId || null
+              ssePayload.graphId = result.graphId || null
+              ssePayload.graphTitle = result.graphTitle || null
+              ssePayload.nodeLabel = result.nodeLabel || null
             }
             // Pass templates array so AgentChat can render the iframe picker
             if (toolUse.name === 'list_challenge_templates' && Array.isArray(result.templates)) {

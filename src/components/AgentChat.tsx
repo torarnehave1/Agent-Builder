@@ -108,6 +108,17 @@ interface AssistantState {
   error?: string;
 }
 
+// One recording waiting to be transcribed in this browser. The agent emits one per
+// recording; they are queued and processed sequentially.
+interface ClientTranscriptionJob {
+  audioUrl: string;
+  recordingId: string | null;
+  displayName: string | null;
+  language: string | null;
+  saveToGraph: boolean;
+  graphTitle: string | null;
+}
+
 interface GraphInfo {
   id: string;
   metadata_title?: string;
@@ -944,6 +955,26 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // preview renders the World's actual brand (html-nodes ignore them — they lack {brand*} tokens).
   const lastBrandVarsRef = useRef<Record<string, string> | undefined>(undefined);
 
+  // Transcripts produced on this device, keyed by a short handle (tx_1, tx_2, ...).
+  // The transcription body is stripped from the history sent to Claude (it is huge and
+  // input tokens dominate cost), so the agent can never quote it back. Instead each
+  // transcript keeps a handle that DOES survive stripping, and `save_transcript_to_graph`
+  // asks this client to write the stored text into a node — the text never passes
+  // through the model at all. Before this, the stripped message pointed the agent at a
+  // "Save to Graph" button that did not exist, and the agent asked the user to paste
+  // back a transcript that was sitting in the same conversation (2026-09-10).
+  const transcriptStoreRef = useRef<Map<string, { title: string; text: string; audioUrl: string; recordingId: string | null }>>(new Map());
+  const transcriptSeqRef = useRef(0);
+
+  // Resolve a `[transcript:tx_N]` handle to the stored text. An unknown or missing handle
+  // falls back to the most recent transcript, which is what "save the transcription" means
+  // when only one is in play.
+  const resolveStoredTranscript = useCallback((handle: string | null) => {
+    const store = transcriptStoreRef.current;
+    const key = handle && store.has(handle) ? handle : [...store.keys()].pop() || null;
+    return key ? { handle: key, entry: store.get(key)! } : null;
+  }, []);
+
   useEffect(() => {
     if (!consoleErrors || consoleErrors.length === 0 || streaming) return;
 
@@ -1437,13 +1468,18 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     }
   }, [audioBufferToWavBlob]);
 
-  const callWhisperTranscription = useCallback(async (blob: Blob, fileName: string) => {
+  // languageOverride: an explicit hint (e.g. the agent's `language: "no"`), used instead of
+  // the picker state. The agent-driven path used to set audioLanguage state and call straight
+  // afterwards, but this callback closes over that state from render — the update never
+  // reached it and every agent-requested language hint was dropped (2026-09-10).
+  const callWhisperTranscription = useCallback(async (blob: Blob, fileName: string, languageOverride?: string | null) => {
     const formData = new FormData();
     formData.append('file', blob, fileName);
     formData.append('model', 'whisper-1');
     formData.append('userId', userId);
-    if (!audioAutoDetect && audioLanguage) {
-      formData.append('language', audioLanguage);
+    const whisperLanguage = languageOverride || (!audioAutoDetect && audioLanguage ? audioLanguage : '');
+    if (whisperLanguage) {
+      formData.append('language', whisperLanguage);
     }
 
     const response = await fetch(AUDIO_ENDPOINT, {
@@ -1757,11 +1793,18 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     // Build multimodal content for the API when images or files are present
     const apiMessages = updatedMessages.map(m => {
       // Strip transcription body from messages sent to Claude — saves tokens.
-      // The full text is available locally for direct KG save via the button.
+      // The text stays in this browser and is placed via save_transcript_to_graph.
       if (m.role === 'assistant' && typeof m.content === 'string' && m.content.startsWith('**Audio Transcription**')) {
+        // The body is stripped (huge, and input tokens dominate cost) but the first line
+        // carries the [transcript:tx_N] handle. Name the tool that acts on that handle —
+        // this used to point at a "Save to Graph" button that does not exist, so the agent
+        // had no way to reach the text and asked the user to paste it back (2026-09-10).
         const firstNewline = m.content.indexOf('\n\n');
         const summary = firstNewline > 0 ? m.content.slice(0, firstNewline) : m.content.slice(0, 120);
-        return { role: m.role, content: summary + '\n\n(Full transcription text available locally — use the "Save to Graph" button to save directly.)' };
+        return {
+          role: m.role,
+          content: summary + '\n\n(Full transcription text is held in the user\'s browser, not here. To put it in a node, call save_transcript_to_graph with the transcript id shown above — never ask the user to paste the text.)',
+        };
       }
       if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
         // Faithful action record for ALL tools (the memory fix) + the structured
@@ -1834,7 +1877,12 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     setCurrent(state);
 
     let finalToolCalls: ToolCall[] = [];
-    let pendingClientTranscription: { audioUrl: string; recordingId: string | null; language: string | null; saveToGraph: boolean; graphTitle: string | null } | null = null;
+    // A QUEUE, not a single slot. The agent routinely fires one transcribe_audio per
+    // recording in the same turn; with a single slot each tool_result overwrote the
+    // previous one and only the last recording was ever transcribed (2026-09-10).
+    const pendingClientTranscriptions: ClientTranscriptionJob[] = [];
+    let pendingTranscriptSave: { transcriptId: string | null; graphId: string | null; graphTitle: string | null; nodeLabel: string | null } | null = null;
+    let pendingMeetingGraph: { transcriptId: string | null; recordingName: string | null; playUrl: string | null; targetLanguage: string | null; metaArea: string | null } | null = null;
 
     const abort = new AbortController();
     abortRef.current = abort;
@@ -2285,14 +2333,42 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           }
         }
 
-        // Detect clientSideRequired from transcribe_audio tool result
+        // Detect clientSideRequired from transcribe_audio tool result. Every such result in
+        // the turn is queued; they are transcribed one after another below.
         if (ev.type === 'tool_result' && ev.data.tool === 'transcribe_audio' && ev.data.clientSideRequired) {
-          pendingClientTranscription = {
-            audioUrl: ev.data.audioUrl as string,
-            recordingId: (ev.data.recordingId as string) || null,
-            language: (ev.data.language as string) || null,
-            saveToGraph: !!ev.data.saveToGraph,
+          const jobUrl = ev.data.audioUrl as string;
+          if (jobUrl && !pendingClientTranscriptions.some(j => j.audioUrl === jobUrl)) {
+            pendingClientTranscriptions.push({
+              audioUrl: jobUrl,
+              recordingId: (ev.data.recordingId as string) || null,
+              displayName: (ev.data.displayName as string) || null,
+              language: (ev.data.language as string) || null,
+              saveToGraph: !!ev.data.saveToGraph,
+              graphTitle: (ev.data.graphTitle as string) || null,
+            });
+          }
+        }
+
+        // Detect a meeting-graph directive: the subagent must READ the transcript to structure
+        // it, so unlike a plain save this one posts the stored text to the worker.
+        if (ev.type === 'tool_result' && ev.data.tool === 'delegate_to_meeting_graph' && ev.data.clientSideMeetingGraph) {
+          pendingMeetingGraph = {
+            transcriptId: (ev.data.transcriptId as string) || null,
+            recordingName: (ev.data.recordingName as string) || null,
+            playUrl: (ev.data.playUrl as string) || null,
+            targetLanguage: (ev.data.targetLanguage as string) || null,
+            metaArea: (ev.data.metaArea as string) || null,
+          };
+        }
+
+        // Detect a save-transcript directive: the agent wants a transcript that already
+        // exists on this device written into a node. The text never leaves the browser.
+        if (ev.type === 'tool_result' && ev.data.tool === 'save_transcript_to_graph' && ev.data.clientSideSaveTranscript) {
+          pendingTranscriptSave = {
+            transcriptId: (ev.data.transcriptId as string) || null,
+            graphId: (ev.data.graphId as string) || null,
             graphTitle: (ev.data.graphTitle as string) || null,
+            nodeLabel: (ev.data.nodeLabel as string) || null,
           };
         }
 
@@ -2415,116 +2491,282 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         }).catch(() => {});
       }
 
-      // Handle client-side transcription if the tool requested it
-      // (TypeScript can't track mutation inside callbacks, so cast to check)
-      const clientTx = pendingClientTranscription as { audioUrl: string; recordingId: string | null; language: string | null; saveToGraph: boolean; graphTitle: string | null } | null;
-      if (clientTx) {
-        const txAudioUrl = clientTx.audioUrl;
-        const txLang = clientTx.language;
-        setCurrent({ text: 'Downloading audio for browser-based transcription...', toolCalls: [], thinking: false });
+      // Handle client-side transcription. The agent emits one transcribe_audio per recording;
+      // every one of them is queued above and they run SEQUENTIALLY here — that is the "one by
+      // one" behaviour. When saveToGraph was requested they are collected into ONE new graph
+      // with a fulltext node per recording, rather than a graph per recording.
+      const txJobs = pendingClientTranscriptions as ClientTranscriptionJob[];
+      if (txJobs.length > 0) {
+        const wantsGraph = txJobs.some(j => j.saveToGraph);
+        const graphNodes: { label: string; info: string }[] = [];
+        const savedHandles: string[] = [];
 
-        try {
-          // Download audio as File
-          const audioResponse = await fetch(txAudioUrl);
-          const audioArrayBuffer = await audioResponse.arrayBuffer();
-          const txContentType = audioResponse.headers.get('content-type') || 'audio/webm';
-          const txFileName = txAudioUrl.split('/').pop() || 'audio.webm';
-          const audioFile = new File([audioArrayBuffer], txFileName, { type: txContentType });
+        for (let jobIndex = 0; jobIndex < txJobs.length; jobIndex++) {
+          const job = txJobs[jobIndex];
+          const txAudioUrl = job.audioUrl;
+          const txFileName = txAudioUrl.split('/').pop()?.split('?')[0] || 'audio.webm';
+          const txTitle = job.displayName || txFileName.replace(/\.[^.]+$/, '');
+          // Progress prefix so a multi-recording run shows which one is being worked on.
+          const step = txJobs.length > 1 ? `[${jobIndex + 1}/${txJobs.length}] ${txTitle} — ` : '';
 
-          // Split into 120s WAV chunks using AudioContext
-          setCurrent(prev => prev ? { ...prev, text: 'Splitting audio into 2-minute chunks...' } : prev);
-          const chunks = await splitAudioIntoChunks(audioFile, CHUNK_DURATION_SECONDS, (progress) => {
-            if (progress.phase === 'creating' && progress.current && progress.total) {
-              setCurrent(prev => prev ? { ...prev, text: `Preparing chunk ${progress.current}/${progress.total}...` } : prev);
-            }
-          });
+          setCurrent({ text: `${step}Downloading audio...`, toolCalls: [], thinking: false });
 
-          if (!chunks.length) throw new Error('Audio could not be chunked');
+          try {
+            const audioResponse = await fetch(txAudioUrl);
+            if (!audioResponse.ok) throw new Error(`Could not download audio (${audioResponse.status})`);
+            const audioArrayBuffer = await audioResponse.arrayBuffer();
+            const txContentType = audioResponse.headers.get('content-type') || 'audio/webm';
+            const audioFile = new File([audioArrayBuffer], txFileName, { type: txContentType });
 
-          // Transcribe each WAV chunk via openai.vegvisr.org/audio
-          const segments: string[] = [];
-          const baseName = txFileName.includes('.') ? txFileName.substring(0, txFileName.lastIndexOf('.')) : txFileName;
-
-          // Temporarily set language if the tool provided one
-          const prevAutoDetect = audioAutoDetect;
-          const prevLang = audioLanguage;
-          if (txLang) {
-            setAudioAutoDetect(false);
-            setAudioLanguage(txLang);
-          }
-
-          for (let i = 0; i < chunks.length; i++) {
-            setCurrent(prev => prev ? { ...prev, text: `Transcribing chunk ${i + 1}/${chunks.length}...` } : prev);
-
-            try {
-              const chunkResult = await callWhisperTranscription(
-                chunks[i].blob,
-                `${baseName}_chunk_${i + 1}.wav`,
-              );
-              const chunkText = ((chunkResult.text as string) || '').trim();
-              const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
-              if (chunkText) {
-                segments.push(`${chunkLabel} ${chunkText}`);
+            // Split into 120s WAV chunks using AudioContext
+            setCurrent(prev => prev ? { ...prev, text: `${step}Splitting audio into 2-minute chunks...` } : prev);
+            const chunks = await splitAudioIntoChunks(audioFile, CHUNK_DURATION_SECONDS, (progress) => {
+              if (progress.phase === 'creating' && progress.current && progress.total) {
+                setCurrent(prev => prev ? { ...prev, text: `${step}Preparing chunk ${progress.current}/${progress.total}...` } : prev);
               }
-            } catch (chunkErr) {
+            });
+
+            if (!chunks.length) throw new Error('Audio could not be chunked');
+
+            // Transcribe each WAV chunk via openai.vegvisr.org/audio
+            const segments: string[] = [];
+            const baseName = txFileName.includes('.') ? txFileName.substring(0, txFileName.lastIndexOf('.')) : txFileName;
+
+            for (let i = 0; i < chunks.length; i++) {
+              setCurrent(prev => prev ? { ...prev, text: `${step}Transcribing chunk ${i + 1}/${chunks.length}...` } : prev);
               const chunkLabel = `[${formatChunkTimestamp(chunks[i].startTime)} - ${formatChunkTimestamp(chunks[i].endTime)}]`;
-              segments.push(`${chunkLabel} [Error: ${chunkErr instanceof Error ? chunkErr.message : 'unknown'}]`);
+              try {
+                const chunkResult = await callWhisperTranscription(
+                  chunks[i].blob,
+                  `${baseName}_chunk_${i + 1}.wav`,
+                  job.language,
+                );
+                const chunkText = ((chunkResult.text as string) || '').trim();
+                if (chunkText) segments.push(`${chunkLabel} ${chunkText}`);
+              } catch (chunkErr) {
+                segments.push(`${chunkLabel} [Error: ${chunkErr instanceof Error ? chunkErr.message : 'unknown'}]`);
+              }
             }
-          }
 
-          // Restore language settings
-          setAudioAutoDetect(prevAutoDetect);
-          setAudioLanguage(prevLang);
+            const txText = segments.join('\n\n');
 
-          const txText = segments.join('\n\n');
+            // Keep the transcript on this device under a short handle. The body is stripped
+            // from the history sent to Claude, but the handle survives — so a later turn can
+            // save it with save_transcript_to_graph without the user re-pasting anything.
+            transcriptSeqRef.current += 1;
+            const handle = `tx_${transcriptSeqRef.current}`;
+            transcriptStoreRef.current.set(handle, {
+              title: txTitle,
+              text: txText,
+              audioUrl: txAudioUrl,
+              recordingId: job.recordingId,
+            });
+            savedHandles.push(handle);
 
-          // If saveToGraph requested, create graph + fulltext node directly (no LLM round-trip)
-          let graphLink = '';
-          if (clientTx.saveToGraph && txText) {
-            setCurrent(prev => prev ? { ...prev, text: 'Saving transcription to graph...' } : prev);
-            const newGraphId = crypto.randomUUID();
-            const title = clientTx.graphTitle || `Transcription - ${txFileName.replace(/\.[^.]+$/, '')}`;
-            try {
-              await fetch(`${KG_API}/saveGraphWithHistory`, {
+            if (job.saveToGraph && txText) {
+              graphNodes.push({ label: `# ${txTitle}`, info: txText });
+            }
+
+            const txContent = `**Audio Transcription** [transcript:${handle}] — ${txTitle} (${chunks.length} chunks, ${txText.length} chars, processed on your device)\n\n${txText || '(No speech detected)'}`;
+            setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
+
+            if (activeSession) {
+              historyFetch('/messages', userId, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
-                body: JSON.stringify({
-                  id: newGraphId,
-                  graphData: {
-                    nodes: [{
-                      id: 'node-transcription',
-                      label: '# Full Transcription',
-                      type: 'fulltext',
-                      info: txText,
-                      color: '#4A90D9',
-                    }],
-                    edges: [],
-                    metadata: { title, description: `Audio transcription (${chunks.length} chunks)`, category: '#Transcription #Audio' },
-                  },
-                  override: true,
-                }),
-              });
-              graphLink = `\n\n[View Graph: ${title}](https://www.vegvisr.org/gnew-viewer?graphId=${newGraphId})`;
-            } catch {
-              graphLink = '\n\n(Failed to save graph)';
+                body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: txContent, provider: 'agent' }),
+              }).catch(() => {});
             }
+          } catch (txErr) {
+            // One bad recording must not abandon the rest of the queue.
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `Transcription failed for ${txTitle}: ${txErr instanceof Error ? txErr.message : String(txErr)}`,
+            }]);
           }
+        }
 
-          const txContent = `**Audio Transcription** (${chunks.length} chunks, processed on your device)${graphLink}\n\n${txText || '(No speech detected)'}`;
-
-          setMessages(prev => [...prev, { role: 'assistant', content: txContent }]);
-
-          if (activeSession) {
-            historyFetch('/messages', userId, {
+        // One graph for the whole batch, one fulltext node per recording.
+        if (wantsGraph && graphNodes.length > 0) {
+          setCurrent({ text: 'Saving transcriptions to graph...', toolCalls: [], thinking: false });
+          const newGraphId = crypto.randomUUID();
+          const withTitle = txJobs.find(j => j.graphTitle);
+          const title = withTitle?.graphTitle
+            || (graphNodes.length === 1 ? `Transcription - ${graphNodes[0].label.replace(/^#\s*/, '')}` : `Transcriptions (${graphNodes.length} recordings)`);
+          try {
+            const saveRes = await fetch(`${KG_API}/saveGraphWithHistory`, {
               method: 'POST',
-              body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: txContent, provider: 'agent' }),
-            }).catch(() => {});
+              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+              body: JSON.stringify({
+                id: newGraphId,
+                graphData: {
+                  nodes: graphNodes.map((n, i) => ({
+                    id: `node-transcription-${i + 1}`,
+                    label: n.label,
+                    type: 'fulltext',
+                    info: n.info,
+                    color: '#4A90D9',
+                  })),
+                  edges: [],
+                  metadata: { title, description: `Audio transcription of ${graphNodes.length} recording(s)`, category: '#Transcription #Audio' },
+                },
+                override: true,
+              }),
+            });
+            if (!saveRes.ok) throw new Error(`save failed (${saveRes.status})`);
+            const graphMsg = `Saved ${graphNodes.length} transcription node(s).\n\n[View Graph: ${title}](https://www.vegvisr.org/gnew-viewer?graphId=${newGraphId})`;
+            setMessages(prev => [...prev, { role: 'assistant', content: graphMsg }]);
+            lastAgentGraphRef.current = newGraphId;
+            onGraphChange(newGraphId);
+            if (activeSession) {
+              historyFetch('/messages', userId, {
+                method: 'POST',
+                body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: graphMsg, provider: 'agent' }),
+              }).catch(() => {});
+            }
+          } catch (graphErr) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `Transcriptions are ready (${savedHandles.join(', ')}) but saving the graph failed: ${graphErr instanceof Error ? graphErr.message : String(graphErr)}`,
+            }]);
           }
-        } catch (txErr) {
+        }
+      }
+
+      // Handle a save-transcript directive: the agent asked for a transcript that already
+      // lives on this device to be written into a node. The text goes straight from this
+      // browser to the KG worker — it never passes through the model.
+      const txSave = pendingTranscriptSave as { transcriptId: string | null; graphId: string | null; graphTitle: string | null; nodeLabel: string | null } | null;
+      if (txSave) {
+        const resolved = resolveStoredTranscript(txSave.transcriptId);
+        const handle = resolved?.handle || null;
+        const entry = resolved?.entry || null;
+
+        if (!entry) {
           setMessages(prev => [...prev, {
             role: 'assistant',
-            content: `Client-side transcription failed: ${txErr instanceof Error ? txErr.message : String(txErr)}`,
+            content: 'No transcription is held in this browser. Transcribe a recording first, then ask to save it.',
           }]);
+        } else {
+          setCurrent({ text: `Saving transcript ${handle} to a node...`, toolCalls: [], thinking: false });
+          const targetGraphId = txSave.graphId || crypto.randomUUID();
+          const isNewGraph = !txSave.graphId;
+          const nodeLabel = txSave.nodeLabel || `# ${entry.title}`;
+          try {
+            let payload;
+            if (isNewGraph) {
+              payload = {
+                id: targetGraphId,
+                graphData: {
+                  nodes: [{ id: `node-${handle}`, label: nodeLabel, type: 'fulltext', info: entry.text, color: '#4A90D9' }],
+                  edges: [],
+                  metadata: {
+                    title: txSave.graphTitle || `Transcription - ${entry.title}`,
+                    description: 'Audio transcription',
+                    category: '#Transcription #Audio',
+                  },
+                },
+                override: true,
+              };
+            } else {
+              // Existing graph: read it, append the node, write it back whole.
+              const existingRes = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(targetGraphId)}`);
+              if (!existingRes.ok) throw new Error(`could not read graph ${targetGraphId} (${existingRes.status})`);
+              const existing = await existingRes.json();
+              payload = {
+                id: targetGraphId,
+                graphData: {
+                  nodes: [...(existing.nodes || []), { id: `node-${handle}-${Date.now()}`, label: nodeLabel, type: 'fulltext', info: entry.text, color: '#4A90D9' }],
+                  edges: existing.edges || [],
+                  metadata: existing.metadata || {},
+                },
+                override: true,
+              };
+            }
+            const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+              body: JSON.stringify(payload),
+            });
+            if (!res.ok) throw new Error(`save failed (${res.status})`);
+            const savedMsg = `Saved transcript ${handle} (${entry.text.length} chars) as a fulltext node.\n\n[View Graph](https://www.vegvisr.org/gnew-viewer?graphId=${targetGraphId})`;
+            setMessages(prev => [...prev, { role: 'assistant', content: savedMsg }]);
+            lastAgentGraphRef.current = targetGraphId;
+            onGraphChange(targetGraphId);
+            if (activeSession) {
+              historyFetch('/messages', userId, {
+                method: 'POST',
+                body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: savedMsg, provider: 'agent' }),
+              }).catch(() => {});
+            }
+          } catch (saveErr) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `Could not save transcript ${handle}: ${saveErr instanceof Error ? saveErr.message : String(saveErr)}`,
+            }]);
+          }
+        }
+      }
+
+      // Handle a meeting-graph directive. This subagent must READ the transcript to extract
+      // themes, decisions and quotes, so it cannot be satisfied by a browser-side write like
+      // save_transcript_to_graph. The browser posts its stored copy to POST /meeting-graph,
+      // which runs the subagent there — the transcript still never enters the agent's context.
+      const meetingReq = pendingMeetingGraph as { transcriptId: string | null; recordingName: string | null; playUrl: string | null; targetLanguage: string | null; metaArea: string | null } | null;
+      if (meetingReq) {
+        const resolvedMeeting = resolveStoredTranscript(meetingReq.transcriptId);
+        if (!resolvedMeeting) {
+          setMessages(prev => [...prev, {
+            role: 'assistant',
+            content: 'No transcription is held in this browser. Transcribe the recording first, then ask for the structured meeting graph.',
+          }]);
+        } else {
+          const { handle: mHandle, entry: mEntry } = resolvedMeeting;
+          setCurrent({ text: `Structuring ${mEntry.title} into a meeting graph (this takes 30-60s)...`, toolCalls: [], thinking: false });
+          try {
+            const res = await fetch(`${AGENT_API}/meeting-graph`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                transcript: mEntry.text,
+                recordingName: meetingReq.recordingName || mEntry.title,
+                playUrl: meetingReq.playUrl || mEntry.audioUrl,
+                targetLanguage: meetingReq.targetLanguage || undefined,
+                metaArea: meetingReq.metaArea || undefined,
+                userId,
+                authToken: (() => {
+                  try {
+                    const user = JSON.parse(localStorage.getItem('user') || '{}');
+                    return user.emailVerificationToken || '';
+                  } catch {
+                    return '';
+                  }
+                })(),
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.success === false) {
+              throw new Error(data.error || `meeting graph failed (${res.status})`);
+            }
+            const viewUrl = data.viewUrl || (data.graphId ? `https://www.vegvisr.org/gnew-viewer?graphId=${data.graphId}` : '');
+            const meetingMsg = `**Meeting graph built** from transcript ${mHandle} — ${data.summary || 'structured graph created'}`
+              + (viewUrl ? `\n\n[View Graph](${viewUrl})` : '');
+            setMessages(prev => [...prev, { role: 'assistant', content: meetingMsg }]);
+            if (data.graphId) {
+              lastAgentGraphRef.current = data.graphId;
+              onGraphChange(data.graphId);
+            }
+            if (activeSession) {
+              historyFetch('/messages', userId, {
+                method: 'POST',
+                body: JSON.stringify({ sessionId: activeSession, role: 'assistant', content: meetingMsg, provider: 'agent' }),
+              }).catch(() => {});
+            }
+          } catch (meetingErr) {
+            setMessages(prev => [...prev, {
+              role: 'assistant',
+              content: `Could not build the meeting graph from transcript ${mHandle}: ${meetingErr instanceof Error ? meetingErr.message : String(meetingErr)}`,
+            }]);
+          }
         }
       }
     } catch (err) {
@@ -2542,7 +2784,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     setCurrent(null);
     setStreaming(false);
     setSubagentProgress(null);
-  }, [input, streaming, messages, userId, graphId, bots, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, audioAutoDetect, audioLanguage]);
+  }, [input, streaming, messages, userId, userEmail, graphId, onGraphChange, bots, parseSSE, current, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, resolveStoredTranscript]);
 
   const stopStreaming = useCallback(() => {
     if (abortRef.current) {

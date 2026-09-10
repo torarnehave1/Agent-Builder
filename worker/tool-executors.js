@@ -6107,6 +6107,14 @@ async function executeListRecordings(input, env) {
   // Sort by newest first so "last N recordings" returns the most recent
   allRecordings.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
 
+  const formatDuration = (secs) => {
+    const n = Number(secs) || 0
+    if (!n) return 'unknown length'
+    const m = Math.floor(n / 60)
+    const s2 = Math.round(n % 60)
+    return `${m}:${String(s2).padStart(2, '0')}`
+  }
+
   const recordings = allRecordings.slice(0, limit).map(r => ({
     recordingId: r.recordingId,
     displayName: r.displayName || r.fileName,
@@ -6116,12 +6124,34 @@ async function executeListRecordings(input, env) {
     tags: r.tags || [],
     category: r.category || '',
     hasTranscription: !!(r.transcriptionText),
+    // How much stored text exists, and enough of it to recognise the recording, WITHOUT
+    // pouring every full transcript into the model's context (input tokens dominate cost).
+    // Call transcribe_audio on the recording to get the whole thing.
+    transcriptionChars: (r.transcriptionText || '').length,
+    transcriptionPreview: (r.transcriptionText || '').slice(0, 200),
     audioUrl: r.r2Url || '',
     createdAt: r.createdAt || '',
   }))
 
+  // The message IS the answer. It used to be just "Found N recording(s)", so the agent
+  // summarised the count and never showed the user a pickable list — leaving them with no
+  // way to say "transcribe that one" (2026-09-10). Ship the list itself.
+  const lines = recordings.map((r, i) => {
+    const when = r.createdAt ? String(r.createdAt).replace('T', ' ').slice(0, 16) : 'unknown date'
+    const state = r.hasTranscription ? `already transcribed (${r.transcriptionChars} chars)` : 'not transcribed'
+    return `${i + 1}. **${r.displayName}** — ${when} · ${formatDuration(r.duration)} · ${state}\n`
+      + `   recordingId: \`${r.recordingId}\`\n`
+      + `   audioUrl: ${r.audioUrl}`
+  })
+
+  const message = recordings.length === 0
+    ? `No recordings found for ${userEmail}${query ? ` matching "${query}"` : ''}.`
+    : `Found ${recordings.length} recording(s) for ${userEmail}${query ? ` matching "${query}"` : ''}:\n\n${lines.join('\n')}\n\n`
+      + 'Show this list to the user so they can pick one. To transcribe, call transcribe_audio '
+      + 'with the audioUrl copied EXACTLY as printed above — one call per recording.'
+
   return {
-    message: `Found ${recordings.length} recording(s) for ${userEmail}`,
+    message,
     total: recordings.length,
     recordings,
   }
@@ -6800,18 +6830,53 @@ async function executeTranscribeAudio(input, env) {
   // 2. Always delegate transcription to the frontend browser.
   //    The browser has AudioContext which can decode ANY audio format,
   //    split into 120s WAV chunks, and send each to /audio — same as GrokChatPanel.
+  // displayName labels the node/message for this recording in the browser. When several
+  // recordings are transcribed in one turn they all land in one graph, and without a name
+  // per recording every node would be titled from an opaque R2 filename.
+  const displayName = (typeof input.title === 'string' && input.title.trim())
+    ? input.title.trim()
+    : ''
+
   return {
     clientSideRequired: true,
     audioUrl: resolvedUrl,
     recordingId: resolvedRecordingId || null,
+    displayName: displayName || null,
     language: language || null,
     saveToPortfolio,
     saveToGraph,
     graphTitle: graphTitle || null,
     userEmail,
     message: saveToGraph
-      ? `Audio file found. Transcribing on your device and saving to a new graph...`
-      : `Audio file found. Transcribing on your device...`,
+      ? `Audio file found${displayName ? ` (${displayName})` : ''}. Transcribing on your device and saving to a graph. The transcription text is produced in the user's browser — do NOT ask the user to paste it back.`
+      : `Audio file found${displayName ? ` (${displayName})` : ''}. Transcribing on your device. The transcription text is produced in the user's browser and is NOT visible to you — to put it in a node later, call save_transcript_to_graph with the transcript id from the transcription message. Never ask the user to paste the text.`,
+  }
+}
+
+// Save a transcript that lives in the user's BROWSER into a graph node.
+//
+// The transcription body is stripped from the history sent to the model (it is large and
+// input tokens dominate cost), so the agent cannot quote it back — it only ever sees the
+// `[transcript:tx_N]` handle. This tool does not carry the text either: it returns a
+// directive the frontend fulfils by writing its stored copy straight to the KG worker.
+// The transcript therefore never passes through the model at all.
+async function executeSaveTranscriptToGraph(input) {
+  const transcriptId = (typeof input?.transcriptId === 'string' && input.transcriptId.trim())
+    ? input.transcriptId.trim()
+    : null
+  const graphId = (typeof input?.graphId === 'string' && input.graphId.trim())
+    ? input.graphId.trim()
+    : null
+
+  return {
+    clientSideSaveTranscript: true,
+    transcriptId,
+    graphId,
+    graphTitle: (typeof input?.graphTitle === 'string' && input.graphTitle.trim()) ? input.graphTitle.trim() : null,
+    nodeLabel: (typeof input?.nodeLabel === 'string' && input.nodeLabel.trim()) ? input.nodeLabel.trim() : null,
+    message: graphId
+      ? `Saving transcript ${transcriptId || '(most recent)'} into graph ${graphId} as a fulltext node — the browser writes its stored copy directly.`
+      : `Saving transcript ${transcriptId || '(most recent)'} into a new graph as a fulltext node — the browser writes its stored copy directly.`,
   }
 }
 
@@ -13091,6 +13156,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return { reference: CAROUSEL_REFERENCE }
     case 'transcribe_audio':
       return await executeTranscribeAudio(toolInput, env)
+    case 'save_transcript_to_graph':
+      return await executeSaveTranscriptToGraph(toolInput)
     case 'analyze_node':
       return await executeAnalyzeNode(toolInput, env)
     case 'analyze_graph':
@@ -13575,6 +13642,27 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       }
     }
     case 'delegate_to_meeting_graph': {
+      // The transcript may live in the user's BROWSER rather than in this request: transcription
+      // runs on their device and the text is stripped from the model's history, so the agent has
+      // only a `[transcript:tx_N]` handle to offer. This subagent must actually READ the
+      // transcript (it extracts themes, decisions, quotes), so — unlike save_transcript_to_graph
+      // — it cannot be satisfied by a browser-side write. Hand the browser a directive instead:
+      // it posts its stored copy to POST /meeting-graph, which runs this same subagent there.
+      const inlineTranscript = typeof toolInput?.transcript === 'string' ? toolInput.transcript.trim() : ''
+      if (!inlineTranscript) {
+        const transcriptId = (typeof toolInput?.transcriptId === 'string' && toolInput.transcriptId.trim())
+          ? toolInput.transcriptId.trim()
+          : null
+        return {
+          clientSideMeetingGraph: true,
+          transcriptId,
+          recordingName: (typeof toolInput?.recordingName === 'string' && toolInput.recordingName.trim()) ? toolInput.recordingName.trim() : null,
+          playUrl: (typeof toolInput?.playUrl === 'string' && toolInput.playUrl.trim()) ? toolInput.playUrl.trim() : null,
+          targetLanguage: (typeof toolInput?.targetLanguage === 'string' && toolInput.targetLanguage.trim()) ? toolInput.targetLanguage.trim() : null,
+          metaArea: (typeof toolInput?.metaArea === 'string' && toolInput.metaArea.trim()) ? toolInput.metaArea.trim() : null,
+          message: `Building the structured meeting graph from transcript ${transcriptId || '(most recent)'} held in the user's browser. The browser sends its stored copy directly — do NOT ask the user to paste the transcript.`,
+        }
+      }
       return await runMeetingGraphSubagent(toolInput, env, progress)
     }
     case 'delegate_to_youtube_graph': {

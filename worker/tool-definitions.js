@@ -1113,7 +1113,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_recordings',
-    description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp.',
+    description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp. ALWAYS show the user the returned list (name, date, length, transcription status, recordingId) rather than only reporting how many were found — they need it to pick one. To transcribe several, make ONE transcribe_audio call per recording in the same turn, each with that recording\'s `audioUrl` and its `displayName` as `title`; they are transcribed one after another in the browser.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1322,7 +1322,21 @@ const TOOL_DEFINITIONS = [
         language: { type: 'string', description: 'Language code hint (e.g. "en", "no"). Improves accuracy.' },
         saveToPortfolio: { type: 'boolean', description: 'If true and recordingId provided, save transcription text back to portfolio metadata. Default: false' },
         saveToGraph: { type: 'boolean', description: 'If true, after transcription the frontend creates a new graph with the transcription as a fulltext node directly (no LLM round-trip). Default: false' },
-        graphTitle: { type: 'string', description: 'Title for the new graph when saveToGraph is true. Auto-generated from recording name if not provided.' }
+        graphTitle: { type: 'string', description: 'Title for the new graph when saveToGraph is true. Auto-generated from recording name if not provided.' },
+        title: { type: 'string', description: 'Human-readable name of THIS recording (copy `displayName` from the list_recordings result). Used to label the transcription message and its node. Always pass it when transcribing several recordings, otherwise every node is titled from an opaque filename.' }
+      }
+    }
+  },
+  {
+    name: 'save_transcript_to_graph',
+    description: 'Save a transcript that was produced in the USER\'S BROWSER into a fulltext node. Transcription runs on the user\'s device and the text is deliberately NOT sent to you — you only ever see a handle like `[transcript:tx_1]` in the transcription message. Use this tool to place that text; it instructs the browser to write its stored copy straight to the knowledge graph, so the transcript never passes through you. NEVER ask the user to paste a transcript back into the chat — if a transcription message exists in this conversation, its text is available through this tool. Pass `graphId` to append to an existing graph, or omit it to create a new one.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        transcriptId: { type: 'string', description: 'The handle shown in the transcription message, e.g. "tx_1". Omit to use the most recent transcript.' },
+        graphId: { type: 'string', description: 'Existing graph to append the node to. Omit to create a new graph.' },
+        graphTitle: { type: 'string', description: 'Title for the new graph (only used when graphId is omitted).' },
+        nodeLabel: { type: 'string', description: 'Label for the fulltext node, e.g. "# Samtale med Arild Hafstad". Defaults to the recording name.' }
       }
     }
   },
@@ -3092,17 +3106,17 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'delegate_to_meeting_graph',
-    description: 'Turn a MEETING / INTERVIEW / PODCAST transcript into a STRUCTURED knowledge graph. Use this when the user asks to turn a recording or conversation into a graph, summarise a meeting as a graph, or extract themes/decisions/action points from a recording. Produces an overview node, a participants node, one node per theme, plus decisions, action points, pull quotes, and the full transcript preserved as a final node — NOT one flat wall of text. WORKFLOW: (1) find the recording with list_realtime_videos (meeting/podcast recordings in R2) or list_recordings (audio portfolio / Contact app); (2) call transcribe_audio with saveToGraph:false to get the transcript TEXT back — pass `recordingKey` for realtime recordings, `audioUrl` for portfolio ones; (3) pass that text here as `transcript`. Do NOT use transcribe_audio saveToGraph:true when the user wants structure — that path creates a single fulltext node and this tool is the structured alternative. For YouTube videos use delegate_to_youtube_graph instead.',
+    description: 'Turn a MEETING / INTERVIEW / PODCAST transcript into a STRUCTURED knowledge graph. Use this when the user asks to turn a recording or conversation into a graph, summarise a meeting as a graph, or extract themes/decisions/action points from a recording. Produces an overview node, a participants node, one node per theme, plus decisions, action points, pull quotes, and the full transcript preserved as a final node — NOT one flat wall of text. WORKFLOW: (1) find the recording with list_realtime_videos (meeting/podcast recordings in R2) or list_recordings (audio portfolio / Contact app); (2) call transcribe_audio with saveToGraph:false — pass `recordingKey` for realtime recordings, `audioUrl` for portfolio ones. Transcription happens in the USER\'S BROWSER and the text is NEVER returned to you; the conversation shows only a `[transcript:tx_N]` handle; (3) call this tool with that handle as `transcriptId` — the browser sends its stored transcript straight to the subagent. Pass `transcript` instead ONLY when you genuinely hold the text (e.g. the user pasted it). NEVER ask the user to paste a transcript so you can forward it. Do NOT use transcribe_audio saveToGraph:true when the user wants structure — that path creates a single fulltext node and this tool is the structured alternative. For YouTube videos use delegate_to_youtube_graph instead.',
     input_schema: {
       type: 'object',
       properties: {
-        transcript: { type: 'string', description: 'The full transcript text, as returned by transcribe_audio. Required.' },
+        transcriptId: { type: 'string', description: 'The `[transcript:tx_N]` handle from a transcription message, e.g. "tx_1". Use this for anything transcribed by transcribe_audio — the text lives in the user\'s browser, not in your context. Omit to use the most recent transcript.' },
+        transcript: { type: 'string', description: 'The full transcript text. Pass this ONLY when you actually hold the text (the user pasted it). For browser-produced transcriptions use transcriptId instead — you do not have the text.' },
         recordingName: { type: 'string', description: 'Human name of the recording, used as a title hint and shown on the overview node.' },
         playUrl: { type: 'string', description: 'Permanent playback URL of the recording, linked from the overview node. Copy verbatim from the list result.' },
         targetLanguage: { type: 'string', description: 'Language for the generated text (e.g. "norwegian", "english"). Defaults to the transcript\'s own language.' },
         metaArea: { type: 'string', description: 'Hashtag meta area for the graph, e.g. "#MEETING #ONBOARDING". Defaults to "#MEETING".' }
-      },
-      required: ['transcript']
+      }
     }
   },
   {
