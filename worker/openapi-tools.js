@@ -147,6 +147,7 @@ function operationToTool(path, method, operation, components, workerCtx) {
     path,
     method: method.toUpperCase(),
     queryParams: params.filter(p => p.in === 'query').map(p => p.name),
+    pathParams: params.filter(p => p.in === 'path').map(p => p.name),
     hasBody: !!requestBody,
     binding: workerCtx.binding,
     workerUrl: workerCtx.workerUrl,
@@ -412,6 +413,63 @@ export function clearOpenAPICache() {
  * Execute a dynamically-generated OpenAPI tool via its registered worker.
  * Reads workerUrl + binding from operationMap so any registered worker is reachable.
  */
+/**
+ * Substitute {tokens} in an OpenAPI path template with values from the tool input.
+ *
+ * Path parameters used to be ignored entirely: the raw template ("/groups/{groupId}/bots")
+ * was sent verbatim, and because a path param is not a query param it was ALSO dumped into
+ * the JSON body, where handlers ignore it. The worker's own route regex then matched the
+ * literal "{groupId}" and looked THAT up as an id, so the call failed with a nonsense
+ * not-found — "Group not found" for a group that plainly exists (observed 2026-09-10 on
+ * add_bot_to_group, while set_contact_route found the same group by reading CHAT_DB direct).
+ * Substitute here, and when a value is missing fail with the parameter NAMED, rather than
+ * letting a worker report a phantom missing record.
+ *
+ * Tokens are matched tolerantly (groupId / group_id / groupid): the model fills these from
+ * the spec's property name, but subagents pass them around in snake_case.
+ *
+ * Tokens are read from the template itself, not only from meta.pathParams, so this also
+ * covers specs that template a segment without declaring it in `parameters`.
+ */
+function fillPathParams(pathTemplate, input, declaredPathParams) {
+  const tokens = (pathTemplate.match(/\{([^}]+)\}/g) || []).map(t => t.slice(1, -1))
+  const used = []
+  for (const p of declaredPathParams || []) if (!used.includes(p)) used.push(p)
+  if (tokens.length === 0) return { path: pathTemplate, used }
+
+  const missing = []
+  let out = pathTemplate
+
+  for (const token of tokens) {
+    const snake = token.replace(/([A-Z])/g, '_$1').toLowerCase()
+    let value
+    let matchedKey
+    for (const key of [token, snake, token.toLowerCase()]) {
+      const v = input[key]
+      if (v !== undefined && v !== null && String(v).trim() !== '') {
+        value = String(v).trim()
+        matchedKey = key
+        break
+      }
+    }
+    if (value === undefined) {
+      missing.push(token)
+      continue
+    }
+    out = out.split(`{${token}}`).join(encodeURIComponent(value))
+    for (const k of [matchedKey, token]) if (!used.includes(k)) used.push(k)
+  }
+
+  if (missing.length > 0) {
+    const names = missing.map(m => `"${m}"`).join(', ')
+    throw new Error(
+      `Missing required path parameter${missing.length > 1 ? 's' : ''} ${names} for ${pathTemplate} — pass ${missing.join(', ')} in the tool input (it goes in the URL path, not the body).`
+    )
+  }
+
+  return { path: out, used }
+}
+
 export async function executeOpenAPITool(toolName, input, env, operationMap) {
   const meta = operationMap[toolName]
   if (!meta) throw new Error(`Unknown OpenAPI tool: ${toolName}`)
@@ -421,7 +479,8 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
   if (!fetcher) throw new Error(`Service binding "${binding}" not configured for tool ${toolName}`)
 
   const workerUrl = meta.workerUrl || 'https://knowledge-graph-worker'
-  let url = `${workerUrl}${meta.path}`
+  const filledPath = fillPathParams(meta.path, input, meta.pathParams)
+  let url = `${workerUrl}${filledPath.path}`
 
   if (meta.queryParams.length > 0) {
     const params = new URLSearchParams()
@@ -466,6 +525,11 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
     const bodyFields = { ...input }
     for (const qp of meta.queryParams) {
       delete bodyFields[qp]
+    }
+    // Path params live in the URL; leaving them in the body made handlers that read a
+    // body field of the same name see a value the route never used.
+    for (const pp of filledPath.used) {
+      delete bodyFields[pp]
     }
     delete bodyFields.userId
     delete bodyFields.authToken

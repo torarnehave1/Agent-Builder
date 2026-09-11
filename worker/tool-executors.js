@@ -5839,6 +5839,13 @@ async function executeSetWorldEmailTemplate(input, env) {
       name: brand.name || '', logo: brand.logo || '', accent: brand.accent || '',
       fromName: brand.fromName || '', footer: brand.footer || '',
     }
+    // fromEmail names the SENDING address for this World's mail. It is optional and only
+    // written when supplied, so an existing value survives a brand update that omits it
+    // (the spread below keeps prior metadata). Without it email-worker has to INFER a
+    // sender from the founder's account list, and that heuristic picks the wrong address:
+    // it prefers an account matching the domain, then isDefault — which for vegr.ai lands
+    // on a personal gmail rather than post@universi.no (measured 2026-09-10).
+    if (brand.fromEmail) bMeta.fromEmail = String(brand.fromEmail).trim()
     const bIdx = nodes.findIndex((n) => (n.type || '').toLowerCase() === 'email-brand')
     if (bIdx >= 0) {
       nodes[bIdx] = { ...nodes[bIdx], type: 'email-brand', label: `${brand.name || domain} email brand`, metadata: { ...(nodes[bIdx].metadata || {}), ...bMeta } }

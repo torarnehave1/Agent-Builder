@@ -1820,6 +1820,73 @@ export default {
       }
 
       // POST /execute - Execute an agent
+      // Approve a contact enquiry: register the person, then send them the World's branded
+      // magic-link mail so they can actually sign in. This is the action behind the Approve
+      // button in the chat group — a Superadmin reads an enquiry and clicks once.
+      //
+      // Worker-to-worker: group-chat-worker authenticates the clicking user (validateUser +
+      // Superadmin) and calls this with the shared secret. approverUserId rides along and is
+      // re-checked here by admin_register_user, so the Superadmin requirement still holds even
+      // if this endpoint were reached by another route.
+      //
+      // The mail is deliberately NOT rendered here. /login/magic/send already resolves the
+      // World's brand and template for the domain and sends from the brand's fromEmail — the
+      // path measured working for vegr.ai (whiteLabel:true, from post@universi.no, 2026-09-10).
+      // Rendering a second copy here would duplicate that logic and drift from it.
+      if (pathname === '/contact/approve' && request.method === 'POST') {
+        const provided = request.headers.get('x-internal-secret') || ''
+        const expected = env.INTERNAL_SHARED_SECRET || ''
+        if (!expected || provided !== expected) {
+          return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const approverUserId = String(body.approverUserId || '').trim()
+        const email = String(body.email || '').trim().toLowerCase()
+        const name = String(body.name || '').trim()
+        const phone = String(body.phone || '').trim()
+        const domain = String(body.domain || '').trim().toLowerCase()
+        const role = String(body.role || 'user').trim()
+        if (!approverUserId || !email || !domain) {
+          return new Response(JSON.stringify({ error: 'approverUserId, email and domain are required' }), { status: 400, headers: corsHeaders })
+        }
+
+        let registered = null
+        try {
+          registered = await executeTool('admin_register_user', { userId: approverUserId, email, name, phone, role }, env, {})
+        } catch (e) {
+          return new Response(JSON.stringify({ error: `Registration failed: ${e.message}` }), { status: 400, headers: corsHeaders })
+        }
+        // An account that already exists is NOT a failure here. The Superadmin approved this
+        // person; the point of the click is that they end up able to sign in. Clicking twice,
+        // or approving someone who registered elsewhere, must still send them their link.
+        const alreadyRegistered = !!(registered && registered.success === false && /already exists/i.test(registered.error || ''))
+        if (registered && registered.success === false && !alreadyRegistered) {
+          return new Response(JSON.stringify({ error: registered.error || 'Registration failed' }), { status: 400, headers: corsHeaders })
+        }
+
+        let mail = null
+        let mailError = null
+        try {
+          const res = await env.EMAIL_WORKER.fetch('https://email-worker.internal/login/magic/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, redirectUrl: `https://${domain}/` }),
+          })
+          mail = await res.json().catch(() => null)
+          if (!res.ok || !mail || mail.success !== true) mailError = (mail && mail.error) || `HTTP ${res.status}`
+        } catch (e) {
+          mailError = e.message
+        }
+
+        return new Response(JSON.stringify({
+          success: !mailError,
+          alreadyRegistered,
+          user: { email, user_id: registered?.user_id || null, role: registered?.role || null },
+          mail: mailError ? null : { sentTo: email, from: mail.from || null, whiteLabel: !!mail.whiteLabel, expiresAt: mail.expiresAt || null },
+          error: mailError,
+        }), { status: mailError ? 502 : 200, headers: corsHeaders })
+      }
+
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()
         const { agentId, task, userId, contractId, graphId, authToken } = body

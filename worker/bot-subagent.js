@@ -8,6 +8,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { loadOpenAPITools } from './openapi-tools.js'
 import { DEFAULT_MODEL } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
@@ -27,12 +28,19 @@ const BOT_SUBAGENT_SYSTEM_PROMPT = `You are a Hallo Vegvisr Bot Management speci
 ## Bot Interactions
 6. \`trigger_bot_response\` — make a bot respond based on recent conversation in its group
 
+## Group Membership
+7. \`add_bot_to_group\` — add an EXISTING bot to a group. Needs groupId + bot_id (bare UUID)
+   + user_id + phone. Get user_id and phone from \`who_am_i\` — never invent them.
+8. \`list_group_bots\` — which bots are in a group
+9. \`remove_bot_from_group\` — take a bot out of one group
+
 ## Workflows
 
 ### Creating a new bot:
 1. \`register_chat_bot\` with botName + username (and optionally graphId, systemPrompt, model, tools)
 2. Optionally add to a group by including groupId in the register call
-3. Or add to a group later by calling \`register_chat_bot\` with an existing bot ID
+3. To add an EXISTING bot to another group use \`add_bot_to_group\` — NOT \`register_chat_bot\`,
+   which creates a NEW bot and rejects a username that already exists.
 
 ### Updating a bot's configuration:
 1. \`list_bots\` or \`get_bot\` to find the bot ID
@@ -66,6 +74,9 @@ After completing your task, provide a brief summary of what you did.`
 // ---------------------------------------------------------------------------
 
 const BOT_SUBAGENT_TOOL_NAMES = new Set([
+  // add_bot_to_group / remove_bot_from_group require the CALLER's user_id AND matching phone.
+  // Without who_am_i the subagent has no way to obtain them and stalls asking the user.
+  'who_am_i',
   'list_bots',
   'get_bot',
   'register_chat_bot',
@@ -74,8 +85,28 @@ const BOT_SUBAGENT_TOOL_NAMES = new Set([
   'trigger_bot_response',
 ])
 
-function getBotSubagentTools() {
-  return TOOL_DEFINITIONS.filter(t => BOT_SUBAGENT_TOOL_NAMES.has(t.name))
+// Tools this subagent needs that are NOT in TOOL_DEFINITIONS: they are generated at runtime
+// from group-chat-worker's own openapi.json, so the TOOL_DEFINITIONS filter below can never
+// see them. Without this the subagent kept reporting "the available tools don't include a
+// direct add-bot-to-group function" and dead-ended the task (2026-09-10), even though the
+// main agent had the tool. executeTool is the main dispatcher, so it can already RUN these —
+// only the definitions were missing.
+const BOT_SUBAGENT_OPENAPI_TOOL_NAMES = new Set([
+  'add_bot_to_group',
+  'list_group_bots',
+  'remove_bot_from_group',
+])
+
+async function getBotSubagentTools(env) {
+  const hardcoded = TOOL_DEFINITIONS.filter(t => BOT_SUBAGENT_TOOL_NAMES.has(t.name))
+  try {
+    const { tools } = await loadOpenAPITools(env)
+    const fromSpec = (tools || []).filter(t => BOT_SUBAGENT_OPENAPI_TOOL_NAMES.has(t.name))
+    return hardcoded.concat(fromSpec)
+  } catch {
+    // A registry/spec fetch failure must degrade to the hardcoded set, never to zero tools.
+    return hardcoded
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +156,7 @@ async function runBotSubagent(input, env, onProgress, executeTool) {
   if (groupId) userMessage += `\n- groupId: ${groupId}`
 
   const messages = [{ role: 'user', content: userMessage }]
-  const tools = getBotSubagentTools()
+  const tools = await getBotSubagentTools(env)
   let turn = 0
   const actions = []
 

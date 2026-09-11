@@ -1574,6 +1574,7 @@ const TOOL_DEFINITIONS = [
             logo: { type: 'string', description: 'Logo image URL.' },
             accent: { type: 'string', description: 'Accent color, hex e.g. "#0f2a43".' },
             fromName: { type: 'string', description: 'Display From name.' },
+            fromEmail: { type: 'string', description: "The address this World's mail is SENT from, e.g. \"post@universi.no\". Must be an email account configured (with a credential) on the World founder's profile — or, for a platform domain, on the System Owner's. When omitted, email-worker infers a sender from the account list, which often picks the wrong address." },
             footer: { type: 'string', description: 'Footer line, e.g. "Universi AS · universi.no".' }
           }
         }
