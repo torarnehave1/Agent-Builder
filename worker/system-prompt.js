@@ -907,7 +907,8 @@ Same convention for ellipses (subtract half of each axis), rectangles (top-left 
 
 **shape**
 \`\`\`
-{ shape: 'rect'|'circle'|'ellipse', color, opacity? }
+{ shape: 'rect'|'circle'|'ellipse', color, opacity?, borderRadius?,
+  strokeColor?, strokeWidth?, filled?: bool, rotation? }
 \`\`\`
 
 There is no polygon shape — the renderer draws only \`rect\` and \`circle\` (a circle in a non-square box is an ellipse). For any other outline use \`path\` with corner anchors or a \`math-shape\`.
@@ -920,17 +921,17 @@ There is no polygon shape — the renderer draws only \`rect\` and \`circle\` (a
 
 ### shape vs math-shape — pick the right primitive (CRITICAL)
 
-\`shape\` is a **filled** primitive — \`shape: 'circle'\` is a solid filled disc with no stroke option. It cannot draw a ring outline. Stacking filled \`shape: circle\` layers at decreasing opacity does NOT produce concentric outlines — it produces a soft-edged dark disc. The same is true for \`'rect'\` and \`'ellipse'\` — they are all filled.
+\`shape\` draws a rectangle, a rounded rectangle (\`borderRadius\`) or a circle/ellipse — **filled by default, with an optional outline**. The outline needs BOTH \`strokeColor\` and \`strokeWidth\` (> 0) and is drawn on top of the fill. Set \`filled: false\` for an outline with no fill: a ring, a frame, a rounded border. The stroke is centred on the box edge, so half of \`strokeWidth\` sits outside the box. Stacking filled \`shape: circle\` layers at decreasing opacity does NOT produce concentric outlines — it produces a soft-edged dark disc; give each ring \`filled: false\` and a stroke instead. \`shape\` has no \`drawProgress\`, so its outline cannot be traced in over time.
 
 \`math-shape\` is a **stroked parametric curve** — set \`fill: null\` and \`stroke: '<color>'\` to draw an outline. \`math-shape\` also supports the \`drawProgress\` animation property (0→1), which traces the curve in over time — ideal for "ring building outward" or "mandala assembling petal by petal" effects.
 
 **Decision rule:**
 
 - Want a **filled shape** (background rect, solid coloured disc)? Use \`shape\`.
-- Want **line art / geometric outlines / mandala / rosette / star / scalloped border / traceable pattern**? Use \`math-shape\` with \`fill: null\` and a stroke. Use \`drawProgress\` to animate the trace.
-- Want both fill and stroke on the same shape? Two layers — one \`shape\` for the fill behind, one \`math-shape\` for the outline on top.
+- Want a **plain outline of a rect, rounded rect, circle or ellipse** (ring, frame, border, a disc with a defined edge)? Use \`shape\` with \`strokeColor\` + \`strokeWidth\` — add \`filled: false\` for no fill. One layer does fill and outline together.
+- Want **line art / curves / mandala / rosette / star / scalloped border**, or an outline that **traces in over time**? Use \`math-shape\` with \`fill: null\` and a stroke. Use \`drawProgress\` to animate the trace.
 
-The single biggest mistake when composing decorative line art is reaching for \`shape: circle\` because it's "the circle primitive." It's the filled circle primitive. For mandalas and outline work, \`math-shape\` is the right tool.
+The single biggest mistake when composing decorative line art is building it from filled \`shape: circle\` discs. A single ring or frame is a \`shape\` with a stroke; anything with petals, points, curves or a traced reveal is a \`math-shape\`.
 
 **image**
 \`\`\`
@@ -1098,7 +1099,7 @@ for (let i = 0; i < N; i++) {
 
 **Venn / flower-of-life overlap:** for adjacent circles in a ring to OVERLAP their neighbours (rather than sit side-by-side without touching), pick \`R\` so adjacent circle centres are closer than \`d\` apart. Chord between two adjacent centres on the ring is \`2R · sin(π/N)\`; require it to be strictly less than \`d\`. Smaller \`R\` per number of items \`N\` → more overlap, deeper lens intersections.
 
-**Pure concentric (target / ripple):** place all circles at \`cx = canvasW/2, cy = canvasH/2\` with the same centre, but different \`size\`. Vary the diameter linearly from inner to outer; draw largest first (back of z-order) so smaller ones layer on top. Each visible "ring" is the difference between two adjacent disks.
+**Pure concentric (target / ripple):** place all circles at \`cx = canvasW/2, cy = canvasH/2\` with the same centre, but different \`size\`. Vary the diameter linearly from inner to outer; draw largest first (back of z-order) so smaller ones layer on top. Each visible "ring" is the difference between two adjacent disks. For thin ring OUTLINES rather than filled bands, give every circle \`filled: false\` with \`strokeColor\` + \`strokeWidth\` — no z-order juggling needed.
 
 ## Parametric curve library (for mandalas, rosettes, stars, decorative borders)
 
@@ -1205,6 +1206,8 @@ Two perpendicular sinusoids at different frequencies — produces braided, woven
 - **Logarithmic** (exponential growth — galaxy / nautilus): \`r = a·exp(b·t)\`. Requires \`exp\` in the formula vocabulary; if not available, sample with explicit \`pow(e, …)\`.
 
 ### Plain ring (degenerate parametric — a circle outline)
+
+A static ring is simpler as \`shape: 'circle'\` with \`filled: false\` + \`strokeColor\` + \`strokeWidth\`. Use this math-shape form when the ring must trace in with \`drawProgress\` or be combined with other formulas.
 
 - \`xFormula: x0 + w/2 + R*cos(t)\`
 - \`yFormula: y0 + h/2 + R*sin(t)\`
