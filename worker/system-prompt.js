@@ -858,6 +858,7 @@ type CompositionData = {
   fontFamily?: string
   groups?: LayerGroup[]
   layers: Layer[]
+  meta?: CompositionMeta  // carousel slide markers, audioTrack, description/tags, guides, scale — copy unchanged when editing
 }
 \`\`\`
 

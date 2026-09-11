@@ -4,8 +4,8 @@
   "description": "Cloudflare Worker that executes autonomous agents with Knowledge Graph tools.",
   "main": "index.js",
   "scripts": {
-    "test": "node test-sequential-tools.mjs && node test-openapi-path-params.mjs && node test-vemotion-composition-gate.mjs",
-    "predeploy": "node test-sequential-tools.mjs && node test-openapi-path-params.mjs && node test-vemotion-composition-gate.mjs",
+    "test": "node test-sequential-tools.mjs && node test-openapi-path-params.mjs && node test-vemotion-composition-gate.mjs && node test-vemotion-save-meta.mjs",
+    "predeploy": "node test-sequential-tools.mjs && node test-openapi-path-params.mjs && node test-vemotion-composition-gate.mjs && node test-vemotion-save-meta.mjs",
     "deploy": "wrangler deploy"
   },
   "keywords": [],

@@ -6391,20 +6391,35 @@ async function executeVemotionSaveComposition(input, env) {
       }
     }
 
+    // Spread first, then set the fields that have defaults. Rebuilding from named fields dropped
+    // everything else the caller sent — `meta` above all (carousel slide markers, audioTrack,
+    // description/tags, guides, mm scale), which 70 of 176 stored compositions carry (L92 v2).
     composition = {
+      ...inputComp,
       duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
       fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
       width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
       height: typeof inputComp.height === 'number' ? inputComp.height : 720,
       layers,
     }
-    if (typeof inputComp.fontFamily === 'string') composition.fontFamily = inputComp.fontFamily
-    if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
+    if (composition.fontFamily !== undefined && typeof composition.fontFamily !== 'string') delete composition.fontFamily
+    if (composition.groups !== undefined && !Array.isArray(composition.groups)) delete composition.groups
 
     // The save endpoint accepts any `properties`, so a composition in the wrong vocabulary saves
     // "successfully" and renders blank (2026-09-11). Refuse it here, naming each field to fix.
     const gateProblems = checkVemotionComposition(composition)
     if (gateProblems.length > 0) throw new Error(formatVemotionGateError(gateProblems, 'vemotion_save_composition'))
+  }
+
+  // An update usually carries only what the model edited. Merge the STORED meta underneath so the
+  // keys it left out survive (a carousel's slide markers above all); an explicit null removes a key.
+  // If the stored version cannot be read, refuse rather than save blind and drop its meta.
+  if (requestedId) {
+    const merged = mergeVemotionMeta(await readStoredVemotionMeta(env, authToken, requestedId), composition.meta)
+    if (merged) composition.meta = merged
+    else delete composition.meta
+  } else if (!(composition.meta && typeof composition.meta === 'object' && !Array.isArray(composition.meta))) {
+    delete composition.meta
   }
 
   const saveBody = { name, composition }
@@ -6445,8 +6460,38 @@ async function executeVemotionSaveComposition(input, env) {
     layerCount: data?.summary?.layerCount ?? composition.layers.length,
     sourceMode,
     sourceAlbum: sourceMode === 'album-slideshow' ? albumName : undefined,
+    metaKeys: composition.meta ? Object.keys(composition.meta) : [],
     editorUrl: `https://vemotion.vegvisr.org/?compositionId=${savedId}`,
   }
+}
+
+// The stored meta of a composition that is about to be updated. 404 = nothing stored under this id
+// yet, so there is nothing to keep. Any other failure refuses the save: writing without the stored
+// version would drop its meta.
+async function readStoredVemotionMeta(env, authToken, id) {
+  const res = await env.VEMOTION_WORKER.fetch(
+    `https://vemotion-worker/vemotion/composition?id=${encodeURIComponent(id)}`,
+    { headers: { 'X-API-Token': authToken } }
+  )
+  if (res.status === 404) return null
+  const text = await res.text().catch(() => '')
+  let data = null
+  try { data = text ? JSON.parse(text) : null } catch { data = null }
+  if (res.status !== 200 || !data) {
+    throw new Error(`Could not read Vemotion composition "${id}" before updating it (HTTP ${res.status}), so it was NOT saved — saving without the stored version would drop its meta (carousel slide markers, description, audio track). Try the save again.`)
+  }
+  const meta = data.composition?.meta
+  return meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : null
+}
+
+// Stored meta underneath, incoming meta on top. A key set to null is removed; `meta: null` removes
+// all of it. Returns null when nothing is left.
+function mergeVemotionMeta(stored, incoming) {
+  if (incoming === null) return null
+  const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
+  const merged = { ...(isObject(stored) ? stored : {}), ...(isObject(incoming) ? incoming : {}) }
+  for (const key of Object.keys(merged)) if (merged[key] === null) delete merged[key]
+  return Object.keys(merged).length > 0 ? merged : null
 }
 
 // Generate a composition from REAL computed geometry — POST /vemotion/generate/structure.
