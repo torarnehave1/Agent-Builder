@@ -906,8 +906,10 @@ Same convention for ellipses (subtract half of each axis), rectangles (top-left 
 
 **shape**
 \`\`\`
-{ shape: 'rect'|'circle'|'ellipse'|'polygon', color, opacity? }
+{ shape: 'rect'|'circle'|'ellipse', color, opacity? }
 \`\`\`
+
+There is no polygon shape — the renderer draws only \`rect\` and \`circle\` (a circle in a non-square box is an ellipse). For any other outline use \`path\` with corner anchors or a \`math-shape\`.
 
 **math-shape** — parametric curve drawn from formulas. See "math-shape footgun" below.
 \`\`\`
@@ -917,13 +919,13 @@ Same convention for ellipses (subtract half of each axis), rectangles (top-left 
 
 ### shape vs math-shape — pick the right primitive (CRITICAL)
 
-\`shape\` is a **filled** primitive — \`shape: 'circle'\` is a solid filled disc with no stroke option. It cannot draw a ring outline. Stacking filled \`shape: circle\` layers at decreasing opacity does NOT produce concentric outlines — it produces a soft-edged dark disc. The same is true for \`'rect'\`, \`'ellipse'\`, \`'polygon'\` — they are all filled.
+\`shape\` is a **filled** primitive — \`shape: 'circle'\` is a solid filled disc with no stroke option. It cannot draw a ring outline. Stacking filled \`shape: circle\` layers at decreasing opacity does NOT produce concentric outlines — it produces a soft-edged dark disc. The same is true for \`'rect'\` and \`'ellipse'\` — they are all filled.
 
 \`math-shape\` is a **stroked parametric curve** — set \`fill: null\` and \`stroke: '<color>'\` to draw an outline. \`math-shape\` also supports the \`drawProgress\` animation property (0→1), which traces the curve in over time — ideal for "ring building outward" or "mandala assembling petal by petal" effects.
 
 **Decision rule:**
 
-- Want a **filled shape** (background rect, solid coloured disc, polygon fill)? Use \`shape\`.
+- Want a **filled shape** (background rect, solid coloured disc)? Use \`shape\`.
 - Want **line art / geometric outlines / mandala / rosette / star / scalloped border / traceable pattern**? Use \`math-shape\` with \`fill: null\` and a stroke. Use \`drawProgress\` to animate the trace.
 - Want both fill and stroke on the same shape? Two layers — one \`shape\` for the fill behind, one \`math-shape\` for the outline on top.
 
@@ -1250,7 +1252,7 @@ Test any complex formula on a small composition before committing — the silent
 Math-shape has hard limits. Reach for a different primitive when:
 
 - **You need integrals or transcendentals beyond the workaround vocabulary** (Cornu spiral / Fresnel integrals, true non-elementary functions) → sample the curve numerically OUTSIDE the formula, then use \`type: 'path'\` with explicit anchor coordinates.
-- **You need straight lines with explicit corners** (star polygons \`{n/k}\` like the pentagram, polylines, charts, schematics, hand-drawn polygonal logos) → use \`type: 'path'\` with corner anchors (no in/out handles). For regular convex polygons, \`type: 'shape'\` with \`shape: 'polygon'\` is also valid.
+- **You need straight lines with explicit corners** (star polygons \`{n/k}\` like the pentagram, polylines, charts, schematics, hand-drawn polygonal logos) → use \`type: 'path'\` with corner anchors (no in/out handles). Regular convex polygons too — \`type: 'shape'\` has no polygon.
 - **You need fine artistic control segment-by-segment** (a designed glyph, calligraphic flourish, signature, asymmetric logo) → \`type: 'path'\` with Bezier-handle anchors (\`in\` / \`out\` on each anchor).
 - **The shape is too complex to express in elementary math** (photo-realistic outlines, painted textures, illustrated icons, anything where the visual is the artifact) → \`type: 'image'\`. If you also want the image clipped to a text shape, use a text layer with \`fillMode: 'image'\`.
 

@@ -1,0 +1,1003 @@
+{
+ "_about": "Real compositions from the Vemotion library, captured 2026-09-11 (composition objects only). broken.* were saved by the agent and render as blank white canvases; clean.* render correctly. In clean.mountainRidge the text of layer 'vivian' was replaced with 'SUMMIT' (same length).",
+ "broken": {
+  "sidratAlMuntaha": {
+   "duration": 6,
+   "fps": 30,
+   "width": 1080,
+   "height": 1350,
+   "layers": [
+    {
+     "id": "bg",
+     "type": "shape",
+     "position": {
+      "x": 0,
+      "y": 0
+     },
+     "size": {
+      "width": 1080,
+      "height": 1350
+     },
+     "properties": {
+      "shapeType": "rectangle",
+      "fillColor": "#0a0a0a",
+      "strokeColor": "transparent"
+     },
+     "startTime": 0,
+     "layerDuration": 6
+    },
+    {
+     "id": "text-arabic",
+     "type": "text",
+     "position": {
+      "x": 540,
+      "y": 300
+     },
+     "size": {
+      "width": 800,
+      "height": 150
+     },
+     "properties": {
+      "text": "سدرة المنتهى",
+      "fontSize": 72,
+      "fontFamily": "Arial",
+      "fillColor": "#ffffff",
+      "textAlign": "center",
+      "fontWeight": "bold"
+     },
+     "startTime": 0,
+     "layerDuration": 1.5,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 1.5,
+        "value": 1
+       }
+      ]
+     }
+    },
+    {
+     "id": "tree-trunk",
+     "type": "shape",
+     "position": {
+      "x": 480,
+      "y": 600
+     },
+     "size": {
+      "width": 120,
+      "height": 400
+     },
+     "properties": {
+      "shapeType": "rectangle",
+      "fillColor": "#8b6914",
+      "strokeColor": "#d4af37",
+      "strokeWidth": 2
+     },
+     "startTime": 1.5,
+     "layerDuration": 2.5,
+     "animation": {
+      "kind": "layer",
+      "property": "offsetY",
+      "keyframes": [
+       {
+        "time": 1.5,
+        "value": 200
+       },
+       {
+        "time": 4,
+        "value": 0
+       }
+      ]
+     }
+    },
+    {
+     "id": "tree-canopy-1",
+     "type": "shape",
+     "position": {
+      "x": 420,
+      "y": 550
+     },
+     "size": {
+      "width": 240,
+      "height": 200
+     },
+     "properties": {
+      "shapeType": "circle",
+      "fillColor": "#2d5016",
+      "strokeColor": "#d4af37",
+      "strokeWidth": 2
+     },
+     "startTime": 2,
+     "layerDuration": 2,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 2,
+        "value": 0
+       },
+       {
+        "time": 3,
+        "value": 1
+       }
+      ]
+     }
+    },
+    {
+     "id": "tree-canopy-2",
+     "type": "shape",
+     "position": {
+      "x": 360,
+      "y": 480
+     },
+     "size": {
+      "width": 200,
+      "height": 180
+     },
+     "properties": {
+      "shapeType": "circle",
+      "fillColor": "#3d6b1f",
+      "strokeColor": "#d4af37",
+      "strokeWidth": 2
+     },
+     "startTime": 2.3,
+     "layerDuration": 1.7,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 2.3,
+        "value": 0
+       },
+       {
+        "time": 3.2,
+        "value": 1
+       }
+      ]
+     }
+    },
+    {
+     "id": "tree-canopy-3",
+     "type": "shape",
+     "position": {
+      "x": 580,
+      "y": 480
+     },
+     "size": {
+      "width": 200,
+      "height": 180
+     },
+     "properties": {
+      "shapeType": "circle",
+      "fillColor": "#3d6b1f",
+      "strokeColor": "#d4af37",
+      "strokeWidth": 2
+     },
+     "startTime": 2.3,
+     "layerDuration": 1.7,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 2.3,
+        "value": 0
+       },
+       {
+        "time": 3.2,
+        "value": 1
+       }
+      ]
+     }
+    },
+    {
+     "id": "glow-1",
+     "type": "shape",
+     "position": {
+      "x": 420,
+      "y": 550
+     },
+     "size": {
+      "width": 240,
+      "height": 200
+     },
+     "properties": {
+      "shapeType": "circle",
+      "fillColor": "transparent",
+      "strokeColor": "#d4af37",
+      "strokeWidth": 3
+     },
+     "startTime": 4,
+     "layerDuration": 2,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 4,
+        "value": 0.3
+       },
+       {
+        "time": 4.5,
+        "value": 0.8
+       },
+       {
+        "time": 5,
+        "value": 0.3
+       },
+       {
+        "time": 5.5,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.3
+       }
+      ]
+     }
+    },
+    {
+     "id": "text-english",
+     "type": "text",
+     "position": {
+      "x": 540,
+      "y": 1100
+     },
+     "size": {
+      "width": 800,
+      "height": 100
+     },
+     "properties": {
+      "text": "The Tree at the Boundary",
+      "fontSize": 48,
+      "fontFamily": "Arial",
+      "fillColor": "#ffffff",
+      "textAlign": "center"
+     },
+     "startTime": 4.5,
+     "layerDuration": 1.5,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 4.5,
+        "value": 0
+       },
+       {
+        "time": 5,
+        "value": 1
+       }
+      ]
+     }
+    }
+   ]
+  },
+  "bodhiTreet": {
+   "duration": 6,
+   "fps": 30,
+   "width": 1080,
+   "height": 1350,
+   "layers": [
+    {
+     "id": "bg",
+     "type": "shape",
+     "position": {
+      "x": 0,
+      "y": 0
+     },
+     "size": {
+      "width": 1080,
+      "height": 1350
+     },
+     "properties": {
+      "shapeType": "rectangle",
+      "fillColor": "#1a1a1a",
+      "opacity": 1
+     }
+    },
+    {
+     "id": "glow",
+     "type": "shape",
+     "position": {
+      "x": 400,
+      "y": 500
+     },
+     "size": {
+      "width": 400,
+      "height": 400
+     },
+     "properties": {
+      "shapeType": "circle",
+      "fillColor": "#d4af37",
+      "opacity": 0.08
+     }
+    },
+    {
+     "id": "leaf-center",
+     "type": "shape",
+     "position": {
+      "x": 490,
+      "y": 600
+     },
+     "size": {
+      "width": 200,
+      "height": 200
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.9
+     },
+     "startTime": 0,
+     "layerDuration": 6,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 0.5,
+        "value": 0.9
+       },
+       {
+        "time": 6,
+        "value": 0.9
+       }
+      ]
+     }
+    },
+    {
+     "id": "leaf-1",
+     "type": "shape",
+     "position": {
+      "x": 540,
+      "y": 450
+     },
+     "size": {
+      "width": 90,
+      "height": 140
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.8
+     },
+     "startTime": 0.8,
+     "layerDuration": 5.2,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 0.8,
+        "value": 0
+       },
+       {
+        "time": 1.3,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    {
+     "id": "leaf-2",
+     "type": "shape",
+     "position": {
+      "x": 700,
+      "y": 550
+     },
+     "size": {
+      "width": 90,
+      "height": 140
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.8
+     },
+     "startTime": 1.2,
+     "layerDuration": 4.8,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 1.2,
+        "value": 0
+       },
+       {
+        "time": 1.7,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    {
+     "id": "leaf-3",
+     "type": "shape",
+     "position": {
+      "x": 380,
+      "y": 550
+     },
+     "size": {
+      "width": 90,
+      "height": 140
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.8
+     },
+     "startTime": 1.2,
+     "layerDuration": 4.8,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 1.2,
+        "value": 0
+       },
+       {
+        "time": 1.7,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    {
+     "id": "leaf-4",
+     "type": "shape",
+     "position": {
+      "x": 620,
+      "y": 750
+     },
+     "size": {
+      "width": 90,
+      "height": 140
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.8
+     },
+     "startTime": 1.6,
+     "layerDuration": 4.4,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 1.6,
+        "value": 0
+       },
+       {
+        "time": 2.1,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    {
+     "id": "leaf-5",
+     "type": "shape",
+     "position": {
+      "x": 460,
+      "y": 750
+     },
+     "size": {
+      "width": 90,
+      "height": 140
+     },
+     "properties": {
+      "shapeType": "ellipse",
+      "fillColor": "#d4af37",
+      "opacity": 0.8
+     },
+     "startTime": 1.6,
+     "layerDuration": 4.4,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 1.6,
+        "value": 0
+       },
+       {
+        "time": 2.1,
+        "value": 0.8
+       },
+       {
+        "time": 6,
+        "value": 0.8
+       }
+      ]
+     }
+    },
+    {
+     "id": "title",
+     "type": "text",
+     "position": {
+      "x": 540,
+      "y": 1050
+     },
+     "size": {
+      "width": 900,
+      "height": 150
+     },
+     "properties": {
+      "text": "BODHI-TREET",
+      "fontSize": 72,
+      "fontFamily": "Poppins",
+      "fontWeight": "bold",
+      "fillColor": "#d4af37",
+      "textAlign": "center",
+      "letterSpacing": 8
+     },
+     "startTime": 2.5,
+     "layerDuration": 3.5,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 2.5,
+        "value": 0
+       },
+       {
+        "time": 3,
+        "value": 1
+       },
+       {
+        "time": 6,
+        "value": 1
+       }
+      ]
+     }
+    },
+    {
+     "id": "subtitle",
+     "type": "text",
+     "position": {
+      "x": 540,
+      "y": 1200
+     },
+     "size": {
+      "width": 900,
+      "height": 80
+     },
+     "properties": {
+      "text": "Opplysningens tre",
+      "fontSize": 36,
+      "fontFamily": "Poppins",
+      "fillColor": "#d4af37",
+      "textAlign": "center",
+      "opacity": 0.7
+     },
+     "startTime": 3.2,
+     "layerDuration": 2.8,
+     "animation": {
+      "kind": "layer",
+      "property": "opacity",
+      "keyframes": [
+       {
+        "time": 3.2,
+        "value": 0
+       },
+       {
+        "time": 3.7,
+        "value": 0.7
+       },
+       {
+        "time": 6,
+        "value": 0.7
+       }
+      ]
+     }
+    }
+   ],
+   "fontFamily": "Poppins"
+  }
+ },
+ "clean": {
+  "vennDots": {
+   "duration": 5,
+   "fps": 30,
+   "width": 1280,
+   "height": 720,
+   "fontFamily": "Inter",
+   "layers": [
+    {
+     "id": "venn-a",
+     "type": "shape",
+     "position": {
+      "x": 380,
+      "y": 200
+     },
+     "size": {
+      "width": 280,
+      "height": 280
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#ff6b6b",
+      "opacity": 0.3,
+      "strokeColor": "#ff6b6b",
+      "strokeWidth": 2
+     }
+    },
+    {
+     "id": "venn-b",
+     "type": "shape",
+     "position": {
+      "x": 620,
+      "y": 200
+     },
+     "size": {
+      "width": 280,
+      "height": 280
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#4ecdc4",
+      "opacity": 0.3,
+      "strokeColor": "#4ecdc4",
+      "strokeWidth": 2
+     }
+    },
+    {
+     "id": "venn-c",
+     "type": "shape",
+     "position": {
+      "x": 500,
+      "y": 320
+     },
+     "size": {
+      "width": 280,
+      "height": 280
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#95e1d3",
+      "opacity": 0.3,
+      "strokeColor": "#95e1d3",
+      "strokeWidth": 2
+     }
+    },
+    {
+     "id": "title",
+     "type": "text",
+     "position": {
+      "x": 390,
+      "y": 40
+     },
+     "size": {
+      "width": 500,
+      "height": 80
+     },
+     "properties": {
+      "text": "Community",
+      "fontSize": 48,
+      "fontFamily": "Inter",
+      "color": "#e2e8f0",
+      "align": "center",
+      "fontWeight": "700"
+     }
+    },
+    {
+     "id": "dot-small",
+     "type": "shape",
+     "position": {
+      "x": 200,
+      "y": 310
+     },
+     "size": {
+      "width": 6,
+      "height": 6
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#9f831d",
+      "opacity": 1
+     },
+     "animation": {
+      "kind": "layer",
+      "property": "offsetY",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 1.25,
+        "value": -67
+       },
+       {
+        "time": 2.5,
+        "value": 0
+       },
+       {
+        "time": 3.75,
+        "value": 67
+       },
+       {
+        "time": 5,
+        "value": 0
+       }
+      ]
+     }
+    },
+    {
+     "id": "dot-mid",
+     "type": "shape",
+     "position": {
+      "x": 250,
+      "y": 310
+     },
+     "size": {
+      "width": 8,
+      "height": 8
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#b94b4b",
+      "opacity": 1
+     },
+     "animation": {
+      "kind": "layer",
+      "property": "offsetY",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 1.25,
+        "value": -147
+       },
+       {
+        "time": 2.5,
+        "value": 0
+       },
+       {
+        "time": 3.75,
+        "value": 147
+       },
+       {
+        "time": 5,
+        "value": 0
+       }
+      ]
+     }
+    },
+    {
+     "id": "dot-big",
+     "type": "shape",
+     "position": {
+      "x": 300,
+      "y": 310
+     },
+     "size": {
+      "width": 10,
+      "height": 10
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#c65d5d",
+      "opacity": 1
+     },
+     "animation": {
+      "kind": "layer",
+      "property": "offsetY",
+      "easing": "linear",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 1.667,
+        "value": -120
+       },
+       {
+        "time": 3.334,
+        "value": 0
+       },
+       {
+        "time": 5,
+        "value": 0
+       }
+      ]
+     }
+    },
+    {
+     "id": "drawing-dot",
+     "type": "math-shape",
+     "position": {
+      "x": 900,
+      "y": 270
+     },
+     "size": {
+      "width": 80,
+      "height": 80
+     },
+     "animation": {
+      "property": "drawProgress",
+      "keyframes": [
+       {
+        "time": 0,
+        "value": 0
+       },
+       {
+        "time": 3.2,
+        "value": 1
+       }
+      ]
+     },
+     "properties": {
+      "mathKind": "parametric",
+      "xFormula": "x0 + w/2 + min(w,h)*0.35*cos(t)",
+      "yFormula": "y0 + h/2 + min(w,h)*0.35*sin(t)",
+      "tStart": 0,
+      "tEnd": 6.283185,
+      "samples": 180,
+      "stroke": "#ffffff",
+      "strokeWidth": 3,
+      "fill": null,
+      "closePath": true
+     }
+    }
+   ]
+  },
+  "mountainRidge": {
+   "duration": 8,
+   "fps": 30,
+   "width": 1280,
+   "height": 720,
+   "layers": [
+    {
+     "id": "bg",
+     "type": "shape",
+     "position": {
+      "x": 0,
+      "y": 0
+     },
+     "size": {
+      "width": 1280,
+      "height": 720
+     },
+     "properties": {
+      "shape": "rect",
+      "color": "#0a0e27"
+     }
+    },
+    {
+     "id": "moon",
+     "type": "shape",
+     "position": {
+      "x": 540,
+      "y": 80
+     },
+     "size": {
+      "width": 200,
+      "height": 200
+     },
+     "properties": {
+      "shape": "circle",
+      "color": "#f4e4c1"
+     },
+     "startTime": 0,
+     "layerDuration": 8,
+     "animations": [
+      {
+       "property": "offsetY",
+       "keyframes": [
+        {
+         "time": 0,
+         "value": 200
+        },
+        {
+         "time": 6,
+         "value": 0
+        }
+       ],
+       "easing": "easeInOut"
+      }
+     ]
+    },
+    {
+     "id": "mountain",
+     "type": "math-shape",
+     "position": {
+      "x": 0,
+      "y": 350
+     },
+     "size": {
+      "width": 1280,
+      "height": 370
+     },
+     "properties": {
+      "mathKind": "parametric",
+      "stroke": "#2d5a3d",
+      "strokeWidth": 3,
+      "fill": "#1a3a2a",
+      "samples": 200,
+      "tStart": 0,
+      "tEnd": 1,
+      "xFormula": "x0 + t * w",
+      "yFormula": "y0 + h * 0.3 + sin(t * 12.5) * h * 0.25 + sin(t * 25) * h * 0.15 + sin(t * 50) * h * 0.08",
+      "closePath": true
+     },
+     "startTime": 0,
+     "layerDuration": 8
+    },
+    {
+     "id": "vivian",
+     "type": "text",
+     "position": {
+      "x": 280,
+      "y": -100
+     },
+     "size": {
+      "width": 720,
+      "height": 150
+     },
+     "properties": {
+      "text": "SUMMIT",
+      "fontSize": 120,
+      "fontWeight": "900",
+      "color": "#f4e4c1",
+      "align": "center"
+     },
+     "startTime": 5,
+     "layerDuration": 3,
+     "animations": [
+      {
+       "property": "offsetY",
+       "keyframes": [
+        {
+         "time": 0,
+         "value": 0
+        },
+        {
+         "time": 3,
+         "value": 600
+        }
+       ],
+       "easing": "easeIn"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

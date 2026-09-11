@@ -26,6 +26,7 @@ import { runAlbumSubagent } from './album-subagent.js'
 import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
+import { checkVemotionComposition, formatVemotionGateError } from './vemotion-composition-gate.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -6399,6 +6400,11 @@ async function executeVemotionSaveComposition(input, env) {
     }
     if (typeof inputComp.fontFamily === 'string') composition.fontFamily = inputComp.fontFamily
     if (Array.isArray(inputComp.groups)) composition.groups = inputComp.groups
+
+    // The save endpoint accepts any `properties`, so a composition in the wrong vocabulary saves
+    // "successfully" and renders blank (2026-09-11). Refuse it here, naming each field to fix.
+    const gateProblems = checkVemotionComposition(composition)
+    if (gateProblems.length > 0) throw new Error(formatVemotionGateError(gateProblems, 'vemotion_save_composition'))
   }
 
   const saveBody = { name, composition }
@@ -6665,6 +6671,12 @@ async function executeVemotionRefitComposition(input, env) {
   const mode = typeof input?.mode === 'string' ? input.mode : ''
   if (!['fit', 'fill', 'stretch'].includes(mode)) {
     throw new Error('mode must be one of "fit" | "fill" | "stretch"')
+  }
+
+  // An inline body is model-authored and, when `name` is given, saved server-side — same gate as a save.
+  if (hasInline) {
+    const gateProblems = checkVemotionComposition(input.composition)
+    if (gateProblems.length > 0) throw new Error(formatVemotionGateError(gateProblems, 'vemotion_refit_composition'))
   }
 
   const body = { targetWidth, targetHeight, mode }

@@ -1151,7 +1151,7 @@ const TOOL_DEFINITIONS = [
             fontFamily: { type: 'string', description: 'Composition-level default font (e.g. "Inter", "Poppins", "Caveat"). Optional.' },
             layers: {
               type: 'array',
-              description: 'Ordered list of layers, back-to-front. Each layer needs id (string), type ("text"|"shape"|"math-shape"|"image"|"kg-shape"|"card"), position {x, y}, size {width, height}, properties (type-specific). Optional: startTime (s), layerDuration (s), animation { property: "opacity"|"offsetX"|"offsetY"|"drawProgress", keyframes: [{time, value}] }.',
+              description: 'Ordered list of layers, back-to-front. Each layer needs id (string), type ("text"|"shape"|"math-shape"|"image"|"kg-shape"|"card"), position {x, y} = the TOP-LEFT of the layer box (not its centre), size {width, height}, properties (type-specific, using the renderer\'s names — text: text, fontSize, fontFamily, fontWeight, color, align; shape: shape "rect"|"circle", color, borderRadius, strokeColor, strokeWidth; math-shape: xFormula, yFormula, stroke, strokeWidth, fill). Optional: startTime (s), layerDuration (s), animation { property: "opacity"|"offsetX"|"offsetY"|"scale"|"drawProgress", keyframes: [{time, value}] } with keyframe times measured from the layer\'s own startTime. A composition with other property names, keyframe times on the video clock, or text placed off the canvas is refused with a numbered list of what to fix.',
               items: { type: 'object' }
             }
           },
