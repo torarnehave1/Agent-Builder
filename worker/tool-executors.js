@@ -7102,9 +7102,12 @@ async function executeSaveTranscriptToGraph(input) {
     graphId,
     graphTitle: (typeof input?.graphTitle === 'string' && input.graphTitle.trim()) ? input.graphTitle.trim() : null,
     nodeLabel: (typeof input?.nodeLabel === 'string' && input.nodeLabel.trim()) ? input.nodeLabel.trim() : null,
+    // This tool only ISSUES A DIRECTIVE: the browser holds the text and performs the write, and it
+    // reports the result in its own message afterwards. Saying "saved" here made the agent announce
+    // "hele 79 412 tegn er på plass" for a write that had not happened yet (live run 2026-09-12).
     message: graphId
-      ? `Saving transcript ${transcriptId || '(most recent)'} into graph ${graphId} as a fulltext node — the browser writes its stored copy directly.`
-      : `Saving transcript ${transcriptId || '(most recent)'} into a new graph as a fulltext node — the browser writes its stored copy directly.`,
+      ? `Asked the browser to write transcript ${transcriptId || '(most recent)'} into graph ${graphId} as a fulltext node. NOT saved yet — the browser holds the text and posts it itself, then reports the result in the next message. Do NOT tell the user it is saved, and do not state a character count; say the save was started and let the browser's own confirmation stand.`
+      : `Asked the browser to write transcript ${transcriptId || '(most recent)'} into a NEW graph as a fulltext node. NOT saved yet — the browser holds the text and posts it itself, then reports the result in the next message. Do NOT tell the user it is saved; say the save was started and let the browser's own confirmation stand.`,
   }
 }
 

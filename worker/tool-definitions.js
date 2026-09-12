@@ -1331,7 +1331,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'save_transcript_to_graph',
-    description: 'Save a transcript that was produced in the USER\'S BROWSER into a fulltext node. Transcription runs on the user\'s device and the text is deliberately NOT sent to you — you only ever see a handle like `[transcript:tx_1]` in the transcription message. Use this tool to place that text; it instructs the browser to write its stored copy straight to the knowledge graph, so the transcript never passes through you. NEVER ask the user to paste a transcript back into the chat — if a transcription message exists in this conversation, its text is available through this tool. Pass `graphId` to append to an existing graph, or omit it to create a new one.',
+    description: 'Save LONG TEXT that is held in the USER\'S BROWSER into a fulltext node — either a transcript produced on their device OR a wall of text they pasted into the chat. In both cases the body is deliberately NOT sent to you: you only ever see a stand-in carrying a handle like `[transcript:tx_1]` ("**Audio Transcription**" for a recording, "**Long pasted text**" for a paste). Use this tool to place it; it instructs the browser to write its stored copy straight to the knowledge graph, so the text never passes through you and cannot time the turn out. NEVER ask the user to paste the text again, never try to retype it from the preview, and never route it through delegate_to_kg or create_node — those carry the body through you, which is exactly what fails on a long transcript. Pass `graphId` to append to an existing graph (use the graph the conversation is working in), or omit it to create a new one.',
     input_schema: {
       type: 'object',
       properties: {

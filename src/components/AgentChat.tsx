@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { findToolCallIndex } from '../lib/toolCallPairing';
 import { logToAutomation, type AutomationDraft, type GraphTarget, type LoggedCall } from '../lib/logToAutomation';
+import { holdLargePaste } from '../lib/largePaste';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
@@ -963,7 +964,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // through the model at all. Before this, the stripped message pointed the agent at a
   // "Save to Graph" button that did not exist, and the agent asked the user to paste
   // back a transcript that was sitting in the same conversation (2026-09-10).
-  const transcriptStoreRef = useRef<Map<string, { title: string; text: string; audioUrl: string; recordingId: string | null }>>(new Map());
+  const transcriptStoreRef = useRef<Map<string, { title: string; text: string; audioUrl: string; recordingId: string | null; kind?: 'recording' | 'paste' }>>(new Map());
   const transcriptSeqRef = useRef(0);
 
   // Resolve a `[transcript:tx_N]` handle to the stored text. An unknown or missing handle
@@ -1784,8 +1785,22 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       } catch { /* continue without persistence */ }
     }
 
+    // A wall of pasted text must not travel through the model. An 80 KB transcript pasted into one
+    // turn blew past the edge timeout twice on 2026-09-12 and never reached a node. Hold the body in
+    // this browser under the SAME tx_N handle transcriptions use, send a short stand-in, and let
+    // save_transcript_to_graph place it — one mechanism, not two (L57).
+    const heldPaste = holdLargePaste(text, `tx_${transcriptSeqRef.current + 1}`);
+    if (heldPaste) {
+      transcriptSeqRef.current += 1;
+      transcriptStoreRef.current.set(heldPaste.handle, {
+        title: heldPaste.title, text: heldPaste.text, audioUrl: '', recordingId: null, kind: 'paste',
+      });
+    }
+
     const fileLabel = files.length > 0 ? `(${files.map(f => f.name).join(', ')} attached)` : '';
-    const contentLabel = text || (images.length > 0 ? '(image attached)' : fileLabel || '(file attached)');
+    const contentLabel = heldPaste
+      ? heldPaste.standIn
+      : (text || (images.length > 0 ? '(image attached)' : fileLabel || '(file attached)'));
     const userMsg: ChatMessage = { role: 'user', content: contentLabel, images: images.length > 0 ? images : undefined, files: files.length > 0 ? files : undefined };
     const updatedMessages = [...messages, userMsg];
     setMessages(updatedMessages);
@@ -1869,7 +1884,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     if (activeSession) {
       historyFetch('/messages', userId, {
         method: 'POST',
-        body: JSON.stringify({ sessionId: activeSession, role: 'user', content: text || '(image attached)' }),
+        body: JSON.stringify({ sessionId: activeSession, role: 'user', content: heldPaste ? heldPaste.standIn : (text || '(image attached)') }),
       }).catch(() => {});
     }
 
@@ -2679,11 +2694,17 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 graphData: {
                   nodes: [{ id: `node-${handle}`, label: nodeLabel, type: 'fulltext', info: entry.text, color: '#4A90D9' }],
                   edges: [],
-                  metadata: {
-                    title: txSave.graphTitle || `Transcription - ${entry.title}`,
-                    description: 'Audio transcription',
-                    category: '#Transcription #Audio',
-                  },
+                  metadata: entry.kind === 'paste'
+                    ? {
+                        title: txSave.graphTitle || entry.title,
+                        description: 'Text pasted into the chat',
+                        category: '#Text',
+                      }
+                    : {
+                        title: txSave.graphTitle || `Transcription - ${entry.title}`,
+                        description: 'Audio transcription',
+                        category: '#Transcription #Audio',
+                      },
                 },
                 override: true,
               };
@@ -2708,7 +2729,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               body: JSON.stringify(payload),
             });
             if (!res.ok) throw new Error(`save failed (${res.status})`);
-            const savedMsg = `Saved transcript ${handle} (${entry.text.length} chars) as a fulltext node.\n\n[View Graph](https://www.vegvisr.org/gnew-viewer?graphId=${targetGraphId})`;
+            const savedMsg = `Saved ${entry.kind === 'paste' ? 'pasted text' : 'transcript'} ${handle} (${entry.text.length} chars) as a fulltext node.\n\n[View Graph](https://www.vegvisr.org/gnew-viewer?graphId=${targetGraphId})`;
             setMessages(prev => [...prev, { role: 'assistant', content: savedMsg }]);
             lastAgentGraphRef.current = targetGraphId;
             onGraphChange(targetGraphId);
