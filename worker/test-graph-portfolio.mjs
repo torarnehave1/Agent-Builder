@@ -29,6 +29,7 @@ for (const part of src.split(/\n(?=  function\s)/)) {
 const need = [
   'parseAreas', 'graphAreas', 'matchesArea', 'isPublished', 'visibleRows', 'mergeById',
   'sortRows', 'hueFor', 'initialsFor', 'summarize', 'fmtDate', 'cardData', 'limitRows',
+  'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -137,6 +138,49 @@ check('a missing date yields an empty string', api.fmtDate(null, 'no') === '')
 check('a malformed date yields an empty string', api.fmtDate('not-a-date', 'no') === '')
 check('limit 0 keeps every row', api.limitRows([1, 2, 3], 0).length === 3)
 check('limit 2 keeps two rows', api.limitRows([1, 2, 3], 2).length === 2)
+
+// 9. The dialog's node mapping. A card must open ON the embedding site, so these decide
+// what actually reaches the reader without a trip to vegvisr.org.
+check('a hidden node is left out', api.visibleNodes({ nodes: [{ id: 'a', visible: false }, { id: 'b', visible: true }] }).length === 1)
+check('a node with no visible flag is shown', api.visibleNodes({ nodes: [{ id: 'a' }] }).length === 1)
+check('a graph with no nodes yields none', api.visibleNodes({}).length === 0 && api.visibleNodes(null).length === 0)
+
+check('a fulltext node renders as markdown',
+  api.nodeRenderPlan({ type: 'fulltext', info: '## Hei\ntekst' }).kind === 'markdown')
+check('a mermaid node is a diagram, not prose',
+  api.nodeRenderPlan({ type: 'mermaid-diagram', info: 'quadrantChart\n title x' }).kind === 'mermaid')
+check('an empty mermaid node is skipped',
+  api.nodeRenderPlan({ type: 'mermaid-diagram', info: '  ' }).kind === 'skip')
+check('a markdown-image renders from its LABEL, not info',
+  (p => p.kind === 'markdown' && p.text.indexOf('![') === 0)(
+    api.nodeRenderPlan({ type: 'markdown-image', label: '![Header](https://x/y.png)', info: '' })))
+check('a markdown-image with no markdown in the label is skipped',
+  api.nodeRenderPlan({ type: 'markdown-image', label: 'just a name' }).kind === 'skip')
+check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-node', info: 'body{}' }).kind === 'skip')
+check('an unknown type with content still renders rather than vanishing',
+  api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')
+check('a node with no content is skipped', api.nodeRenderPlan({ type: 'fulltext', info: '   ' }).kind === 'skip')
+
+// 10. The scrub's pure half. A meta area can hold graphs written by other accounts, and
+// this grid renders them on somebody else's site.
+check('javascript: url is unsafe', api.isUnsafeUrl('javascript:alert(1)'))
+check('JavaScript: in mixed case is unsafe', api.isUnsafeUrl('JaVaScRiPt:alert(1)'))
+check('a url hiding behind whitespace/control chars is unsafe',
+  api.isUnsafeUrl(' java\tscript:alert(1)') && api.isUnsafeUrl('java\nscript:alert(1)'))
+check('data:text/html is unsafe', api.isUnsafeUrl('data:text/html;base64,PHNjcmlwdD4='))
+check('vbscript: is unsafe', api.isUnsafeUrl('vbscript:msgbox'))
+check('an ordinary https link is safe', !api.isUnsafeUrl('https://vegvisr.org/a/b?c=d'))
+check('a relative link is safe', !api.isUnsafeUrl('/photos/1.png'))
+check('a data: image is safe', !api.isUnsafeUrl('data:image/png;base64,iVBOR'))
+check('a mailto link is safe', !api.isUnsafeUrl('mailto:post@vegvisr.org'))
+check('empty / null is safe', !api.isUnsafeUrl('') && !api.isUnsafeUrl(null))
+
+// 11. The dialog bar shows the graph title and the first node usually repeats it.
+check('an identical heading is recognised', api.sameHeading('Hva ligger i sentrum?', 'Hva ligger i sentrum?'))
+check('case and spacing differences still match', api.sameHeading('  HVA   ligger i Sentrum? ', 'Hva ligger i sentrum?'))
+check('trailing punctuation is ignored', api.sameHeading('De to aksene —', 'De to aksene'))
+check('a genuinely different heading is kept', !api.sameHeading('Om Tor Arne Håve', 'Hva ligger i sentrum?'))
+check('an empty heading never counts as a duplicate', !api.sameHeading('', '') && !api.sameHeading('   ', 'Title'))
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed.')
 process.exit(failed ? 1 : 0)

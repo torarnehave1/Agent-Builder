@@ -19,10 +19,25 @@
 //        data-include="published" (optional — "published" (default) | "public", see below)
 //        data-title=""           (optional — heading above the grid)
 //        data-lang="no"          (optional — "no" | "en", default no)
-//        data-target="_blank"    (optional — link target, default _blank)
+//        data-open="modal"       (optional — "modal" (default) | "page" | "self")
+//        data-target="_blank"    (optional — link target for data-open="page", default _blank)
 //        data-viewer="https://www.vegvisr.org/gnew-viewer?graphId="
 //        data-endpoint="https://knowledge.vegvisr.org/getknowgraphsummaries">
 //   </div>
+//
+// THE CARD KEEPS THE READER ON THIS SITE. data-open="modal" (the default) reads the
+// graph and renders it in a dialog on the page — the visitor never leaves the
+// domain the grid is embedded on. In that mode a card is a <button>, not a link,
+// so there is no href that a middle-click or cmd-click could follow off-site
+// either. data-open="page"/"self" is the deliberate opt-in to sending the reader
+// to data-viewer (vegvisr.org's viewer unless you point it at your own page).
+//
+// The dialog renders graph content with the 'vegvisr-fulltext' registry component,
+// loaded lazily from our own origin the first time a card is opened, so the grid
+// itself stays light. That component is generated verbatim from GNewDefaultNode.vue
+// — the renderer the real viewer uses — so the dialog and the viewer agree about
+// what the markup means. Node `info` already carries its own heading, so the node
+// label is NOT rendered as one; doing that prints every title twice.
 //
 // ONE REQUEST PER META AREA, merged by id. The endpoint's metaArea filter takes a
 // SINGLE term — "NIBI,BLOGG" and "NIBI BLOGG" both match zero rows (verified
@@ -48,7 +63,9 @@
   'use strict'
 
   var ENDPOINT = 'https://knowledge.vegvisr.org/getknowgraphsummaries'
+  var GRAPH_ENDPOINT = 'https://knowledge.vegvisr.org/getknowgraph?id='
   var VIEWER = 'https://www.vegvisr.org/gnew-viewer?graphId='
+  var FULLTEXT_URL = 'https://api.vegvisr.org/components/vegvisr-fulltext.js'
   var STYLE_ID = 'vgp-style'
   var PAGE = 250 // the endpoint caps limit at 250 whatever you ask for
   var CEILING = 1000 // stop paging one area after this many rows
@@ -64,6 +81,12 @@
       updated: 'Oppdatert',
       loading: 'Laster …',
       noConfig: 'Porteføljen er ikke konfigurert.',
+      close: 'Lukk',
+      loadingGraph: 'Laster innhold …',
+      graphError: 'Kunne ikke laste denne grafen.',
+      emptyGraph: 'Denne grafen har ikke noe innhold å vise.',
+      diagram: 'Diagram',
+      diagramNote: 'Vis diagramkilde',
     },
     en: {
       empty: 'No published graphs here yet.',
@@ -73,6 +96,12 @@
       updated: 'Updated',
       loading: 'Loading …',
       noConfig: 'Portfolio is not configured.',
+      close: 'Close',
+      loadingGraph: 'Loading content …',
+      graphError: 'Could not load this graph.',
+      emptyGraph: 'This graph has no content to show.',
+      diagram: 'Diagram',
+      diagramNote: 'Show diagram source',
     },
   }
 
@@ -220,7 +249,81 @@
     }
   }
 
+  // A graph's nodes, in order, minus the ones hidden in the editor.
+  function visibleNodes (graph) {
+    return (((graph && graph.nodes) || [])).filter(function (n) { return n && n.visible !== false })
+  }
+
+  // What the dialog should do with one node. Kept pure so the mapping is testable
+  // without a DOM, and so an unknown node type degrades to something visible
+  // rather than vanishing silently.
+  function nodeRenderPlan (node) {
+    var type = String((node && node.type) || '').toLowerCase()
+    var info = String((node && node.info) || '')
+    var label = String((node && node.label) || '')
+    if (type === 'mermaid-diagram') {
+      return { kind: info.trim() ? 'mermaid' : 'skip', text: info, label: label }
+    }
+    // markdown-image renders from markdown in the LABEL, not info or path — the
+    // viewer's own quirk, documented in CLAUDE.md.
+    if (type === 'markdown-image') {
+      return { kind: /!\[/.test(label) ? 'markdown' : 'skip', text: label, label: label }
+    }
+    if (type === 'css-node') return { kind: 'skip', text: '', label: label }
+    if (info.trim()) return { kind: 'markdown', text: info, label: label }
+    return { kind: 'skip', text: '', label: label }
+  }
+
+  // A meta area can hold graphs written by other accounts, and this grid renders
+  // them on SOMEBODY ELSE'S site, so rendered markdown is scrubbed before it is
+  // inserted (marked passes raw HTML through by design). These two are the pure,
+  // testable half; scrubInto() below does the DOM walk.
+  var UNSAFE_TAGS = ['script', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'form', 'style']
+
+  // The dialog puts the graph title in its title bar, and the first node's `info`
+  // usually opens with that same title as a markdown heading — so it printed twice.
+  // Compared loosely (case, whitespace and trailing punctuation ignored) because
+  // the two are typed in different places by hand.
+  function sameHeading (a, b) {
+    var norm = function (s) {
+      return String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase().replace(/[.:;!?–—-]+$/, '').trim()
+    }
+    var x = norm(a)
+    return x !== '' && x === norm(b)
+  }
+
+  function isUnsafeUrl (value) {
+    // Everything from NUL through space is stripped first: "java\tscript:alert(1)" is a
+    // url the browser happily follows but a naive prefix test walks straight past.
+    var v = String(value == null ? '' : value).replace(/[ - ]/g, '').toLowerCase()
+    return v.indexOf('javascript:') === 0 || v.indexOf('data:text/html') === 0 || v.indexOf('vbscript:') === 0
+  }
+
   // ---- DOM + network ----
+
+  function scrubInto (container) {
+    UNSAFE_TAGS.forEach(function (tag) {
+      var found = container.querySelectorAll(tag)
+      Array.prototype.forEach.call(found, function (el) { el.parentNode.removeChild(el) })
+    })
+    var all = container.querySelectorAll('*')
+    Array.prototype.forEach.call(all, function (el) {
+      Array.prototype.slice.call(el.attributes).forEach(function (attr) {
+        var name = attr.name.toLowerCase()
+        if (name.indexOf('on') === 0) el.removeAttribute(attr.name)
+        else if ((name === 'href' || name === 'src' || name === 'xlink:href') && isUnsafeUrl(attr.value)) {
+          el.removeAttribute(attr.name)
+        }
+      })
+      // Anything the graph links out to opens in a new tab, so the reader keeps
+      // the page they are on — the whole point of the dialog.
+      if (el.tagName === 'A' && el.getAttribute('href')) {
+        el.setAttribute('target', '_blank')
+        el.setAttribute('rel', 'noopener noreferrer')
+      }
+    })
+    return container
+  }
 
   function injectStyle () {
     if (document.getElementById(STYLE_ID)) return
@@ -234,8 +337,11 @@
       '.vgp-chip[aria-pressed="true"]{background:var(--v-primary,#2a9d8f);border-color:var(--v-primary,#2a9d8f);color:#fff;opacity:1}',
       '.vgp-chip-n{opacity:.65;margin-left:.35rem;font-variant-numeric:tabular-nums}',
       '.vgp-grid{display:grid;width:100%}',
+      // A card is a <button> in modal mode, so the button UA styles have to be
+      // undone: font, text alignment, padding and cursor are NOT inherited.
       '.vgp-card{display:flex;flex-direction:column;overflow:hidden;border-radius:12px;text-decoration:none;color:inherit;',
       'background:var(--v-surface,rgba(127,127,127,.07));border:1px solid var(--v-border,rgba(127,127,127,.18));',
+      'font:inherit;text-align:left;padding:0;cursor:pointer;width:100%;',
       'transition:transform .2s ease,box-shadow .2s ease}',
       '.vgp-card:hover{transform:translateY(-3px);box-shadow:0 8px 22px rgba(0,0,0,.13)}',
       '.vgp-card:focus-visible{outline:2px solid var(--v-primary,currentColor);outline-offset:2px}',
@@ -251,6 +357,28 @@
       '.vgp-facts{white-space:nowrap}',
       '.vgp-msg{padding:1.1rem;font:400 .9rem/1.5 inherit;opacity:.75;text-align:center}',
       '.vgp-msg[data-error]{color:#c0392b;opacity:1}',
+      // Dialog
+      '.vgp-back{position:fixed;inset:0;z-index:2147483000;background:rgba(8,10,14,.62);display:flex;',
+      'align-items:flex-start;justify-content:center;padding:4vmin 3vmin;overflow-y:auto}',
+      '.vgp-back[hidden]{display:none}',
+      '.vgp-dlg{position:relative;width:min(820px,100%);max-height:92vh;display:flex;flex-direction:column;',
+      'background:var(--v-bg,#fff);color:var(--v-text,inherit);border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,.35)}',
+      '.vgp-dlg-bar{display:flex;align-items:flex-start;gap:1rem;padding:1.1rem 1.3rem .8rem;',
+      'border-bottom:1px solid var(--v-border,rgba(127,127,127,.2))}',
+      '.vgp-dlg-h{font:600 1.25rem/1.35 inherit;margin:0;flex:1;color:var(--v-text,inherit)}',
+      '.vgp-close{flex:none;width:34px;height:34px;border-radius:50%;border:0;cursor:pointer;font-size:22px;line-height:1;',
+      'background:rgba(127,127,127,.16);color:inherit;display:flex;align-items:center;justify-content:center}',
+      '.vgp-close:hover{background:rgba(127,127,127,.3)}',
+      '.vgp-dlg-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;font:400 1rem/1.6 inherit}',
+      '.vgp-lead{margin:0 0 1.2rem;color:var(--v-muted,rgba(127,127,127,.95));font-size:.95rem}',
+      '.vgp-node{margin:0 0 1.1rem}',
+      '.vgp-node img{max-width:100%;height:auto}',
+      '.vgp-node pre,.vgp-node table{overflow-x:auto;max-width:100%}',
+      '.vgp-diagram{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px dashed var(--v-border,rgba(127,127,127,.35));border-radius:10px}',
+      '.vgp-diagram figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.4rem}',
+      '.vgp-diagram summary{cursor:pointer;font-size:.85rem;opacity:.75}',
+      '.vgp-diagram pre{margin:.6rem 0 0;padding:.7rem;overflow-x:auto;background:rgba(127,127,127,.1);border-radius:6px;font-size:.8rem}',
+      '@media (max-width:560px){.vgp-back{padding:0}.vgp-dlg{width:100%;max-height:100vh;border-radius:0;min-height:100vh}}',
       '@media (prefers-reduced-motion:reduce){.vgp-card{transition:none}.vgp-card:hover{transform:none}}',
     ].join('')
     var el = document.createElement('style')
@@ -339,11 +467,21 @@
   // Built with DOM APIs, never innerHTML: titles and descriptions come from a
   // database and land on a public page.
   function cardEl (card, opts) {
-    var a = document.createElement('a')
+    // In modal mode the card is a BUTTON, not a link: with no href there is no
+    // middle-click, cmd-click or "copy link" that could still carry the reader off
+    // this site. A link is used only when the author asked for one with
+    // data-open="page"/"self".
+    var modal = opts.open === 'modal'
+    var a = document.createElement(modal ? 'button' : 'a')
     a.className = 'vgp-card'
-    a.href = card.href
-    a.target = opts.target
-    if (opts.target === '_blank') a.rel = 'noopener noreferrer'
+    if (modal) {
+      a.type = 'button'
+      a.addEventListener('click', function () { openDialog(card, opts) })
+    } else {
+      a.href = card.href
+      a.target = opts.open === 'self' ? '_self' : opts.target
+      if (a.target === '_blank') a.rel = 'noopener noreferrer'
+    }
     a.setAttribute('data-graph-id', card.id)
 
     a.appendChild(thumbFor(card))
@@ -436,6 +574,201 @@
     return limit > 0 ? rows.slice(0, limit) : rows
   }
 
+  // ---- the dialog: the reader stays on this site ----
+
+  var fulltextPromise = null
+
+  // Loaded on the FIRST card open, not with the grid: a portfolio that nobody
+  // clicks should not pull 42KB of renderer plus marked.
+  function ensureFulltext () {
+    if (fulltextPromise) return fulltextPromise
+    fulltextPromise = new Promise(function (resolve, reject) {
+      if (window.VegvisrFulltext) return resolve(window.VegvisrFulltext)
+      var existing = document.querySelector('script[src="' + FULLTEXT_URL + '"]')
+      var s = existing || document.createElement('script')
+      s.addEventListener('load', function () { resolve(window.VegvisrFulltext) })
+      s.addEventListener('error', function () { reject(new Error('could not load ' + FULLTEXT_URL)) })
+      if (!existing) {
+        s.src = FULLTEXT_URL
+        document.head.appendChild(s)
+      }
+    }).then(function (api) {
+      if (!api) throw new Error('vegvisr-fulltext loaded but exposed no VegvisrFulltext')
+      return api.ready().then(function () { return api })
+    })
+    return fulltextPromise
+  }
+
+  var dialog = null // one dialog serves every grid on the page
+
+  function buildDialog () {
+    if (dialog) return dialog
+    var back = document.createElement('div')
+    back.className = 'vgp-back'
+    back.setAttribute('hidden', '')
+    var box = document.createElement('div')
+    box.className = 'vgp-dlg'
+    box.setAttribute('role', 'dialog')
+    box.setAttribute('aria-modal', 'true')
+    var bar = document.createElement('div')
+    bar.className = 'vgp-dlg-bar'
+    var heading = document.createElement('h2')
+    heading.className = 'vgp-dlg-h'
+    heading.id = 'vgp-dlg-h'
+    box.setAttribute('aria-labelledby', heading.id)
+    var close = document.createElement('button')
+    close.type = 'button'
+    close.className = 'vgp-close'
+    close.innerHTML = '&times;'
+    bar.appendChild(heading)
+    bar.appendChild(close)
+    var body = document.createElement('div')
+    body.className = 'vgp-dlg-body'
+    box.appendChild(bar)
+    box.appendChild(body)
+    back.appendChild(box)
+    document.body.appendChild(back)
+    dialog = { back: back, box: box, heading: heading, close: close, body: body, opener: null, open: false }
+
+    close.addEventListener('click', function () { closeDialog() })
+    back.addEventListener('click', function (e) { if (e.target === back) closeDialog() })
+    document.addEventListener('keydown', function (e) {
+      if (!dialog.open) return
+      if (e.key === 'Escape') { e.preventDefault(); closeDialog() }
+      else if (e.key === 'Tab') trapTab(e)
+    })
+    // Browser Back closes the dialog instead of leaving the site — the behaviour
+    // a phone's back gesture implies. The history entry carries no url change, so
+    // the host page's own address is never rewritten.
+    window.addEventListener('popstate', function () { if (dialog.open) closeDialog(true) })
+    return dialog
+  }
+
+  function trapTab (e) {
+    var focusable = dialog.box.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])')
+    if (!focusable.length) return
+    var first = focusable[0]
+    var last = focusable[focusable.length - 1]
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+  }
+
+  function closeDialog (fromPopstate) {
+    if (!dialog || !dialog.open) return
+    dialog.open = false
+    dialog.back.setAttribute('hidden', '')
+    dialog.body.textContent = ''
+    document.documentElement.style.overflow = dialog.prevOverflow || ''
+    if (!fromPopstate && dialog.pushed) window.history.back()
+    dialog.pushed = false
+    if (dialog.opener && dialog.opener.focus) dialog.opener.focus()
+  }
+
+  function openDialog (card, opts) {
+    var d = buildDialog()
+    d.opener = document.activeElement
+    d.open = true
+    d.heading.textContent = card.title
+    d.body.textContent = ''
+    d.close.setAttribute('aria-label', opts.t.close)
+    d.close.title = opts.t.close
+    d.prevOverflow = document.documentElement.style.overflow
+    document.documentElement.style.overflow = 'hidden'
+    d.back.removeAttribute('hidden')
+    d.box.scrollTop = 0
+    d.close.focus()
+    try {
+      window.history.pushState({ vgpDialog: card.id }, '')
+      d.pushed = true
+    } catch (e) { d.pushed = false }
+
+    var loading = document.createElement('div')
+    loading.className = 'vgp-msg'
+    loading.textContent = opts.t.loadingGraph
+    d.body.appendChild(loading)
+
+    var token = card.id
+    d.token = token
+    Promise.all([
+      fetch(GRAPH_ENDPOINT + encodeURIComponent(card.id), { headers: { accept: 'application/json' } })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() }),
+      ensureFulltext(),
+    ]).then(function (both) {
+      if (!d.open || d.token !== token) return // closed, or another card opened meanwhile
+      var withTitle = {}
+      for (var k in opts) withTitle[k] = opts[k]
+      withTitle.dialogTitle = card.title
+      renderGraphInto(d.body, both[0], both[1], withTitle)
+    }).catch(function (err) {
+      console.error('[graph-portfolio] could not open graph ' + card.id + ':', err)
+      if (!d.open || d.token !== token) return
+      d.body.textContent = ''
+      message(d.body, opts.t.graphError, true)
+    })
+  }
+
+  function renderGraphInto (body, graph, ft, opts) {
+    body.textContent = ''
+    var md = (graph && graph.metadata) || {}
+    if (md.description) {
+      var lead = document.createElement('p')
+      lead.className = 'vgp-lead'
+      lead.textContent = md.description
+      body.appendChild(lead)
+    }
+    var rendered = 0
+    visibleNodes(graph).forEach(function (node) {
+      var plan = nodeRenderPlan(node)
+      if (plan.kind === 'skip') return
+      if (plan.kind === 'mermaid') {
+        body.appendChild(diagramEl(plan, opts))
+        rendered += 1
+        return
+      }
+      var section = document.createElement('div')
+      section.className = 'vgp-node'
+      try {
+        section.innerHTML = ft.render(plan.text)
+      } catch (e) {
+        console.warn('[graph-portfolio] node ' + node.id + ' did not render:', e)
+        section.textContent = plan.text
+      }
+      scrubInto(section)
+      // Drop the first node's opening heading when it merely repeats the title
+      // already shown in the dialog bar.
+      if (rendered === 0) {
+        var lead = section.firstElementChild
+        if (lead && /^H[1-3]$/.test(lead.tagName) && sameHeading(lead.textContent, opts.dialogTitle)) {
+          section.removeChild(lead)
+        }
+      }
+      body.appendChild(section)
+      rendered += 1
+    })
+    if (!rendered) message(body, opts.t.emptyGraph)
+  }
+
+  // mermaid is NOT served from our own origin (api.vegvisr.org/components/mermaid.min.js
+  // returns 500), and a registry component must not pull third-party JavaScript onto a
+  // customer's page. So a diagram node shows its title and keeps its source reachable
+  // instead of dumping raw `quadrantChart …` into the prose or dropping it silently.
+  function diagramEl (plan, opts) {
+    var wrap = document.createElement('figure')
+    wrap.className = 'vgp-diagram'
+    var cap = document.createElement('figcaption')
+    cap.textContent = plan.label ? opts.t.diagram + ' — ' + plan.label : opts.t.diagram
+    wrap.appendChild(cap)
+    var det = document.createElement('details')
+    var sum = document.createElement('summary')
+    sum.textContent = opts.t.diagramNote
+    var pre = document.createElement('pre')
+    pre.textContent = plan.text
+    det.appendChild(sum)
+    det.appendChild(pre)
+    wrap.appendChild(det)
+    return wrap
+  }
+
   function mount (root) {
     var lang = (root.getAttribute('data-lang') || 'no').trim().toLowerCase() === 'en' ? 'en' : 'no'
     var t = TEXT[lang]
@@ -448,7 +781,9 @@
     var areas = parseAreas(root.getAttribute('data-vegvisr-portfolio') || root.getAttribute('data-meta-areas') || '')
     var filterMode = (root.getAttribute('data-filters') || 'auto').trim().toLowerCase()
     var include = (root.getAttribute('data-include') || 'published').trim().toLowerCase()
-    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX }
+    var open = (root.getAttribute('data-open') || 'modal').trim().toLowerCase()
+    if (open !== 'page' && open !== 'self') open = 'modal'
+    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open }
 
     injectStyle()
     root.classList.add('vgp')
