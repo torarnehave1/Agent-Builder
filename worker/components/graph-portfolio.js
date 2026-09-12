@@ -66,6 +66,11 @@
   var GRAPH_ENDPOINT = 'https://knowledge.vegvisr.org/getknowgraph?id='
   var VIEWER = 'https://www.vegvisr.org/gnew-viewer?graphId='
   var FULLTEXT_URL = 'https://api.vegvisr.org/components/vegvisr-fulltext.js'
+  // mermaid 11.9.0, the same version the Vue viewer bundles, served from OUR OWN
+  // origin (the web-components R2 bucket) — not a third-party CDN, which a
+  // component running on a customer's page must never pull in. It is 2.7MB, so it
+  // is fetched only when an opened graph actually contains a diagram.
+  var MERMAID_URL = 'https://api.vegvisr.org/components/mermaid.min.js'
   var STYLE_ID = 'vgp-style'
   var PAGE = 250 // the endpoint caps limit at 250 whatever you ask for
   var CEILING = 1000 // stop paging one area after this many rows
@@ -301,8 +306,13 @@
 
   // ---- DOM + network ----
 
-  function scrubInto (container) {
-    UNSAFE_TAGS.forEach(function (tag) {
+  // keepStyle is for mermaid output ONLY: mermaid ships the diagram's CSS in a
+  // <style> inside the SVG, so stripping it leaves solid black boxes with
+  // unreadable labels — rendered, and useless (seen 2026-09-12). Mermaid runs in
+  // securityLevel 'strict', which escapes the label text that CSS could hide in.
+  // Page markdown never gets this exemption.
+  function scrubInto (container, keepStyle) {
+    (keepStyle ? UNSAFE_TAGS.filter(function (t) { return t !== 'style' }) : UNSAFE_TAGS).forEach(function (tag) {
       var found = container.querySelectorAll(tag)
       Array.prototype.forEach.call(found, function (el) { el.parentNode.removeChild(el) })
     })
@@ -374,8 +384,11 @@
       '.vgp-node{margin:0 0 1.1rem}',
       '.vgp-node img{max-width:100%;height:auto}',
       '.vgp-node pre,.vgp-node table{overflow-x:auto;max-width:100%}',
-      '.vgp-diagram{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px dashed var(--v-border,rgba(127,127,127,.35));border-radius:10px}',
-      '.vgp-diagram figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.4rem}',
+      '.vgp-diagram{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px solid var(--v-border,rgba(127,127,127,.22));border-radius:10px}',
+      '.vgp-diagram[data-fallback]{border-style:dashed}',
+      '.vgp-diagram figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.6rem}',
+      '.vgp-diagram-canvas{overflow-x:auto;margin-bottom:.5rem}',
+      '.vgp-diagram-canvas svg{max-width:100%;height:auto;display:block;margin:0 auto}',
       '.vgp-diagram summary{cursor:pointer;font-size:.85rem;opacity:.75}',
       '.vgp-diagram pre{margin:.6rem 0 0;padding:.7rem;overflow-x:auto;background:rgba(127,127,127,.1);border-radius:6px;font-size:.8rem}',
       '@media (max-width:560px){.vgp-back{padding:0}.vgp-dlg{width:100%;max-height:100vh;border-radius:0;min-height:100vh}}',
@@ -599,6 +612,32 @@
     return fulltextPromise
   }
 
+  var mermaidPromise = null
+
+  function ensureMermaid () {
+    if (mermaidPromise) return mermaidPromise
+    mermaidPromise = new Promise(function (resolve, reject) {
+      if (window.mermaid) return resolve(window.mermaid)
+      var existing = document.querySelector('script[src="' + MERMAID_URL + '"]')
+      var s = existing || document.createElement('script')
+      s.addEventListener('load', function () { resolve(window.mermaid) })
+      s.addEventListener('error', function () { reject(new Error('could not load ' + MERMAID_URL)) })
+      if (!existing) {
+        s.src = MERMAID_URL
+        document.head.appendChild(s)
+      }
+    }).then(function (m) {
+      if (!m) throw new Error('mermaid loaded but exposed no global')
+      // startOnLoad would have mermaid hunt the whole page for .mermaid elements,
+      // including the host site's own; this component renders its diagrams itself.
+      m.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' })
+      return m
+    })
+    return mermaidPromise
+  }
+
+  var diagramSeq = 0
+
   var dialog = null // one dialog serves every grid on the page
 
   function buildDialog () {
@@ -748,16 +787,19 @@
     if (!rendered) message(body, opts.t.emptyGraph)
   }
 
-  // mermaid is NOT served from our own origin (api.vegvisr.org/components/mermaid.min.js
-  // returns 500), and a registry component must not pull third-party JavaScript onto a
-  // customer's page. So a diagram node shows its title and keeps its source reachable
-  // instead of dumping raw `quadrantChart …` into the prose or dropping it silently.
+  // A diagram node is DRAWN with mermaid (served from our own origin, loaded only
+  // when a graph actually has one). The source stays reachable in a <details>, and
+  // it is also what the reader is left with if mermaid fails to load or the
+  // diagram does not parse — a broken diagram must never swallow the content.
   function diagramEl (plan, opts) {
     var wrap = document.createElement('figure')
     wrap.className = 'vgp-diagram'
     var cap = document.createElement('figcaption')
     cap.textContent = plan.label ? opts.t.diagram + ' — ' + plan.label : opts.t.diagram
     wrap.appendChild(cap)
+    var canvas = document.createElement('div')
+    canvas.className = 'vgp-diagram-canvas'
+    wrap.appendChild(canvas)
     var det = document.createElement('details')
     var sum = document.createElement('summary')
     sum.textContent = opts.t.diagramNote
@@ -766,6 +808,26 @@
     det.appendChild(sum)
     det.appendChild(pre)
     wrap.appendChild(det)
+
+    diagramSeq += 1
+    var id = 'vgp-mmd-' + diagramSeq
+    ensureMermaid().then(function (m) {
+      return m.render(id, plan.text)
+    }).then(function (res) {
+      canvas.innerHTML = (res && res.svg) || ''
+      scrubInto(canvas, true)
+    }).catch(function (err) {
+      console.warn('[graph-portfolio] diagram did not render:', err && err.message ? err.message : err)
+      wrap.setAttribute('data-fallback', '')
+      canvas.parentNode.removeChild(canvas)
+      det.setAttribute('open', '')
+      // mermaid leaves its failed attempt in the document; clear it so a broken
+      // diagram does not leave a stray error block on the host page.
+      var orphan = document.getElementById(id)
+      if (orphan && orphan.parentNode) orphan.parentNode.removeChild(orphan)
+      var stray = document.querySelector('#d' + id)
+      if (stray && stray.parentNode) stray.parentNode.removeChild(stray)
+    })
     return wrap
   }
 
