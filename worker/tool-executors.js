@@ -347,6 +347,20 @@ async function executePatchNode(input, env) {
     throw new Error(`patch_node: "fields" must be an object of node fields (info, label, path, color, metadata). Received arguments: [${Object.keys(input).join(', ')}]. Correct call: { graphId: "...", nodeId: "...", fields: { "info": "..." } }.`)
   }
 
+  // A whole-info write must not smuggle in a hand-written copy of a registry component, nor damage a
+  // block insert_component owns (L105). Only pays the read when the write carries page markup.
+  if (typeof fields.info === 'string' && /<script[\s>]|<html/i.test(fields.info)) {
+    const comps = await loadComponentSignatures(env)
+    let oldInfo = ''
+    try { oldInfo = String((await fetchHtmlNode(env, input.graphId, input.nodeId)).node?.info || '') } catch (e) { oldInfo = '' }
+    const hit = matchRegistrySignatures(fields.info, comps)
+    if (hit && countSignatureHits(fields.info, hit.matched) > countSignatureHits(oldInfo, hit.matched)) {
+      return registryComponentRefusal('patch_node', input.nodeId, hit)
+    }
+    const damagedBlocks = ownedBlocksDamaged(oldInfo, fields.info)
+    if (damagedBlocks.length) return registryBlockRefusal('patch_node', input.nodeId, damagedBlocks)
+  }
+
   try {
     const data = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, fields)
     return {
@@ -522,6 +536,13 @@ async function executeEditHtmlNode(input, env) {
     const idx = currentHtml.indexOf(oldString)
     newHtml = currentHtml.substring(0, idx) + newString + currentHtml.substring(idx + oldString.length)
   }
+
+  // 4a. REGISTRY-COMPONENT GATE (L105): do not hand-write or patch a component the registry owns.
+  const editComps = await loadComponentSignatures(env)
+  const editReimpl = registryEditReimplementation(oldString, newString, editComps)
+  if (editReimpl) return registryComponentRefusal('edit_html_node', input.nodeId, editReimpl)
+  const editDamaged = ownedBlocksDamaged(currentHtml, newHtml)
+  if (editDamaged.length) return registryBlockRefusal('edit_html_node', input.nodeId, editDamaged)
 
   // 4b. CONTENT-LOSS GUARD (Lesson 46 — universal net across ALL html write paths).
   // edit_html_node is find/replace, so a normal in-place text change keeps every
@@ -1199,6 +1220,108 @@ function isUnwrappedJs(snippet) {
   if (/<script[\s>]/i.test(s)) return false // already wrapped (or a <script src=…>)
   return /\bfunction\s+[A-Za-z_$][\w$]*\s*\(|\baddEventListener\s*\(|\b(?:document|window)\.(?:querySelector|getElementById|createElement|addEventListener)\s*\(/.test(s)
 }
+// ---- Registry re-implementation gate (L105) ----------------------------------
+// A model told to "fix" a component that exists in the registry patches the hand-written copy on the
+// page instead of replacing it: on 2026-09-11, 0 of 3 live runs called insert_component, 2 of 3
+// retyped picker code, and all three ran out of turns. Prompt prose does not move that (L79), so the
+// WRITE tools refuse content that re-implements a registry component and name insert_component. The
+// fingerprints live in the registry node (metadata.schema.signatures), so this gate is DATA, not a
+// hardcoded list — a component with no signatures is never gated. No force override: hand-writing a
+// verified component is never the right move; changing it means changing its registry impl (L74).
+let REGISTRY_SIG_CACHE = { at: 0, items: [] }
+async function loadComponentSignatures(env) {
+  const now = Date.now()
+  if (now - REGISTRY_SIG_CACHE.at < 60000) return REGISTRY_SIG_CACHE.items
+  const { items, error } = await fetchRegistryItems(env, 'component')
+  if (error) return REGISTRY_SIG_CACHE.items // registry unreachable: fail open, never block real edits
+  const sigs = items
+    .map(n => ({ name: n.label, signatures: ((n.metadata && n.metadata.schema && n.metadata.schema.signatures) || []).filter(s => typeof s === 'string' && s.length > 3) }))
+    .filter(c => c.signatures.length)
+  REGISTRY_SIG_CACHE = { at: now, items: sigs }
+  return sigs
+}
+
+// Only CODE re-implements a component. Page text or a CSS rule that happens to mention a class name
+// is not a second implementation, and blocking those would be the false-positive class that taught
+// force:true in the first place.
+function looksLikeRegistryCode(text) {
+  return /<script[\s>]|function\s|=>|addEventListener\(|document\.(?:querySelector|createElement|getElementById)/.test(String(text || ''))
+}
+
+function matchRegistrySignatures(snippet, components) {
+  const text = String(snippet || '')
+  if (!text || !looksLikeRegistryCode(text)) return null
+  for (const c of components || []) {
+    const matched = (c.signatures || []).filter(sig => text.includes(sig))
+    if (matched.length) return { component: c.name, matched }
+  }
+  return null
+}
+
+function countSignatureHits(text, sigs) {
+  const t = String(text || '')
+  return (sigs || []).reduce((n, s) => n + (t.split(s).length - 1), 0)
+}
+
+// The two whole-region writers (edit_html_node, replace_html_section) see an OLD and a NEW text.
+// Refuse whenever the region carries a registry component's code and the write KEEPS it: that is
+// either hand-writing a copy or patching one. A write that REMOVES component code (fewer signature
+// hits than before) passes, because deleting a hand-written picker is a legitimate step on the way
+// to insert_component. A line-level comparison was tried first and was too weak — the agent's real
+// edits (a fetch url, a role check) touch lines that carry no signature at all.
+function registryEditReimplementation(oldText, newText, components) {
+  const hit = matchRegistrySignatures(newText, components) || matchRegistrySignatures(oldText, components)
+  if (!hit) return null
+  if (countSignatureHits(newText, hit.matched) < countSignatureHits(oldText, hit.matched)) return null
+  if (String(oldText) === String(newText)) return null
+  return hit
+}
+
+// Blocks insert_component owns, by component name -> array of block bodies.
+function ownedComponentBlocks(html) {
+  const out = {}
+  const re = /<!-- vegvisr-component:([a-z0-9-]+):start -->([\s\S]*?)<!-- vegvisr-component:\1:end -->/g
+  let m
+  while ((m = re.exec(String(html || ''))) !== null) (out[m[1]] = out[m[1]] || []).push(m[2])
+  return out
+}
+function ownedBlocksDamaged(before, after) {
+  const b = ownedComponentBlocks(before), a = ownedComponentBlocks(after)
+  return Object.keys(b).filter(name => {
+    const got = a[name] || []
+    return b[name].some(body => !got.includes(body))
+  })
+}
+
+function registryComponentRefusal(tool, nodeId, hit) {
+  return {
+    success: false,
+    blocked: 'registry_component_reimplementation',
+    component: hit.component,
+    matched: hit.matched,
+    error: `Refusing this ${tool} on "${nodeId}" — this content re-implements the registry component "${hit.component}" by hand (matched: ${hit.matched.join(', ')}). ` +
+      `A model-written copy is exactly what failed here: put the verified one on the page with insert_component(graphId, nodeId, component:"${hit.component}") — run it again to UPGRADE or REPAIR the copy already there, and pass removeSuspected:true to delete earlier hand-written attempts. ` +
+      `To CHANGE what the component does, edit its registry impl (get_component includeImpl:true, then save_component overwrite:true) so every page gets the fix. This gate has no force override.`,
+  }
+}
+function registryBlockRefusal(tool, nodeId, damaged) {
+  return {
+    success: false,
+    blocked: 'registry_component_block_edit',
+    components: damaged,
+    error: `Refusing this ${tool} on "${nodeId}" — it changes the registry component block(s) ${damaged.map(d => '"' + d + '"').join(', ')} that insert_component owns. ` +
+      `Re-run insert_component(component:"${damaged[0]}") to upgrade that block from the registry, or change the component's registry impl with save_component so every page gets it. Editing one page's copy makes it drift from the registry.`,
+  }
+}
+
+// True when a script body is one immediately-invoked function: (function(){…})(), (()=>{…})(),
+// (function(){…}()), optionally prefixed with ; or !. Its declarations are local, not page globals.
+function isIifeScript(body) {
+  const b = String(body || '').trim()
+  return /^[;!]?\s*\(\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/.test(b) &&
+    /(?:\}\s*\)\s*\(\s*\)|\}\s*\(\s*\)\s*\))\s*;?$/.test(b)
+}
+
 // Refuse an insert that ADDS A SECOND COPY of something the page already has.
 //
 // The insert tools are additive by design — that is what makes them loss-proof — but additive
@@ -1233,15 +1356,26 @@ function findDuplicateInserts(currentHtml, snippet) {
     }
   }
 
-  const declRe = /(?:^|\n)[ \t]{0,4}(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*\(|(?:^|\n)[ \t]{0,4}(?:const|let|var)[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*=|window\.([A-Za-z_$][\w$]{2,})[ \t]*=/g
+  // A function/var declared INSIDE an IIFE-wrapped script is local to that script: `var root` in two
+  // separate (function(){ … })() blocks is not a collision. Counting them was a false positive that
+  // taught the agent to pass force:true, which then let a real second copy of a component through
+  // (2026-09-11 theme-picker on nibi). Globals written as window.X still count in every script.
+  const topLevelJs = t => [...String(t).matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map(x => x[1]).filter(b => !isIifeScript(b)).join('\n')
+  const pageTop = topLevelJs(html)
+  const snipTop = topLevelJs(snip)
+  const declRe = /(?:^|\n)[ \t]{0,4}(?:async[ \t]+)?function[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*\(|(?:^|\n)[ \t]{0,4}(?:const|let|var)[ \t]+([A-Za-z_$][\w$]{2,})[ \t]*=/g
+  const winRe = /window\.([A-Za-z_$][\w$]{2,})[ \t]*=/g
+  const names = []
+  while ((m = declRe.exec(snipTop)) !== null) names.push(m[1] || m[2])
+  while ((m = winRe.exec(snipJs)) !== null) names.push(m[1])
   const seen = new Set()
-  while ((m = declRe.exec(snipJs)) !== null) {
-    const n = m[1] || m[2] || m[3]
+  for (const n of names) {
     if (!n || seen.has(n)) continue
     seen.add(n)
     const e = esc(n)
-    const decl = new RegExp('(?:function[ \\t]+' + e + '[ \\t]*\\(|(?:const|let|var)[ \\t]+' + e + '[ \\t]*=|window\\.' + e + '[ \\t]*=)')
-    if (decl.test(pageJs)) hits.push('"' + n + '" is ALREADY defined in a script on this page — the later definition wins and the earlier one becomes dead code')
+    const decl = new RegExp('(?:function[ \\t]+' + e + '[ \\t]*\\(|(?:const|let|var)[ \\t]+' + e + '[ \\t]*=)')
+    const glob = new RegExp('window\\.' + e + '[ \\t]*=')
+    if (decl.test(pageTop) || glob.test(pageJs)) hits.push('"' + n + '" is ALREADY defined in a script on this page — the later definition wins and the earlier one becomes dead code')
   }
 
   const markerRe = /\sdata-(?:vegvisr|vgc)-[a-z-]+/gi
@@ -1291,6 +1425,8 @@ async function executeInsertInElement(input, env) {
     const dupes = findDuplicateInserts(currentHtml, snippet)
     if (dupes.length) return { success: false, blocked: 'duplicate_insert', duplicates: dupes, error: dupeError('insert_in_element', input.nodeId, dupes) }
   }
+  const reimpl = input.__registryInsert === true ? null : matchRegistrySignatures(snippet, await loadComponentSignatures(env))
+  if (reimpl) return registryComponentRefusal('insert_in_element', input.nodeId, reimpl)
   const r = spliceInElement(currentHtml, target, snippet, where, nth)
   if (r.error) return { success: false, error: r.error }
 
@@ -1404,6 +1540,12 @@ async function executeReplaceHtmlSection(input, env) {
   // deleted while "adding two cards" (the section came back -495 chars). Refuse when
   // the new content drops a structural block (<script>/<style>/<video>/<iframe>/…)
   // or shrinks hard, unless the caller passes force:true to confirm the removal.
+  const comps = await loadComponentSignatures(env)
+  const reimpl = registryEditReimplementation(oldInner, newInner, comps)
+  if (reimpl) return registryComponentRefusal('replace_html_section', input.nodeId, reimpl)
+  const damaged = ownedBlocksDamaged(currentHtml, newHtml)
+  if (damaged.length) return registryBlockRefusal('replace_html_section', input.nodeId, damaged)
+
   if (input.force !== true) {
     const loss = detectHtmlContentLoss(oldInner, newInner)
     if (loss.lost) {
@@ -1474,6 +1616,8 @@ async function executeAppendToSection(input, env) {
   if (node.type !== 'html-node' && node.type !== 'css-node') {
     return { success: false, error: `append_to_section only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
   }
+  const reimpl = matchRegistrySignatures(snippet, await loadComponentSignatures(env))
+  if (reimpl) return registryComponentRefusal('append_to_section', input.nodeId, reimpl)
 
   const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
   const { start, end } = anchorMarkers(anchorId)
@@ -1800,6 +1944,9 @@ async function executeInsertHtmlAt(input, env) {
     }
     return { success: false, error: `Could not find "${missing}" in "${input.nodeId}" for position "${position}".${hint}` }
   }
+
+  const reimpl = input.__registryInsert === true ? null : matchRegistrySignatures(snippet, await loadComponentSignatures(env))
+  if (reimpl) return registryComponentRefusal('insert_html_at', input.nodeId, reimpl)
 
   if (input.force !== true) {
     const dupes = findDuplicateInserts(currentHtml, snippet)
@@ -2486,6 +2633,23 @@ async function executeRestoreHtmlNodeVersion(input, env) {
   if (oldNode.type !== 'html-node' && oldNode.type !== 'css-node') {
     throw new Error(`restore_html_node_version only works on html-node/css-node. Node "${input.nodeId}" was type "${oldNode.type}" in version ${input.version}. Use restore_graph_version for full-graph restore.`)
   }
+
+  // A rollback to a version from BEFORE a registry component was installed deletes that component
+  // without saying so. On 2026-09-11 a live run installed theme-picker with insert_component, chased
+  // a phantom syntax error, then restored version 3 — and ended with the hand-written picker back and
+  // the verified one gone, reporting neither. Name it, and let the caller decide (L105).
+  try {
+    const cur = await fetchHtmlNode(env, input.graphId, input.nodeId)
+    const dropped = ownedBlocksDamaged(String(cur.node?.info || ''), String(oldNode.info || ''))
+    if (dropped.length && input.force !== true) {
+      return {
+        success: false,
+        blocked: 'restore_drops_registry_component',
+        components: dropped,
+        error: `Refusing this restore of "${input.nodeId}" — version ${input.version} does not contain the registry component(s) ${dropped.map(d => '"' + d + '"').join(', ')} that the page has now, so restoring would silently remove ${dropped.length === 1 ? 'it' : 'them'}. If the older content is what you want, restore with force:true and then re-run insert_component(component:"${dropped[0]}"). If you are chasing a syntax error inside that component, do not: its code is browser-verified and the scan skips it.`,
+      }
+    }
+  } catch (e) { /* cannot read the current node — fall through to the restore */ }
 
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
     info: oldNode.info || '',
@@ -9179,7 +9343,7 @@ async function executeListComponents(input, env) {
         delivery: isGraphJsDelivery(m) ? 'graph-js' : 'inline',
       }
     }),
-    usage: 'Call get_component(name) to fetch what to insert. delivery "inline" returns the impl HTML — insert it intact. delivery "graph-js" returns ONE <script src> line — insert that line, never the source. Do NOT hand-write a component that exists here.',
+    usage: 'delivery "inline": put it on a page with insert_component(graphId, nodeId, name) — one call, the server splices the verified impl, re-running upgrades it. delivery "graph-js": call get_component(name) and insert the <script src> line plus the mount markup it returns, never the source. Do NOT hand-write or paste a component that exists here.',
   }
 }
 
@@ -9275,10 +9439,24 @@ async function executeGetComponent(input, env) {
     }
   }
 
+  // INLINE components go onto a page through insert_component, which splices the impl server-side.
+  // Handing the source to the model invited it to paste it through insert_html_at, and a model
+  // retypes a 17 KB component: the theme-picker went onto nibi ten times on 2026-09-11, cut in two
+  // and with its role gate rewritten. The source is returned only for EDITING the registry node.
+  if (input.includeImpl === true) {
+    return {
+      success: true, name: node.label, graphId, delivery: 'inline', sourceForEditing: true,
+      schema: m.schema || null, impl: m.impl, verify: m.verify || null,
+      instructions: `This is the SOURCE of "${node.label}", returned for EDITING the registry node only (save_component overwrite:true). Do NOT paste it into a page — put it on a page with insert_component(graphId, nodeId, "${node.label}").`,
+      message: `Source of "${node.label}" (${String(m.impl).length} chars) for editing the registry. Pages get it through insert_component.`,
+    }
+  }
   return {
     success: true, name: node.label, graphId, delivery: 'inline',
-    schema: m.schema || null, impl: m.impl, verify: m.verify || null,
-    instructions: 'Insert the impl HTML intact (it carries its own <style>, markup, and <script>). Parameterize per schema props if needed. This component was verified in a real browser — do not rewrite its wiring.',
+    schema: m.schema || null, verify: m.verify || null,
+    implOmitted: true, implChars: String(m.impl).length,
+    instructions: `Put "${node.label}" on a page with insert_component(graphId, nodeId, "${node.label}") — ONE call. The server splices the verified impl (${String(m.impl).length} chars) so it is never retyped, and running it again upgrades or repairs the component on that page. Do not hand-write or paste this component.`,
+    message: `"${node.label}" is an inline registry component (${String(m.impl).length} chars${m.verify?.verdict === 'PASS' ? ', browser-verified' : ''}). Put it on a page with insert_component(graphId, nodeId, "${node.label}").`,
   }
 }
 
@@ -9478,7 +9656,7 @@ async function executeFillSlotWithComponent(input, env) {
   // Reuse the nesting-aware selector splice; slot containers are [data-slot="NAME"].
   // Spread the original input so the caller's auth (userId/authContext) reaches the inner
   // Superadmin gate — building a fresh input object here would drop it (role=unknown).
-  const result = await executeInsertInElement({ ...input, target: `[data-slot="${slot}"]`, html: impl, position: input.position === 'start' ? 'start' : 'end' }, env)
+  const result = await executeInsertInElement({ ...input, __registryInsert: true, target: `[data-slot="${slot}"]`, html: impl, position: input.position === 'start' ? 'start' : 'end' }, env)
   if (result && result.success) {
     result.componentInserted = componentName
     result.slot = slot
@@ -9488,6 +9666,161 @@ async function executeFillSlotWithComponent(input, env) {
     return { success: false, error: `No [data-slot="${slot}"] container in "${nodeId}". Apply a layout first (apply_layout) so the slot exists, or check the slot name with list_layouts.` }
   }
   return result
+}
+
+// Pure HTML transform behind insert_component (tested by test-insert-component.mjs).
+// The component lives in ONE owned block:
+//   <!-- vegvisr-component:NAME:start --> impl <!-- vegvisr-component:NAME:end -->
+// Re-running replaces that block in place (an upgrade). Earlier copies that are provably the same
+// component are removed: its <style data-component="NAME">, any <script> carrying data-component="NAME"
+// or the impl's own idempotency guard (window.__x = true), and a legacy "component:NAME" header
+// comment. Scripts that merely MENTION the component (earlier hand-written attempts) are only
+// reported — with the nth that remove_html_element counts — unless removeSuspected is set.
+function spliceComponentBlock(currentHtml, name, impl, opts = {}) {
+  const blankOut = m => ' '.repeat(m.length)
+  const esc = v => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const START = `<!-- vegvisr-component:${name}:start -->`
+  const END = `<!-- vegvisr-component:${name}:end -->`
+  const SLOT = ' vegvisr-component-slot '
+  const body = opts.nodeId ? String(impl).split('%%VEGVISR_NODE_ID%%').join(opts.nodeId) : String(impl)
+  const block = `${START}\n${body}\n${END}`
+  const target = String(opts.target || '').trim()
+  let html = String(currentHtml || '').replace(/\r\n/g, '\n')
+
+  // 1. The owned block from an earlier run — keep its position unless a new target was asked for.
+  const s = html.indexOf(START)
+  const e = s === -1 ? -1 : html.indexOf(END, s)
+  const upgraded = s !== -1 && e !== -1
+  if (upgraded) html = html.slice(0, s) + (target ? '' : SLOT) + html.slice(e + END.length)
+
+  // 2. Copies outside the owned block.
+  const guards = [...String(impl).matchAll(/window\.(__[A-Za-z_$][\w$]*)\s*=\s*true/g)].map(m => m[1])
+  const camel = name.replace(/-([a-z])/g, (_, c) => c.toUpperCase())
+  const maskedScripts = html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, blankOut)
+  const maskedBoth = maskedScripts.replace(/<!--[\s\S]*?-->/g, blankOut)
+  const maskedComments = html.replace(/<!--[\s\S]*?-->/g, blankOut)
+  const ranges = []
+  for (const m of maskedBoth.matchAll(new RegExp(`<style\\b[^>]*\\bdata-component=["']${esc(name)}["'][^>]*>[\\s\\S]*?</style\\s*>`, 'gi'))) {
+    ranges.push({ a: m.index, b: m.index + m[0].length, label: `<style data-component="${name}">` })
+  }
+  for (const m of maskedScripts.matchAll(new RegExp(`<!--\\s*component:${esc(name)}\\b[\\s\\S]*?-->`, 'gi'))) {
+    ranges.push({ a: m.index, b: m.index + m[0].length, label: `header comment "component:${name}"` })
+  }
+  const suspectedRanges = []
+  for (const m of maskedComments.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
+    const attrs = m[1], js = m[2]
+    const isCopy = new RegExp(`data-component=["']${esc(name)}["']`, 'i').test(attrs) ||
+      guards.some(g => new RegExp(`window\\.${esc(g)}\\s*=\\s*true`).test(js))
+    if (isCopy) {
+      ranges.push({ a: m.index, b: m.index + m[0].length, label: `<script> copy of ${name}${guards.length ? ` (guard ${guards.join(', ')})` : ''}` })
+    } else if (js.includes(name) || js.includes(camel)) {
+      suspectedRanges.push({ a: m.index, b: m.index + m[0].length, label: `hand-written <script> mentioning ${name}`, text: js })
+    }
+  }
+  if (opts.removeSuspected) ranges.push(...suspectedRanges)
+
+  const removed = []
+  let lowest = Infinity
+  for (const r of ranges.sort((x, y) => y.a - x.a)) {
+    if (r.b > lowest) continue // nested inside something already removed
+    html = html.slice(0, r.a) + html.slice(r.b)
+    removed.push(r.label)
+    lowest = r.a
+  }
+
+  // 3. Place the block.
+  if (html.includes(SLOT)) {
+    html = html.replace(SLOT, block)
+  } else if (target) {
+    const nth = Number.isInteger(opts.nth) ? opts.nth : (opts.nth ? Number(opts.nth) : undefined)
+    const r = spliceInElement(html, target, block, opts.position === 'start' ? 'start' : 'end', nth)
+    if (r.error) return { error: r.error }
+    html = r.html
+  } else {
+    const masked = html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, blankOut).replace(/<!--[\s\S]*?-->/g, blankOut)
+    const at = masked.lastIndexOf('</body>')
+    html = at === -1 ? `${html}\n${block}\n` : `${html.slice(0, at)}${block}\n${html.slice(at)}`
+  }
+
+  // 4. Report leftovers that are still there, numbered exactly as remove_html_element counts scripts.
+  const suspected = []
+  if (!opts.removeSuspected && suspectedRanges.length) {
+    const texts = suspectedRanges.map(r => r.text)
+    const ownedStart = html.indexOf(START), ownedEnd = html.indexOf(END) + END.length
+    for (let k = 1; k < 500; k++) {
+      const r = findElementRange(html, 'script', k)
+      if (r.error) break
+      if (r.start >= ownedStart && r.end <= ownedEnd) continue
+      const inner = html.slice(r.innerStart, r.innerEnd)
+      if (texts.includes(inner)) suspected.push({ nth: k, preview: inner.trim().replace(/\s+/g, ' ').slice(0, 160) })
+    }
+  }
+  return { html, upgraded, removed, suspected, block }
+}
+
+// Put a Component Registry component on an html-node in ONE deterministic call. The impl is read
+// from the registry and spliced SERVER-SIDE, so component code never travels through a model's
+// tool-call argument. That road is how the 17 KB theme-picker reached nibi-website-main ten times on
+// 2026-09-11 without once arriving intact: split into two inserts, its role gate rewritten by the
+// model, copies forced past the duplicate guard, and a "bake theme" button that never saved anything.
+async function executeInsertComponent(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  const graphId = String(input.graphId || '').trim()
+  const nodeId = String(input.nodeId || '').trim()
+  const name = String(input.component || input.name || input.componentName || '').trim().toLowerCase()
+  if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId (the html-node to put the component on) are required.' }
+  if (!name) return { success: false, error: 'component is required — a registered component name from list_components, e.g. "theme-picker".' }
+
+  const { items, error } = await fetchRegistryItems(env, 'component')
+  if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+  const comp = items.find(n => (n.label || '').toLowerCase() === name)
+  if (!comp) return { success: false, error: `Component "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
+  const meta = comp.metadata || {}
+  if (!meta.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
+  if (isGraphJsDelivery(meta)) {
+    return { success: false, error: `"${name}" is a served (graph-js) component: a page references it with one <script src> line plus mount markup that needs values only you have. Call get_component("${name}") and insert the two pieces it returns.` }
+  }
+
+  const { node } = await fetchHtmlNode(env, graphId, nodeId)
+  if (!node) return { success: false, error: `Node "${nodeId}" not found in graph "${graphId}".` }
+  if (node.type !== 'html-node') return { success: false, error: `insert_component only works on an html-node. "${nodeId}" is type "${node.type}".` }
+
+  const currentHtml = (node.info || '').replace(/\r\n/g, '\n')
+  const out = spliceComponentBlock(currentHtml, name, meta.impl, {
+    nodeId, target: input.target, position: input.position, nth: input.nth, removeSuspected: input.removeSuspected === true,
+  })
+  if (out.error) return { success: false, error: `Could not place "${name}" in "${input.target}": ${out.error}` }
+  if (out.html === currentHtml) {
+    return { success: true, graphId, nodeId, component: name, changed: false, message: `"${name}" is already on "${nodeId}" at the current registry version — nothing to change.` }
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, graphId, nodeId, {
+    info: out.html, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  const verified = meta.verify?.verdict === 'PASS'
+  const roleGated = /vegvisrWhoAmI|__VEGVISR_USER/.test(meta.impl)
+  const authBarMissing = roleGated && !/<vegvisr-auth[\s>]/i.test(out.html)
+  const usage = (meta.schema && (meta.schema.usage || meta.schema.description)) || ''
+  const parts = [
+    `${out.upgraded ? 'Upgraded' : 'Inserted'} the registry component "${name}" on "${nodeId}" (${String(meta.impl).length} chars, spliced by the server — not retyped). Saved as v${patchData.newVersion}, NOT live until published.`,
+  ]
+  if (out.removed.length) parts.push(`Removed ${out.removed.length} earlier cop${out.removed.length === 1 ? 'y' : 'ies'}: ${out.removed.join('; ')}.`)
+  if (out.suspected.length) parts.push(`${out.suspected.length} other script(s) look like earlier hand-written attempts at the same feature: ${out.suspected.map(x => `script nth=${x.nth} ("${x.preview.slice(0, 80)}…")`).join('; ')}. If they are, re-run insert_component with removeSuspected:true (or remove_html_element target:"script" nth:N) — two pickers on one page conflict.`)
+  if (authBarMissing) parts.push(`This component is only shown to signed-in Superadmin/Admin, and the page has NO <vegvisr-auth> login bar. The Agent-Builder preview signs you in automatically, but on the PUBLISHED site nobody can sign in, so the button never appears there. Add <vegvisr-auth></vegvisr-auth> to the page header (insert_in_element).`)
+  if (!verified) parts.push('NOTE: this component is not browser-verified in the registry.')
+  if (usage) parts.push(`How the user uses it: ${usage}`)
+  return {
+    success: true, graphId, nodeId, component: name,
+    changed: true, upgraded: out.upgraded, removedCopies: out.removed, suspectedLeftovers: out.suspected,
+    authBarMissing, componentVerified: verified,
+    charDelta: out.html.length - currentHtml.length,
+    version: patchData.newVersion,
+    updatedHtml: out.html,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: parts.join(' '),
+  }
 }
 
 // Bind a NODE's text into an html-node as an editable bound-text block — in ONE deterministic
@@ -13438,6 +13771,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeFillSlotWithComponent(toolInput, env)
     case 'bind_node_text':
       return await executeBindNodeText(toolInput, env)
+    case 'insert_component':
+      return await executeInsertComponent(toolInput, env)
     case 'get_secure_worker_template':
       return await executeGetSecureWorkerTemplate(toolInput, env)
     case 'create_capability_blueprint':

@@ -2211,7 +2211,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                      toolName === 'append_to_section' || toolName === 'insert_html_at' ||
                      toolName === 'insert_in_element' || toolName === 'move_html_element' ||
                      toolName === 'remove_html_element' || toolName === 'apply_layout' ||
-                     toolName === 'translate_html_node') {
+                     toolName === 'translate_html_node' || toolName === 'insert_component' ||
+                     toolName === 'fill_slot_with_component' || toolName === 'bind_node_text') {
             const resultData = ev.data as Record<string, unknown>;
             if (resultData.nodeId) { lastHtmlNodeIdRef.current = resultData.nodeId as string; onActiveHtmlNode?.(resultData.nodeId as string, (resultData.graphId as string) || lastAgentGraphRef.current || null); }
             const updatedHtml = resultData.updatedHtml as string;

@@ -217,6 +217,10 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'who_am_i', 'onboarding_status', 'describe_capabilities', 'get_system_registry',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
+  // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
+  // retype registry components through insert_html_at and could not delete a leftover script.
+  'insert_component', 'fill_slot_with_component', 'bind_node_text', 'apply_layout',
+  'move_html_element', 'remove_html_element',
   'get_secure_worker_template', 'create_capability_blueprint',
   'build_capability_worker_scaffold', 'deploy_worker', 'register_deployed_worker',
   'register_capability_worker', 'read_worker', 'delete_worker', 'invoke_registry_worker',
@@ -252,7 +256,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
-  'translate_html_node',
+  'insert_component', 'translate_html_node',
   'restore_html_node_version', 'restore_graph_version', 'patch_node_metadata', 'remove_node',
   'create_html_from_template', 'save_component', 'save_layout',
   'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',
@@ -1958,7 +1962,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               'edit_html_node', 'replace_html_section', 'append_to_section',
               'insert_html_at', 'insert_in_element', 'move_html_element',
               'remove_html_element', 'apply_layout', 'fill_slot_with_component',
-              'bind_node_text', 'translate_html_node', 'delegate_to_html_builder',
+              'bind_node_text', 'insert_component', 'translate_html_node', 'delegate_to_html_builder',
             ])
             if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.updatedHtml) {
               ssePayload.updatedHtml = result.updatedHtml

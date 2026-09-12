@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { scanHtmlSyntax, ownedBlockRanges } from './html-syntax.js'
 import { detectTranslationGap } from './html-i18n.js'
 import { DEFAULT_MODEL } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
@@ -393,168 +394,19 @@ async function executeValidateHtmlSyntax(input, env) {
   )
   const graphData = await res.json()
   if (!res.ok) throw new Error(graphData.error || 'Graph not found')
-
   const node = graphData.nodes?.find(n => n.id === input.nodeId)
   if (!node) throw new Error(`Node "${input.nodeId}" not found`)
 
-  const html = (node.info || '').replace(/\r\n/g, '\n')
-
-  // Extract all <script> blocks
-  const scriptRegex = /<script[^>]*>([\s\S]*?)<\/script>/gi
-  const scripts = []
-  let scriptMatch
-  while ((scriptMatch = scriptRegex.exec(html)) !== null) {
-    const before = html.substring(0, scriptMatch.index)
-    const startLine = before.split('\n').length
-    scripts.push({ content: scriptMatch[1], startLine })
-  }
-
-  if (scripts.length === 0) {
-    return { valid: true, message: 'No <script> blocks found', totalLines: html.split('\n').length }
-  }
-
-  const issues = []
-
-  for (const script of scripts) {
-    const lines = script.content.split('\n')
-    const stack = [] // { char, line }
-    let inSingleQuote = false
-    let inDoubleQuote = false
-    let inTemplateLiteral = false
-    let inLineComment = false
-    let inBlockComment = false
-    let prevChar = ''
-
-    for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
-      const line = lines[lineIdx]
-      const absoluteLine = script.startLine + lineIdx
-      inLineComment = false
-
-      for (let col = 0; col < line.length; col++) {
-        const ch = line[col]
-        const nextCh = col + 1 < line.length ? line[col + 1] : ''
-
-        // Handle block comment
-        if (inBlockComment) {
-          if (ch === '*' && nextCh === '/') { inBlockComment = false; col++ }
-          prevChar = ch
-          continue
-        }
-
-        // Handle line comment
-        if (inLineComment) { prevChar = ch; continue }
-
-        // Handle strings
-        if (inSingleQuote) {
-          if (ch === "'" && prevChar !== '\\') inSingleQuote = false
-          prevChar = ch === '\\' && prevChar === '\\' ? '' : ch
-          continue
-        }
-        if (inDoubleQuote) {
-          if (ch === '"' && prevChar !== '\\') inDoubleQuote = false
-          prevChar = ch === '\\' && prevChar === '\\' ? '' : ch
-          continue
-        }
-        if (inTemplateLiteral) {
-          if (ch === '`' && prevChar !== '\\') inTemplateLiteral = false
-          prevChar = ch === '\\' && prevChar === '\\' ? '' : ch
-          continue
-        }
-
-        // Detect comment starts
-        if (ch === '/' && nextCh === '/') { inLineComment = true; prevChar = ch; continue }
-        if (ch === '/' && nextCh === '*') { inBlockComment = true; col++; prevChar = '*'; continue }
-
-        // Detect string starts
-        if (ch === "'") { inSingleQuote = true; prevChar = ch; continue }
-        if (ch === '"') { inDoubleQuote = true; prevChar = ch; continue }
-        if (ch === '`') { inTemplateLiteral = true; prevChar = ch; continue }
-
-        // Track brackets
-        if (ch === '{' || ch === '(' || ch === '[') {
-          stack.push({ char: ch, line: absoluteLine })
-        } else if (ch === '}' || ch === ')' || ch === ']') {
-          const expected = ch === '}' ? '{' : ch === ')' ? '(' : '['
-          if (stack.length === 0) {
-            issues.push({
-              type: 'unexpected_closing',
-              char: ch,
-              line: absoluteLine,
-              message: `Unexpected '${ch}' at line ${absoluteLine} — no matching '${expected}' found`,
-              context: `${absoluteLine}: ${line.trim()}`
-            })
-          } else {
-            const top = stack[stack.length - 1]
-            if (top.char !== expected) {
-              issues.push({
-                type: 'mismatch',
-                expected: expected === '{' ? '}' : expected === '(' ? ')' : ']',
-                found: ch,
-                line: absoluteLine,
-                openedAt: top.line,
-                message: `Mismatched '${ch}' at line ${absoluteLine} — expected '${expected === '{' ? '}' : expected === '(' ? ')' : ']'}' to close '${top.char}' opened at line ${top.line}`,
-                context: `${absoluteLine}: ${line.trim()}`
-              })
-            } else {
-              stack.pop()
-            }
-          }
-        }
-
-        prevChar = ch
-      }
-    }
-
-    // Report unclosed brackets
-    for (const unclosed of stack) {
-      const closer = unclosed.char === '{' ? '}' : unclosed.char === '(' ? ')' : ']'
-      issues.push({
-        type: 'unclosed',
-        char: unclosed.char,
-        closer,
-        line: unclosed.line,
-        message: `Unclosed '${unclosed.char}' opened at line ${unclosed.line} — missing '${closer}'`,
-        context: `${unclosed.line}: ${lines[unclosed.line - script.startLine]?.trim() || '(unknown)'}`
-      })
-    }
-
-    // Check for unclosed strings
-    if (inBlockComment) issues.push({ type: 'unclosed_comment', message: 'Unclosed block comment /* ... */' })
-    if (inTemplateLiteral) issues.push({ type: 'unclosed_template', message: 'Unclosed template literal `...`' })
-
-    // Full JS syntax check using V8 parser (catches everything brackets miss)
-    try {
-      new Function(script.content)
-    } catch (syntaxErr) {
-      // Extract line number from V8 error if possible
-      const errMsg = syntaxErr.message || String(syntaxErr)
-      // V8 doesn't give line numbers in new Function errors, but the message is precise
-      issues.push({
-        type: 'js_syntax_error',
-        message: `JavaScript syntax error in script block starting at line ${script.startLine}: ${errMsg}`,
-        scriptStartLine: script.startLine,
-        scriptEndLine: script.startLine + lines.length - 1
-      })
-    }
-  }
-
-  if (issues.length === 0) {
-    return {
-      valid: true,
-      message: `All brackets balanced and JS syntax valid. ${scripts.length} script block(s) checked.`,
-      totalLines: html.split('\n').length,
-      scriptBlocks: scripts.length
-    }
-  }
-
+  // One shared, runtime-safe scanner (html-syntax.js): regex literals are parsed, scripts inside a
+  // registry component block are left alone, and the runtime's own ban on code generation from
+  // strings is never reported as a page error. The previous version reported a syntax error on
+  // EVERY script in the Workers runtime, which sent agents into repair loops on healthy pages.
+  const result = scanHtmlSyntax(node.info || '')
   return {
-    valid: false,
-    issueCount: issues.length,
-    issues: issues.slice(0, 10), // Top 10 issues
-    message: `Found ${issues.length} syntax issue(s). Fix the FIRST one — later errors are often caused by the first.`,
-    totalLines: html.split('\n').length,
-    scriptBlocks: scripts.length,
-    hint: 'Use read_html_section with startLine/endLine around the reported line to see the code, then use edit_html_node to fix it.'
+    ...result,
+    hint: result.valid
+      ? undefined
+      : 'Use read_html_source around the reported line to see the code, then edit_html_node to fix it. Scripts inside a registry component block are not scanned — re-run insert_component instead of editing them.',
   }
 }
 
@@ -617,6 +469,20 @@ async function executeRollbackHtmlNode(input, env) {
     `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`
   )
   const currentData = await currentRes.json()
+
+  // A rollback past an insert_component run deletes that component silently (L105). Name it instead.
+  const nowNode = (currentData.nodes || []).find(n => n.id === nodeId)
+  const have = ownedBlockRanges(String(nowNode?.info || '')).map(r => r.name)
+  const after = ownedBlockRanges(String(oldNode.info || '')).map(r => r.name)
+  const dropped = have.filter(name => !after.includes(name))
+  if (dropped.length) {
+    return {
+      success: false,
+      blocked: 'restore_drops_registry_component',
+      components: dropped,
+      error: `Refusing this rollback of "${nodeId}" — version ${targetVersion} predates the registry component(s) ${dropped.map(d => '"' + d + '"').join(', ')} now on the page, so it would remove ${dropped.length === 1 ? 'it' : 'them'}. Fix what you actually broke, or roll back and re-run insert_component(component:"${dropped[0]}"). Do not chase syntax errors inside that component: its code is browser-verified and the syntax scan skips it.`,
+    }
+  }
   if (!currentRes.ok) throw new Error(currentData.error || 'Could not fetch current graph')
 
   let expectedVersion = Number(currentData?.metadata?.version || 0)
@@ -670,7 +536,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
   'apply_layout',
   // Component-SSOT assembly + write loop: fill a layout slot with a verified component, and
   // register a newly-built (browser-verified) component/layout so the library grows via the app.
-  'fill_slot_with_component', 'save_component', 'save_layout',
+  'fill_slot_with_component', 'insert_component', 'save_component', 'save_layout',
   // Show a node's text as an editable bound-text block in one atomic call (component + marker).
   'bind_node_text',
   'get_system_registry', 'save_learning',

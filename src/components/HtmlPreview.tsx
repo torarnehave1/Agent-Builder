@@ -876,6 +876,27 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
 
+  // A component on the page that saves ITSELF (theme-picker "Save theme") changes the stored node
+  // behind this preview. Re-read the node so the preview, the code panel and the visual editor's
+  // baseline follow the saved bytes — otherwise the next visual-edit save writes the stale copy back
+  // and silently undoes the component's save.
+  useEffect(() => {
+    const onNodeSaved = async (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || d.type !== 'vegvisr:node-saved' || !graphId || !nodeId) return;
+      if (d.nodeId !== nodeId || (d.graphId && d.graphId !== graphId)) return;
+      try {
+        const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const g = await res.json();
+        const node = (g.nodes || []).find((n: { id: string }) => n.id === nodeId);
+        if (node && typeof node.info === 'string' && node.info !== html) onHtmlChange?.(node.info);
+      } catch { /* the save itself already succeeded; the preview just stays as it is */ }
+    };
+    window.addEventListener('message', onNodeSaved);
+    return () => window.removeEventListener('message', onNodeSaved);
+  }, [graphId, nodeId, html, onHtmlChange]);
+
   // Clear console entries (visual) when html changes, but KEEP reportedRef
   // so the same error message isn't re-sent to the agent after a fix attempt
   useEffect(() => {

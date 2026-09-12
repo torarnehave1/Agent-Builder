@@ -2797,7 +2797,7 @@ export default {
       // Body: { name, impl, schema?, verify?, delivery?, kind?, authToken }.
       if (pathname === '/save-component' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
-        const { name, impl, schema, verify, delivery, kind, overwrite, authToken } = body
+        const { name, impl, schema, verify, delivery, kind, overwrite, description, authToken } = body
         if (!name || !impl) {
           return new Response(JSON.stringify({ success: false, error: 'name and impl are required' }), {
             status: 400, headers: corsHeaders
@@ -2810,7 +2810,7 @@ export default {
         // refuses to replace an existing verified one without it. Dropping the flag here made a
         // legitimate update look like a failure while the old bytes kept serving.
         const result = await executeTool(kind === 'layout' ? 'save_layout' : 'save_component', {
-          name, impl, schema, verify, delivery, overwrite: overwrite === true,
+          name, impl, schema, verify, delivery, description, overwrite: overwrite === true,
           authContext, userId: authContext.userId || body.userId || null,
         }, env)
         return new Response(JSON.stringify(result), {
