@@ -343,6 +343,11 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   log(`max turns reached (${maxTurns}) | tokens in=${inputTokens} out=${outputTokens}`)
   const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
   const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
+  // Same rule as the end_turn path: an empty graph is only a failure when content was asked for.
+  // Missing it here left the live run of 2026-09-12 with "Graph created with 0 nodes" on a correct
+  // result, and the agent then burned two recovery calls trying to repair work that had succeeded.
+  const maxTurnsContentWasAsked = taskAskedForNodes(task)
+  const maxTurnsEmptyButFine = !verification.valid && !maxTurnsContentWasAsked
 
   // Build summary with metadata for formatting in chat
   const summaryParts = [`KG subagent completed ${actions.length} actions in ${turn} turns (max turns reached).`]
@@ -360,10 +365,12 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   }
 
   return {
-    success: verification.valid,
+    success: verification.valid || maxTurnsEmptyButFine,
     summary: verification.valid
       ? summaryParts.join(' | ')
-      : `Graph ${resolvedGraphId} was created but has 0 nodes after ${turn} turns. Task incomplete.`,
+      : maxTurnsEmptyButFine
+        ? `Graph ${resolvedGraphId} created. It has no nodes yet — none were requested.`
+        : `Graph ${resolvedGraphId} was created but has 0 nodes after ${turn} turns. Task incomplete.`,
     turns: turn,
     actions,
     model,
@@ -379,7 +386,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       metaArea: verification.metaArea,
       nodeTypes: verification.nodeTypes,
       nodeCount: verification.nodeCount,
-    } : { error: 'Graph created with 0 nodes' }),
+    } : maxTurnsEmptyButFine ? {} : { error: 'Graph created with 0 nodes' }),
   }
 }
 
