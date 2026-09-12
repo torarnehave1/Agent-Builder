@@ -7,6 +7,7 @@
  */
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
+import { readModelResponse } from './model-response.js'
 import { DEFAULT_MODEL } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
@@ -203,7 +204,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       }),
     })
 
-    const data = await response.json()
+    const data = await readModelResponse(response)
     if (!response.ok) {
       const errorMsg = typeof data.error === 'string' ? data.error : JSON.stringify(data.error || {})
       log(`ERROR: ${errorMsg}`)
@@ -221,9 +222,15 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
       const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
       log(`end_turn — summary: ${text.slice(0, 200)} | tokens in=${inputTokens} out=${outputTokens}`)
       const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
+      const contentWasAsked = taskAskedForNodes(task)
+      const emptyButFine = !verification.valid && !contentWasAsked
       return {
-        success: verification.valid,
-        summary: verification.valid ? text : `Graph ${resolvedGraphId} was created but has 0 nodes. Task incomplete.`,
+        success: verification.valid || emptyButFine,
+        summary: verification.valid
+          ? text
+          : emptyButFine
+            ? `${text}\n\n(Graph ${resolvedGraphId} has no nodes yet — none were requested.)`
+            : `Graph ${resolvedGraphId} was created but has 0 nodes. Task incomplete.`,
         turns: turn,
         actions,
         model,
@@ -231,7 +238,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
         inputTokens,
         outputTokens,
-        ...(verification.valid ? {} : { error: 'Graph created with 0 nodes' }),
+        ...(verification.valid || emptyButFine ? {} : { error: 'Graph created with 0 nodes' }),
       }
     }
 
@@ -381,6 +388,13 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
  * Also extract metadata (title, metaArea, description, nodeTypes) for response formatting.
  * If no graphId (read-only or no-graph task), treat as valid.
  */
+// "0 nodes" is only a failure when the task asked for CONTENT. "Create a graph called X" is a
+// complete, correct request whose result has no nodes — reporting it as an error put a red failed
+// tool card in the architect's chat for work that had succeeded (2026-09-12).
+function taskAskedForNodes(task) {
+  return /\b(node|noder|content|innhold|transcript|transkrip|text|tekst|add |legg (til|inn)|populate|fill|section|seksjon|agenda|summar|oppsummer)/i.test(String(task || ''))
+}
+
 async function verifyGraphHasNodes(graphId, env, log) {
   if (!graphId) return { valid: true }
   try {

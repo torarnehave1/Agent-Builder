@@ -7,6 +7,7 @@
 
 import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
+import { readModelResponse } from './model-response.js'
 import { executeTool } from './tool-executors.js'
 import { DEFAULT_MODEL, MODELS } from './models.js'
 import { repairToolPairing } from './message-history.js'
@@ -1578,7 +1579,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         }),
       })
 
-      const data = await response.json()
+      const data = await readModelResponse(response)
       modelEvent.settle(response.ok ? 'ok' : 'error', response.ok
         ? {
             stop_reason: data.stop_reason ?? null,

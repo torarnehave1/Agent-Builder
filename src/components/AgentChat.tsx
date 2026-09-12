@@ -2165,6 +2165,25 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           }
         }
 
+        // The graph context must follow the agent even when a tool reports FAILURE, and even when
+        // no preview pane is mounted. All of this used to live inside the `success && onPreview`
+        // gate below: a create that came back success:false (the kg-subagent called a correctly
+        // created EMPTY graph a failed task) therefore never switched the selection. The next turn
+        // was posted with the OLD graphId, the agent wrote into the previous graph, and then told
+        // the user the context was correct (2026-09-12).
+        if (ev.type === 'tool_result') {
+          const toolName = ev.data.tool as string;
+          const resultGraphId = (ev.data as Record<string, unknown>).graphId as string | undefined;
+          const GRAPH_CONTEXT_TOOLS = [
+            'create_graph', 'delegate_to_kg', 'delegate_to_video', 'delegate_to_meeting_graph',
+            'delegate_to_youtube_graph', 'create_html_node', 'create_html_from_template',
+          ];
+          if (resultGraphId && GRAPH_CONTEXT_TOOLS.includes(toolName) && lastAgentGraphRef.current !== resultGraphId) {
+            lastAgentGraphRef.current = resultGraphId;
+            onGraphChange(resultGraphId);
+          }
+        }
+
         // Auto-open preview when an HTML node is created or patched
         // Also enable the dev loop so console errors get fed back to the agent
         if (ev.type === 'tool_result' && ev.data.success && onPreview) {
