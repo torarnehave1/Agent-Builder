@@ -14,6 +14,10 @@ import {
   extractTranslatableStrings, normText, buildI18nBlock, readI18nConfig, stripI18nBlocks,
   findLegacyTranslationScripts, removeLegacyTranslationScripts,
 } from './html-i18n.js'
+import {
+  slugTabId, readTabsBlock, panelInner, buildTabsBlock, buildTabButton, buildTabPanel,
+  findLegacyTabScripts, removeLegacyTabScripts, detectDeadSelectorWiring,
+} from './html-tabs.js'
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runChatSubagent } from './chat-subagent.js'
@@ -9997,6 +10001,314 @@ async function executeApplyLayout(input, env) {
   }
 }
 
+// ---- Managed tab set (html-tabs.js) -----------------------------------------
+// "Put the component in its own tab" is a RESTRUCTURE, not an insert: sections have to be
+// WRAPPED in panels, a bar of buttons generated, and ids matched between the two. With only
+// additive primitives the model writes the two thirds it can (CSS + controller) and the
+// markup never arrives — on 2026-09-12 that shipped .tab-button CSS (v15) and a
+// .tab-button controller (v16) onto a page with no tab button anywhere, both reported as
+// success, and then delegated a whole-page rewrite. These three tools are the apply_layout
+// answer for tabs: one deterministic server-side call that MOVES the existing markup by
+// byte range (never retyped) into ONE managed, replaceable block.
+
+/** Per-tag census guard: after a tab build no tag type may decrease, except the <script>s
+ *  we deliberately removed (legacy controllers). Catches any splice bug before it saves. */
+function tabsPreservationCheck(before, after, allowedScriptDrop) {
+  const ot = countHtmlTags(before), nt = countHtmlTags(after)
+  const dropped = []
+  for (const tag of Object.keys(ot)) {
+    const delta = (nt[tag] || 0) - ot[tag]
+    if (delta >= 0) continue
+    if (tag === 'script' && -delta <= allowedScriptDrop) continue
+    dropped.push(`<${tag}> (${ot[tag]}→${nt[tag] || 0})`)
+  }
+  return dropped
+}
+
+async function executeApplyTabs(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const tabsIn = Array.isArray(input.tabs) ? input.tabs : []
+  if (tabsIn.length < 2) {
+    return { success: false, error: "tabs must list at least 2 tabs, in display order — e.g. tabs:[{label:'Om oss', target:'section', nth:1}, {label:'Portefølje', target:'[data-vegvisr-portfolio]'}]. One tab is not a tab set; to add a tab to a page that already has a managed set, use add_tab." }
+  }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `apply_tabs only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const original = (node.info || '').replace(/\r\n/g, '\n')
+  if (!/<body[^>]*>/i.test(original)) {
+    return { success: false, error: 'No <body> tag — apply_tabs needs a full page. Add a page shell first.' }
+  }
+  let working = original
+  const warnings = []
+
+  // An existing managed set is an UPGRADE, not a second set. Refuse unless the caller
+  // says rebuild — then dissolve the old block back into flat content at its own position
+  // so the new mapping can target the same sections again.
+  const existing = readTabsBlock(working)
+  if (existing && !input.rebuild) {
+    return {
+      success: false,
+      error: `"${input.nodeId}" already has a managed tab set (${existing.tabs.length} tabs: ${existing.tabs.map(t => t.label || t.id).join(', ')}). To ADD one tab, call add_tab(label, target) — it keeps the existing tabs untouched. Only pass rebuild:true if you really want the whole set rebuilt from scratch (the panels are unwrapped back into the page first, nothing is deleted).`,
+      existingTabs: existing.tabs,
+    }
+  }
+  if (existing && input.rebuild) {
+    const bodies = existing.tabs.map(t => panelInner(existing.inner, t.id)).filter(Boolean).join('\n')
+    working = working.slice(0, existing.start) + bodies + '\n' + working.slice(existing.end)
+    warnings.push(`rebuild: unwrapped the previous ${existing.tabs.length}-tab set back into the page before rebuilding (no content removed)`)
+  }
+
+  // 1. Resolve EVERY tab before writing anything. A half-built tab set is worse than none,
+  //    so one unresolved selector refuses the whole call and names what to fix.
+  const used = new Set()
+  const resolved = []
+  const errors = []
+  for (const t of tabsIn) {
+    const label = String((t && (t.label ?? t.title ?? t.name)) || '').trim()
+    if (!label) { errors.push(`a tab entry has no label: ${JSON.stringify(t)}`); continue }
+    const id = slugTabId(t.id || label, used)
+    const target = String((t && (t.target || t.selector)) || '').trim()
+    const nth = Number.isInteger(t.nth) ? t.nth : (t.nth ? Number(t.nth) : undefined)
+    if (target) {
+      const r = findElementRange(working, target, nth)
+      if (r.error) { errors.push(`tab "${label}" → target "${target}": ${r.error}`); continue }
+      if (r.matchCount > 1 && !nth) warnings.push(`tab "${label}": "${target}" matched ${r.matchCount} elements — used #1. Pass nth to pick another.`)
+      resolved.push({ id, label, target, nth, range: r })
+    } else if (t.html) {
+      resolved.push({ id, label, target: null, range: null, content: String(t.html) })
+    } else {
+      resolved.push({ id, label, target: null, range: null, content: '' })
+      warnings.push(`tab "${label}" has neither target nor html — it is an EMPTY panel. Fill it with add_tab/insert_in_element('#${id}', …) or the user sees a blank tab.`)
+    }
+  }
+  if (errors.length) {
+    return {
+      success: false,
+      error: `NOTHING was written — every tab target must resolve first (a half-built tab set is worse than none):\n- ${errors.join('\n- ')}\nRun get_html_structure or read_html_source(part:'window') to see the real elements, then call apply_tabs again with selectors that exist. Selector grammar: tag ('section'), .class, #id, [attr="val"], tag.class; add nth (1-based) when several match — e.g. the 3rd <section> is target:'section', nth:3.`,
+      tabsRequested: tabsIn.length,
+    }
+  }
+
+  // 2. Cut each mapped element out, from the END backwards so earlier offsets stay valid.
+  //    Overlapping targets (one inside another) would duplicate or nest content — refuse.
+  const mapped = resolved.filter(r => r.range).sort((a, b) => a.range.start - b.range.start)
+  for (let i = 1; i < mapped.length; i++) {
+    if (mapped[i].range.start < mapped[i - 1].range.end) {
+      return { success: false, error: `NOTHING was written — tab "${mapped[i].label}" (${mapped[i].target}) is INSIDE tab "${mapped[i - 1].label}" (${mapped[i - 1].target}). A tab cannot contain another tab's content. Pick sibling elements (e.g. the page's <section>s), or map the outer one only.` }
+    }
+  }
+  const MOUNT = '<!--v-tabs-mount-->'
+  const container = String(input.container || '').trim()
+  const mountOwner = container ? null : (mapped[0] || null)
+  if (!mountOwner && !container) {
+    return { success: false, error: "No tab has a `target`, so there is nothing on the page to anchor the tab set to. Either map at least one existing element (target), or pass `container` — the selector of the element the tab set should be placed inside (e.g. '.container', 'main')." }
+  }
+  for (const r of [...mapped].reverse()) {
+    r.content = working.slice(r.range.start, r.range.end)
+    working = working.slice(0, r.range.start) + (r === mountOwner ? MOUNT : '') + working.slice(r.range.end)
+  }
+
+  // 3. Assemble the managed block and splice it in where the first mapped section was
+  //    (or at the end of `container`).
+  const activeReq = String(input.active || '').trim()
+  const active = resolved.find(r => r.id === activeReq || r.label === activeReq || r.id === slugTabId(activeReq, null))?.id || resolved[0].id
+  const block = buildTabsBlock({
+    tabs: resolved.map(r => ({ id: r.id, label: r.label, content: r.content })),
+    active,
+    ariaLabel: input.ariaLabel,
+  })
+  if (working.includes(MOUNT)) {
+    working = working.replace(MOUNT, block)
+  } else {
+    const c = findElementRange(working, container)
+    if (c.error) return { success: false, error: `container "${container}": ${c.error}` }
+    working = working.slice(0, c.innerEnd) + '\n' + block + '\n' + working.slice(c.innerEnd)
+  }
+
+  // 4. A hand-rolled tab controller fights the managed one over the same buttons. A DEAD
+  //    one (no .tab-button markup anywhere) is removed without asking — that is the
+  //    artifact of the failure this tool replaces. A LIVE one is reported, not touched,
+  //    unless the caller says removeLegacy.
+  const legacy = findLegacyTabScripts(working)
+  let legacyRemoved = 0
+  if (legacy.hits.length && (!legacy.alive || input.removeLegacy === true)) {
+    const out = removeLegacyTabScripts(working)
+    working = out.html
+    legacyRemoved = out.removed
+    warnings.push(`removed ${out.removed} hand-rolled tab controller script(s) (${out.chars} chars)${legacy.alive ? '' : ' — they queried .tab-button/.tab-content, which no element on this page carries, so they were dead code'}`)
+  } else if (legacy.hits.length) {
+    warnings.push(`LEFT ${legacy.hits.length} hand-rolled tab controller script(s) in place — the page still has .tab-button/.tab-content markup they drive. Two controllers can fight: check the page, and pass removeLegacy:true if the old one should go.`)
+  }
+
+  // 5. Verify before saving: nothing may have been lost by the splice.
+  const dropped = tabsPreservationCheck(original, working, legacyRemoved)
+  if (dropped.length) {
+    return { success: false, error: `REFUSED (nothing written) — the rebuild would drop ${dropped.join(', ')}. This is a bug in the splice, not something to retry: report it and use move_html_element one element at a time instead.` }
+  }
+  for (const r of resolved) {
+    const expect = String(r.content || '').replace(/^\n+|\n+$/g, '')
+    if (expect && !working.includes(expect)) {
+      return { success: false, error: `REFUSED (nothing written) — the content for tab "${r.label}" did not survive the splice intact. Report this; do not retry.` }
+    }
+  }
+  const deadWiring = detectDeadSelectorWiring(working)
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: working, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+
+  const moved = resolved.filter(r => r.range).map(r => `${r.target} → "${r.label}" (#${r.id})`)
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    tabs: resolved.map(r => ({ id: r.id, label: r.label, source: r.target || (r.content ? 'inline html' : 'empty'), chars: (r.content || '').length })),
+    active,
+    moved,
+    legacyControllersRemoved: legacyRemoved,
+    deadWiring,
+    warnings,
+    changed: true,
+    charDelta: working.length - original.length,
+    version: patchData.newVersion,
+    updatedHtml: working,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Built a ${resolved.length}-tab set on "${input.nodeId}": ${resolved.map(r => `"${r.label}"`).join(', ')} — "${resolved.find(r => r.id === active).label}" opens first. ${moved.length} existing section(s) MOVED into panels byte-for-byte (${moved.join('; ') || 'none'}); bar, panels, CSS and ONE controller live in a single managed <!-- v-tabs --> block, so re-running replaces it instead of stacking a second controller.${legacyRemoved ? ` Removed ${legacyRemoved} hand-rolled tab controller(s).` : ''}${warnings.length ? ' ⚠ ' + warnings.join(' | ') : ''}${deadWiring.length ? ' ⚠ ' + deadWiring.join(' ') : ''} Saved as v${patchData.newVersion}, not live until published — open the preview and click every tab before telling the user it is done.`,
+  }
+}
+
+async function executeAddTab(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const label = String(input.label || input.title || '').trim()
+  if (!label) return { success: false, error: "label is required — the caption on the tab button, e.g. 'Portefølje'." }
+
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  if (node.type !== 'html-node' && node.type !== 'css-node') {
+    return { success: false, error: `add_tab only works on html-node/css-node. "${input.nodeId}" is type "${node.type}".` }
+  }
+  const original = (node.info || '').replace(/\r\n/g, '\n')
+  const block = readTabsBlock(original)
+  if (!block) {
+    const legacy = findLegacyTabScripts(original)
+    return {
+      success: false,
+      error: `"${input.nodeId}" has no managed tab set yet, so there is no bar to add a button to.${legacy.hits.length ? ` (It does have ${legacy.hits.length} hand-rolled tab controller script(s)${legacy.alive ? ' with matching markup' : ' that are DEAD — no .tab-button/.tab-content element exists'}.)` : ''} Call apply_tabs FIRST with every tab the page should have — list the existing sections as tabs plus the new one — e.g. apply_tabs(tabs:[{label:'Om oss', target:'section', nth:1}, …, {label:'${label}', target:'<selector of the new content>'}]). apply_tabs MOVES the existing sections into panels; it never retypes them.`,
+      hasTabs: false,
+    }
+  }
+  const used = new Set(block.tabs.map(t => t.id))
+  const id = slugTabId(input.id || label, used)
+
+  let working = original
+  let content = input.html ? String(input.html) : ''
+  const target = String(input.target || input.selector || '').trim()
+  const warnings = []
+  if (target) {
+    const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
+    const r = findElementRange(working, target, nth)
+    if (r.error) return { success: false, error: `target "${target}": ${r.error} — nothing was written. Use get_html_structure to find the element, or pass \`html\` to create the tab's content instead of moving an existing element.` }
+    if (r.start >= block.start && r.end <= block.end) {
+      return { success: false, error: `"${target}" is ALREADY inside the tab set (it is in a panel). To move content between existing tabs use move_html_element(target, to:'#<panel id>'); panels are: ${block.tabs.map(t => '#' + t.id).join(', ')}.` }
+    }
+    if (r.matchCount > 1 && !nth) warnings.push(`"${target}" matched ${r.matchCount} elements — moved #1. Pass nth to pick another.`)
+    content = working.slice(r.start, r.end)
+    working = working.slice(0, r.start) + working.slice(r.end)
+  }
+  if (!target && !input.html) {
+    warnings.push(`no target and no html — the "${label}" tab is an EMPTY panel. Fill it with insert_in_element('#${id}', …) or the user sees a blank tab.`)
+  }
+
+  // Splice the panel in first, then the button — each located fresh so the earlier edit's
+  // offset shift cannot mis-target the second.
+  const atStart = String(input.position || 'end').toLowerCase() === 'start'
+  const panel = buildTabPanel({ id, label, isActive: false }, content)
+  const setRange = findElementRange(working, '[data-v-tabs-root]')
+  if (setRange.error) return { success: false, error: `The managed tab set container is missing: ${setRange.error}. Re-run apply_tabs(rebuild:true).` }
+  if (atStart) {
+    const bar = findElementRange(working, '.v-tabs')
+    if (bar.error) return { success: false, error: `tab bar: ${bar.error}` }
+    working = working.slice(0, bar.end) + '\n' + panel + working.slice(bar.end)
+  } else {
+    working = working.slice(0, setRange.innerEnd) + '\n' + panel + '\n' + working.slice(setRange.innerEnd)
+  }
+  const bar2 = findElementRange(working, '.v-tabs')
+  if (bar2.error) return { success: false, error: `tab bar: ${bar2.error}` }
+  const button = buildTabButton({ id, label }, false)
+  const at = atStart ? bar2.innerStart : bar2.innerEnd
+  working = working.slice(0, at) + '\n' + button + '\n' + working.slice(at)
+
+  const dropped = tabsPreservationCheck(original, working, 0)
+  if (dropped.length) {
+    return { success: false, error: `REFUSED (nothing written) — adding the tab would drop ${dropped.join(', ')}. Report this; do not retry.` }
+  }
+  const expect = content.replace(/^\n+|\n+$/g, '')
+  if (expect && !working.includes(expect)) {
+    return { success: false, error: `REFUSED (nothing written) — the moved content did not survive the splice intact. Report this; do not retry.` }
+  }
+
+  const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+    info: working, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
+  })
+  const all = [...block.tabs.map(t => t.label || t.id)]
+  if (atStart) all.unshift(label)
+  else all.push(label)
+  return {
+    success: true,
+    graphId: input.graphId,
+    nodeId: input.nodeId,
+    tabId: id,
+    label,
+    movedFrom: target || null,
+    contentChars: content.length,
+    tabs: all,
+    warnings,
+    changed: true,
+    charDelta: working.length - original.length,
+    version: patchData.newVersion,
+    updatedHtml: working,
+    savedNotLive: true,
+    publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
+    message: `Added tab "${label}" (#${id}) ${atStart ? 'first' : 'last'} on "${input.nodeId}"${target ? `, MOVING ${target} into its panel byte-for-byte (${content.length} chars)` : (input.html ? ' with the html you supplied' : ' as an empty panel')}. Tabs now: ${all.join(' | ')}. The managed controller picks it up with no extra script.${warnings.length ? ' ⚠ ' + warnings.join(' | ') : ''} Saved as v${patchData.newVersion}, not live until published — click the new tab in the preview before telling the user it is done.`,
+  }
+}
+
+async function executeListTabs(input, env) {
+  if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
+  const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const html = (node.info || '').replace(/\r\n/g, '\n')
+  const block = readTabsBlock(html)
+  const legacy = findLegacyTabScripts(html)
+  const deadWiring = detectDeadSelectorWiring(html)
+  const handRolled = {
+    controllerScripts: legacy.hits.length,
+    markupPresent: legacy.alive,
+    tabButtons: (html.match(/class=["'][^"']*\btab-button\b/gi) || []).length,
+    tabPanels: (html.match(/class=["'][^"']*\btab-content\b/gi) || []).length,
+  }
+  if (!block) {
+    return {
+      success: true, graphId: input.graphId, nodeId: input.nodeId, hasTabs: false, tabs: [], handRolled, deadWiring,
+      message: `"${input.nodeId}" has NO tab set${handRolled.controllerScripts ? `, but it does carry ${handRolled.controllerScripts} hand-rolled tab controller script(s) and ${handRolled.tabButtons} .tab-button / ${handRolled.tabPanels} .tab-content element(s)` : ' and no tab markup at all'}. To create one, call apply_tabs with EVERY tab the page should have (existing sections + the new content) — it moves the sections into panels and installs one managed controller. Do NOT insert tab CSS or a tab script by hand: CSS + controller without the markup is the exact failure this tool exists for.`,
+    }
+  }
+  return {
+    success: true, graphId: input.graphId, nodeId: input.nodeId, hasTabs: true,
+    tabs: block.tabs.map(t => ({ id: t.id, label: t.label, panelPresent: t.hasPanel, contentChars: t.contentChars, isDefault: t.id === block.activeDefault })),
+    activeDefault: block.activeDefault, handRolled, deadWiring,
+    message: `"${input.nodeId}" has a managed tab set with ${block.tabs.length} tab(s): ${block.tabs.map(t => `"${t.label}" (#${t.id}, ${t.contentChars} chars${t.id === block.activeDefault ? ', opens first' : ''})`).join(', ')}. Add one with add_tab, move content between panels with move_html_element(target, to:'#<panel id>'), rebuild the whole set with apply_tabs(rebuild:true).${block.tabs.some(t => !t.contentChars) ? ' ⚠ Empty panel(s) — those tabs render blank.' : ''}${deadWiring.length ? ' ⚠ ' + deadWiring.join(' ') : ''}`,
+  }
+}
+
 async function fetchWorkerSpec(fetcher, baseUrl) {
   try {
     let res = await fetcher.fetch(`${baseUrl}/openapi.json`)
@@ -13402,6 +13714,12 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeMoveHtmlElement(toolInput, env)
     case 'apply_layout':
       return await executeApplyLayout(toolInput, env)
+    case 'apply_tabs':
+      return await executeApplyTabs(toolInput, env)
+    case 'add_tab':
+      return await executeAddTab(toolInput, env)
+    case 'list_tabs':
+      return await executeListTabs(toolInput, env)
     case 'list_graph_versions':
       return await executeListGraphVersions(toolInput, env)
     case 'get_graph_version':

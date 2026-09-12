@@ -9,6 +9,7 @@
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { scanHtmlSyntax, ownedBlockRanges } from './html-syntax.js'
 import { detectTranslationGap } from './html-i18n.js'
+import { detectDeadSelectorWiring } from './html-tabs.js'
 import { DEFAULT_MODEL } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
@@ -76,6 +77,7 @@ const HTML_BUILDER_SYSTEM_PROMPT = `You are an expert HTML app developer. You wo
 
 ## HTML creation rules
 - **Converting an EXISTING page to a layout? Use \`apply_layout\` — do NOT hand-restructure.** To make an existing html-node use a layout (holy-grail, app-shell, two-column, etc.), call \`list_layouts\` for the slot names, then ONE \`apply_layout(nodeId, layout, slots)\` call: it inserts the verified skeleton and MOVES your mapped sections into its slots deterministically (e.g. \`slots:[{slot:'nav',target:'.sidebar'},{slot:'main',target:'.grid-builder'},{slot:'header',target:'h1'}]\`, plus \`removeEmpty:['.main-layout','.container']\` to drop the empty old wrappers). Moving all the markup by hand with edit_html_node/replace_html_section overruns the turn budget and loses functionality — never do that for a whole-page restructure.
+- **TABS? \`apply_tabs\` / \`add_tab\` — NEVER hand-write a tab bar, tab CSS or a tab controller.** "Put X in its own tab", "make these sections tabs", "legg dette i en egen tab" is a RESTRUCTURE: every section has to be WRAPPED in a panel and each button id matched to its panel id. No additive tool can wrap anything, so hand-writing tabs gives you the two thirds you CAN type — the CSS and the controller — on a page with no tab markup: on 2026-09-12 that put \`.tab-button\` CSS in v15 and a \`.tab-button\` controller in v16 on a page with zero tab buttons, both tools said success, the page showed no tabs. Instead: \`list_tabs\` (does this page have tabs at all?) → \`apply_tabs(tabs:[{label, target}, …])\` to build the set (it MOVES the existing sections into panels byte-for-byte and installs ONE managed controller), or \`add_tab(label, target)\` when a managed set already exists. To move content between existing tabs: \`move_html_element(target, to:'#<panel id>')\`.
 - **Start from a verified LAYOUT — do NOT hand-write page structure.** When building a NEW full page, call \`list_layouts\` first and pick one (holy-grail, app-shell, two-column, left/right sidebar, single/two column). Call \`get_layout\` and insert its \`impl\` (a CSS-grid skeleton with \`<div data-slot="NAME">\` containers) **intact** — it was verified responsive in a real browser. Then fill each \`data-slot\` with content or a component. Assembly model: **app = layout + components + content.** Only hand-write structure when no layout fits.
 - **Reuse verified components — do NOT hand-write them.** Before building a known interactive component (theme/dark-mode toggle, login/logout, etc.), call \`list_components\`. If the component exists, call \`get_component\` and insert its \`impl\` HTML **intact** (it carries its own <style>, markup, and <script>, and was verified in a real browser). Only hand-write a component when the registry does not have it. This is why the theme toggle now works: the wiring is proven once and reused, never re-improvised.
 - **Node-sourced TEXT a user may edit → the \`bound-text\` component, NEVER a hand-rolled fetch.** To show a graph node's text on the page where an authorized user edits it in place, do NOT write a \`getknowgraph\` fetch that injects innerHTML — that is READ-ONLY and un-editable by the visual editor. Instead \`get_component('bound-text')\` and insert its \`impl\` intact ONCE, then place a marker where the text goes: \`<div data-bound-node="NODE_ID" data-bound-graph="GRAPH_ID"></div>\` (ALWAYS the real graph id; a bare marker renders "missing node/graph"). It renders the node's markdown and gives Superadmin/Admin an in-place pencil that saves back via \`vegvisrPatchNode\`; visitors read-only. One marker per node. This is the ONLY approved way to show editable node text — reserve a hand-rolled fetch for custom NON-text data.
@@ -534,6 +536,9 @@ const SUBAGENT_TOOL_NAMES = new Set([
   // One-shot, deterministic whole-page layout conversion (insert verified skeleton + move
   // existing sections into slots) — restructuring by hand overran the turn budget every time.
   'apply_layout',
+  // Tabs are a restructure (wrap sections in panels + generate a matching bar), which no
+  // additive primitive can do — hand-writing them produced CSS + controller and no markup.
+  'list_tabs', 'apply_tabs', 'add_tab',
   // Component-SSOT assembly + write loop: fill a layout slot with a verified component, and
   // register a newly-built (browser-verified) component/layout so the library grows via the app.
   'fill_slot_with_component', 'insert_component', 'save_component', 'save_layout',
@@ -763,6 +768,13 @@ function detectFunctionalGaps(html) {
 
   // 5. Init script placed above the markup it wires up — present but dead.
   gaps.push(...detectPrematureInit(h))
+
+  // 6. A script that queries a class/id NO element on the page carries (2026-09-12). The
+  //    tab run wrote .tab-button CSS and a .tab-button controller onto a page with no tab
+  //    button and BOTH writes returned success — valid syntax, no console error, nothing
+  //    happens on click. The three detectors above only knew the features they were named
+  //    for; this one is the general case: CSS + controller with the MARKUP missing.
+  gaps.push(...detectDeadSelectorWiring(h))
 
   return gaps
 }

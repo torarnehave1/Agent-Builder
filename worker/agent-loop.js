@@ -222,6 +222,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // retype registry components through insert_html_at and could not delete a leftover script.
   'insert_component', 'fill_slot_with_component', 'bind_node_text', 'apply_layout',
   'move_html_element', 'remove_html_element',
+  'list_tabs', 'apply_tabs', 'add_tab',
   'get_secure_worker_template', 'create_capability_blueprint',
   'build_capability_worker_scaffold', 'deploy_worker', 'register_deployed_worker',
   'register_capability_worker', 'read_worker', 'delete_worker', 'invoke_registry_worker',
@@ -257,6 +258,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
+  'apply_tabs', 'add_tab',
   'insert_component', 'translate_html_node',
   'restore_html_node_version', 'restore_graph_version', 'patch_node_metadata', 'remove_node',
   'create_html_from_template', 'save_component', 'save_layout',
@@ -1683,7 +1685,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         // end_turn and force the agent to fix it before finishing. Only fires when this
         // turn actually touched an html-node tool, so it never nags on non-HTML chats.
         if (options.graphId && options.activeHtmlNodeId && functionalGateRetries < 2 &&
-            stats.toolCalls.some(t => /html|append_to_section|insert_in_element|insert_html_at/i.test(t))) {
+            stats.toolCalls.some(t => /html|append_to_section|insert_in_element|insert_html_at|apply_layout|apply_tabs|add_tab|insert_component|fill_slot/i.test(t))) {
           let gaps = []
           try {
             const gateHtml = await fetchNodeHtmlForGate(env, options.graphId, options.activeHtmlNodeId)
@@ -1962,7 +1964,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const HTML_EDIT_TOOLS_WITH_HTML = new Set([
               'edit_html_node', 'replace_html_section', 'append_to_section',
               'insert_html_at', 'insert_in_element', 'move_html_element',
-              'remove_html_element', 'apply_layout', 'fill_slot_with_component',
+              'remove_html_element', 'apply_layout', 'apply_tabs', 'add_tab', 'fill_slot_with_component',
               'bind_node_text', 'insert_component', 'translate_html_node', 'delegate_to_html_builder',
             ])
             if (HTML_EDIT_TOOLS_WITH_HTML.has(toolUse.name) && result.updatedHtml) {

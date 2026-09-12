@@ -447,6 +447,68 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'apply_tabs',
+    description: "Turn an EXISTING page into a TAB SET in ONE deterministic call — the ONLY correct way to answer \"put this in its own tab\", \"make these sections tabs\", \"legg dette i en egen tab\". Tabs are a RESTRUCTURE, not an insert: each section must be WRAPPED in a panel, a bar of buttons generated, and the ids matched between button and panel. insert_html_at/insert_in_element CANNOT wrap anything, so writing tabs by hand produces the two thirds a model can type — the CSS and the controller — on a page with no tab markup: on 2026-09-12 that shipped .tab-button CSS (v15) and a .tab-button controller (v16) onto a page that had not one tab button, both tools answered \"success\", the page showed no tabs, and the run ended by delegating a whole-page rewrite. THIS tool instead MOVES each mapped element by byte range (never retyped, nothing reworded or lost), generates the bar, the panels, the CSS and ONE controller inside a single managed <!-- v-tabs --> block, and REFUSES the whole write if any target does not resolve (a half-built tab set is worse than none). Pass `tabs` in display order; each entry maps an existing element (`target`, + `nth` when several match) or supplies `html`. The set lands where the FIRST mapped element was, or inside `container`. Panels are <div> (a page's own `section {…}` card styling must not double-frame them) and every class is v- prefixed so the page's `button {…}` rules cannot leak in. A dead hand-rolled tab controller is removed automatically; a live one is reported, and removed only with removeLegacy:true. To add ONE tab to a set that already exists use add_tab; list_tabs first if you are unsure whether the page has tabs. Returns version + the tab ids + what moved. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        tabs: {
+          type: 'array',
+          description: "The tabs, IN DISPLAY ORDER — at least 2. Each entry: { label, target?, nth?, html?, id? }. `target` MOVES an existing element into that tab (the normal case: map the page's existing sections, e.g. {label:'Om oss', target:'section', nth:1}); `html` creates new content instead; neither = an empty panel (warned about). Every target must resolve or the whole call is refused.",
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: "The caption on the tab button, in the page's language, e.g. 'Portefølje'." },
+              target: { type: 'string', description: "Selector of the EXISTING element to move into this tab: tag ('section'), .class, #id, [data-vegvisr-portfolio], tag.class, combo. The element is moved whole, byte-for-byte." },
+              nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based). The 3rd <section> is target:"section", nth:3.' },
+              html: { type: 'string', description: 'Content for a NEW tab that is not on the page yet (used when there is no target).' },
+              id: { type: 'string', description: "Optional explicit panel id (also the #hash that deep-links this tab). Default: slugified from the label." }
+            },
+            required: ['label']
+          }
+        },
+        container: { type: 'string', description: "Where to put the tab set when NO tab maps an existing element (e.g. '.container', 'main'). Normally omit it — the set lands exactly where the first mapped element was." },
+        active: { type: 'string', description: 'Tab id or label that opens first. Default: the first tab. (A #hash in the URL still wins at runtime.)' },
+        ariaLabel: { type: 'string', description: "Accessible name for the tab bar, e.g. 'Seksjoner'." },
+        rebuild: { type: 'boolean', description: 'Required to re-run on a page that ALREADY has a managed tab set: the existing panels are unwrapped back into the page (nothing deleted) and the set is rebuilt from your new mapping. Without it the call is refused and points you at add_tab.' },
+        removeLegacy: { type: 'boolean', description: 'Remove a hand-rolled tab controller script even when the page still has .tab-button/.tab-content markup it drives. A DEAD controller (no such markup anywhere) is always removed without this.' }
+      },
+      required: ['graphId', 'nodeId', 'tabs']
+    }
+  },
+  {
+    name: 'add_tab',
+    description: "Add ONE tab to a page that already has a managed tab set (built by apply_tabs) — button + panel + ids in one deterministic call, with the existing tabs untouched. Pass `target` to MOVE an existing element into the new tab's panel (byte-for-byte, never retyped — this is the answer to \"the component is on the page but not in its own tab\"), or `html` to create the content. Refuses if the page has no managed set (it tells you to call apply_tabs with the full tab list), and refuses a target that is already inside a panel (use move_html_element(target, to:'#<panel id>') to move content BETWEEN tabs). The managed controller picks the new tab up with no extra script — never insert a tab script or tab CSS yourself. Returns version + the new tab id. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' },
+        label: { type: 'string', description: "The caption on the new tab button, e.g. 'Portefølje'." },
+        target: { type: 'string', description: "Selector of an EXISTING element to MOVE into the new tab (e.g. '[data-vegvisr-portfolio]', '#gallery', '.portfolio'). Moved whole, nothing retyped." },
+        nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based).' },
+        html: { type: 'string', description: "Content for the new tab when it is not on the page yet. Omit when you pass `target`." },
+        id: { type: 'string', description: 'Optional explicit panel id (also the #hash). Default: slugified from the label.' },
+        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) adds the tab last; 'start' first." }
+      },
+      required: ['graphId', 'nodeId', 'label']
+    }
+  },
+  {
+    name: 'list_tabs',
+    description: "Report a page's TAB STRUCTURE before you change it: every managed tab (id, label, how many chars of content its panel holds, which one opens first), plus whether the page carries hand-rolled tab markup or a hand-rolled tab controller, plus any script on the page that queries a class/id NO element has (dead wiring). Call this FIRST for any tab request instead of guessing — 'hasTabs: false' is the fact the 2026-09-12 run never established: it guessed an edit anchor, got \"this page has no edit anchors yet\", and then bolted tab CSS and a tab controller onto a page with no tabs. Read-only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The graph ID' },
+        nodeId: { type: 'string', description: 'The html-node ID' }
+      },
+      required: ['graphId', 'nodeId']
+    }
+  },
+  {
     name: 'move_html_element',
     description: "RELIABLE way to REPOSITION an existing element on an html-node — the deterministic 'move' primitive. Use this instead of edit_html_node whenever an element is in the WRONG PLACE (e.g. a drop-zone that landed inside a two-column grid and now sits under the sidebar). It extracts the whole `target` element intact and splices it back at `to`, in ONE call — no retyping, no exact-string matching, no content-loss risk. `target` selects the element to move; `to` selects the destination element. position: 'start'/'end' place it as the FIRST/LAST CHILD of `to`; 'before'/'after' place it as a SIBLING of `to`. Selectors use the same grammar as insert_in_element: tag ('nav'), class ('.drop-zone'), id ('#dropZone'), tag+class ('div.card'), combo. If several match, pass `nth` (source) / `toNth` (destination), 1-based; otherwise the FIRST is used and the result reports matchCount. Nesting-aware. Example — move a drop-zone out of the grid so it renders full-width below it: move_html_element(target:'#dropZone', to:'.main-layout', position:'after'). Returns version + charDelta (verified). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
