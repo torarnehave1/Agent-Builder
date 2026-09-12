@@ -980,8 +980,30 @@ async function fetchHtmlNode(env, graphId, nodeId) {
 // element's tag to find its MATCHING close (nested same-tag elements don't fool it).
 // position 'end' (default) = before the close; 'start' = after the open. Additive.
 const VOID_TAGS = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'])
+// SUPPORTED: one compound selector — tag, .class, #id, [attr], [attr="value"], and
+// combinations of those on ONE element ('section.hero#main'). Everything else is REFUSED,
+// not approximated (2026-09-12). Approximating is what deleted 8 680 chars of a live page:
+// `div[style*="grid-template-columns"] div:nth-child(2)` dropped the attribute operator,
+// the descendant combinator and the pseudo-class, degraded to a bare `div`, matched the
+// OUTERMOST wrapper and removed it — reported as a normal removal. A selector that cannot
+// be honoured must fail loudly; the caller then uses nth, or a different anchor.
+function unsupportedSelectorReason(t) {
+  const s = String(t || '').trim()
+  if (!s) return null
+  if (s.includes(',')) return 'a comma list (several selectors at once) is not supported — call the tool once per element'
+  if (/[>+~]/.test(s)) return 'combinators (> + ~) are not supported — target the element itself, with nth to pick which match'
+  if (/:[a-z-]+/i.test(s)) return 'pseudo-classes/elements (:nth-child, :first-child, :hover …) are not supported — use the nth parameter instead (1-based, over ALL matches of the selector)'
+  if (/\[[\w-]+\s*[~^$*|]=/.test(s)) return 'attribute operators (*= ^= $= ~= |=) are not supported — only [attr] and [attr="exact value"]'
+  if (/\*/.test(s)) return 'the universal selector (*) is not supported'
+  // A space between two compound parts is a descendant combinator.
+  const outside = s.replace(/\[[^\]]*\]/g, '').trim()
+  if (/\s/.test(outside)) return 'a descendant selector (space between parts) is not supported — target the element itself, with nth to pick which match'
+  return null
+}
 function parseSelector(t) {
   const sel = { tag: null, id: null, classes: [], attrs: [] }
+  const bad = unsupportedSelectorReason(t)
+  if (bad) { sel.error = `Selector "${String(t).trim()}" cannot be used: ${bad}. SUPPORTED: one element — tag ('section'), .class, #id, [data-x], [data-x="value"], or a combination on the same element ('div.card#main') — plus nth (1-based) to choose among matches. This selector is REFUSED rather than approximated: silently dropping the unsupported parts once turned a nested-card selector into "the first <div> on the page" and deleted 8 680 chars.`; return sel }
   const idm = t.match(/#([\w-]+)/); if (idm) sel.id = idm[1]
   // Attribute selectors: [name], [name=val], [name="val"]. Parse BEFORE classes so a
   // dotted value inside brackets isn't mistaken for a class. Enables targeting
@@ -1011,6 +1033,7 @@ function matchesSelector(attrs, tag, sel) {
 function spliceInElement(html, target, snippet, position, nth) {
   const t = String(target || '').trim()
   const sel = parseSelector(t)
+  if (sel.error) return { error: sel.error }
   if (!sel.tag && !sel.id && !sel.classes.length && !sel.attrs.length) {
     return { error: "target must be a tag ('nav'), class ('.card'), id ('#hero'), or combo ('div.card')." }
   }
@@ -1050,6 +1073,7 @@ function spliceInElement(html, target, snippet, position, nth) {
 function findElementRange(html, target, nth) {
   const t = String(target || '').trim()
   const sel = parseSelector(t)
+  if (sel.error) return { error: sel.error }
   if (!sel.tag && !sel.id && !sel.classes.length && !sel.attrs.length) {
     return { error: "target must be a tag ('nav'), class ('.card'), id ('#hero'), or combo ('div.card')." }
   }
@@ -1112,6 +1136,31 @@ async function executeRemoveHtmlElement(input, env) {
         declares,
         error: `Refusing to remove this inline <script> from "${input.nodeId}" — it DEFINES ${declares.length} function(s) the page uses: ${declares.join(', ')}. Deleting it removes that behaviour, and rewriting it afterwards means writing it from memory, which is how invented code gets in. To CHANGE something inside it: read_html_source(part:"script") to get the exact bytes, then edit_html_node on just the lines that must change. Pass force:true only if the whole script really is meant to go, and you are not planning to recreate it.`,
       }
+    }
+  }
+
+  // PROPORTION GUARD (2026-09-12). A selector the engine could not honour used to degrade
+  // to something far broader, and the removal went through without anyone noticing the SIZE:
+  // `div[style*="grid-template-columns"] div:nth-child(2)` became a bare `div`, matched the
+  // page's outermost wrapper, and deleted 8 680 chars — the whole tab set and every section
+  // in it — reported as "Removed <div> … 8 680 chars deleted". The parser now refuses that
+  // selector, but the class of accident is "delete a container when you meant a child", so
+  // the SIZE itself has to be a gate. Asking for one card and getting the page is not an
+  // edit, it is a data loss, and it must cost a deliberate force:true.
+  const share = currentHtml.length ? removed.length / currentHtml.length : 0
+  if (input.force !== true && (share >= 0.25 || removed.length >= 4000)) {
+    const inside = countHtmlTags(removed)
+    const notable = ['section', 'script', 'style', 'form', 'iframe', 'video', 'img', 'button', 'h1', 'h2']
+      .filter(t => inside[t]).map(t => `${inside[t]}×<${t}>`)
+    const holdsTabs = /data-v-tabs-root|<!-- v-tabs:start -->/.test(removed)
+    const holdsComponents = [...new Set([...removed.matchAll(/data-(vegvisr-[a-z-]+|bound-node)/g)].map(m => m[1]))]
+    return {
+      success: false,
+      blocked: 'disproportionate_removal',
+      wouldRemoveChars: removed.length,
+      wouldRemoveShare: Math.round(share * 100) + '%',
+      contains: notable,
+      error: `Refusing to remove <${r.tag}> ("${target}") from "${input.nodeId}" — it is ${removed.length} chars, ${Math.round(share * 100)}% of the page${notable.length ? `, containing ${notable.join(', ')}` : ''}${holdsTabs ? ', INCLUDING THE WHOLE TAB SET' : ''}${holdsComponents.length ? `, including live component mount(s): ${holdsComponents.join(', ')}` : ''}. A removal this size is almost always a selector that matched a CONTAINER instead of the child you meant${r.matchCount > 1 ? ` ("${target}" matched ${r.matchCount} elements; #${r.picked} was picked)` : ''}. Check what you are pointing at first — get_html_structure, or read_html_source(part:'window') — and target the child directly (tag/.class/#id/[attr], plus nth). Pass force:true ONLY if deleting this entire block is genuinely what the user asked for.`,
     }
   }
 

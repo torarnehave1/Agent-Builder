@@ -24,7 +24,7 @@ for (const part of src.split(/\n(?=(?:async\s+)?function\s)/)) {
   if (nm) parts[nm[1]] = part
 }
 const need = [
-  'parseSelector', 'matchesSelector', 'spliceInElement', 'findElementRange',
+  'unsupportedSelectorReason', 'parseSelector', 'matchesSelector', 'spliceInElement', 'findElementRange',
   'isIifeScript', 'findDuplicateInserts', 'spliceComponentBlock',
   'looksLikeRegistryCode', 'matchRegistrySignatures', 'countSignatureHits',
   'registryEditReimplementation', 'ownedComponentBlocks', 'ownedBlocksDamaged',
