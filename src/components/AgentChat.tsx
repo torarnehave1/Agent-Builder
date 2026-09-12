@@ -2245,6 +2245,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                      toolName === 'append_to_section' || toolName === 'insert_html_at' ||
                      toolName === 'insert_in_element' || toolName === 'move_html_element' ||
                      toolName === 'remove_html_element' || toolName === 'apply_layout' ||
+                     toolName === 'apply_tabs' || toolName === 'add_tab' ||
                      toolName === 'translate_html_node' || toolName === 'insert_component' ||
                      toolName === 'fill_slot_with_component' || toolName === 'bind_node_text') {
             const resultData = ev.data as Record<string, unknown>;
@@ -2349,6 +2350,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             (ev.data.tool === 'delegate_to_html_builder' || ev.data.tool === 'replace_html_section' || ev.data.tool === 'edit_html_node' ||
              ev.data.tool === 'append_to_section' || ev.data.tool === 'insert_html_at' || ev.data.tool === 'insert_in_element' ||
              ev.data.tool === 'move_html_element' || ev.data.tool === 'remove_html_element' || ev.data.tool === 'apply_layout' ||
+             ev.data.tool === 'apply_tabs' || ev.data.tool === 'add_tab' ||
              ev.data.tool === 'translate_html_node')) {
           const rd = ev.data as Record<string, unknown>;
           const gId = (rd.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
