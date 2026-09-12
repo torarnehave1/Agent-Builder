@@ -294,3 +294,26 @@ export function detectDeadSelectorWiring(html) {
   const tabby = sels.some(s => /tab/i.test(s))
   return [`Script is PRESENT but DEAD — it queries ${sels.map(s => `"${s}"`).join(', ')} and NO element on the page carries ${sels.length === 1 ? 'that class/id' : 'those classes/ids'}, so querySelectorAll returns an empty list, every addEventListener is skipped, and nothing happens when the user clicks. There is no console error and no syntax error, so the tool results all said "success". The CSS and the controller are only two thirds of the feature — the MARKUP the controller drives is missing.${tabby ? ' For TABS this is exactly what apply_tabs is for: it wraps the existing sections in panels, generates the matching buttons, and installs ONE managed controller — do not hand-write the bar on top of this dead script, call apply_tabs(graphId, nodeId, tabs:[{label, target}, …]) and let it replace it.' : ' Either add the markup those selectors need, or remove the dead script.'}`]
 }
+
+/**
+ * Text a model RETYPED instead of moving (2026-09-12, v29 thrash). With only one
+ * target per tab, "these four sections are one tab" was inexpressible, so the agent
+ * passed the page's own sections back as `html` — and its retyped copy replaced the real
+ * <div data-vegvisr-contact> component with an invented <form>, which no duplicate guard
+ * caught because the invented markup was NEW. Content that is already on the page must be
+ * MOVED (targets), never retyped: this returns the sentences that already occur, so the
+ * tools can refuse the write and name them.
+ */
+export function retypedExistingContent(pageHtml, snippet) {
+  const strip = s => String(s || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+  const page = strip(pageHtml)
+  const chunks = strip(snippet).split(/(?<=[.!?])\s+|\s*\|\s*/).map(s => s.trim()).filter(s => s.length >= 30)
+  if (chunks.length < 2) return []
+  const already = chunks.filter(c => page.includes(c))
+  if (already.length < 2 || already.length / chunks.length < 0.5) return []
+  return already.slice(0, 4)
+}

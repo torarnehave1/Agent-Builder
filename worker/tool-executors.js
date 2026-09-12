@@ -16,7 +16,7 @@ import {
 } from './html-i18n.js'
 import {
   slugTabId, readTabsBlock, panelInner, buildTabsBlock, buildTabButton, buildTabPanel,
-  findLegacyTabScripts, removeLegacyTabScripts, detectDeadSelectorWiring,
+  findLegacyTabScripts, removeLegacyTabScripts, detectDeadSelectorWiring, retypedExistingContent,
 } from './html-tabs.js'
 import { runKgSubagent } from './kg-subagent.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
@@ -10011,6 +10011,57 @@ async function executeApplyLayout(input, env) {
 // answer for tabs: one deterministic server-side call that MOVES the existing markup by
 // byte range (never retyped) into ONE managed, replaceable block.
 
+/** Top-level element children of a container's inner range, in document order.
+ *  The sweep behind `rest: true` — "everything else on the page is ONE tab". Without it a
+ *  tab could hold exactly one element, so "one extra tab beside what is already there" was
+ *  inexpressible and the agent either made every section its own tab or retyped the page
+ *  into `html` (2026-09-12: that retyped copy replaced a live contact component with an
+ *  invented <form>). Comments, text and void/self-closing tags are skipped; so are the
+ *  page-level tags that must never move into a panel. */
+function topLevelChildRanges(html, from, to) {
+  const out = []
+  const SKIP = new Set(['script', 'style', 'link', 'meta', 'header', 'footer', 'nav', 'template'])
+  let i = from
+  while (i < to) {
+    const rest = html.slice(i, to)
+    const m = rest.match(/<(!--|[a-z][a-z0-9-]*)/i)
+    if (!m) break
+    const at = i + m.index
+    if (m[1] === '!--') { const end = html.indexOf('-->', at); if (end === -1 || end > to) break; i = end + 3; continue }
+    const tag = m[1].toLowerCase()
+    const openEnd = html.indexOf('>', at)
+    if (openEnd === -1 || openEnd >= to) break
+    const selfClosing = html[openEnd - 1] === '/' || VOID_TAGS.has(tag)
+    if (selfClosing) {
+      if (!SKIP.has(tag)) out.push({ tag, start: at, end: openEnd + 1 })
+      i = openEnd + 1
+      continue
+    }
+    const tre = new RegExp('<' + tag + '\\b[^>]*>|</' + tag + '\\s*>', 'gi')
+    tre.lastIndex = openEnd + 1
+    let depth = 1, closeEnd = -1, m2
+    while ((m2 = tre.exec(html)) !== null) {
+      if (m2.index >= to) break
+      if (m2[0][1] === '/') { depth -= 1; if (depth === 0) { closeEnd = tre.lastIndex; break } }
+      else depth += 1
+    }
+    if (closeEnd === -1) break
+    if (!SKIP.has(tag)) out.push({ tag, start: at, end: closeEnd })
+    i = closeEnd
+  }
+  return out
+}
+
+/** Where a tab set goes when the caller does not say: the element that holds the page's
+ *  body content. Tried in order, first hit wins. */
+function autoTabsContainer(html) {
+  for (const sel of ['.container', 'main', '#content', '.content', '.wrapper', 'body']) {
+    const r = findElementRange(html, sel)
+    if (!r.error) return { selector: sel, range: r }
+  }
+  return null
+}
+
 /** Per-tag census guard: after a tab build no tag type may decrease, except the <script>s
  *  we deliberately removed (legacy controllers). Catches any splice bug before it saves. */
 function tabsPreservationCheck(before, after, allowedScriptDrop) {
@@ -10025,13 +10076,37 @@ function tabsPreservationCheck(before, after, allowedScriptDrop) {
   return dropped
 }
 
+/** Resolve one tab's `target` / `targets` into byte ranges, in document order. */
+function resolveTabTargets(html, entry) {
+  const list = []
+  if (Array.isArray(entry.targets)) list.push(...entry.targets)
+  if (entry.target || entry.selector) list.push({ target: entry.target || entry.selector, nth: entry.nth })
+  const ranges = []
+  const errors = []
+  const notes = []
+  for (const item of list) {
+    const target = String((typeof item === 'string' ? item : (item.target || item.selector)) || '').trim()
+    if (!target) continue
+    const nthRaw = typeof item === 'string' ? undefined : item.nth
+    const nth = Number.isInteger(nthRaw) ? nthRaw : (nthRaw ? Number(nthRaw) : undefined)
+    if (target.toLowerCase() === 'all' || nth === 0) { errors.push(`"${target}" — use targets:["section"] with an explicit nth per element, or rest:true for "everything else"`); continue }
+    const r = findElementRange(html, target, nth)
+    if (r.error) { errors.push(`target "${target}"${nth ? ` (nth ${nth})` : ''}: ${r.error}`); continue }
+    if (r.matchCount > 1 && !nth) {
+      notes.push(`"${target}" matched ${r.matchCount} elements and took only #1 — pass targets:[{target:"${target}",nth:1},{target:"${target}",nth:2},…] to put SEVERAL in one tab, or rest:true to sweep everything else in`)
+    }
+    ranges.push({ ...r, target, nth })
+  }
+  return { ranges, errors, notes }
+}
+
 async function executeApplyTabs(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'edit an html-node')
   if (!gate.ok) return { success: false, error: gate.error }
   if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
   const tabsIn = Array.isArray(input.tabs) ? input.tabs : []
   if (tabsIn.length < 2) {
-    return { success: false, error: "tabs must list at least 2 tabs, in display order — e.g. tabs:[{label:'Om oss', target:'section', nth:1}, {label:'Portefølje', target:'[data-vegvisr-portfolio]'}]. One tab is not a tab set; to add a tab to a page that already has a managed set, use add_tab." }
+    return { success: false, error: "tabs must list at least 2 tabs, in display order. To add ONE tab beside a page that has no tabs yet, call add_tab — it wraps everything already on the page as the first tab and adds yours as the second. Example here: tabs:[{label:'Innhold', rest:true}, {label:'Portefølje', target:'[data-vegvisr-portfolio]'}]." }
   }
 
   const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
@@ -10046,25 +10121,45 @@ async function executeApplyTabs(input, env) {
   let working = original
   const warnings = []
 
-  // An existing managed set is an UPGRADE, not a second set. Refuse unless the caller
-  // says rebuild — then dissolve the old block back into flat content at its own position
-  // so the new mapping can target the same sections again.
   const existing = readTabsBlock(working)
   if (existing && !input.rebuild) {
     return {
       success: false,
-      error: `"${input.nodeId}" already has a managed tab set (${existing.tabs.length} tabs: ${existing.tabs.map(t => t.label || t.id).join(', ')}). To ADD one tab, call add_tab(label, target) — it keeps the existing tabs untouched. Only pass rebuild:true if you really want the whole set rebuilt from scratch (the panels are unwrapped back into the page first, nothing is deleted).`,
+      error: `"${input.nodeId}" already has a managed tab set (${existing.tabs.length} tabs: ${existing.tabs.map(t => t.label || t.id).join(', ')}). To ADD one tab, call add_tab(label, target) — it keeps the existing tabs untouched. To move content between tabs, move_html_element(target, to:'#<panel id>'). Only pass rebuild:true to rebuild the whole set from scratch (panels are unwrapped back into the page first, nothing deleted).`,
       existingTabs: existing.tabs,
     }
   }
   if (existing && input.rebuild) {
     const bodies = existing.tabs.map(t => panelInner(existing.inner, t.id)).filter(Boolean).join('\n')
     working = working.slice(0, existing.start) + bodies + '\n' + working.slice(existing.end)
-    warnings.push(`rebuild: unwrapped the previous ${existing.tabs.length}-tab set back into the page before rebuilding (no content removed)`)
+    warnings.push(`rebuild: unwrapped the previous ${existing.tabs.length}-tab set back into the page first (no content removed)`)
   }
 
-  // 1. Resolve EVERY tab before writing anything. A half-built tab set is worse than none,
-  //    so one unresolved selector refuses the whole call and names what to fix.
+  // Duplicate labels produced three tabs called "Innhold" on 2026-09-12, all showing
+  // different thirds of one section. Several elements in ONE tab is `targets`/`rest`.
+  const seen = new Map()
+  for (const t of tabsIn) {
+    const key = String((t && (t.label ?? t.title ?? t.name)) || '').trim().toLowerCase()
+    if (!key) continue
+    if (seen.has(key)) {
+      return { success: false, error: `NOTHING was written — two tabs are both labelled "${String(t.label).trim()}". If you meant SEVERAL sections in ONE tab, give that tab a list: {label:"${String(t.label).trim()}", targets:[{target:"section",nth:1},{target:"section",nth:2},…]}, or {label:"${String(t.label).trim()}", rest:true} to sweep in everything not claimed by another tab.` }
+    }
+    seen.set(key, true)
+  }
+
+  // `rest` needs a container to sweep; it is also the fallback mount point.
+  const wantsRest = tabsIn.some(t => t && (t.rest === true || t.remaining === true))
+  let container = null
+  if (input.container) {
+    const r = findElementRange(working, String(input.container).trim())
+    if (r.error) return { success: false, error: `container "${input.container}": ${r.error}` }
+    container = { selector: String(input.container).trim(), range: r }
+  } else if (wantsRest) {
+    container = autoTabsContainer(working)
+    if (!container) return { success: false, error: "rest:true needs a container to sweep and none could be found — pass container:'<selector>' (e.g. '.container' or 'main')." }
+  }
+
+  // 1. Resolve every explicit target FIRST. One bad selector refuses the whole write.
   const used = new Set()
   const resolved = []
   const errors = []
@@ -10072,51 +10167,64 @@ async function executeApplyTabs(input, env) {
     const label = String((t && (t.label ?? t.title ?? t.name)) || '').trim()
     if (!label) { errors.push(`a tab entry has no label: ${JSON.stringify(t)}`); continue }
     const id = slugTabId(t.id || label, used)
-    const target = String((t && (t.target || t.selector)) || '').trim()
-    const nth = Number.isInteger(t.nth) ? t.nth : (t.nth ? Number(t.nth) : undefined)
-    if (target) {
-      const r = findElementRange(working, target, nth)
-      if (r.error) { errors.push(`tab "${label}" → target "${target}": ${r.error}`); continue }
-      if (r.matchCount > 1 && !nth) warnings.push(`tab "${label}": "${target}" matched ${r.matchCount} elements — used #1. Pass nth to pick another.`)
-      resolved.push({ id, label, target, nth, range: r })
-    } else if (t.html) {
-      resolved.push({ id, label, target: null, range: null, content: String(t.html) })
-    } else {
-      resolved.push({ id, label, target: null, range: null, content: '' })
-      warnings.push(`tab "${label}" has neither target nor html — it is an EMPTY panel. Fill it with add_tab/insert_in_element('#${id}', …) or the user sees a blank tab.`)
+    const isRest = t.rest === true || t.remaining === true
+    const { ranges, errors: errs, notes } = resolveTabTargets(working, t)
+    errs.forEach(e => errors.push(`tab "${label}" → ${e}`))
+    notes.forEach(n => warnings.push(`tab "${label}": ${n}`))
+    if (t.html) {
+      const retyped = retypedExistingContent(working, String(t.html))
+      if (retyped.length) {
+        errors.push(`tab "${label}" passes html that is ALREADY on this page (e.g. "${retyped[0].slice(0, 60)}…"). Retyping page content is how a live component gets replaced by an invented copy — MOVE it instead: targets:[{target:"section",nth:N}, …], or rest:true for everything not claimed by another tab.`)
+      }
     }
+    resolved.push({ id, label, isRest, ranges, html: t.html ? String(t.html) : null })
   }
   if (errors.length) {
     return {
       success: false,
-      error: `NOTHING was written — every tab target must resolve first (a half-built tab set is worse than none):\n- ${errors.join('\n- ')}\nRun get_html_structure or read_html_source(part:'window') to see the real elements, then call apply_tabs again with selectors that exist. Selector grammar: tag ('section'), .class, #id, [attr="val"], tag.class; add nth (1-based) when several match — e.g. the 3rd <section> is target:'section', nth:3.`,
+      error: `NOTHING was written — every tab must resolve first (a half-built tab set is worse than none):\n- ${errors.join('\n- ')}\nSelector grammar: tag ('section'), .class, #id, [attr="val"], tag.class, plus nth (1-based). SEVERAL elements in ONE tab: targets:[{target:'section',nth:2},{target:'section',nth:3}]. EVERYTHING else in one tab: {label:'…', rest:true}.`,
       tabsRequested: tabsIn.length,
     }
   }
 
-  // 2. Cut each mapped element out, from the END backwards so earlier offsets stay valid.
-  //    Overlapping targets (one inside another) would duplicate or nest content — refuse.
-  const mapped = resolved.filter(r => r.range).sort((a, b) => a.range.start - b.range.start)
-  for (let i = 1; i < mapped.length; i++) {
-    if (mapped[i].range.start < mapped[i - 1].range.end) {
-      return { success: false, error: `NOTHING was written — tab "${mapped[i].label}" (${mapped[i].target}) is INSIDE tab "${mapped[i - 1].label}" (${mapped[i - 1].target}). A tab cannot contain another tab's content. Pick sibling elements (e.g. the page's <section>s), or map the outer one only.` }
+  // 2. The rest tab sweeps what no other tab claimed.
+  const claimed = resolved.flatMap(r => r.ranges)
+  if (wantsRest) {
+    const swept = topLevelChildRanges(working, container.range.innerStart, container.range.innerEnd)
+      .filter(c => !claimed.some(k => c.start < k.end && k.start < c.end))
+    const restTab = resolved.find(r => r.isRest)
+    if (!swept.length) {
+      return { success: false, error: `NOTHING was written — rest:true found no unclaimed content inside "${container.selector}". Name the container explicitly, or map the tabs with targets.` }
     }
-  }
-  const MOUNT = '<!--v-tabs-mount-->'
-  const container = String(input.container || '').trim()
-  const mountOwner = container ? null : (mapped[0] || null)
-  if (!mountOwner && !container) {
-    return { success: false, error: "No tab has a `target`, so there is nothing on the page to anchor the tab set to. Either map at least one existing element (target), or pass `container` — the selector of the element the tab set should be placed inside (e.g. '.container', 'main')." }
-  }
-  for (const r of [...mapped].reverse()) {
-    r.content = working.slice(r.range.start, r.range.end)
-    working = working.slice(0, r.range.start) + (r === mountOwner ? MOUNT : '') + working.slice(r.range.end)
+    restTab.ranges = swept.map(c => ({ ...c, target: `${container.selector} > ${c.tag}` }))
   }
 
-  // 3. Assemble the managed block and splice it in where the first mapped section was
-  //    (or at the end of `container`).
+  // 3. Cut everything out from the END backwards, so earlier offsets stay valid.
+  const all = resolved.flatMap(r => r.ranges.map(range => ({ range, owner: r })))
+    .sort((a, b) => a.range.start - b.range.start)
+  for (let i = 1; i < all.length; i++) {
+    if (all[i].range.start < all[i - 1].range.end) {
+      return { success: false, error: `NOTHING was written — "${all[i].range.target}" is INSIDE "${all[i - 1].range.target}". One element cannot be in two tabs; pick siblings.` }
+    }
+  }
+  if (!all.length && !resolved.some(r => r.html)) {
+    return { success: false, error: 'No tab maps any content. Give at least one tab a target/targets, rest:true, or html.' }
+  }
+  const MOUNT = '<!--v-tabs-mount-->'
+  const mountRange = all[0] ? all[0].range : null
+  for (const { range, owner } of [...all].reverse()) {
+    owner.chunks = owner.chunks || []
+    owner.chunks.unshift(working.slice(range.start, range.end))
+    working = working.slice(0, range.start) + (range === mountRange ? MOUNT : '') + working.slice(range.end)
+  }
+  for (const r of resolved) {
+    r.content = (r.chunks && r.chunks.length) ? r.chunks.join('\n') : (r.html || '')
+    if (!r.content.trim()) warnings.push(`tab "${r.label}" is an EMPTY panel — it renders blank.`)
+  }
+
+  // 4. Assemble and splice.
   const activeReq = String(input.active || '').trim()
-  const active = resolved.find(r => r.id === activeReq || r.label === activeReq || r.id === slugTabId(activeReq, null))?.id || resolved[0].id
+  const active = resolved.find(r => r.id === activeReq || r.label === activeReq)?.id || resolved[0].id
   const block = buildTabsBlock({
     tabs: resolved.map(r => ({ id: r.id, label: r.label, content: r.content })),
     active,
@@ -10125,51 +10233,61 @@ async function executeApplyTabs(input, env) {
   if (working.includes(MOUNT)) {
     working = working.replace(MOUNT, block)
   } else {
-    const c = findElementRange(working, container)
-    if (c.error) return { success: false, error: `container "${container}": ${c.error}` }
+    const c = findElementRange(working, container ? container.selector : 'body')
+    if (c.error) return { success: false, error: `container: ${c.error}` }
     working = working.slice(0, c.innerEnd) + '\n' + block + '\n' + working.slice(c.innerEnd)
   }
 
-  // 4. A hand-rolled tab controller fights the managed one over the same buttons. A DEAD
-  //    one (no .tab-button markup anywhere) is removed without asking — that is the
-  //    artifact of the failure this tool replaces. A LIVE one is reported, not touched,
-  //    unless the caller says removeLegacy.
+  // 5. Legacy controller: a DEAD one goes without asking, a LIVE one only on request.
   const legacy = findLegacyTabScripts(working)
   let legacyRemoved = 0
   if (legacy.hits.length && (!legacy.alive || input.removeLegacy === true)) {
     const out = removeLegacyTabScripts(working)
     working = out.html
     legacyRemoved = out.removed
-    warnings.push(`removed ${out.removed} hand-rolled tab controller script(s) (${out.chars} chars)${legacy.alive ? '' : ' — they queried .tab-button/.tab-content, which no element on this page carries, so they were dead code'}`)
+    warnings.push(`removed ${out.removed} hand-rolled tab controller script(s)${legacy.alive ? '' : ' — dead code: they queried .tab-button/.tab-content, which no element on this page carries'}`)
   } else if (legacy.hits.length) {
-    warnings.push(`LEFT ${legacy.hits.length} hand-rolled tab controller script(s) in place — the page still has .tab-button/.tab-content markup they drive. Two controllers can fight: check the page, and pass removeLegacy:true if the old one should go.`)
+    warnings.push(`LEFT ${legacy.hits.length} hand-rolled tab controller script(s) in place — the page still has markup they drive. Pass removeLegacy:true if the old one should go.`)
   }
 
-  // 5. Verify before saving: nothing may have been lost by the splice.
+  // 6. Verify before saving.
   const dropped = tabsPreservationCheck(original, working, legacyRemoved)
   if (dropped.length) {
-    return { success: false, error: `REFUSED (nothing written) — the rebuild would drop ${dropped.join(', ')}. This is a bug in the splice, not something to retry: report it and use move_html_element one element at a time instead.` }
+    return { success: false, error: `REFUSED (nothing written) — the rebuild would drop ${dropped.join(', ')}. Report this; do not retry.` }
   }
   for (const r of resolved) {
-    const expect = String(r.content || '').replace(/^\n+|\n+$/g, '')
-    if (expect && !working.includes(expect)) {
-      return { success: false, error: `REFUSED (nothing written) — the content for tab "${r.label}" did not survive the splice intact. Report this; do not retry.` }
+    for (const chunk of (r.chunks || [])) {
+      const expect = chunk.replace(/^\n+|\n+$/g, '')
+      if (expect && !working.includes(expect)) {
+        return { success: false, error: `REFUSED (nothing written) — content for tab "${r.label}" did not survive the splice intact. Report this; do not retry.` }
+      }
     }
   }
   const deadWiring = detectDeadSelectorWiring(working)
+
+  // 7. What is still OUTSIDE the tab set? The v21 page showed a two-tab bar while three
+  //    sections sat loose above it, and nothing said so.
+  let leftOutside = []
+  const afterContainer = container ? findElementRange(working, container.selector) : null
+  if (afterContainer && !afterContainer.error) {
+    const setRange = findElementRange(working, '[data-v-tabs-root]')
+    leftOutside = topLevelChildRanges(working, afterContainer.innerStart, afterContainer.innerEnd)
+      .filter(c => setRange.error || c.start >= setRange.end || c.end <= setRange.start)
+      .map(c => `<${c.tag}> (${working.slice(c.start, c.end).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40)}…)`)
+    if (leftOutside.length) warnings.push(`STILL OUTSIDE the tab set, inside ${container.selector}: ${leftOutside.join(', ')} — they render above/below the tabs, in every tab. Sweep them in with rest:true or map them to a tab.`)
+  }
 
   const patchData = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
     info: working, updatedAt: new Date().toISOString(), updatedBy: gate.email || null,
   })
 
-  const moved = resolved.filter(r => r.range).map(r => `${r.target} → "${r.label}" (#${r.id})`)
   return {
     success: true,
     graphId: input.graphId,
     nodeId: input.nodeId,
-    tabs: resolved.map(r => ({ id: r.id, label: r.label, source: r.target || (r.content ? 'inline html' : 'empty'), chars: (r.content || '').length })),
+    tabs: resolved.map(r => ({ id: r.id, label: r.label, elements: (r.chunks || []).length, chars: (r.content || '').length, source: r.isRest ? `rest of ${container.selector}` : (r.ranges.map(x => x.target).join(' + ') || 'inline html') })),
     active,
-    moved,
+    leftOutside,
     legacyControllersRemoved: legacyRemoved,
     deadWiring,
     warnings,
@@ -10179,7 +10297,7 @@ async function executeApplyTabs(input, env) {
     updatedHtml: working,
     savedNotLive: true,
     publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
-    message: `Built a ${resolved.length}-tab set on "${input.nodeId}": ${resolved.map(r => `"${r.label}"`).join(', ')} — "${resolved.find(r => r.id === active).label}" opens first. ${moved.length} existing section(s) MOVED into panels byte-for-byte (${moved.join('; ') || 'none'}); bar, panels, CSS and ONE controller live in a single managed <!-- v-tabs --> block, so re-running replaces it instead of stacking a second controller.${legacyRemoved ? ` Removed ${legacyRemoved} hand-rolled tab controller(s).` : ''}${warnings.length ? ' ⚠ ' + warnings.join(' | ') : ''}${deadWiring.length ? ' ⚠ ' + deadWiring.join(' ') : ''} Saved as v${patchData.newVersion}, not live until published — open the preview and click every tab before telling the user it is done.`,
+    message: `Built a ${resolved.length}-tab set on "${input.nodeId}": ${resolved.map(r => `"${r.label}" (${(r.chunks || []).length} element(s))`).join(', ')} — "${resolved.find(r => r.id === active).label}" opens first. Existing markup MOVED byte-for-byte into panels; bar, panels, CSS and ONE controller live in a single managed <!-- v-tabs --> block.${legacyRemoved ? ` Removed ${legacyRemoved} hand-rolled tab controller(s).` : ''}${warnings.length ? ' ⚠ ' + warnings.join(' | ') : ''}${deadWiring.length ? ' ⚠ ' + deadWiring.join(' ') : ''} Saved as v${patchData.newVersion}, not live until published — open the preview and click every tab before telling the user it is done.`,
   }
 }
 
@@ -10197,27 +10315,60 @@ async function executeAddTab(input, env) {
   }
   const original = (node.info || '').replace(/\r\n/g, '\n')
   const block = readTabsBlock(original)
+
+  // NO tab set yet → this IS the "one extra tab beside what is already there" case, and it
+  // is the whole point of the tool. Everything currently on the page becomes tab 1, the new
+  // content becomes tab 2. Refusing here is what sent the agent into apply_tabs with one
+  // tab per section, then into retyping the page (2026-09-12, v19→v29).
   if (!block) {
-    const legacy = findLegacyTabScripts(original)
+    const baseLabel = String(input.baseLabel || input.existingLabel || 'Innhold').trim()
+    if (baseLabel.toLowerCase() === label.toLowerCase()) {
+      return { success: false, error: `baseLabel and label are both "${label}" — the tab holding the existing page and the new tab need different names. Pass baseLabel:'Innhold' (or whatever the existing content should be called).` }
+    }
+    const bootstrap = {
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      container: input.container,
+      active: input.active,
+      ariaLabel: input.ariaLabel,
+      removeLegacy: input.removeLegacy,
+      authToken: input.authToken,
+      userId: input.userId,
+      tabs: String(input.position || 'end').toLowerCase() === 'start'
+        ? [{ label, target: input.target, nth: input.nth, html: input.html }, { label: baseLabel, rest: true }]
+        : [{ label: baseLabel, rest: true }, { label, target: input.target, nth: input.nth, html: input.html }],
+    }
+    const built = await executeApplyTabs(bootstrap, env)
+    if (!built.success) return built
     return {
-      success: false,
-      error: `"${input.nodeId}" has no managed tab set yet, so there is no bar to add a button to.${legacy.hits.length ? ` (It does have ${legacy.hits.length} hand-rolled tab controller script(s)${legacy.alive ? ' with matching markup' : ' that are DEAD — no .tab-button/.tab-content element exists'}.)` : ''} Call apply_tabs FIRST with every tab the page should have — list the existing sections as tabs plus the new one — e.g. apply_tabs(tabs:[{label:'Om oss', target:'section', nth:1}, …, {label:'${label}', target:'<selector of the new content>'}]). apply_tabs MOVES the existing sections into panels; it never retypes them.`,
-      hasTabs: false,
+      ...built,
+      bootstrapped: true,
+      message: `"${input.nodeId}" had no tabs, so this created the set: everything already on the page is now the "${baseLabel}" tab, and "${label}" is a second tab beside it — nothing else moved or restyled. ${built.message}`,
     }
   }
+
   const used = new Set(block.tabs.map(t => t.id))
   const id = slugTabId(input.id || label, used)
+  if (block.tabs.some(t => (t.label || '').trim().toLowerCase() === label.toLowerCase())) {
+    return { success: false, error: `This page already has a tab called "${label}". Pick another label, or move content into the existing one with move_html_element(target, to:'#${block.tabs.find(t => (t.label || '').trim().toLowerCase() === label.toLowerCase()).id}').` }
+  }
 
   let working = original
   let content = input.html ? String(input.html) : ''
+  if (content) {
+    const retyped = retypedExistingContent(working, content)
+    if (retyped.length) {
+      return { success: false, error: `The html you passed is ALREADY on this page (e.g. "${retyped[0].slice(0, 60)}…"). Retyping page content replaces the real markup with an invented copy — pass target:'<selector>' to MOVE the existing element into the new tab instead.` }
+    }
+  }
   const target = String(input.target || input.selector || '').trim()
   const warnings = []
   if (target) {
     const nth = Number.isInteger(input.nth) ? input.nth : (input.nth ? Number(input.nth) : undefined)
     const r = findElementRange(working, target, nth)
-    if (r.error) return { success: false, error: `target "${target}": ${r.error} — nothing was written. Use get_html_structure to find the element, or pass \`html\` to create the tab's content instead of moving an existing element.` }
+    if (r.error) return { success: false, error: `target "${target}": ${r.error} — nothing was written.` }
     if (r.start >= block.start && r.end <= block.end) {
-      return { success: false, error: `"${target}" is ALREADY inside the tab set (it is in a panel). To move content between existing tabs use move_html_element(target, to:'#<panel id>'); panels are: ${block.tabs.map(t => '#' + t.id).join(', ')}.` }
+      return { success: false, error: `"${target}" is ALREADY inside the tab set. To give it its own tab, move it out and in one step is not supported — use move_html_element(target, to:'#<panel id>') to move content between existing panels; panels are: ${block.tabs.map(t => '#' + t.id).join(', ')}.` }
     }
     if (r.matchCount > 1 && !nth) warnings.push(`"${target}" matched ${r.matchCount} elements — moved #1. Pass nth to pick another.`)
     content = working.slice(r.start, r.end)
@@ -10227,8 +10378,6 @@ async function executeAddTab(input, env) {
     warnings.push(`no target and no html — the "${label}" tab is an EMPTY panel. Fill it with insert_in_element('#${id}', …) or the user sees a blank tab.`)
   }
 
-  // Splice the panel in first, then the button — each located fresh so the earlier edit's
-  // offset shift cannot mis-target the second.
   const atStart = String(input.position || 'end').toLowerCase() === 'start'
   const panel = buildTabPanel({ id, label, isActive: false }, content)
   const setRange = findElementRange(working, '[data-v-tabs-root]')
@@ -10296,9 +10445,13 @@ async function executeListTabs(input, env) {
     tabPanels: (html.match(/class=["'][^"']*\btab-content\b/gi) || []).length,
   }
   if (!block) {
+    const c = autoTabsContainer(html)
+    const top = c ? topLevelChildRanges(html, c.range.innerStart, c.range.innerEnd) : []
     return {
       success: true, graphId: input.graphId, nodeId: input.nodeId, hasTabs: false, tabs: [], handRolled, deadWiring,
-      message: `"${input.nodeId}" has NO tab set${handRolled.controllerScripts ? `, but it does carry ${handRolled.controllerScripts} hand-rolled tab controller script(s) and ${handRolled.tabButtons} .tab-button / ${handRolled.tabPanels} .tab-content element(s)` : ' and no tab markup at all'}. To create one, call apply_tabs with EVERY tab the page should have (existing sections + the new content) — it moves the sections into panels and installs one managed controller. Do NOT insert tab CSS or a tab script by hand: CSS + controller without the markup is the exact failure this tool exists for.`,
+      container: c ? c.selector : null,
+      topLevelSections: top.length,
+      message: `"${input.nodeId}" has NO tab set${handRolled.controllerScripts ? `, but it does carry ${handRolled.controllerScripts} hand-rolled tab controller script(s) and ${handRolled.tabButtons} .tab-button / ${handRolled.tabPanels} .tab-content element(s)` : ' and no tab markup at all'}. ${c ? `Its content sits in ${c.selector} as ${top.length} top-level element(s). ` : ''}To put ONE thing in its own tab WITHOUT re-laying-out the page, call add_tab(label, target) — everything already on the page becomes the first tab and yours is the second. Only use apply_tabs when the user wants several tabs; there, SEVERAL elements go in ONE tab via targets:[…] or rest:true. Never insert tab CSS or a tab script by hand.`,
     }
   }
   return {

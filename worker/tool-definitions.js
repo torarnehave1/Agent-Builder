@@ -448,7 +448,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'apply_tabs',
-    description: "Turn an EXISTING page into a TAB SET in ONE deterministic call — the ONLY correct way to answer \"put this in its own tab\", \"make these sections tabs\", \"legg dette i en egen tab\". Tabs are a RESTRUCTURE, not an insert: each section must be WRAPPED in a panel, a bar of buttons generated, and the ids matched between button and panel. insert_html_at/insert_in_element CANNOT wrap anything, so writing tabs by hand produces the two thirds a model can type — the CSS and the controller — on a page with no tab markup: on 2026-09-12 that shipped .tab-button CSS (v15) and a .tab-button controller (v16) onto a page that had not one tab button, both tools answered \"success\", the page showed no tabs, and the run ended by delegating a whole-page rewrite. THIS tool instead MOVES each mapped element by byte range (never retyped, nothing reworded or lost), generates the bar, the panels, the CSS and ONE controller inside a single managed <!-- v-tabs --> block, and REFUSES the whole write if any target does not resolve (a half-built tab set is worse than none). Pass `tabs` in display order; each entry maps an existing element (`target`, + `nth` when several match) or supplies `html`. The set lands where the FIRST mapped element was, or inside `container`. Panels are <div> (a page's own `section {…}` card styling must not double-frame them) and every class is v- prefixed so the page's `button {…}` rules cannot leak in. A dead hand-rolled tab controller is removed automatically; a live one is reported, and removed only with removeLegacy:true. To add ONE tab to a set that already exists use add_tab; list_tabs first if you are unsure whether the page has tabs. Returns version + the tab ids + what moved. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Build a MULTI-TAB set on an existing page in ONE deterministic call. **For \"put this ONE thing in its own tab\" on a page that has no tabs, use add_tab instead** — it wraps everything already on the page as the first tab and adds yours beside it, changing nothing else. Use apply_tabs when the user wants several tabs, or to rebuild a set. Tabs are a RESTRUCTURE (each section WRAPPED in a panel, every button id matched to its panel id) and no additive tool can wrap anything, which is why hand-written tabs ship as CSS + a controller on a page with no tab markup — all reporting success. **A tab can hold SEVERAL elements**: `targets:[{target:'section',nth:2},{target:'section',nth:3}]`, or `rest:true` to sweep in every top-level element of the container no other tab claimed. Two tabs with one label are REFUSED (three tabs called \"Innhold\" each showing a third of the page, 2026-09-12), and `html` that is already on the page is REFUSED — retyping page content is how a live contact component got replaced by an invented <form>; MOVE it with targets instead. Every target resolves before anything is written; content is moved by byte range, never retyped; a per-tag census runs before the save; the result reports what is STILL OUTSIDE the tab set. Bar, panels, CSS and ONE controller live in a single managed <!-- v-tabs --> block, so re-running replaces instead of stacking. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
@@ -456,31 +456,33 @@ const TOOL_DEFINITIONS = [
         nodeId: { type: 'string', description: 'The html-node ID' },
         tabs: {
           type: 'array',
-          description: "The tabs, IN DISPLAY ORDER — at least 2. Each entry: { label, target?, nth?, html?, id? }. `target` MOVES an existing element into that tab (the normal case: map the page's existing sections, e.g. {label:'Om oss', target:'section', nth:1}); `html` creates new content instead; neither = an empty panel (warned about). Every target must resolve or the whole call is refused.",
+          description: "The tabs, IN DISPLAY ORDER — at least 2 (one tab beside the existing page is add_tab's job). Each entry: { label, target?/targets?/rest?/html?, nth?, id? }. Labels must be unique.",
           items: {
             type: 'object',
             properties: {
               label: { type: 'string', description: "The caption on the tab button, in the page's language, e.g. 'Portefølje'." },
-              target: { type: 'string', description: "Selector of the EXISTING element to move into this tab: tag ('section'), .class, #id, [data-vegvisr-portfolio], tag.class, combo. The element is moved whole, byte-for-byte." },
-              nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based). The 3rd <section> is target:"section", nth:3.' },
-              html: { type: 'string', description: 'Content for a NEW tab that is not on the page yet (used when there is no target).' },
-              id: { type: 'string', description: "Optional explicit panel id (also the #hash that deep-links this tab). Default: slugified from the label." }
+              target: { type: 'string', description: "Selector of ONE existing element to move into this tab: tag ('section'), .class, #id, [data-vegvisr-portfolio], tag.class. Moved whole, byte-for-byte." },
+              targets: { type: 'array', items: { type: 'object' }, description: "SEVERAL existing elements in THIS ONE tab, in document order: [{target:'section',nth:2},{target:'section',nth:3}] (plain selector strings work too). This is how \"the rest of the page is one tab\" is expressed when rest:true is too broad." },
+              rest: { type: 'boolean', description: "This tab takes EVERY top-level element of `container` that no other tab claimed — 'everything else, as one tab'. Page-level tags (script/style/header/footer/nav) are never swept in. At most one tab should set it." },
+              nth: { type: 'integer', description: 'With `target`: which match (1-based) when the selector matches several.' },
+              html: { type: 'string', description: 'Content for a tab that is NOT on the page yet. Rejected if the text is already on the page — move it with target/targets instead of retyping it.' },
+              id: { type: 'string', description: 'Optional explicit panel id (also the #hash that deep-links this tab). Default: slugified from the label.' }
             },
             required: ['label']
           }
         },
-        container: { type: 'string', description: "Where to put the tab set when NO tab maps an existing element (e.g. '.container', 'main'). Normally omit it — the set lands exactly where the first mapped element was." },
+        container: { type: 'string', description: "The element whose children `rest:true` sweeps, and where the set is placed when no tab maps an existing element. Auto-detected (.container → main → #content → .content → .wrapper → body) when omitted." },
         active: { type: 'string', description: 'Tab id or label that opens first. Default: the first tab. (A #hash in the URL still wins at runtime.)' },
         ariaLabel: { type: 'string', description: "Accessible name for the tab bar, e.g. 'Seksjoner'." },
-        rebuild: { type: 'boolean', description: 'Required to re-run on a page that ALREADY has a managed tab set: the existing panels are unwrapped back into the page (nothing deleted) and the set is rebuilt from your new mapping. Without it the call is refused and points you at add_tab.' },
-        removeLegacy: { type: 'boolean', description: 'Remove a hand-rolled tab controller script even when the page still has .tab-button/.tab-content markup it drives. A DEAD controller (no such markup anywhere) is always removed without this.' }
+        rebuild: { type: 'boolean', description: 'Required to re-run on a page that ALREADY has a managed tab set: the existing panels are unwrapped back into the page (nothing deleted) and the set is rebuilt from your new mapping.' },
+        removeLegacy: { type: 'boolean', description: 'Remove a hand-rolled tab controller script even when the page still has .tab-button/.tab-content markup it drives. A DEAD controller is always removed without this.' }
       },
       required: ['graphId', 'nodeId', 'tabs']
     }
   },
   {
     name: 'add_tab',
-    description: "Add ONE tab to a page that already has a managed tab set (built by apply_tabs) — button + panel + ids in one deterministic call, with the existing tabs untouched. Pass `target` to MOVE an existing element into the new tab's panel (byte-for-byte, never retyped — this is the answer to \"the component is on the page but not in its own tab\"), or `html` to create the content. Refuses if the page has no managed set (it tells you to call apply_tabs with the full tab list), and refuses a target that is already inside a panel (use move_html_element(target, to:'#<panel id>') to move content BETWEEN tabs). The managed controller picks the new tab up with no extra script — never insert a tab script or tab CSS yourself. Returns version + the new tab id. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Put ONE thing in its own tab — the answer to \"legg X i en egen tab\", \"put this in its own tab\", \"one extra tab beside what is already there\". Works BOTH ways: on a page that already has a managed tab set it adds one tab beside the others; on a page with NO tabs it creates the set by wrapping everything already on the page as the first tab (label it with `baseLabel`, default 'Innhold') and putting your content in a second tab — **the rest of the page keeps its order, styling and components exactly as they are, nothing is re-laid-out**. Pass `target` to MOVE an existing element into the new tab (byte-for-byte, never retyped — this is the case where a component is on the page but not in a tab), or `html` for content that does not exist yet. `html` that is already on the page is REFUSED: retyping page content replaces real markup with an invented copy. Use apply_tabs only when the user wants SEVERAL tabs at once. Returns version + the new tab id. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
@@ -489,16 +491,19 @@ const TOOL_DEFINITIONS = [
         label: { type: 'string', description: "The caption on the new tab button, e.g. 'Portefølje'." },
         target: { type: 'string', description: "Selector of an EXISTING element to MOVE into the new tab (e.g. '[data-vegvisr-portfolio]', '#gallery', '.portfolio'). Moved whole, nothing retyped." },
         nth: { type: 'integer', description: 'When the selector matches several elements, which one (1-based).' },
-        html: { type: 'string', description: "Content for the new tab when it is not on the page yet. Omit when you pass `target`." },
+        html: { type: 'string', description: "Content for the new tab when it is not on the page yet. Omit when you pass `target`. Rejected if the text is already on the page." },
+        baseLabel: { type: 'string', description: "Only used when the page has NO tabs yet: the caption for the tab that holds everything already on the page. Default 'Innhold'. Ask the user what to call it when the page's own wording suggests something better ('Hjem', 'Om oss')." },
+        container: { type: 'string', description: "Only used when the page has NO tabs yet: which element holds the page content that becomes the first tab. Auto-detected (.container → main → #content → .content → .wrapper → body)." },
         id: { type: 'string', description: 'Optional explicit panel id (also the #hash). Default: slugified from the label.' },
-        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) adds the tab last; 'start' first." }
+        position: { type: 'string', enum: ['end', 'start'], description: "'end' (default) adds the tab last; 'start' first." },
+        active: { type: 'string', description: 'Which tab opens first once the set exists. Default: the first one.' }
       },
       required: ['graphId', 'nodeId', 'label']
     }
   },
   {
     name: 'list_tabs',
-    description: "Report a page's TAB STRUCTURE before you change it: every managed tab (id, label, how many chars of content its panel holds, which one opens first), plus whether the page carries hand-rolled tab markup or a hand-rolled tab controller, plus any script on the page that queries a class/id NO element has (dead wiring). Call this FIRST for any tab request instead of guessing — 'hasTabs: false' is the fact the 2026-09-12 run never established: it guessed an edit anchor, got \"this page has no edit anchors yet\", and then bolted tab CSS and a tab controller onto a page with no tabs. Read-only. Code-hardcoded (not in registry).",
+    description: "Report a page's TAB STRUCTURE before you change it: every managed tab (id, label, how many chars of content its panel holds, which one opens first), which container holds the page content and how many top-level elements it has, plus whether the page carries hand-rolled tab markup or a hand-rolled tab controller, plus any script on the page that queries a class/id NO element has (dead wiring). When it reports hasTabs:false, ONE extra tab is add_tab's job, not apply_tabs'. Call this FIRST for any tab request instead of guessing — 'hasTabs: false' is the fact the 2026-09-12 run never established: it guessed an edit anchor, got \"this page has no edit anchors yet\", and then bolted tab CSS and a tab controller onto a page with no tabs. Read-only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {

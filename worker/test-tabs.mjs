@@ -26,7 +26,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import {
   slugTabId, buildTabsBlock, buildTabPanel, buildTabButton, readTabsBlock, panelInner,
-  findLegacyTabScripts, removeLegacyTabScripts, detectDeadSelectorWiring,
+  findLegacyTabScripts, removeLegacyTabScripts, detectDeadSelectorWiring, retypedExistingContent,
 } from './html-tabs.js'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
@@ -39,7 +39,7 @@ for (const part of execSrc.split(/\n(?=(?:async\s+)?function\s)/)) {
   const nm = part.match(/^(?:async\s+)?function\s+(\w+)\s*\(/)
   if (nm) parts[nm[1]] = part
 }
-const need = ['parseSelector', 'matchesSelector', 'findElementRange', 'countHtmlTags', 'tabsPreservationCheck']
+const need = ['parseSelector', 'matchesSelector', 'findElementRange', 'countHtmlTags', 'tabsPreservationCheck', 'topLevelChildRanges', 'autoTabsContainer', 'resolveTabTargets']
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in tool-executors.js`); process.exit(1) }
 }
@@ -227,12 +227,12 @@ for (const t of ['apply_tabs', 'add_tab', 'list_tabs']) {
     new RegExp(`case '${t}':\\s*\\n\\s*return await ${fn}\\(`).test(execSrc))
   check(`${fn} exists`, !!parts[fn])
 }
-check('apply_tabs refuses a partial build (no tab target may be left unresolved)',
-  /NOTHING was written — every tab target must resolve first/.test(execSrc))
+check('apply_tabs refuses a partial build (no tab may be left unresolved)',
+  /NOTHING was written — every tab must resolve first/.test(execSrc))
 check('apply_tabs verifies content preservation before it saves',
   /tabsPreservationCheck\(original, working, legacyRemoved\)/.test(execSrc))
-check('add_tab refuses a page with no managed set and names apply_tabs',
-  /has no managed tab set yet[\s\S]{0,400}apply_tabs FIRST/.test(execSrc))
+check('add_tab on a page with NO tabs bootstraps the set instead of refusing (the requirement)',
+  /NO tab set yet → this IS the "one extra tab beside what is already there" case/.test(execSrc))
 check('the functional-coherence gate calls the dead-wiring detector',
   /gaps\.push\(\.\.\.detectDeadSelectorWiring\(h\)\)/.test(fs.readFileSync(path.join(dir, 'html-builder-subagent.js'), 'utf8')))
 {
@@ -246,3 +246,72 @@ check('the functional-coherence gate calls the dead-wiring detector',
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed')
 process.exit(failed ? 1 : 0)
+
+// ── 8. THE REQUIREMENT (2026-09-12, round 2) ──────────────────────────────────
+// "Jeg ba ikke om flere enn 1 ekstra tab, ikke mange tabs."
+// One target per tab made that inexpressible: the agent made every section its own tab,
+// then retyped the page into `html` — and its retyped copy replaced the live
+// <div data-vegvisr-contact> component with an invented <form>. These checks encode what
+// was ASKED for, not what the failing transcript happened to do.
+{
+  const c = api.autoTabsContainer(REAL)
+  check('the page container is found automatically', c && c.selector === '.container', JSON.stringify(c && c.selector))
+  const top = api.topLevelChildRanges(REAL, c.range.innerStart, c.range.innerEnd)
+  check('its top-level children are swept (3 sections, no scripts/styles)', top.length === 3 && top.every(t => t.tag === 'section'),
+    JSON.stringify(top.map(t => t.tag)))
+
+  // add_tab's bootstrap path: everything already there = tab 1, the component = tab 2.
+  const claimed = [api.findElementRange(REAL, '[data-vegvisr-portfolio]')]
+  const swept = api.topLevelChildRanges(REAL, c.range.innerStart, c.range.innerEnd)
+    .filter(x => !claimed.some(k => x.start < k.end && k.start < x.end))
+  const tabs = [
+    { id: 'tab-innhold', label: 'Innhold', ranges: swept },
+    { id: 'tab-portefoelje', label: 'Portefølje', ranges: claimed },
+  ]
+  const all = tabs.flatMap(t => t.ranges.map(r => ({ r, t }))).sort((a, b) => a.r.start - b.r.start)
+  let w = REAL
+  const MOUNT = '<!--v-tabs-mount-->'
+  const mountRange = all[0].r
+  for (const { r, t } of [...all].reverse()) {
+    t.chunks = t.chunks || []; t.chunks.unshift(w.slice(r.start, r.end))
+    w = w.slice(0, r.start) + (r === mountRange ? MOUNT : '') + w.slice(r.end)
+  }
+  w = w.replace(MOUNT, buildTabsBlock({ tabs: tabs.map(t => ({ ...t, content: t.chunks.join('\n') })), active: 'tab-innhold' }))
+  w = removeLegacyTabScripts(w).html
+
+  const read = readTabsBlock(w)
+  check('ONE extra tab, not many: exactly 2 tabs', read.tabs.length === 2, JSON.stringify(read.tabs.map(t => t.label)))
+  const innhold = panelInner(w, 'tab-innhold')
+  check('ALL three existing sections sit in the first tab, together', (innhold.match(/<section/g) || []).length === 3,
+    String((innhold.match(/<section/g) || []).length))
+  check('the live contact component survived as itself (not retyped into a <form>)',
+    innhold.includes('data-vegvisr-contact') && !/<form/.test(innhold))
+  check('the component is alone in the second tab', (panelInner(w, 'tab-portefoelje') || '').includes('data-vegvisr-portfolio'))
+  check('nothing is left loose in the container beside the tab set', (() => {
+    const cc = api.findElementRange(w, '.container')
+    const set = api.findElementRange(w, '[data-v-tabs-root]')
+    return api.topLevelChildRanges(w, cc.innerStart, cc.innerEnd).filter(x => x.start >= set.end || x.end <= set.start).length === 0
+  })())
+  check('no tag type lost', api.tabsPreservationCheck(REAL, w, 1).length === 0, api.tabsPreservationCheck(REAL, w, 1).join(', '))
+  check('header and footer stay OUTSIDE the tabs', !panelInner(w, 'tab-innhold').includes('<footer') && w.includes('<footer'))
+}
+
+// ── 9. the retyped-content guard ──────────────────────────────────────────────
+{
+  const retyped = `<section><h2>Om oss</h2><p>Vi leverer kunnskapsledelsessystemer.</p></section>
+    <section><h2>Kontakt oss</h2><form><input placeholder="Ditt navn"></form></section>`
+  check('html that is already on the page is caught as retyped content',
+    retypedExistingContent(REAL, retyped).length >= 2, JSON.stringify(retypedExistingContent(REAL, retyped)))
+  check('genuinely new html is not flagged',
+    retypedExistingContent(REAL, '<section><h2>Nyheter</h2><p>Her kommer nyheter fra teamet vårt hver uke framover.</p></section>').length === 0)
+  check('a short snippet is never flagged', retypedExistingContent(REAL, '<div data-vegvisr-portfolio="BLOGG"></div>').length === 0)
+}
+
+// ── 10. the new refusals ──────────────────────────────────────────────────────
+check('apply_tabs refuses two tabs with the same label', /two tabs are both labelled/.test(execSrc))
+check('apply_tabs refuses html that is already on the page', /passes html that is ALREADY on this page/.test(execSrc))
+check('add_tab bootstraps a set when the page has none (one extra tab beside the page)',
+  /had no tabs, so this created the set: everything already on the page is now the/.test(execSrc))
+check('apply_tabs reports what is still OUTSIDE the tab set', /STILL OUTSIDE the tab set, inside/.test(execSrc))
+check('a multi-match target tells the model how to put SEVERAL elements in one tab',
+  /pass targets:\[\{target:"\$\{target\}",nth:1\}/.test(execSrc))
