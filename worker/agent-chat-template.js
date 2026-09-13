@@ -15,7 +15,7 @@ export const AGENT_CHAT_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <meta name="template-version" content="1.0.0" />
+  <meta name="template-version" content="1.1.0" />
   <meta name="template-id" content="agent-chat" />
   <title>{{TITLE}}</title>
 
@@ -536,7 +536,7 @@ export const AGENT_CHAT_TEMPLATE = `<!DOCTYPE html>
         authToken = data.token || null;
         localStorage.setItem('userStore', JSON.stringify({ user: currentUser, token: authToken }));
         if (authToken) localStorage.setItem('token', authToken);
-        updateLoginButton(); hideLoginModal();
+        updateLoginButton(); hideLoginModal(); loadGraphSelector();
         var url = new URL(window.location.href);
         url.searchParams.delete('magic');
         window.history.replaceState({}, document.title, url.toString());
@@ -550,23 +550,60 @@ export const AGENT_CHAT_TEMPLATE = `<!DOCTYPE html>
       localStorage.removeItem('user'); localStorage.removeItem('authToken');
       try { sessionStorage.clear(); } catch(e) {}
       updateLoginButton();
+      loadGraphSelector();
     }
 
     // ========== GRAPH SELECTOR ==========
 
+    // The KG worker widens a listing to drafts on the mere PRESENCE of x-user-role. This page is
+    // public, so it sends the role the visitor actually has and nothing at all when signed out —
+    // a page served to the world must not hand every visitor the account's draft titles.
+    function kgHeaders() {
+      var h = {};
+      if (!currentUser) return h;
+      var role = currentUser.role || currentUser.userRole || currentUser.roles;
+      if (Array.isArray(role)) role = role.length ? (typeof role[0] === 'string' ? role[0] : (role[0].name || '')) : '';
+      if (typeof role === 'string' && role) h['x-user-role'] = role;
+      if (currentUser.email) h['x-user-email'] = currentUser.email;
+      return h;
+    }
+
+    // Summary rows carry the title in metadata.title, with a flat title alongside it. The flattened
+    // field this used to read does not exist, so every option fell through to the raw graph id.
+    function graphTitle(g) {
+      return (g.metadata && g.metadata.title) || g.title || g.id;
+    }
+
     async function loadGraphSelector() {
+      var sel = document.getElementById('graphSelector');
       try {
-        var res = await fetch(KG_API + '/getknowgraphsummaries?offset=0&limit=50');
+        var res = await fetch(KG_API + '/getknowgraphsummaries?offset=0&limit=50', { headers: kgHeaders() });
         var data = await res.json();
-        var sel = document.getElementById('graphSelector');
         var results = data.results || [];
+        // Rebuild — this runs again after login and logout, when the visible set changes.
+        while (sel.options.length > 1) sel.remove(1);
         for (var i = 0; i < results.length; i++) {
           var g = results[i];
           var opt = document.createElement('option');
           opt.value = g.id;
-          opt.textContent = (g.metadata_title || g.id).slice(0, 50);
+          opt.textContent = graphTitle(g).slice(0, 50);
           if (g.id === GRAPH_ID) opt.selected = true;
           sel.appendChild(opt);
+        }
+        // The active graph may sit outside the 50 loaded rows; without this the box reads
+        // "No graph context" while the page keeps chatting against GRAPH_ID.
+        if (GRAPH_ID && sel.value !== GRAPH_ID) {
+          var pinned = document.createElement('option');
+          pinned.value = GRAPH_ID;
+          pinned.textContent = GRAPH_ID.slice(0, 50);
+          pinned.selected = true;
+          sel.appendChild(pinned);
+          try {
+            var oneRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID), { headers: kgHeaders() });
+            var oneData = await oneRes.json();
+            var oneTitle = oneData && oneData.metadata && oneData.metadata.title;
+            if (oneTitle) pinned.textContent = oneTitle.slice(0, 50);
+          } catch (e) {}
         }
       } catch (e) { console.error('Failed to load graphs:', e); }
     }
