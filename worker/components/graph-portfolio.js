@@ -453,14 +453,21 @@
     thumb.className = 'vgp-thumb'
     if (card.image) {
       var img = document.createElement('img')
-      img.src = card.image
       img.alt = ''
-      img.loading = 'lazy'
-      // A dead imgix key must not leave a blank rectangle — fall back to the tile.
+      // NOT loading="lazy", and onerror BEFORE src. Both were wrong here until
+      // 2026-09-13, and together they made a card with a real portfolioImagePath
+      // render as a BLANK rectangle: the lazy heuristic never started the load for
+      // an image this script creates and appends (currentSrc stayed empty,
+      // complete stayed false, neither load nor error ever fired), so the gradient
+      // fallback below could not run either. It went unnoticed because only 4 of
+      // 211 published graphs carry an image, and no card in any earlier test had
+      // one. Revisit with IntersectionObserver if a grid ever carries enough
+      // images to be worth deferring.
       img.onerror = function () {
-        thumb.removeChild(img)
+        if (img.parentNode === thumb) thumb.removeChild(img)
         paintFallback(thumb, card)
       }
+      img.src = card.image
       thumb.appendChild(img)
     } else {
       paintFallback(thumb, card)
