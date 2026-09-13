@@ -64,18 +64,27 @@ function shortName(email: string | undefined | null): string {
   return email.split('@')[0];
 }
 
+// /searchGraphs returns FLAT rows ({ title, description, category, metaArea, updatedAt }) while
+// /getknowgraphsummaries nests the same fields under `metadata` — accept both shapes.
+interface RawSummary extends GraphSummary {
+  description?: string;
+  createdBy?: string;
+  metaArea?: string;
+  category?: string;
+}
+
 // Normalise a raw summary into a consistent shape (mirrors processGraphSummary in GraphPortfolio.vue)
-function processSummary(raw: GraphSummary): GraphSummary {
+function processSummary(raw: RawSummary): GraphSummary {
   const meta = raw.metadata || {};
   return {
     ...raw,
     metadata: {
       ...meta,
       title: meta.title || raw.title || 'Untitled',
-      description: meta.description || '',
-      createdBy: meta.createdBy || 'Unknown',
-      metaArea: meta.metaArea || '',
-      category: meta.category || '',
+      description: meta.description || raw.description || '',
+      createdBy: meta.createdBy || raw.createdBy || 'Unknown',
+      metaArea: meta.metaArea || raw.metaArea || '',
+      category: meta.category || raw.category || '',
       // normalise updatedAt into metadata (same as Vue: summary.updatedAt || summary.createdAt || metadata.updatedAt)
       updatedAt: raw.updatedAt || raw.createdAt || meta.updatedAt || undefined,
     },
@@ -88,6 +97,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
   const [loading, setLoading] = useState(false);
   const [hydrating, setHydrating] = useState(false); // background loading remaining pages
   const [search, setSearch] = useState('');
+  const [serverSearched, setServerSearched] = useState(false); // current list came from /searchGraphs
   const [selectedArea, setSelectedArea] = useState<string | null>(null);
   const [selectedCreator, setSelectedCreator] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
@@ -127,10 +137,13 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
       const desc = (g.metadata?.description || '').toLowerCase();
       const area = (g.metadata?.metaArea || '').toLowerCase();
       const cat = (g.metadata?.category || '').toLowerCase();
-      const matchesSearch = !q || title.includes(q) || desc.includes(q) || area.includes(q) || cat.includes(q);
+      // The server matches node labels and node content too — re-applying the local
+      // title/description test to its results would throw away real hits.
+      const matchesSearch = serverSearched || !q || title.includes(q) || desc.includes(q) || area.includes(q) || cat.includes(q);
       const graphAreas = parseMetaAreas(g.metadata?.metaArea);
       const matchesArea = !selectedArea || graphAreas.includes(selectedArea);
-      const matchesCreator = !selectedCreator || g.metadata?.createdBy === selectedCreator;
+      // /searchGraphs rows carry no createdBy — don't filter search hits on a field they lack.
+      const matchesCreator = !selectedCreator || serverSearched || g.metadata?.createdBy === selectedCreator;
       return matchesSearch && matchesArea && matchesCreator;
     })
     .sort((a, b) => {
@@ -154,6 +167,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
     const runId = ++runIdRef.current;
     setLoading(true);
     setHydrating(false);
+    setServerSearched(false);
     setGraphs([]);
 
     try {
@@ -164,7 +178,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
       const totalCount: number = firstData.total || 0;
       setTotal(totalCount);
 
-      const firstBatch = (firstData.results as GraphSummary[] || []).map(processSummary);
+      const firstBatch = (firstData.results as RawSummary[] || []).map(processSummary);
       if (runId !== runIdRef.current) return;
       setGraphs(firstBatch);
       setLoading(false);
@@ -178,7 +192,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
           const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: { 'x-user-role': 'Superadmin' } });
           if (!res.ok) break;
           const data = await res.json();
-          const page = (data.results as GraphSummary[] || []).map(processSummary);
+          const page = (data.results as RawSummary[] || []).map(processSummary);
           if (!page.length) break;
           if (runId !== runIdRef.current) return;
           setGraphs(prev => [...prev, ...page]);
@@ -202,13 +216,17 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
       debounceRef.current = setTimeout(async () => {
         const runId = ++runIdRef.current;
         setLoading(true);
+        setHydrating(false); // a superseded background page-load must not leave the spinner on
         try {
-          const params = new URLSearchParams({ q: search, limit: '100', offset: '0' });
-          const res = await fetch(`${KG_API}/searchGraphs?${params}`);
+          const params = new URLSearchParams({ q: search, limit: '50', offset: '0' });
+          // Without the role header the worker searches PUBLISHED graphs only — drafts vanish.
+          const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: { 'x-user-role': 'Superadmin' } });
           if (res.ok && runId === runIdRef.current) {
             const data = await res.json();
-            setGraphs((data.results || []).map(processSummary));
-            setTotal(data.results?.length || 0);
+            const hits = ((data.results as RawSummary[]) || []).map(processSummary);
+            setGraphs(hits);
+            setTotal(typeof data.total === 'number' ? data.total : hits.length);
+            setServerSearched(true);
           }
         } catch { /* silent */ } finally {
           if (runId === runIdRef.current) setLoading(false);
