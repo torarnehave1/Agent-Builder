@@ -1,9 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
 interface GraphInfo {
   id: string;
   title: string;
   updatedAt?: string;
+}
+
+// Both endpoints answer rows this component has to flatten: /getknowgraphsummaries nests the
+// title under `metadata`, /searchGraphs returns it flat. Neither has a `metadata_title` field.
+interface RawGraph {
+  id: string;
+  title?: string;
+  updatedAt?: string;
+  metadata?: { title?: string } | null;
 }
 
 interface Props {
@@ -12,25 +21,67 @@ interface Props {
 }
 
 const KG_API = 'https://knowledge.vegvisr.org';
+const PAGE_LIMIT = 50;
+
+// Session auth — without it the worker answers PUBLISHED graphs only, so drafts are invisible.
+const KG_HEADERS = { 'x-user-role': 'Superadmin' };
+
+function toGraphInfo(raw: RawGraph): GraphInfo {
+  const info: GraphInfo = { id: raw.id, title: raw.metadata?.title || raw.title || raw.id };
+  if (raw.updatedAt) info.updatedAt = raw.updatedAt;
+  return info;
+}
 
 export default function GraphSelector({ graphId, onGraphChange }: Props) {
   const [graphs, setGraphs] = useState<GraphInfo[]>([]);
+  const [search, setSearch] = useState('');
+  const [searching, setSearching] = useState(false);
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const ref = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const runIdRef = useRef(0);
 
-  // Load available graphs
-  useEffect(() => {
-    fetch(`${KG_API}/getknowgraphs`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.results) {
-          setGraphs(data.results);
-        }
-      })
-      .catch(() => {});
+  // Most recent graphs — the default list when nothing is typed
+  const loadRecent = useCallback(async () => {
+    const runId = ++runIdRef.current;
+    try {
+      const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_LIMIT}`, { headers: KG_HEADERS });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (runId !== runIdRef.current) return;
+      setGraphs(((data.results as RawGraph[]) || []).map(toGraphInfo));
+    } catch { /* leave the list as it is */ }
   }, []);
+
+  useEffect(() => { loadRecent(); }, [loadRecent]);
+
+  // Search runs on the server: it matches titles, descriptions, node labels and node content,
+  // which a filter over this component's 50 loaded rows could never do.
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = search.trim();
+    if (q.length >= 2) {
+      setSearching(true);
+      debounceRef.current = setTimeout(async () => {
+        const runId = ++runIdRef.current;
+        try {
+          const params = new URLSearchParams({ q, limit: String(PAGE_LIMIT), offset: '0' });
+          const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: KG_HEADERS });
+          if (!res.ok || runId !== runIdRef.current) return;
+          const data = await res.json();
+          setGraphs(((data.results as RawGraph[]) || []).map(toGraphInfo));
+        } catch { /* leave the list as it is */ } finally {
+          if (runId === runIdRef.current) setSearching(false);
+        }
+      }, 300);
+    } else {
+      setSearching(false);
+      if (q.length === 0) loadRecent();
+    }
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [search, loadRecent]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -74,6 +125,29 @@ export default function GraphSelector({ graphId, onGraphChange }: Props) {
 
       {open && (
         <div className="absolute top-full left-0 mt-1 w-[320px] rounded-lg border border-white/10 bg-slate-900/95 backdrop-blur-sm shadow-2xl z-50 overflow-hidden">
+          {/* Search */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5">
+            <svg className="w-3 h-3 text-gray-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search all graphs…"
+              className="flex-1 bg-transparent text-[11px] text-white placeholder:text-gray-600 focus:outline-none"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="text-[10px] text-gray-500 hover:text-gray-300"
+                title="Clear search"
+              >
+                &times;
+              </button>
+            )}
+          </div>
+
           {/* Create new toggle */}
           {!creating ? (
             <button
@@ -131,7 +205,7 @@ export default function GraphSelector({ graphId, onGraphChange }: Props) {
             ))}
             {graphs.length === 0 && (
               <div className="px-3 py-4 text-[11px] text-gray-600 text-center">
-                No graphs found
+                {searching ? 'Searching…' : search ? 'No graphs match that search' : 'No graphs found'}
               </div>
             )}
           </div>

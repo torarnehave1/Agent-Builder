@@ -122,8 +122,14 @@ interface ClientTranscriptionJob {
 
 interface GraphInfo {
   id: string;
-  metadata_title?: string;
+  title?: string;
+  metadata?: { title?: string } | null;
 }
+
+// Summary rows from /getknowgraphsummaries carry the title in `metadata.title`, with a flat
+// `title` alongside it. There is no flattened `metadata_title` field — reading one showed ids.
+const graphTitle = (g?: GraphInfo | null): string | undefined =>
+  g?.metadata?.title || g?.title || undefined;
 
 interface CapabilityQuestion {
   id?: string;
@@ -1013,7 +1019,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
   // Load graph list
   useEffect(() => {
-    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=200`)
+    // Without the role header the worker lists PUBLISHED graphs only — drafts never appear.
+    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=200`, { headers: { 'x-user-role': 'Superadmin' } })
       .then(r => r.json())
       .then(data => { if (data.results) setGraphs(data.results); })
       .catch(() => {});
@@ -1029,7 +1036,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         .then(r => r.json())
         .then(data => {
           const title = (data.metadata?.title as string) || graphId;
-          setGraphs(p => p.some(g => g.id === graphId) ? p : [...p, { id: graphId, metadata_title: title }]);
+          setGraphs(p => p.some(g => g.id === graphId) ? p : [...p, { id: graphId, title }]);
         })
         .catch(() => {});
       return prev;
@@ -1228,7 +1235,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       prompt: automationPrompt(autoScope),
       graphTarget: autoGraphTarget,
       contextGraphId,
-      contextGraphTitle: graphs.find((g) => g.id === contextGraphId)?.metadata_title,
+      contextGraphTitle: graphTitle(graphs.find((g) => g.id === contextGraphId)),
       parameterize: autoParameterize,
       keepReads: autoKeepReads,
       flattenDelegates: autoFlatten,
@@ -2935,7 +2942,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <option value="">No graph context</option>
           {graphs.map(g => (
             <option key={g.id} value={g.id} className="app-panel app-text">
-              {(g.metadata_title || g.id).slice(0, 50)}
+              {(graphTitle(g) || g.id).slice(0, 50)}
             </option>
           ))}
         </select>
@@ -3044,7 +3051,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0 animate-pulse" />
           <span className="font-medium text-purple-200">Active context:</span>
           <span className="truncate text-purple-300/90">
-            {graphs.find(g => g.id === graphId)?.metadata_title || graphId}
+            {graphTitle(graphs.find(g => g.id === graphId)) || graphId}
           </span>
           <button
             type="button"
