@@ -32,7 +32,7 @@ const need = [
   'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
-  'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl',
+  'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl', 'cssForHtmlNode',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -208,6 +208,31 @@ check('a leading slash is dropped', api.realtimeVideoUrl('/recordings/video1.mp4
 check('a full url is used as it is', api.realtimeVideoUrl('https://example.org/v.mp4') === 'https://example.org/v.mp4')
 check('a javascript:/data: value is not a key', api.realtimeVideoUrl('javascript:alert(1)') === '' && api.realtimeVideoUrl('data:video/mp4;base64,AAAA') === '')
 check('a realtime-video with no path falls back to its note', rv({ path: '' }).kind === 'markdown')
+
+// 9d. html-node: its own frame, and the css-nodes the viewer would add (GNewHtmlNode.vue).
+check('an html-node becomes a page, not markdown',
+  api.nodeRenderPlan({ type: 'html-node', label: 'Walkthrough', info: '<!DOCTYPE html><html><head><style>.t{}</style></head><body></body></html>' }).kind === 'page')
+check('an empty html-node is skipped', api.nodeRenderPlan({ type: 'html-node', info: '  ' }).kind === 'skip')
+{
+  const g = {
+    nodes: [
+      { id: 'page', type: 'html-node' },
+      { id: 'c-edge', type: 'css-node', info: 'EDGE', metadata: { priority: 50 } },
+      { id: 'c-star', type: 'css-node', info: 'STAR', metadata: { appliesTo: ['*'], priority: 10 } },
+      { id: 'c-named', type: 'css-node', info: 'NAMED', metadata: { appliesTo: ['page'] } },
+      { id: 'c-other', type: 'css-node', info: 'OTHER', metadata: { appliesTo: ['elsewhere'] } },
+      { id: 'c-loose', type: 'css-node', info: 'LOOSE' },
+    ],
+    edges: [
+      { source: 'c-edge', target: 'page', label: 'Styles' },
+      { source: 'c-loose', target: 'another-page', type: 'styles' },
+    ],
+  }
+  const got = api.cssForHtmlNode(g, 'page')
+  check('css-nodes by styles edge (any case) and appliesTo, lowest priority first, unrelated ones left out',
+    JSON.stringify(got) === JSON.stringify(['STAR', 'EDGE', 'NAMED']), JSON.stringify(got))
+  check('a graph with no css-nodes adds none', api.cssForHtmlNode({ nodes: [{ id: 'page', type: 'html-node' }] }, 'page').length === 0 && api.cssForHtmlNode(null, 'x').length === 0)
+}
 
 // 9b. Sharing. A shared link must lead back to THIS page with the article open, keep the
 // tab #hash (html-node tabs own it) and every other parameter, and never be built from a

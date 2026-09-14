@@ -335,6 +335,12 @@
       var yt = youtubeEmbed(node)
       if (yt) return { kind: 'video', text: info, label: yt.title, src: yt.src }
     }
+    // An html-node is a whole document with its own <style>. Rendered as markdown its
+    // CSS was scrubbed and the page arrived unstyled (timestamp badges ran together as
+    // "0100:45", seen 2026-09-14 on a2341af7). It gets its own sandboxed frame instead.
+    if (type === 'html-node') {
+      return info.trim() ? { kind: 'page', text: info, label: label } : { kind: 'skip', text: '', label: label }
+    }
     if (type === 'css-node') return { kind: 'skip', text: '', label: label }
     // The editor's password control ("Add password protection to this Knowledge
     // Graph…"). The viewer hides it from readers; so does this dialog.
@@ -499,6 +505,28 @@
     ]
   }
 
+  // The css-nodes the viewer adds to an html-node (GNewHtmlNode.vue collectCssNodes): a
+  // 'styles' edge css-node -> html-node, or metadata.appliesTo naming the node or '*',
+  // lowest metadata.priority first (default 999). No published graph uses one today
+  // (checked 2026-09-14); kept for parity so a styled page does not lose its sheet here.
+  function cssForHtmlNode (graph, nodeId) {
+    var nodes = (graph && graph.nodes) || []
+    var edges = (graph && graph.edges) || []
+    var fromEdges = {}
+    edges.forEach(function (e) {
+      if (e && String(e.label || e.type || '').toLowerCase() === 'styles' && e.target === nodeId && e.source) {
+        fromEdges[e.source] = true
+      }
+    })
+    return nodes.filter(function (n) {
+      if (!n || n.type !== 'css-node') return false
+      var applies = (n.metadata && n.metadata.appliesTo) || []
+      return fromEdges[n.id] || applies.indexOf(nodeId) !== -1 || applies.indexOf('*') !== -1
+    }).sort(function (a, b) {
+      return ((a.metadata && a.metadata.priority) || 999) - ((b.metadata && b.metadata.priority) || 999)
+    }).map(function (n) { return String(n.info || '') })
+  }
+
   // PASSWORD PROTECTION — the same check the viewer makes, and only that. The editor's
   // password node stores metadata.passwordHash = btoa(password) and the viewer compares
   // btoa(input) in the browser (useGraphPasswordGate.js). That is NOT protection: the
@@ -646,6 +674,8 @@
       '.vgp-audio figcaption,.vgp-recording figcaption{font-weight:600;font-size:.9rem;line-height:1.4;margin-bottom:.6rem}',
       '.vgp-audio audio{display:block;width:100%}',
       '.vgp-recording video{display:block;width:100%;height:auto;max-height:70vh;background:#000;border-radius:8px}',
+      '.vgp-page{margin:0 0 1.1rem}',
+      '.vgp-page iframe{display:block;width:100%;height:320px;border:0;border-radius:10px;background:transparent}',
       '.vgp-media-note{margin-top:.5rem;font-size:.85rem;color:var(--v-muted,rgba(127,127,127,.95))}',
       '.vgp-media-note p{margin:0}',
       '.vgp-video{margin:0 0 1.1rem}',
@@ -1305,6 +1335,11 @@
         rendered += 1
         return
       }
+      if (plan.kind === 'page') {
+        body.appendChild(pageEl(plan, cssForHtmlNode(graph, node.id)))
+        rendered += 1
+        return
+      }
       if (plan.kind === 'video') {
         body.appendChild(videoEl(plan, ft))
         rendered += 1
@@ -1453,6 +1488,148 @@
       wrap.appendChild(about)
     }
     return wrap
+  }
+
+  // An html-node in its own frame, the way the viewer shows one — but locked down for a
+  // page that is not ours:
+  //  - sandbox WITHOUT allow-scripts. No script from graph content runs on a customer
+  //    site; 7 of 27 published html-nodes load marked + DOMPurify from jsdelivr, and
+  //    those parts stay inert here (2026-09-14). allow-same-origin is safe ONLY because
+  //    scripts are off — it lets this component read the frame to size it. Never add
+  //    allow-scripts next to it: together they let the frame lift its own sandbox.
+  //  - no allow-forms, no top navigation; links open a new tab (<base target=_blank> +
+  //    allow-popups-to-escape-sandbox, so the opened site works normally).
+  //  - the node's CSS stays inside the frame and cannot restyle the host page, and its
+  //    @media queries answer to the dialog's width, as they would in a browser window.
+  function pageEl (plan, css) {
+    var wrap = document.createElement('div')
+    wrap.className = 'vgp-page'
+    var frame = document.createElement('iframe')
+    frame.title = plan.label || 'HTML'
+    frame.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox')
+    frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
+    frame.srcdoc = pageSource(plan.text, css)
+    var lastWidth = -1
+    var queued = false
+    var refit = function () {
+      if (queued) return
+      queued = true
+      requestAnimationFrame(function () { queued = false; fitPage(frame) })
+    }
+    // Size as soon as the document is PARSED, not at the frame's load event: that waits
+    // for every image, and a 22-screenshot page sat at 320px until the last one arrived
+    // (seen 2026-09-14). Each image then re-fits as it lands; load re-fits once more.
+    var wired = false
+    var started = Date.now()
+    var wire = function () {
+      var doc
+      try { doc = frame.contentDocument } catch (e) { return true }
+      if (!doc || doc.URL !== 'about:srcdoc' || doc.readyState === 'loading') return false
+      if (!wired) {
+        wired = true
+        Array.prototype.forEach.call(doc.images, function (img) {
+          if (!img.complete) {
+            img.addEventListener('load', refit)
+            img.addEventListener('error', refit)
+          }
+        })
+        if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(refit)
+      }
+      fitPage(frame)
+      return true
+    }
+    var poll = setInterval(function () {
+      if (!frame.isConnected || Date.now() - started > 20000 || wire()) clearInterval(poll)
+    }, 100)
+    frame.addEventListener('load', function () {
+      clearInterval(poll)
+      wire()
+    })
+    // Width changes (a phone turned, a window resized) reflow the page; height changes
+    // are this code's own doing and are ignored, so sizing cannot feed itself.
+    if (typeof ResizeObserver === 'function') {
+      new ResizeObserver(function (entries) {
+        var w = Math.round(entries[0].contentRect.width)
+        if (w !== lastWidth) { lastWidth = w; refit() }
+      }).observe(frame)
+    }
+    wrap.appendChild(frame)
+    return wrap
+  }
+
+  // The node's document, cleaned: scripts and plugin elements removed (they could not
+  // run in the sandbox anyway; removing them means their files are not even fetched),
+  // meta refresh and <base> removed, on* attributes and javascript:/data:text/html urls
+  // stripped, the css-nodes added, and links pointed at a new tab.
+  function pageSource (html, css) {
+    var doc = new DOMParser().parseFromString(String(html), 'text/html')
+    ;['script', 'object', 'embed', 'base', 'meta[http-equiv]'].forEach(function (sel) {
+      Array.prototype.forEach.call(doc.querySelectorAll(sel), function (el) { el.parentNode.removeChild(el) })
+    })
+    Array.prototype.forEach.call(doc.querySelectorAll('*'), function (el) {
+      Array.prototype.slice.call(el.attributes).forEach(function (attr) {
+        var name = attr.name.toLowerCase()
+        if (name.indexOf('on') === 0) el.removeAttribute(attr.name)
+        else if (['href', 'src', 'xlink:href', 'action', 'formaction'].indexOf(name) !== -1 && isUnsafeUrl(attr.value)) {
+          el.removeAttribute(attr.name)
+        }
+      })
+    })
+    ;(css || []).forEach(function (text) {
+      var style = doc.createElement('style')
+      style.textContent = text
+      doc.head.appendChild(style)
+    })
+    var base = doc.createElement('base')
+    base.setAttribute('target', '_blank')
+    doc.head.insertBefore(base, doc.head.firstChild)
+    // The frame is sized to its content, so its own vertical scrollbar would only ever
+    // flash during measurement.
+    var fit = doc.createElement('style')
+    fit.textContent = 'html{overflow-y:hidden}'
+    doc.head.appendChild(fit)
+    return '<!DOCTYPE html>' + doc.documentElement.outerHTML
+  }
+
+  // The frame's height has to account for vh units, which 13 of 27 published html-nodes
+  // use and which are measured against the frame itself. Start from the height at 0px
+  // (vh counts for nothing), then grow until the document fits: a hero with
+  // min-height:60vh gets taller each round by a shrinking amount and settles. A body with
+  // min-height:100vh plus a margin never settles — it outgrows the frame by the same
+  // margin every round — so a repeated growth is recognised and the last height before
+  // it kept: everything real fits, only that empty margin stays cut (seen on a test page,
+  // 2026-09-14). The dialog's scroll position is put back, so a late image does not make
+  // the reader jump.
+  function fitPage (frame) {
+    var doc
+    try { doc = frame.contentDocument } catch (e) { doc = null }
+    if (!doc || !doc.documentElement) return
+    var scroller = frame.closest('.vgp-dlg-body')
+    var keep = scroller ? scroller.scrollTop : 0
+    // scrollHeight is a rounded integer; a vh-derived height is fractional (60vh of
+    // 1173px), so the exact box height is read too and rounded UP — scrollHeight alone
+    // left a test page 1px short.
+    var measure = function () {
+      var el = doc.documentElement
+      return Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height))
+    }
+    frame.style.height = '0px'
+    var h = measure()
+    var lastGrowth = -1
+    // Up to 40 rounds: a page with no vh settles in one, a 60vh hero in about ten
+    // (8 left a test hero 4px short). A repeated growth of 1-2px is the tail of that
+    // settling, not the margin case, so it keeps the taller height instead.
+    for (var i = 0; i < 40; i++) {
+      frame.style.height = h + 'px'
+      var next = measure()
+      if (next <= h) break
+      var growth = next - h
+      if (growth === lastGrowth) { h = growth > 2 ? h - growth : next; break }
+      lastGrowth = growth
+      h = next
+    }
+    frame.style.height = h + 'px'
+    if (scroller) scroller.scrollTop = keep
   }
 
   function mount (root) {
