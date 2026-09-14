@@ -274,6 +274,15 @@
     if (type === 'markdown-image') {
       return { kind: /!\[/.test(label) ? 'markdown' : 'skip', text: label, label: label }
     }
+    // An audio node carries its recording in PATH; info is only a note about the file
+    // ("Audio file: x.webm"). With no branch here it fell through to the markdown case
+    // and the reader got that note and no player (seen 2026-09-14). Same rule as the
+    // viewer's GNewAudioNode: the player plays path, label titles it, info sits beneath.
+    // A path that is not http(s) falls through, so the note still shows.
+    if (type === 'audio') {
+      var src = String((node && node.path) || '').trim()
+      if (/^https?:\/\//i.test(src)) return { kind: 'audio', text: info, label: label, src: src }
+    }
     if (type === 'css-node') return { kind: 'skip', text: '', label: label }
     if (info.trim()) return { kind: 'markdown', text: info, label: label }
     return { kind: 'skip', text: '', label: label }
@@ -390,6 +399,11 @@
       '.vgp-diagram-canvas{overflow-x:auto;margin-bottom:.5rem}',
       '.vgp-diagram-canvas svg{max-width:100%;height:auto;display:block;margin:0 auto}',
       '.vgp-diagram summary{cursor:pointer;font-size:.85rem;opacity:.75}',
+      '.vgp-audio{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px solid var(--v-border,rgba(127,127,127,.22));border-radius:10px}',
+      '.vgp-audio figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.6rem}',
+      '.vgp-audio audio{display:block;width:100%}',
+      '.vgp-audio-note{margin-top:.5rem;font-size:.85rem;color:var(--v-muted,rgba(127,127,127,.95))}',
+      '.vgp-audio-note p{margin:0}',
       '.vgp-diagram pre{margin:.6rem 0 0;padding:.7rem;overflow-x:auto;background:rgba(127,127,127,.1);border-radius:6px;font-size:.8rem}',
       '@media (max-width:560px){.vgp-back{padding:0}.vgp-dlg{width:100%;max-height:100vh;border-radius:0;min-height:100vh}}',
       '@media (prefers-reduced-motion:reduce){.vgp-card{transition:none}.vgp-card:hover{transform:none}}',
@@ -691,7 +705,9 @@
   }
 
   function trapTab (e) {
-    var focusable = dialog.box.querySelectorAll('a[href], button, [tabindex]:not([tabindex="-1"])')
+    // audio[controls] and summary take focus too; left out, Tab walked off the last
+    // one and out of the dialog.
+    var focusable = dialog.box.querySelectorAll('a[href], button, audio[controls], summary, [tabindex]:not([tabindex="-1"])')
     if (!focusable.length) return
     var first = focusable[0]
     var last = focusable[focusable.length - 1]
@@ -771,6 +787,11 @@
         rendered += 1
         return
       }
+      if (plan.kind === 'audio') {
+        body.appendChild(audioEl(plan, ft))
+        rendered += 1
+        return
+      }
       var section = document.createElement('div')
       section.className = 'vgp-node'
       try {
@@ -835,6 +856,41 @@
       var stray = document.querySelector('#d' + id)
       if (stray && stray.parentNode) stray.parentNode.removeChild(stray)
     })
+    return wrap
+  }
+
+  // Built with DOM APIs: the src is set as a property after nodeRenderPlan has
+  // already required http(s), so nothing from the graph is parsed as markup except
+  // the note, which goes through the same renderer and scrub as page markdown.
+  // preload="metadata" matters — a recording is tens of MB and must not download
+  // just because the dialog opened.
+  function audioEl (plan, ft) {
+    var wrap = document.createElement('figure')
+    wrap.className = 'vgp-audio'
+    if (plan.label) {
+      var cap = document.createElement('figcaption')
+      cap.textContent = plan.label
+      wrap.appendChild(cap)
+    }
+    var player = document.createElement('audio')
+    player.controls = true
+    player.preload = 'metadata'
+    player.addEventListener('error', function () {
+      console.warn('[graph-portfolio] audio did not load: ' + plan.src)
+    })
+    player.src = plan.src
+    wrap.appendChild(player)
+    if (plan.text.trim()) {
+      var note = document.createElement('div')
+      note.className = 'vgp-audio-note'
+      try {
+        note.innerHTML = ft.render(plan.text)
+      } catch (e) {
+        note.textContent = plan.text
+      }
+      scrubInto(note)
+      wrap.appendChild(note)
+    }
     return wrap
   }
 

@@ -156,6 +156,13 @@ check('a markdown-image renders from its LABEL, not info',
     api.nodeRenderPlan({ type: 'markdown-image', label: '![Header](https://x/y.png)', info: '' })))
 check('a markdown-image with no markdown in the label is skipped',
   api.nodeRenderPlan({ type: 'markdown-image', label: 'just a name' }).kind === 'skip')
+check('an audio node is a player from its PATH, not its info note',
+  (p => p.kind === 'audio' && p.src === 'https://audio.vegvisr.org/audio/x.webm' && p.label === 'Opptak')(
+    api.nodeRenderPlan({ type: 'audio', label: 'Opptak', info: 'Audio file: x.webm', path: 'https://audio.vegvisr.org/audio/x.webm' })))
+check('an audio node whose path is not http(s) falls back to its note',
+  api.nodeRenderPlan({ type: 'audio', info: 'Audio file: x.webm', path: 'javascript:alert(1)' }).kind === 'markdown')
+check('an audio node with no path and no note is skipped',
+  api.nodeRenderPlan({ type: 'audio', info: '', path: null }).kind === 'skip')
 check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-node', info: 'body{}' }).kind === 'skip')
 check('an unknown type with content still renders rather than vanishing',
   api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')

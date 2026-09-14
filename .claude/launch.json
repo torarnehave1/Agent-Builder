@@ -70,7 +70,7 @@
         "http.server",
         "8099",
         "--directory",
-        "/private/tmp/claude-501/-Users-torarnehave-Documents-GitHub-Agent-Builder/f0b27de8-6d03-49de-a780-09df8cf091c4/scratchpad/ph"
+        "/private/tmp/claude-501/-Users-torarnehave-Documents-GitHub-Agent-Builder/177c4c27-e06f-4fe2-97fb-e616e862989a/scratchpad/ph"
       ],
       "port": 8099
     }
