@@ -148,6 +148,23 @@ check('a hidden node is left out', api.visibleNodes({ nodes: [{ id: 'a', visible
 check('a node with no visible flag is shown', api.visibleNodes({ nodes: [{ id: 'a' }] }).length === 1)
 check('a graph with no nodes yields none', api.visibleNodes({}).length === 0 && api.visibleNodes(null).length === 0)
 
+// The viewer's reading order (GNewViewer.vue sortedNodes). The first case is the REAL shape
+// of a2341af7: the video has order 0 but sits fifth in the array, and the password node
+// (order 0) is last.
+{
+  const real = { nodes: [
+    { id: 't1', order: 1 }, { id: 't2', order: 2 }, { id: 't3', order: 3 }, { id: 't4', order: 4 },
+    { id: 'video', order: 0 }, { id: 't6', order: 6 }, { id: 'pw', order: 0 },
+  ] }
+  const ids = api.visibleNodes(real).map(n => n.id).join(',')
+  check('nodes follow node.order, not array position (video with order 0 comes first)', ids === 'video,pw,t1,t2,t3,t4,t6', ids)
+  const mixed = { nodes: [{ id: 'a' }, { id: 'b', order: 1 }, { id: 'c' }, { id: 'h', visible: false, order: -5 }] }
+  const m = api.visibleNodes(mixed).map(n => n.id).join(',')
+  check('a node without a numeric order takes its visible position + 1; hidden nodes are ignored', m === 'a,b,c', m)
+  check('the graph\'s own nodes are not modified', mixed.nodes[0].order === undefined && mixed.nodes.map(n => n.id).join(',') === 'a,b,c,h')
+  check('a string order is treated as missing, as in the viewer',
+    api.visibleNodes({ nodes: [{ id: 'x', order: '9' }, { id: 'y', order: 1 }] }).map(n => n.id).join(',') === 'x,y')
+}
 check('a fulltext node renders as markdown',
   api.nodeRenderPlan({ type: 'fulltext', info: '## Hei\ntekst' }).kind === 'markdown')
 check('a mermaid node is a diagram, not prose',

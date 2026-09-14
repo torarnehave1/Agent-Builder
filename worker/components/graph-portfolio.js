@@ -291,9 +291,19 @@
     }
   }
 
-  // A graph's nodes, in order, minus the ones hidden in the editor.
+  // A graph's nodes minus the ones hidden in the editor, in the order the READER sees in
+  // the viewer — by node.order, not by array position. The viewer (GNewViewer.vue
+  // sortedNodes) gives a node without a numeric order its position among the visible
+  // nodes + 1, then sorts by (order || 0); ties keep their array order. Array order put
+  // a2341af7's video (order 0, fifth in the array) after four text nodes (2026-09-14).
+  // The graph's own nodes are not modified.
   function visibleNodes (graph) {
-    return (((graph && graph.nodes) || [])).filter(function (n) { return n && n.visible !== false })
+    var shown = (((graph && graph.nodes) || [])).filter(function (n) { return n && n.visible !== false })
+    return shown.map(function (n, i) {
+      return { node: n, key: typeof n.order === 'number' ? n.order : i + 1, i: i }
+    }).sort(function (a, b) {
+      return ((a.key || 0) - (b.key || 0)) || (a.i - b.i)
+    }).map(function (x) { return x.node })
   }
 
   // What the dialog should do with one node. Kept pure so the mapping is testable
