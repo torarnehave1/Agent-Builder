@@ -283,9 +283,79 @@
       var src = String((node && node.path) || '').trim()
       if (/^https?:\/\//i.test(src)) return { kind: 'audio', text: info, label: label, src: src }
     }
+    // A youtube-video node likewise keeps the video out of info, which holds its
+    // description. Without this branch the reader got the description and no video.
+    // A node whose url cannot be read falls through, so the description still shows.
+    if (type === 'youtube-video') {
+      var yt = youtubeEmbed(node)
+      if (yt) return { kind: 'video', text: info, label: yt.title, src: yt.src }
+    }
     if (type === 'css-node') return { kind: 'skip', text: '', label: label }
     if (info.trim()) return { kind: 'markdown', text: info, label: label }
     return { kind: 'skip', text: '', label: label }
+  }
+
+  // The YouTube url rules are the viewer's (GNewVideoNode + src/utils/youtube.js in
+  // vegvisr-frontend), so the dialog embeds exactly what the viewer embeds. Real data
+  // measured 2026-09-14 over all 37 youtube-video nodes: 20 carry the video in the
+  // LABEL as "![YOUTUBE src=<embed url>]Title[END YOUTUBE]", 16 carry a url in PATH
+  // (youtu.be 12, watch?v= 3, shorts 1). Path wins over label, as in the viewer.
+
+  // A plain url, or the src of a pasted <iframe> snippet, with &amp; decoded.
+  function normalizeVideoUrl (raw) {
+    var url = String(raw == null ? '' : raw).trim()
+    var src = url.match(/src=["']([^"']+)["']/)
+    if (src) url = src[1]
+    return url.replace(/&amp;/g, '&')
+  }
+
+  // Ids go into an embed url on somebody else's page, so anything that is not a
+  // plain YouTube id character is refused rather than encoded into it.
+  function youtubeVideoId (url) {
+    var u = normalizeVideoUrl(url)
+    var patterns = [
+      /youtube\.com\/watch\?v=([^&\n?#/]+)/,
+      /youtube\.com\/embed\/([^&\n?#/]+)/,
+      /youtube\.com\/shorts\/([^&\n?#/]+)/,
+      /youtube\.com\/live\/([^&\n?#/]+)/,
+      /youtu\.be\/([^&\n?#/]+)/,
+      /youtube\.com\/watch\?.*[?&]v=([^&\n?#/]+)/,
+    ]
+    for (var i = 0; i < patterns.length; i++) {
+      var m = u.match(patterns[i])
+      if (m && m[1]) return /^[\w-]+$/.test(m[1]) ? m[1] : ''
+    }
+    return ''
+  }
+
+  function youtubeParam (url, name) {
+    var m = normalizeVideoUrl(url).match(new RegExp('[?&]' + name + '=([^&\\n#]+)'))
+    return m && /^[\w-]+$/.test(m[1]) ? m[1] : ''
+  }
+
+  // node -> { src, title } for the embed, or null when no video or playlist can be
+  // read from it.
+  function youtubeEmbed (node) {
+    var path = String((node && node.path) || '').trim()
+    var label = String((node && node.label) || '')
+    var gv = label.match(/!\[YOUTUBE src=(.+?)\](.+?)\[END YOUTUBE\]/)
+    var labelUrl = gv ? gv[1] : label
+    var id = youtubeVideoId(path) || youtubeVideoId(labelUrl)
+    var from = path || labelUrl
+    var list = youtubeParam(from, 'list')
+    var clip = youtubeParam(from, 'clip')
+    var clipt = youtubeParam(from, 'clipt')
+    var base = 'https://www.youtube.com/embed'
+    var src
+    if (id && clip && clipt) src = base + '/' + id + '?clip=' + clip + '&clipt=' + clipt + '&rel=0&modestbranding=1'
+    else if (id && list) src = base + '/' + id + '?list=' + list + '&rel=0&modestbranding=1'
+    else if (id) src = base + '/' + id + '?rel=0&modestbranding=1'
+    else if (list) src = base + '?listType=playlist&list=' + list + '&rel=0&modestbranding=1'
+    else return null
+    var title = gv
+      ? gv[2].trim()
+      : label.replace(/https?:\/\/(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+/, '').trim()
+    return { src: src, title: title }
   }
 
   // A meta area can hold graphs written by other accounts, and this grid renders
@@ -388,7 +458,9 @@
       '.vgp-close{flex:none;width:34px;height:34px;border-radius:50%;border:0;cursor:pointer;font-size:22px;line-height:1;',
       'background:rgba(127,127,127,.16);color:inherit;display:flex;align-items:center;justify-content:center}',
       '.vgp-close:hover{background:rgba(127,127,127,.3)}',
-      '.vgp-dlg-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;font:400 1rem/1.6 inherit}',
+      // overflow-wrap: a long bare url in graph text pushed the dialog body 155px past a
+      // 375px screen (seen 2026-09-14, graph 9779e366).
+      '.vgp-dlg-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;font:400 1rem/1.6 inherit;overflow-wrap:anywhere}',
       '.vgp-lead{margin:0 0 1.2rem;color:var(--v-muted,rgba(127,127,127,.95));font-size:.95rem}',
       '.vgp-node{margin:0 0 1.1rem}',
       '.vgp-node img{max-width:100%;height:auto}',
@@ -404,6 +476,12 @@
       '.vgp-audio audio{display:block;width:100%}',
       '.vgp-audio-note{margin-top:.5rem;font-size:.85rem;color:var(--v-muted,rgba(127,127,127,.95))}',
       '.vgp-audio-note p{margin:0}',
+      '.vgp-video{margin:0 0 1.1rem}',
+      '.vgp-video figcaption{font:600 .95rem/1.4 inherit;margin-bottom:.6rem}',
+      '.vgp-video-frame{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000}',
+      '.vgp-video-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}',
+      '.vgp-video-about{margin-top:.7rem}',
+      '.vgp-video-about img{max-width:100%;height:auto}',
       '.vgp-diagram pre{margin:.6rem 0 0;padding:.7rem;overflow-x:auto;background:rgba(127,127,127,.1);border-radius:6px;font-size:.8rem}',
       '@media (max-width:560px){.vgp-back{padding:0}.vgp-dlg{width:100%;max-height:100vh;border-radius:0;min-height:100vh}}',
       '@media (prefers-reduced-motion:reduce){.vgp-card{transition:none}.vgp-card:hover{transform:none}}',
@@ -705,9 +783,9 @@
   }
 
   function trapTab (e) {
-    // audio[controls] and summary take focus too; left out, Tab walked off the last
-    // one and out of the dialog.
-    var focusable = dialog.box.querySelectorAll('a[href], button, audio[controls], summary, [tabindex]:not([tabindex="-1"])')
+    // audio[controls], iframe and summary take focus too; left out, Tab walked off the
+    // last one and out of the dialog.
+    var focusable = dialog.box.querySelectorAll('a[href], button, audio[controls], iframe, summary, [tabindex]:not([tabindex="-1"])')
     if (!focusable.length) return
     var first = focusable[0]
     var last = focusable[focusable.length - 1]
@@ -789,6 +867,11 @@
       }
       if (plan.kind === 'audio') {
         body.appendChild(audioEl(plan, ft))
+        rendered += 1
+        return
+      }
+      if (plan.kind === 'video') {
+        body.appendChild(videoEl(plan, ft))
         rendered += 1
         return
       }
@@ -890,6 +973,46 @@
       }
       scrubInto(note)
       wrap.appendChild(note)
+    }
+    return wrap
+  }
+
+  // The iframe is built here, never parsed from graph content (the scrub removes every
+  // iframe in rendered markdown), and its src is assembled by youtubeEmbed from
+  // checked ids only. No loading="lazy": the lazy heuristic never started the load
+  // for an image this script appended (see thumbFor), and an iframe is the same risk.
+  // referrerpolicy is explicit because YouTube refuses to play an embed that sends no
+  // referrer, and a host page's own Referrer-Policy could otherwise strip it.
+  // The description renders as normal content: unlike an audio node's file note,
+  // it is what the author wrote about the video.
+  function videoEl (plan, ft) {
+    var wrap = document.createElement('figure')
+    wrap.className = 'vgp-video'
+    if (plan.label) {
+      var cap = document.createElement('figcaption')
+      cap.textContent = plan.label
+      wrap.appendChild(cap)
+    }
+    var frame = document.createElement('div')
+    frame.className = 'vgp-video-frame'
+    var iframe = document.createElement('iframe')
+    iframe.title = plan.label || 'YouTube'
+    iframe.setAttribute('allow', 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share')
+    iframe.setAttribute('allowfullscreen', '')
+    iframe.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
+    iframe.src = plan.src
+    frame.appendChild(iframe)
+    wrap.appendChild(frame)
+    if (plan.text.trim()) {
+      var about = document.createElement('div')
+      about.className = 'vgp-video-about'
+      try {
+        about.innerHTML = ft.render(plan.text)
+      } catch (e) {
+        about.textContent = plan.text
+      }
+      scrubInto(about)
+      wrap.appendChild(about)
     }
     return wrap
   }

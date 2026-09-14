@@ -30,6 +30,7 @@ const need = [
   'parseAreas', 'graphAreas', 'matchesArea', 'isPublished', 'visibleRows', 'mergeById',
   'sortRows', 'hueFor', 'initialsFor', 'summarize', 'fmtDate', 'cardData', 'limitRows',
   'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
+  'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -163,6 +164,32 @@ check('an audio node whose path is not http(s) falls back to its note',
   api.nodeRenderPlan({ type: 'audio', info: 'Audio file: x.webm', path: 'javascript:alert(1)' }).kind === 'markdown')
 check('an audio node with no path and no note is skipped',
   api.nodeRenderPlan({ type: 'audio', info: '', path: null }).kind === 'skip')
+// youtube-video: the viewer's url rules. The values below are REAL node fields from
+// published graphs (surveyed 2026-09-14: 20 label-format, 16 path urls over 37 nodes).
+const yt = (node) => api.nodeRenderPlan(Object.assign({ type: 'youtube-video', info: '' }, node))
+check('a youtu.be path (with ?si=) embeds that video',
+  (p => p.kind === 'video' && p.src === 'https://www.youtube.com/embed/J4PJ3XOi-Ys?rel=0&modestbranding=1' && p.label === 'SKULD No 2')(
+    yt({ path: 'https://youtu.be/J4PJ3XOi-Ys?si=egwx4bVkc1QAc1D2', label: 'SKULD No 2' })))
+check('a shorts path embeds', yt({ path: 'https://youtube.com/shorts/ASuX6eURM74?si=vXv2EaaU8BvUHCF2' }).src ===
+  'https://www.youtube.com/embed/ASuX6eURM74?rel=0&modestbranding=1')
+check('a watch?v= path embeds', yt({ path: 'https://youtube.com/watch?v=TqC1qOfiVcQ' }).src ===
+  'https://www.youtube.com/embed/TqC1qOfiVcQ?rel=0&modestbranding=1')
+check('the label format carries both the video and the title',
+  (p => p.kind === 'video' && p.src.indexOf('/embed/mdFcDMvQSPw?') !== -1 && p.label === 'Bioenergetic exercise   Grounding')(
+    yt({ path: '', label: '![YOUTUBE src=https://www.youtube.com/embed/mdFcDMvQSPw]Bioenergetic exercise   Grounding[END YOUTUBE]' })))
+check('path wins over a label url, as in the viewer',
+  yt({ path: 'https://youtu.be/AAAAAAAAAAA', label: '![YOUTUBE src=https://www.youtube.com/embed/BBBBBBBBBBB]T[END YOUTUBE]' }).src.indexOf('/embed/AAAAAAAAAAA?') !== -1)
+check('a video inside a playlist plays within it',
+  yt({ path: 'https://www.youtube.com/watch?v=abc123&list=PL_x-1' }).src === 'https://www.youtube.com/embed/abc123?list=PL_x-1&rel=0&modestbranding=1')
+check('a playlist alone uses the documented listType form',
+  yt({ path: 'https://music.youtube.com/playlist?list=PL_x-1' }).src === 'https://www.youtube.com/embed?listType=playlist&list=PL_x-1&rel=0&modestbranding=1')
+check('a pasted <iframe> snippet is read, &amp; decoded',
+  yt({ path: '<iframe src="https://www.youtube.com/embed/abc123?si=q&amp;list=PLq" allowfullscreen></iframe>' }).src ===
+  'https://www.youtube.com/embed/abc123?list=PLq&rel=0&modestbranding=1')
+check('an id carrying markup is refused, not embedded',
+  yt({ path: 'https://youtu.be/abc"onload="x', info: 'about' }).kind === 'markdown')
+check('a node with no readable video falls back to its description',
+  yt({ path: '', label: 'YouTube Video Nessi Gomes', info: 'https://youtu.be/TXuKTHkJEZM' }).kind === 'markdown')
 check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-node', info: 'body{}' }).kind === 'skip')
 check('an unknown type with content still renders rather than vanishing',
   api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')
