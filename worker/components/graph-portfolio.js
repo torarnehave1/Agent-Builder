@@ -21,6 +21,7 @@
 //        data-lang="no"          (optional — "no" | "en", default no)
 //        data-open="modal"       (optional — "modal" (default) | "page" | "self")
 //        data-target="_blank"    (optional — link target for data-open="page", default _blank)
+//        data-share-url=""       (optional — the page address shared links point at; default = this page)
 //        data-viewer="https://www.vegvisr.org/gnew-viewer?graphId="
 //        data-endpoint="https://knowledge.vegvisr.org/getknowgraphsummaries">
 //   </div>
@@ -31,6 +32,14 @@
 // so there is no href that a middle-click or cmd-click could follow off-site
 // either. data-open="page"/"self" is the deliberate opt-in to sending the reader
 // to data-viewer (vegvisr.org's viewer unless you point it at your own page).
+//
+// EVERY ARTICLE CAN BE SHARED, AND THE LINK COMES BACK HERE. The dialog's Share menu
+// (the device's own share sheet where there is one, copy link, Facebook, LinkedIn, X,
+// e-mail — plain links, no third-party script) shares THIS page's address plus
+// ?vgp=<graph id>. Opening that link loads the page and opens the article's dialog.
+// It opens only a graph that is published and in this grid, so a hand-edited link
+// cannot surface a draft. Social previews show the host page's own preview, not the
+// article's: their crawlers do not run this script.
 //
 // The dialog renders graph content with the 'vegvisr-fulltext' registry component,
 // loaded lazily from our own origin the first time a card is opened, so the grid
@@ -72,6 +81,10 @@
   // is fetched only when an opened graph actually contains a diagram.
   var MERMAID_URL = 'https://api.vegvisr.org/components/mermaid.min.js'
   var STYLE_ID = 'vgp-style'
+  // A QUERY parameter, not a #hash: html-node tabs already own the hash
+  // (#tab-kunnskapsportefoelje), and one link has to carry both — the tab holding the
+  // grid and the article in it. vegr.ai serves the same page with it (checked 2026-09-14).
+  var SHARE_PARAM = 'vgp'
   var PAGE = 250 // the endpoint caps limit at 250 whatever you ask for
   var CEILING = 1000 // stop paging one area after this many rows
   var MIN_CARD = 240 // px — never squeeze a card narrower than this
@@ -92,6 +105,13 @@
       emptyGraph: 'Denne grafen har ikke noe innhold å vise.',
       diagram: 'Diagram',
       diagramNote: 'Vis diagramkilde',
+      share: 'Del',
+      shareMenu: 'Del artikkelen',
+      shareVia: 'Del via …',
+      copy: 'Kopier lenke',
+      copied: 'Lenke kopiert',
+      copyManual: 'Kopier lenken:',
+      email: 'E-post',
     },
     en: {
       empty: 'No published graphs here yet.',
@@ -107,6 +127,13 @@
       emptyGraph: 'This graph has no content to show.',
       diagram: 'Diagram',
       diagramNote: 'Show diagram source',
+      share: 'Share',
+      shareMenu: 'Share this article',
+      shareVia: 'Share via …',
+      copy: 'Copy link',
+      copied: 'Link copied',
+      copyManual: 'Copy the link:',
+      email: 'Email',
     },
   }
 
@@ -383,6 +410,61 @@
     return v.indexOf('javascript:') === 0 || v.indexOf('data:text/html') === 0 || v.indexOf('vbscript:') === 0
   }
 
+  // The link that opens one article: base page + ?vgp=<id>, every other part of the
+  // address (other parameters, the tab #hash) kept. '' when the base is not an http(s)
+  // page — inside the viewer or a builder preview this script runs in a blob: or
+  // about:srcdoc frame, and a link to that reaches nobody.
+  function shareLink (base, id) {
+    try {
+      var u = new URL(String(base || ''))
+      if (u.protocol !== 'https:' && u.protocol !== 'http:') return ''
+      u.searchParams.set(SHARE_PARAM, String(id))
+      return u.toString()
+    } catch (e) {
+      return ''
+    }
+  }
+
+  // The graph id a page was opened with, or ''.
+  function deepLinkId (href) {
+    try {
+      return (new URL(String(href || '')).searchParams.get(SHARE_PARAM) || '').trim()
+    } catch (e) {
+      return ''
+    }
+  }
+
+  // The same address without the article parameter, so a reload after closing the
+  // article shows the grid rather than reopening it.
+  function withoutDeepLink (href) {
+    try {
+      var u = new URL(String(href || ''))
+      u.searchParams.delete(SHARE_PARAM)
+      return u.toString()
+    } catch (e) {
+      return String(href || '')
+    }
+  }
+
+  // Plain share links, no SDKs: nothing third-party loads on the host page until the
+  // reader picks a service. Endpoints probed 2026-09-14: LinkedIn share-offsite
+  // redirects to its share form, x.com/intent/tweet answers 200 (twitter.com 301s to
+  // it); Facebook's sharer answers a bare curl with 400 and was checked in a browser.
+  function shareTargets (url, title, t) {
+    var u = encodeURIComponent(url)
+    var ti = encodeURIComponent(title || '')
+    return [
+      { key: 'facebook', label: 'Facebook', href: 'https://www.facebook.com/sharer/sharer.php?u=' + u },
+      { key: 'linkedin', label: 'LinkedIn', href: 'https://www.linkedin.com/sharing/share-offsite/?url=' + u },
+      { key: 'x', label: 'X', href: 'https://x.com/intent/tweet?url=' + u + (title ? '&text=' + ti : '') },
+      {
+        key: 'email',
+        label: t.email,
+        href: 'mailto:?subject=' + ti + '&body=' + encodeURIComponent((title ? title + '\n\n' : '') + url),
+      },
+    ]
+  }
+
   // ---- DOM + network ----
 
   // keepStyle is for mermaid output ONLY: mermaid ships the diagram's CSS in a
@@ -458,6 +540,26 @@
       '.vgp-close{flex:none;width:34px;height:34px;border-radius:50%;border:0;cursor:pointer;font-size:22px;line-height:1;',
       'background:rgba(127,127,127,.16);color:inherit;display:flex;align-items:center;justify-content:center}',
       '.vgp-close:hover{background:rgba(127,127,127,.3)}',
+      '.vgp-share{position:relative;flex:none}',
+      '.vgp-share[hidden]{display:none}',
+      '.vgp-share-btn{height:34px;display:inline-flex;align-items:center;gap:.4rem;padding:0 .85rem;border-radius:999px;border:0;',
+      // Longhands on purpose: `font:500 .88rem/1 inherit` is INVALID (inherit cannot be a
+      // family inside the shorthand), so the whole declaration is dropped and a <button>
+      // keeps the browser's small UI font — seen in the first screenshot of this menu.
+      'cursor:pointer;background:rgba(127,127,127,.16);color:inherit;font-family:inherit;font-size:.88rem;font-weight:500;line-height:1}',
+      '.vgp-share-btn:hover,.vgp-share-btn[aria-expanded="true"]{background:rgba(127,127,127,.3)}',
+      '.vgp-share-btn svg{width:16px;height:16px;flex:none}',
+      '.vgp-share-menu{position:absolute;top:calc(100% + 6px);right:0;z-index:3;width:max-content;min-width:210px;',
+      'max-width:min(300px,calc(100vw - 2rem));padding:.35rem;border-radius:12px;background:var(--v-bg,#fff);color:var(--v-text,inherit);',
+      'border:1px solid var(--v-border,rgba(127,127,127,.25));box-shadow:0 12px 32px rgba(0,0,0,.18)}',
+      '.vgp-share-menu[hidden]{display:none}',
+      '.vgp-share-item{display:block;width:100%;box-sizing:border-box;text-align:left;padding:.6rem .75rem;border:0;border-radius:8px;',
+      'background:transparent;color:inherit;font-family:inherit;font-size:.92rem;font-weight:400;line-height:1.3;text-decoration:none;cursor:pointer}',
+      '.vgp-share-item:hover,.vgp-share-item:focus-visible{background:rgba(127,127,127,.14);outline:none}',
+      '.vgp-share-sep{height:1px;margin:.3rem .4rem;background:rgba(127,127,127,.2)}',
+      '.vgp-share-manual{display:block;padding:.3rem .75rem .6rem;font-size:.82rem}',
+      '.vgp-share-manual input{display:block;width:100%;box-sizing:border-box;margin-top:.35rem;padding:.45rem;font-family:inherit;font-size:.8rem;',
+      'border:1px solid rgba(127,127,127,.35);border-radius:6px;background:transparent;color:inherit}',
       // overflow-wrap: a long bare url in graph text pushed the dialog body 155px past a
       // 375px screen (seen 2026-09-14, graph 9779e366).
       '.vgp-dlg-body{padding:1.1rem 1.3rem 1.6rem;overflow-y:auto;font:400 1rem/1.6 inherit;overflow-wrap:anywhere}',
@@ -758,7 +860,23 @@
     close.type = 'button'
     close.className = 'vgp-close'
     close.innerHTML = '&times;'
+    var share = document.createElement('div')
+    share.className = 'vgp-share'
+    var shareBtn = document.createElement('button')
+    shareBtn.type = 'button'
+    shareBtn.className = 'vgp-share-btn'
+    shareBtn.setAttribute('aria-haspopup', 'true')
+    shareBtn.setAttribute('aria-expanded', 'false')
+    shareBtn.appendChild(shareIcon())
+    var shareLabel = document.createElement('span')
+    shareBtn.appendChild(shareLabel)
+    var menu = document.createElement('div')
+    menu.className = 'vgp-share-menu'
+    menu.setAttribute('hidden', '')
+    share.appendChild(shareBtn)
+    share.appendChild(menu)
     bar.appendChild(heading)
+    bar.appendChild(share)
     bar.appendChild(close)
     var body = document.createElement('div')
     body.className = 'vgp-dlg-body'
@@ -766,14 +884,30 @@
     box.appendChild(body)
     back.appendChild(box)
     document.body.appendChild(back)
-    dialog = { back: back, box: box, heading: heading, close: close, body: body, opener: null, open: false }
+    dialog = {
+      back: back, box: box, heading: heading, close: close, body: body, opener: null, open: false,
+      share: share, shareBtn: shareBtn, shareLabel: shareLabel, menu: menu,
+    }
 
     close.addEventListener('click', function () { closeDialog() })
     back.addEventListener('click', function (e) { if (e.target === back) closeDialog() })
+    shareBtn.addEventListener('click', function () {
+      if (menu.hasAttribute('hidden')) openShareMenu()
+      else closeShareMenu(true)
+    })
+    // A click anywhere else in the dialog closes the menu; a click on the backdrop
+    // closes the dialog, which closes the menu with it.
+    box.addEventListener('click', function (e) {
+      if (!menu.hasAttribute('hidden') && !share.contains(e.target)) closeShareMenu(false)
+    })
     document.addEventListener('keydown', function (e) {
       if (!dialog.open) return
-      if (e.key === 'Escape') { e.preventDefault(); closeDialog() }
-      else if (e.key === 'Tab') trapTab(e)
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        // Esc peels one layer: an open menu first, the dialog on the next press.
+        if (!menu.hasAttribute('hidden')) closeShareMenu(true)
+        else closeDialog()
+      } else if (e.key === 'Tab') trapTab(e)
     })
     // Browser Back closes the dialog instead of leaving the site — the behaviour
     // a phone's back gesture implies. The history entry carries no url change, so
@@ -785,7 +919,12 @@
   function trapTab (e) {
     // audio[controls], iframe and summary take focus too; left out, Tab walked off the
     // last one and out of the dialog.
-    var focusable = dialog.box.querySelectorAll('a[href], button, audio[controls], iframe, summary, [tabindex]:not([tabindex="-1"])')
+    // Only what is actually rendered: the closed menu's items and a hidden Share button
+    // are still in the DOM, and wrapping focus onto an invisible element loses it.
+    var focusable = Array.prototype.filter.call(
+      dialog.box.querySelectorAll('a[href], button, input, audio[controls], iframe, summary, [tabindex]:not([tabindex="-1"])'),
+      function (el) { return el.getClientRects().length > 0 }
+    )
     if (!focusable.length) return
     var first = focusable[0]
     var last = focusable[focusable.length - 1]
@@ -793,8 +932,117 @@
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
   }
 
+  function shareIcon () {
+    var ns = 'http://www.w3.org/2000/svg'
+    var svg = document.createElementNS(ns, 'svg')
+    svg.setAttribute('viewBox', '0 0 24 24')
+    svg.setAttribute('aria-hidden', 'true')
+    svg.setAttribute('fill', 'none')
+    svg.setAttribute('stroke', 'currentColor')
+    svg.setAttribute('stroke-width', '2')
+    svg.setAttribute('stroke-linecap', 'round')
+    svg.setAttribute('stroke-linejoin', 'round')
+    ;['M12 15V3', 'M7.5 7.5 12 3l4.5 4.5', 'M5 11v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8'].forEach(function (d) {
+      var p = document.createElementNS(ns, 'path')
+      p.setAttribute('d', d)
+      svg.appendChild(p)
+    })
+    return svg
+  }
+
+  // Built fresh on every open, from what the dialog is showing now.
+  function openShareMenu () {
+    var d = dialog
+    var t = d.shareOpts.t
+    var link = d.shareLink
+    var menu = d.menu
+    menu.textContent = ''
+    menu.setAttribute('aria-label', t.shareMenu)
+
+    function item (tag, label) {
+      var el = document.createElement(tag)
+      el.className = 'vgp-share-item'
+      if (tag === 'button') el.type = 'button'
+      el.textContent = label
+      menu.appendChild(el)
+      return el
+    }
+
+    // The device's own share sheet (Messenger, WhatsApp, SMS …) wherever the browser
+    // offers one. Cancelling it is not an error.
+    if (typeof navigator.share === 'function') {
+      item('button', t.shareVia).addEventListener('click', function () {
+        closeShareMenu(true)
+        navigator.share({ title: d.shareTitle, url: link }).catch(function (err) {
+          if (err && err.name !== 'AbortError') log('share sheet refused: ' + (err.message || err.name))
+        })
+      })
+    }
+
+    var copyBtn = item('button', t.copy)
+    copyBtn.addEventListener('click', function () {
+      var done = function () {
+        copyBtn.textContent = t.copied
+        setTimeout(function () { if (copyBtn.isConnected) copyBtn.textContent = t.copy }, 2000)
+      }
+      // No clipboard, or the page's frame is not allowed it: show the link selected so
+      // the reader can copy it by hand, rather than failing silently.
+      var manual = function () {
+        if (menu.querySelector('.vgp-share-manual')) return
+        var box = document.createElement('label')
+        box.className = 'vgp-share-manual'
+        box.appendChild(document.createTextNode(t.copyManual))
+        var input = document.createElement('input')
+        input.type = 'text'
+        input.readOnly = true
+        input.value = link
+        box.appendChild(input)
+        copyBtn.insertAdjacentElement('afterend', box)
+        input.focus()
+        input.select()
+      }
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(link).then(done, function (err) {
+          log('clipboard refused: ' + (err && err.message ? err.message : err))
+          manual()
+        })
+      } else {
+        manual()
+      }
+    })
+
+    var sep = document.createElement('div')
+    sep.className = 'vgp-share-sep'
+    menu.appendChild(sep)
+
+    shareTargets(link, d.shareTitle, t).forEach(function (target) {
+      var a = item('a', target.label)
+      a.href = target.href
+      a.setAttribute('data-share', target.key)
+      if (target.key !== 'email') {
+        a.target = '_blank'
+        a.rel = 'noopener noreferrer'
+      }
+      a.addEventListener('click', function () { closeShareMenu(false) })
+    })
+
+    menu.removeAttribute('hidden')
+    d.shareBtn.setAttribute('aria-expanded', 'true')
+    var first = menu.querySelector('.vgp-share-item')
+    if (first) first.focus()
+  }
+
+  function closeShareMenu (refocus) {
+    if (!dialog || dialog.menu.hasAttribute('hidden')) return
+    dialog.menu.setAttribute('hidden', '')
+    dialog.menu.textContent = ''
+    dialog.shareBtn.setAttribute('aria-expanded', 'false')
+    if (refocus) dialog.shareBtn.focus()
+  }
+
   function closeDialog (fromPopstate) {
     if (!dialog || !dialog.open) return
+    closeShareMenu(false)
     dialog.open = false
     dialog.back.setAttribute('hidden', '')
     dialog.body.textContent = ''
@@ -812,6 +1060,15 @@
     d.body.textContent = ''
     d.close.setAttribute('aria-label', opts.t.close)
     d.close.title = opts.t.close
+    closeShareMenu(false)
+    // Read the address at open time, not at mount: a host page's router may have moved on.
+    d.shareLink = shareLink(opts.shareUrl || window.location.href, card.id)
+    d.shareTitle = card.title
+    d.shareOpts = opts
+    d.shareLabel.textContent = opts.t.share
+    d.shareBtn.title = opts.t.shareMenu
+    if (d.shareLink) d.share.removeAttribute('hidden')
+    else d.share.setAttribute('hidden', '')
     d.prevOverflow = document.documentElement.style.overflow
     document.documentElement.style.overflow = 'hidden'
     d.back.removeAttribute('hidden')
@@ -1031,7 +1288,8 @@
     var include = (root.getAttribute('data-include') || 'published').trim().toLowerCase()
     var open = (root.getAttribute('data-open') || 'modal').trim().toLowerCase()
     if (open !== 'page' && open !== 'self') open = 'modal'
-    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open }
+    var shareUrl = (root.getAttribute('data-share-url') || '').trim()
+    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open, shareUrl: shareUrl }
 
     injectStyle()
     root.classList.add('vgp')
@@ -1071,12 +1329,44 @@
       if (showChips) root.appendChild(buildChips(root, host, rows, areas, opts))
       root.appendChild(host)
       renderGrid(host, limitRows(rows, limit), opts, root)
+      openDeepLink(rows, opts, root)
     }).catch(function (err) {
       console.error('[graph-portfolio] load failed:', err)
       root.appendChild(host)
       host.textContent = ''
       message(host, t.error, true)
     })
+  }
+
+  var deepLinkDone = false // several grids on one page open a shared article once
+
+  // A page opened from a shared link (?vgp=<id>) opens that article. Only a row this
+  // grid already holds qualifies — published and in its areas — so editing the id in a
+  // link cannot open a draft or someone else's graph. rows is the full set, not the
+  // data-limit slice: a card cut off the visible grid is still a real article here.
+  function openDeepLink (rows, opts, root) {
+    if (deepLinkDone || opts.open !== 'modal') return
+    var want = deepLinkId(window.location.href)
+    if (!want) return
+    var row = null
+    for (var i = 0; i < rows.length; i++) if (rows[i].id === want) { row = rows[i]; break }
+    if (!row) {
+      log('shared link names ' + want + ', which is not a published graph in this grid')
+      return
+    }
+    deepLinkDone = true
+    // Drop the parameter from the address first, so closing the article (or reloading
+    // after closing it) shows the grid instead of reopening the article.
+    try {
+      window.history.replaceState(window.history.state, '', withoutDeepLink(window.location.href))
+    } catch (e) { /* a sandboxed frame may refuse; the dialog still opens */ }
+    log('opening shared article ' + want)
+    openDialog(cardData(row, opts), opts)
+    // Focus returns to the article's card on close, as if it had been clicked.
+    var cards = root.querySelectorAll('[data-graph-id]')
+    for (var j = 0; j < cards.length; j++) {
+      if (cards[j].getAttribute('data-graph-id') === want) { dialog.opener = cards[j]; break }
+    }
   }
 
   function mountAll () {

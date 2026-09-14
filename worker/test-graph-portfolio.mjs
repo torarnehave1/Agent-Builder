@@ -31,12 +31,13 @@ const need = [
   'sortRows', 'hueFor', 'initialsFor', 'summarize', 'fmtDate', 'cardData', 'limitRows',
   'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
+  'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
 }
-const consts = src.match(/^\s*var (VIEWER|DESC_MAX) = .*$/gm) || []
-if (consts.length !== 2) { console.error('FAIL: VIEWER/DESC_MAX consts not found'); process.exit(1) }
+const consts = src.match(/^\s*var (VIEWER|DESC_MAX|SHARE_PARAM) = .*$/gm) || []
+if (consts.length !== 3) { console.error('FAIL: VIEWER/DESC_MAX/SHARE_PARAM consts not found'); process.exit(1) }
 const api = new Function(`${consts.join('\n')}\n${need.map(n => parts[n]).join('\n')}\nreturn { ${need.join(', ')} }`)()
 
 let failed = 0
@@ -194,6 +195,35 @@ check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-nod
 check('an unknown type with content still renders rather than vanishing',
   api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')
 check('a node with no content is skipped', api.nodeRenderPlan({ type: 'fulltext', info: '   ' }).kind === 'skip')
+
+// 9b. Sharing. A shared link must lead back to THIS page with the article open, keep the
+// tab #hash (html-node tabs own it) and every other parameter, and never be built from a
+// preview frame's blob:/about:srcdoc address.
+check('share link adds vgp and keeps other params and the tab hash',
+  api.shareLink('https://vegr.ai/?a=1#tab-kunnskapsportefoelje', 'e1c58154') === 'https://vegr.ai/?a=1&vgp=e1c58154#tab-kunnskapsportefoelje',
+  api.shareLink('https://vegr.ai/?a=1#tab-kunnskapsportefoelje', 'e1c58154'))
+check('share link replaces an existing article, not appends a second',
+  api.shareLink('https://vegr.ai/?vgp=old', 'new') === 'https://vegr.ai/?vgp=new')
+check('no share link from a blob: or about:srcdoc frame',
+  api.shareLink('blob:https://www.vegvisr.org/1f2e', 'x') === '' && api.shareLink('about:srcdoc', 'x') === '' && api.shareLink('', 'x') === '')
+check('the opened article is read back from the link',
+  api.deepLinkId(api.shareLink('https://vegr.ai/#tab-x', 'graph_1764099693909')) === 'graph_1764099693909')
+check('a page without the parameter names no article', api.deepLinkId('https://vegr.ai/?a=1') === '' && api.deepLinkId('about:srcdoc') === '')
+check('closing strips only the article parameter',
+  api.withoutDeepLink('https://vegr.ai/?a=1&vgp=abc#tab-x') === 'https://vegr.ai/?a=1#tab-x' &&
+  api.withoutDeepLink('https://vegr.ai/?vgp=abc') === 'https://vegr.ai/',
+  api.withoutDeepLink('https://vegr.ai/?a=1&vgp=abc#tab-x'))
+{
+  const link = 'https://vegr.ai/?vgp=abc#tab-x'
+  const targets = api.shareTargets(link, 'Hva er sakte for deg?', { email: 'E-post' })
+  const by = Object.fromEntries(targets.map(x => [x.key, x.href]))
+  const enc = encodeURIComponent(link)
+  check('facebook, linkedin, x and e-mail each carry the encoded link',
+    by.facebook.endsWith('?u=' + enc) && by.linkedin.endsWith('?url=' + enc) && by.x.indexOf('url=' + enc) !== -1 &&
+    decodeURIComponent(by.email.split('&body=')[1]).indexOf(link) !== -1, JSON.stringify(by))
+  check('x and e-mail carry the title', by.x.indexOf('&text=Hva%20er%20sakte%20for%20deg%3F') !== -1 && by.email.indexOf('subject=Hva%20er') !== -1)
+  check('the hash in the link is encoded, so the service does not drop it', by.facebook.indexOf('%23tab-x') !== -1)
+}
 
 // 10. The scrub's pure half. A meta area can hold graphs written by other accounts, and
 // this grid renders them on somebody else's site.
