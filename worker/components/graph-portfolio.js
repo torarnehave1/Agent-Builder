@@ -112,6 +112,11 @@
       copied: 'Lenke kopiert',
       copyManual: 'Kopier lenken:',
       email: 'E-post',
+      locked: 'Denne artikkelen er passordbeskyttet.',
+      password: 'Passord',
+      unlock: 'Åpne',
+      wrongPassword: 'Feil passord. Prøv igjen.',
+      noPassword: 'Skriv inn passordet.',
     },
     en: {
       empty: 'No published graphs here yet.',
@@ -134,6 +139,11 @@
       copied: 'Link copied',
       copyManual: 'Copy the link:',
       email: 'Email',
+      locked: 'This article is password protected.',
+      password: 'Password',
+      unlock: 'Open',
+      wrongPassword: 'Wrong password. Try again.',
+      noPassword: 'Enter the password.',
     },
   }
 
@@ -318,6 +328,9 @@
       if (yt) return { kind: 'video', text: info, label: yt.title, src: yt.src }
     }
     if (type === 'css-node') return { kind: 'skip', text: '', label: label }
+    // The editor's password control ("Add password protection to this Knowledge
+    // Graph…"). The viewer hides it from readers; so does this dialog.
+    if (type === 'password-protection') return { kind: 'skip', text: '', label: label }
     if (info.trim()) return { kind: 'markdown', text: info, label: label }
     return { kind: 'skip', text: '', label: label }
   }
@@ -465,6 +478,29 @@
     ]
   }
 
+  // PASSWORD PROTECTION — the same check the viewer makes, and only that. The editor's
+  // password node stores metadata.passwordHash = btoa(password) and the viewer compares
+  // btoa(input) in the browser (useGraphPasswordGate.js). That is NOT protection: the
+  // anonymous getknowgraph response carries every node AND the reversible hash
+  // (verified 2026-09-14 on e1c58154). This gate keeps ordinary readers out on a
+  // customer page, as the viewer does; real protection needs the KG worker to withhold
+  // the content — the architect chose this client-side step first (see TODO).
+  function isPasswordProtected (graph) {
+    var md = (graph && graph.metadata) || {}
+    return !!md.passwordProtected
+  }
+
+  // btoa throws on characters outside Latin-1; the editor could never have stored such a
+  // password, so such input is simply wrong, not an error.
+  function passwordMatches (input, storedHash) {
+    if (!storedHash) return false
+    try {
+      return btoa(String(input == null ? '' : input)) === String(storedHash)
+    } catch (e) {
+      return false
+    }
+  }
+
   // ---- DOM + network ----
 
   // keepStyle is for mermaid output ONLY: mermaid ships the diagram's CSS in a
@@ -540,6 +576,18 @@
       '.vgp-close{flex:none;width:34px;height:34px;border-radius:50%;border:0;cursor:pointer;font-size:22px;line-height:1;',
       'background:rgba(127,127,127,.16);color:inherit;display:flex;align-items:center;justify-content:center}',
       '.vgp-close:hover{background:rgba(127,127,127,.3)}',
+      '.vgp-lock{max-width:340px;margin:2.2rem auto 1.4rem;display:flex;flex-direction:column;gap:.65rem;text-align:center}',
+      '.vgp-lock svg{width:38px;height:38px;margin:0 auto .2rem;opacity:.65}',
+      '.vgp-lock-title{margin:0 0 .4rem;font-weight:600;font-size:1.05rem}',
+      '.vgp-lock-label{text-align:left;font-size:.85rem;opacity:.8}',
+      // 1rem on the input: anything smaller makes iOS zoom the page when it takes focus.
+      '.vgp-lock input{width:100%;box-sizing:border-box;padding:.65rem .75rem;border-radius:8px;border:1px solid rgba(127,127,127,.45);',
+      'background:transparent;color:inherit;font-family:inherit;font-size:1rem}',
+      '.vgp-lock input:focus{outline:2px solid var(--v-primary,#2a9d8f);outline-offset:1px}',
+      '.vgp-lock button{padding:.7rem;border:0;border-radius:8px;background:var(--v-primary,#2a9d8f);color:#fff;',
+      'font-family:inherit;font-size:1rem;font-weight:600;cursor:pointer}',
+      '.vgp-lock-error{margin:0;color:#c0392b;font-size:.88rem;text-align:left}',
+      '.vgp-lock-error[hidden]{display:none}',
       '.vgp-share{position:relative;flex:none}',
       '.vgp-share[hidden]{display:none}',
       '.vgp-share-btn{height:34px;display:inline-flex;align-items:center;gap:.4rem;padding:0 .85rem;border-radius:999px;border:0;',
@@ -1095,6 +1143,10 @@
       var withTitle = {}
       for (var k in opts) withTitle[k] = opts[k]
       withTitle.dialogTitle = card.title
+      if (isPasswordProtected(both[0]) && !passwordRemembered(card.id)) {
+        renderPasswordGate(d, both[0], both[1], withTitle, card.id, token)
+        return
+      }
       renderGraphInto(d.body, both[0], both[1], withTitle)
     }).catch(function (err) {
       console.error('[graph-portfolio] could not open graph ' + card.id + ':', err)
@@ -1102,6 +1154,105 @@
       d.body.textContent = ''
       message(d.body, opts.t.graphError, true)
     })
+  }
+
+  // The viewer's session key, so the rule reads the same in both places: a correct
+  // password is remembered for this browser tab only. sessionStorage can throw in a
+  // sandboxed frame — then the reader is simply asked again next time.
+  function passwordRemembered (id) {
+    try {
+      return window.sessionStorage.getItem('graph_password_verified_' + id) === 'true'
+    } catch (e) {
+      return false
+    }
+  }
+
+  function rememberPassword (id) {
+    try {
+      window.sessionStorage.setItem('graph_password_verified_' + id, 'true')
+    } catch (e) { /* not remembered; asked again next open */ }
+  }
+
+  // Nothing of the article is put in the page until the password matches — not the
+  // description, not a node. (The fetched graph is still in memory; see the note above
+  // isPasswordProtected.)
+  function renderPasswordGate (d, graph, ft, opts, id, token) {
+    var t = opts.t
+    var body = d.body
+    body.textContent = ''
+    var form = document.createElement('form')
+    form.className = 'vgp-lock'
+    form.noValidate = true
+    form.appendChild(lockIcon())
+    var inputId = 'vgp-pw-' + (++diagramSeq)
+    var title = document.createElement('p')
+    title.className = 'vgp-lock-title'
+    title.id = inputId + '-t'
+    title.textContent = t.locked
+    form.appendChild(title)
+    var label = document.createElement('label')
+    label.className = 'vgp-lock-label'
+    label.htmlFor = inputId
+    label.textContent = t.password
+    form.appendChild(label)
+    var input = document.createElement('input')
+    input.type = 'password'
+    input.id = inputId
+    input.autocomplete = 'current-password'
+    form.appendChild(input)
+    var err = document.createElement('p')
+    err.className = 'vgp-lock-error'
+    err.setAttribute('role', 'alert')
+    err.setAttribute('hidden', '')
+    form.appendChild(err)
+    var submit = document.createElement('button')
+    submit.type = 'submit'
+    submit.textContent = t.unlock
+    form.appendChild(submit)
+    input.setAttribute('aria-describedby', title.id)
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault()
+      if (!d.open || d.token !== token) return
+      var value = input.value
+      if (!value) {
+        err.textContent = t.noPassword
+        err.removeAttribute('hidden')
+        input.focus()
+        return
+      }
+      if (passwordMatches(value, ((graph && graph.metadata) || {}).passwordHash)) {
+        rememberPassword(id)
+        renderGraphInto(body, graph, ft, opts)
+        body.scrollTop = 0
+        d.close.focus()
+        return
+      }
+      err.textContent = t.wrongPassword
+      err.removeAttribute('hidden')
+      input.focus()
+      input.select()
+    })
+    body.appendChild(form)
+    input.focus()
+  }
+
+  function lockIcon () {
+    var ns = 'http://www.w3.org/2000/svg'
+    var svg = document.createElementNS(ns, 'svg')
+    svg.setAttribute('viewBox', '0 0 24 24')
+    svg.setAttribute('aria-hidden', 'true')
+    svg.setAttribute('fill', 'none')
+    svg.setAttribute('stroke', 'currentColor')
+    svg.setAttribute('stroke-width', '1.8')
+    svg.setAttribute('stroke-linecap', 'round')
+    svg.setAttribute('stroke-linejoin', 'round')
+    ;['M6 11h12v10H6z', 'M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11'].forEach(function (dd) {
+      var p = document.createElementNS(ns, 'path')
+      p.setAttribute('d', dd)
+      svg.appendChild(p)
+    })
+    return svg
   }
 
   function renderGraphInto (body, graph, ft, opts) {

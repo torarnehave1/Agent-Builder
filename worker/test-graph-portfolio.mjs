@@ -32,6 +32,7 @@ const need = [
   'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
+  'isPasswordProtected', 'passwordMatches',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -224,6 +225,19 @@ check('closing strips only the article parameter',
   check('x and e-mail carry the title', by.x.indexOf('&text=Hva%20er%20sakte%20for%20deg%3F') !== -1 && by.email.indexOf('subject=Hva%20er') !== -1)
   check('the hash in the link is encoded, so the service does not drop it', by.facebook.indexOf('%23tab-x') !== -1)
 }
+
+// 9c. Password protection — parity with the viewer (btoa compare, useGraphPasswordGate.js).
+// The metadata shape is the real one from e1c58154: passwordProtected true + passwordHash.
+check('a graph with passwordProtected is gated', api.isPasswordProtected({ metadata: { passwordProtected: true, passwordHash: 'aGVtbWVsaWcx' } }))
+check('a graph without the flag is not gated',
+  !api.isPasswordProtected({ metadata: { passwordProtected: false } }) && !api.isPasswordProtected({ metadata: {} }) && !api.isPasswordProtected(null))
+check('the right password matches the editor-stored hash', api.passwordMatches('hemmelig1', btoa('hemmelig1')))
+check('a wrong password does not match', !api.passwordMatches('hemmelig2', btoa('hemmelig1')))
+check('Norwegian letters work (Latin-1, as the editor stores them)', api.passwordMatches('blåbærsyltetøy', btoa('blåbærsyltetøy')))
+check('input btoa cannot encode is a wrong password, not a crash', api.passwordMatches('🙂🙂🙂🙂', btoa('hemmelig1')) === false)
+check('no stored hash never matches, even empty input', !api.passwordMatches('', '') && !api.passwordMatches('x', undefined))
+check('the editor password node never reaches the reader',
+  api.nodeRenderPlan({ type: 'password-protection', info: 'Add password protection to this Knowledge Graph.' }).kind === 'skip')
 
 // 10. The scrub's pure half. A meta area can hold graphs written by other accounts, and
 // this grid renders them on somebody else's site.
