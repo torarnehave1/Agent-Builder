@@ -8,14 +8,10 @@
 const TOOL_DEFINITIONS = [
   {
     name: 'create_graph',
-    description: 'Create a new knowledge graph with metadata. Returns the graph ID and initial version.',
+    description: 'Create a new knowledge graph with metadata. The SERVER assigns the graph ID and returns it as `graphId` (also stated in the result message) — you do not choose it, and any ID you pass is ignored. Use exactly the returned graphId for every create_node / add_edge / create_html_node on the new graph, which means waiting for this result: do not issue those calls in the same turn as create_graph.',
     input_schema: {
       type: 'object',
       properties: {
-        graphId: {
-          type: 'string',
-          description: 'MUST be a UUID (e.g. "550e8400-e29b-41d4-a716-446655440000"). Generate a random UUID — NEVER use human-readable names.'
-        },
         title: {
           type: 'string',
           description: 'Human-readable title for the graph'
@@ -38,7 +34,7 @@ const TOOL_DEFINITIONS = [
           description: 'A single community-relevant meta area tag in ALL CAPS, e.g. "NEUROSCIENCE", "AI TECHNOLOGY", "NORSE MYTHOLOGY". Should be a proper noun or well-known field of study.'
         }
       },
-      required: ['graphId', 'title']
+      required: ['title']
     }
   },
   {

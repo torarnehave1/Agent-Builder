@@ -1113,6 +1113,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
   const latestUserText = activeTask.latestIsAck ? activeTask.primary : (activeTask.latest || getLatestUserText(messages))
   const requiresNewGraph = /\b(create|build|make|generate|start)\s+(a\s+|an\s+|the\s+)?(new\s+)?(knowledge\s+)?graph\b/i.test(latestUserText) || /\bnew graph\b/i.test(latestUserText)
   let createdGraphId = null
+  let discardedGraphId = null // the id the model passed to create_graph, which the server did not use
   const GRAPH_WRITE_TOOLS = new Set(['create_node', 'create_html_node', 'add_edge', 'patch_node', 'patch_graph_metadata'])
 
   const log = (msg) => {
@@ -1248,6 +1249,10 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         // Once create_graph has run this turn, redirect any graph-write that has no graphId
         // (or still points at the context graph) to the NEW graph — so the model can't keep
         // appending nodes to the context graph after making a new one.
+        if (createdGraphId && GRAPH_WRITE_TOOLS.has(toolName) && input.graphId && input.graphId === discardedGraphId) {
+          log(`rerouted ${toolName} from discarded graphId ${input.graphId} to created graph ${createdGraphId}`)
+          input.graphId = createdGraphId
+        }
         if (createdGraphId && GRAPH_WRITE_TOOLS.has(toolName) && (!input.graphId || input.graphId === contextGraphId)) {
           log(`redirected ${toolName} from ${input.graphId || 'unset'} to new graph ${createdGraphId}`)
           input.graphId = createdGraphId
@@ -1280,6 +1285,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           // Capture a freshly-created graph id so subsequent writes this turn target it, not the context graph.
           if (toolName === 'create_graph' && result && result.success !== false && result.graphId) {
             createdGraphId = result.graphId
+            discardedGraphId = result.discardedGraphId || null
             log(`create_graph → new graphId ${createdGraphId} (subsequent writes will target it)`)
           }
           if (result.inputTokens) stats.inputTokens += result.inputTokens
@@ -1503,6 +1509,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
     if (options.avatarUrl) {
       writer.write(encoder.encode(`event: agent_info\ndata: ${JSON.stringify({ avatarUrl: options.avatarUrl })}\n\n`))
     }
+
+    // create_graph ignores a model-supplied graphId and assigns its own. A call that still
+    // targets the discarded id (typically batched in the same turn, before the result was
+    // visible) is aimed at the graph that was just created — route it there.
+    const discardedGraphIds = new Map()
 
     while (turn < maxTurns) {
       turn++
@@ -1837,6 +1848,11 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           }
 
           if (!toolUse.input) toolUse.input = {}
+          if (toolUse.input.graphId && discardedGraphIds.has(toolUse.input.graphId) && GRAPH_ID_AWARE_TOOLS.has(toolUse.name)) {
+            const realId = discardedGraphIds.get(toolUse.input.graphId)
+            log(`rerouted ${toolUse.name} from discarded graphId ${toolUse.input.graphId} to created graph ${realId}`)
+            toolUse.input.graphId = realId
+          }
           if (!toolUse.input.graphId && inferredGraphId && GRAPH_ID_AWARE_TOOLS.has(toolUse.name)) {
             toolUse.input.graphId = inferredGraphId
             log(`auto-injected graphId=${inferredGraphId} into ${toolUse.name} (same-turn carry-over)`)
@@ -1904,6 +1920,9 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap, onProgress)
             if (result?.graphId) {
               inferredGraphId = result.graphId
+            }
+            if (toolUse.name === 'create_graph' && result?.discardedGraphId && result?.graphId) {
+              discardedGraphIds.set(result.discardedGraphId, result.graphId)
             }
             // Summary must be a string. Some tools (e.g. bot_send_message) return
             // result.message as an OBJECT (the created chat-message record), which

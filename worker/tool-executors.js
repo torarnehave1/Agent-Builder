@@ -217,11 +217,20 @@ async function executeCreateGraph(input, env) {
     ? ` WARNING: input.${ignoredContentKeys.join(', input.')} was IGNORED — create_graph is metadata-only and does not accept node/edge content.`
     : ''
 
+  // The id has to be IN the message. It used to live only in the graphId field while the tool
+  // schema told the model to invent an id — so a model that batched create_graph + create_node
+  // in one turn wrote every node to its own id and got "Graph not found" (2026-09-14).
+  const finalGraphId = data.id || graphId
+  const supplied = typeof input.graphId === 'string' && input.graphId.trim() ? input.graphId.trim() : null
+  const discardedNote = supplied && supplied !== finalGraphId
+    ? ` The graphId you supplied (${supplied}) was NOT used — it does not exist; write to ${finalGraphId}.`
+    : ''
   return {
-    graphId: data.id || graphId,
+    graphId: finalGraphId,
+    ...(supplied && supplied !== finalGraphId ? { discardedGraphId: supplied } : {}),
     version: data.newVersion || 1,
-    message: `Graph "${title}" created successfully with 0 nodes. Call create_node once per node to add content — this graph has no content yet.${warning}`,
-    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`
+    message: `Graph "${title}" created with graphId ${finalGraphId} (0 nodes). Use exactly this graphId for create_node / add_edge on it.${discardedNote}${warning}`,
+    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${finalGraphId}`
   }
 }
 

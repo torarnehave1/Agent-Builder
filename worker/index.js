@@ -1919,7 +1919,7 @@ export default {
         }
 
         const targetGraphId = graphId || crypto.randomUUID()
-        let enrichedTask = `${task}\n\n[Target graph ID: ${targetGraphId}] — Use this exact graphId when calling create_graph and create_html_from_template.`
+        let enrichedTask = `${task}\n\n[Target graph ID: ${targetGraphId}] — Use this exact graphId when calling create_html_from_template. create_graph assigns its own id: if you call it, use the graphId it returns.`
 
         const result = await executeAgent(config, enrichedTask, effectiveUserId, env, { authContext })
 

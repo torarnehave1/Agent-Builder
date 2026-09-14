@@ -42,7 +42,7 @@ const KG_SUBAGENT_SYSTEM_PROMPT = `You are a Knowledge Graph specialist. You cre
 ## Workflows
 
 ### Creating a new graph with content:
-1. \`create_graph\` with a UUID, title, description, category, metaArea
+1. \`create_graph\` with title, description, category, metaArea — the server assigns the graphId; use the one it returns
 2. \`create_node\` for each piece of content
 3. \`add_edge\` to connect related nodes
 
@@ -109,6 +109,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   const { task, nodeId, userId } = input
   const rawGraphId = input.graphId || null
   let graphId = (typeof rawGraphId === 'string' && rawGraphId.trim()) ? rawGraphId.trim() : null
+  let discardedGraphId = null // the id the model passed to create_graph, which the server did not use
   const maxTurns = 10
   const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
   let inputTokens = 0
@@ -255,6 +256,10 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         // Code-level enforcement: auto-inject graphId into all graph-mutation tools
         // This prevents the LLM from hallucinating IDs or creating duplicate graphs
         const GRAPH_MUTATION_TOOLS = new Set(['create_node', 'patch_node', 'add_edge', 'patch_graph_metadata', 'read_graph', 'read_graph_content', 'read_node'])
+        if (graphId && discardedGraphId && GRAPH_MUTATION_TOOLS.has(toolUse.name) && toolUse.input.graphId === discardedGraphId) {
+          log(`rerouted ${toolUse.name} from discarded graphId ${discardedGraphId} to ${graphId}`)
+          toolUse.input.graphId = graphId
+        }
         if (graphId && GRAPH_MUTATION_TOOLS.has(toolUse.name) && !toolUse.input.graphId) {
           toolUse.input.graphId = graphId
           log(`auto-injected graphId=${graphId} into ${toolUse.name}`)
@@ -281,6 +286,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
             const createdId = result.graphId || toolUse.input.graphId
             if (createdId) {
               graphId = createdId
+              discardedGraphId = result.discardedGraphId || null
               log(`tracked graphId=${graphId} from create_graph result — will auto-inject into future tools`)
             }
           }
