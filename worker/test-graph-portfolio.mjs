@@ -32,7 +32,7 @@ const need = [
   'visibleNodes', 'nodeRenderPlan', 'isUnsafeUrl', 'sameHeading',
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
-  'isPasswordProtected', 'passwordMatches',
+  'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -196,6 +196,18 @@ check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-nod
 check('an unknown type with content still renders rather than vanishing',
   api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')
 check('a node with no content is skipped', api.nodeRenderPlan({ type: 'fulltext', info: '   ' }).kind === 'skip')
+
+// 9a. realtime-video: the viewer's key rule (GNewRealtimeVideoNode.vue). The first value is
+// the REAL node path from a2341af7.
+const rv = (node) => api.nodeRenderPlan(Object.assign({ type: 'realtime-video', label: 'Realtime Video', info: 'Meeting recording' }, node))
+check('a recordings/ key plays from the realtimevideos bucket',
+  (p => p.kind === 'recording' && p.src === 'https://realtimevideos.vegvisr.org/recordings/video1448764609.mp4' && p.label === 'Realtime Video')(
+    rv({ path: 'recordings/video1448764609.mp4' })))
+check('a bare key is placed under recordings/', api.realtimeVideoUrl('video1.mp4') === 'https://realtimevideos.vegvisr.org/recordings/video1.mp4')
+check('a leading slash is dropped', api.realtimeVideoUrl('/recordings/video1.mp4') === 'https://realtimevideos.vegvisr.org/recordings/video1.mp4')
+check('a full url is used as it is', api.realtimeVideoUrl('https://example.org/v.mp4') === 'https://example.org/v.mp4')
+check('a javascript:/data: value is not a key', api.realtimeVideoUrl('javascript:alert(1)') === '' && api.realtimeVideoUrl('data:video/mp4;base64,AAAA') === '')
+check('a realtime-video with no path falls back to its note', rv({ path: '' }).kind === 'markdown')
 
 // 9b. Sharing. A shared link must lead back to THIS page with the article open, keep the
 // tab #hash (html-node tabs own it) and every other parameter, and never be built from a

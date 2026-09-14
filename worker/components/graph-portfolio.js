@@ -320,6 +320,14 @@
       var src = String((node && node.path) || '').trim()
       if (/^https?:\/\//i.test(src)) return { kind: 'audio', text: info, label: label, src: src }
     }
+    // A realtime-video node (a meeting recording) keeps a bucket KEY in path
+    // ("recordings/video1448764609.mp4", seen 2026-09-14 on a2341af7) — or a full url.
+    // With no branch the reader got only its note ("Meeting recording video from the
+    // realtimevideos bucket…").
+    if (type === 'realtime-video') {
+      var rv = realtimeVideoUrl(node && node.path)
+      if (rv) return { kind: 'recording', text: info, label: label, src: rv }
+    }
     // A youtube-video node likewise keeps the video out of info, which holds its
     // description. Without this branch the reader got the description and no video.
     // A node whose url cannot be read falls through, so the description still shows.
@@ -333,6 +341,19 @@
     if (type === 'password-protection') return { kind: 'skip', text: '', label: label }
     if (info.trim()) return { kind: 'markdown', text: info, label: label }
     return { kind: 'skip', text: '', label: label }
+  }
+
+  // The viewer's rule (GNewRealtimeVideoNode.vue): a full http(s) url is used as it is;
+  // a bare key is served from the realtimevideos bucket, under recordings/ unless the
+  // key already starts there. The host is fixed, so a key cannot point the player
+  // anywhere else.
+  function realtimeVideoUrl (raw) {
+    var v = String(raw == null ? '' : raw).trim()
+    if (!v) return ''
+    if (/^https?:\/\//i.test(v)) return v
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return '' // javascript:, data: … are not keys
+    var key = v.replace(/^\/+/, '')
+    return 'https://realtimevideos.vegvisr.org/' + (key.indexOf('recordings/') === 0 ? key : 'recordings/' + key)
   }
 
   // The YouTube url rules are the viewer's (GNewVideoNode + src/utils/youtube.js in
@@ -621,11 +642,12 @@
       '.vgp-diagram-canvas{overflow-x:auto;margin-bottom:.5rem}',
       '.vgp-diagram-canvas svg{max-width:100%;height:auto;display:block;margin:0 auto}',
       '.vgp-diagram summary{cursor:pointer;font-size:.85rem;opacity:.75}',
-      '.vgp-audio{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px solid var(--v-border,rgba(127,127,127,.22));border-radius:10px}',
-      '.vgp-audio figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.6rem}',
+      '.vgp-audio,.vgp-recording{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px solid var(--v-border,rgba(127,127,127,.22));border-radius:10px}',
+      '.vgp-audio figcaption,.vgp-recording figcaption{font-weight:600;font-size:.9rem;line-height:1.4;margin-bottom:.6rem}',
       '.vgp-audio audio{display:block;width:100%}',
-      '.vgp-audio-note{margin-top:.5rem;font-size:.85rem;color:var(--v-muted,rgba(127,127,127,.95))}',
-      '.vgp-audio-note p{margin:0}',
+      '.vgp-recording video{display:block;width:100%;height:auto;max-height:70vh;background:#000;border-radius:8px}',
+      '.vgp-media-note{margin-top:.5rem;font-size:.85rem;color:var(--v-muted,rgba(127,127,127,.95))}',
+      '.vgp-media-note p{margin:0}',
       '.vgp-video{margin:0 0 1.1rem}',
       '.vgp-video figcaption{font:600 .95rem/1.4 inherit;margin-bottom:.6rem}',
       '.vgp-video-frame{position:relative;width:100%;aspect-ratio:16/9;border-radius:10px;overflow:hidden;background:#000}',
@@ -970,7 +992,7 @@
     // Only what is actually rendered: the closed menu's items and a hidden Share button
     // are still in the DOM, and wrapping focus onto an invisible element loses it.
     var focusable = Array.prototype.filter.call(
-      dialog.box.querySelectorAll('a[href], button, input, audio[controls], iframe, summary, [tabindex]:not([tabindex="-1"])'),
+      dialog.box.querySelectorAll('a[href], button, input, audio[controls], video[controls], iframe, summary, [tabindex]:not([tabindex="-1"])'),
       function (el) { return el.getClientRects().length > 0 }
     )
     if (!focusable.length) return
@@ -1274,7 +1296,12 @@
         return
       }
       if (plan.kind === 'audio') {
-        body.appendChild(audioEl(plan, ft))
+        body.appendChild(mediaEl(plan, ft, 'audio'))
+        rendered += 1
+        return
+      }
+      if (plan.kind === 'recording') {
+        body.appendChild(mediaEl(plan, ft, 'video'))
         rendered += 1
         return
       }
@@ -1353,27 +1380,30 @@
   // Built with DOM APIs: the src is set as a property after nodeRenderPlan has
   // already required http(s), so nothing from the graph is parsed as markup except
   // the note, which goes through the same renderer and scrub as page markdown.
-  // preload="metadata" matters — a recording is tens of MB and must not download
-  // just because the dialog opened.
-  function audioEl (plan, ft) {
+  // preload="metadata" matters — a recording is tens of MB (a meeting video over
+  // 100MB) and must not download just because the dialog opened. The same figure
+  // serves an audio node (tag 'audio') and a realtime-video recording (tag 'video').
+  // playsinline keeps an iPhone from forcing the video fullscreen on play.
+  function mediaEl (plan, ft, tag) {
     var wrap = document.createElement('figure')
-    wrap.className = 'vgp-audio'
+    wrap.className = tag === 'video' ? 'vgp-recording' : 'vgp-audio'
     if (plan.label) {
       var cap = document.createElement('figcaption')
       cap.textContent = plan.label
       wrap.appendChild(cap)
     }
-    var player = document.createElement('audio')
+    var player = document.createElement(tag)
     player.controls = true
     player.preload = 'metadata'
+    if (tag === 'video') player.setAttribute('playsinline', '')
     player.addEventListener('error', function () {
-      console.warn('[graph-portfolio] audio did not load: ' + plan.src)
+      console.warn('[graph-portfolio] ' + tag + ' did not load: ' + plan.src)
     })
     player.src = plan.src
     wrap.appendChild(player)
     if (plan.text.trim()) {
       var note = document.createElement('div')
-      note.className = 'vgp-audio-note'
+      note.className = 'vgp-media-note'
       try {
         note.innerHTML = ft.render(plan.text)
       } catch (e) {
