@@ -6228,6 +6228,30 @@ async function executeSendEmail(input, env) {
 
 // ── Audio operations ──────────────────────────────────────────────
 
+// The portfolio worker lists a user's KV recordings 200 at a time, OLDEST first, and returns a
+// `cursor` while more remain. Reading only the first page hid every recording past the 200th:
+// on 2026-09-14 that was the newest 17 of 217, including one saved in Audio Studio minutes
+// earlier — so the agent could neither find nor transcribe the recordings a user had just made.
+async function fetchAllPortfolioRecordings(env, email) {
+  const all = []
+  let cursor = null
+  for (let page = 0; page < 25; page++) {
+    const params = new URLSearchParams({ userEmail: email, limit: '200', userRole: 'Superadmin', ownerEmail: email })
+    if (cursor) params.set('cursor', cursor)
+    const res = await env.AUDIO_PORTFOLIO.fetch(`https://audio-portfolio-worker/list-recordings?${params}`)
+    if (!res.ok) {
+      if (page === 0) throw new Error(`Failed to list recordings: ${await res.text()}`)
+      break
+    }
+    const data = await res.json()
+    const batch = data.recordings || []
+    all.push(...batch)
+    cursor = data.cursor || null
+    if (!cursor || batch.length === 0) break
+  }
+  return all
+}
+
 async function executeListRecordings(input, env) {
   const { limit = 20, query } = input
   // Resolve UUID to email — audio-portfolio-worker expects email
@@ -6244,28 +6268,14 @@ async function executeListRecordings(input, env) {
 
   // Agent-worker is a trusted internal service (service binding) — always use
   // Superadmin + ownerEmail to bypass broken user index and scan KV directly
-  const fetchUrl = `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(userEmail)}&limit=200&userRole=Superadmin&ownerEmail=${encodeURIComponent(userEmail)}`
-
-  const res = await env.AUDIO_PORTFOLIO.fetch(fetchUrl)
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Failed to list recordings: ${err}`)
-  }
-
-  const data = await res.json()
-  let allRecordings = data.recordings || []
+  let allRecordings = await fetchAllPortfolioRecordings(env, userEmail)
 
   // Also include Sonic Wisdom recordings (saved under sonic-wisdom@vegvisr.org)
   const sonicEmail = 'sonic-wisdom@vegvisr.org'
   if (userEmail.toLowerCase() !== sonicEmail) {
     try {
-      const sonicUrl = `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(sonicEmail)}&limit=200&userRole=Superadmin&ownerEmail=${encodeURIComponent(sonicEmail)}`
-      const sonicRes = await env.AUDIO_PORTFOLIO.fetch(sonicUrl)
-      if (sonicRes.ok) {
-        const sonicData = await sonicRes.json()
-        const sonicRecordings = (sonicData.recordings || []).map(r => ({ ...r, source: 'Sonic Wisdom' }))
-        allRecordings = allRecordings.concat(sonicRecordings)
-      }
+      const sonicRecordings = (await fetchAllPortfolioRecordings(env, sonicEmail)).map(r => ({ ...r, source: 'Sonic Wisdom' }))
+      allRecordings = allRecordings.concat(sonicRecordings)
     } catch (e) {
       // Sonic Wisdom fetch failed — continue with user's recordings only
     }
@@ -7063,12 +7073,7 @@ async function executeTranscribeAudio(input, env) {
 
   // 1. Resolve audio URL from portfolio if recordingId provided (KV-indexed recordings)
   if (recordingId && userEmail && !resolvedUrl) {
-    const listRes = await env.AUDIO_PORTFOLIO.fetch(
-      `https://audio-portfolio-worker/list-recordings?userEmail=${encodeURIComponent(userEmail)}&limit=200&userRole=Superadmin&ownerEmail=${encodeURIComponent(userEmail)}`
-    )
-    if (!listRes.ok) throw new Error('Failed to fetch recordings from portfolio')
-    const listData = await listRes.json()
-    const recording = (listData.recordings || []).find(r => r.recordingId === recordingId)
+    const recording = (await fetchAllPortfolioRecordings(env, userEmail)).find(r => r.recordingId === recordingId)
     if (recording) {
       resolvedUrl = recording.r2Url
       if (!resolvedUrl) throw new Error(`Recording "${recordingId}" has no audio URL`)
