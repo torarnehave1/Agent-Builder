@@ -363,6 +363,7 @@ const TOOL_DEFINITIONS = [
         gateRole: { type: 'string', description: "With gate:true, restrict access to these roles (comma-separated, e.g. 'Admin,Superadmin'); signed-in users with another role see 'Ingen tilgang'. Omit to allow any signed-in user." },
         gateAppName: { type: 'string', description: "With gate:true, the title shown on the login card (e.g. the app/world name)." },
         gateLogo: { type: 'string', description: "With gate:true, an optional logo image URL for the login card." },
+        gateLang: { type: 'string', enum: ['nb', 'en'], description: "With gate:true, the language of the login card and signed-in bar. 'nb' (default) is Norwegian; use 'en' for a page whose audience reads English." },
         gateRegisterMode: { type: 'string', enum: ['invite', 'open'], description: "With gate:true, 'open' shows a Register button on the login card (email → creates a ViewOnly account → magic link) for self-signup; 'invite' (default) is login-only (new accounts provisioned elsewhere)." }
       },
       required: ['graphId', 'nodeId', 'host']

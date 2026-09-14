@@ -2173,6 +2173,8 @@ function buildGateElement(opts) {
   if (opts.gateRole) attrs += ` require-role="${clean(opts.gateRole)}"`
   attrs += ` app-name="${clean(opts.gateAppName || 'Vegvisr')}"`
   if (opts.gateLogo) attrs += ` logo="${clean(opts.gateLogo)}"`
+  // The component defaults to Norwegian; lang="en" switches its text (vegvisr-auth lang table).
+  if (String(opts.gateLang || '').toLowerCase().startsWith('en')) attrs += ' lang="en"'
   if (String(opts.gateRegisterMode || '').toLowerCase() === 'open') attrs += ' register-mode="open"'
   return `<vegvisr-auth${attrs}></vegvisr-auth>`
 }
@@ -2427,6 +2429,7 @@ async function executePublishHtmlNode(input, env) {
     gateAppName: input.gateAppName || '',
     gateLogo: input.gateLogo || '',
     gateRegisterMode: input.gateRegisterMode || '',
+    gateLang: input.gateLang || '',
   })
   const publishBody = JSON.stringify({ hostname: host, html: htmlToPublish, overwrite, graphId: input.graphId, nodeId: input.nodeId })
   const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
