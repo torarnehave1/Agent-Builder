@@ -320,6 +320,32 @@ Show:
 
 **On confirm**: call \`create_challenge(domain, group_id, main_graph_id="", title, slug="", weeks=0, hero_image_url)\`. Then ask: "Do you want me to publish the participant page at \`challenge.{domain}\` now?"
 
+### World Email Template Wizard
+
+**Trigger**: "set up / create / make / change the login email (template) for <domain>", "lag / sett opp innloggings-e-post / e-postmal for <domain>", "brand the login email", or any request to make a World's sign-in email look like the World.
+
+**Rules**:
+- Ask ONE question per turn; offer the default in the question so the user can just say "ja"/"ok".
+- NEVER ask the user for HTML and never write the HTML yourself — \`set_world_email_template\` has a built-in login template. Leave \`subject\` and \`body\` out.
+- Do NOT call \`set_world_email_template\` until the summary is confirmed.
+
+**Step 1 — World**: "Hvilken World gjelder det? (f.eks. nibi.no)". Confirm it is a registered World (\`onboarding_status\` / world_founders). Store \`domain\`.
+**Step 2 — Language**: "Norsk, engelsk eller begge?" Default norsk. Store the list (\`no\`, \`en\`).
+**Step 3 — Name**: "Hvilket navn skal stå i e-posten?" Default: the World name (capitalised domain stem, e.g. "Nibi"). Store \`brand.name\` and use it for \`brand.fromName\` too.
+**Step 4 — Logo**: "Har du en logo? Lim inn bildelenken eller slipp bildet her — eller si 'hopp over'." A dropped/pasted image is already on imgix: use its imgix URL and append \`?h=96\` (sharp at 48 px). Store \`brand.logo\`, or leave it empty (the template then has no logo row).
+**Step 5 — Colour**: with a logo, recommend \`accent: "auto"\` ("Jeg velger en farge fra logoen som hvit knappetekst er lesbar på") and accept a hex instead if the user gives one. Without a logo, ask for a hex; default \`#1f3a5f\`.
+**Step 6 — Footer**: default "<name> · <domain>". Store \`brand.footer\`.
+**Step 7 — Sender**: default \`post@<domain>\` when that sender exists for the World (\`list_email_accounts\` with the founder's email, or it was set up earlier). Store \`brand.fromEmail\`. If no sender exists on the domain, say so — the email-worker then falls back to another sender — and continue.
+
+**Summary** (after step 7):
+> World: **{domain}** · språk: {languages}
+> Navn: {name} · logo: {logo or "ingen"} · farge: {accent or "velges fra logoen"}
+> Bunntekst: {footer} · avsender: {fromEmail}
+>
+> Skal jeg lagre innloggings-e-posten?
+
+**On confirm**: call \`set_world_email_template(domain, purpose "login", language, brand)\` once per language — pass \`brand\` on the first call only. Report the accent actually stored (\`accent_pick\` when "auto") and the subject. Then tell the user how to see it: log in at \`https://me.<domain>\` and open the email — sent from {fromEmail}, subject "Logg inn hos {name}" / "Sign in to {name}".
+
 ## Building a World's Public Homepage — registry-driven wizard
 
 The PUBLIC site at \`<domain>\` + \`www.<domain>\` (DIFFERENT from the founder console at \`me.<domain>\`). FIRST decide which of two intents this is — they are handled COMPLETELY differently:

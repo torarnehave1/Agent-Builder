@@ -6227,26 +6227,144 @@ async function executeSetEmailPassword(input, env) {
 // can locate it in one read); this bypasses create_graph's UUID-forcing on purpose. Node schema:
 //   type "email-template" { info:<HTML body>, metadata:{purpose,language,subject} }
 //   type "email-brand"    { metadata:{name,logo,accent,fromName,footer} } — templates reference {brand*}
+// Built-in login email, so a World's template can be set up without anyone pasting HTML (pasting it
+// into AgentChat broke on 2026-09-15). Same design as the universi.no template that is in use.
+// {placeholders} are filled by email-worker at send time; the logo row is only included when the
+// World's brand has a logo, because the template language has no conditionals.
+const DEFAULT_WORLD_EMAIL_TEMPLATES = {
+  login: {
+    no: {
+      subject: 'Logg inn hos {brandName}',
+      heading: 'Logg inn hos {brandName}',
+      intro: 'Klikk knappen under for å fullføre innloggingen. Lenken utløper om {expiryMinutes} minutter.',
+      cta: 'Fortsett til {brandName}',
+      ignore: 'Hvis du ikke ba om denne e-posten, kan du se bort fra den.',
+    },
+    en: {
+      subject: 'Sign in to {brandName}',
+      heading: 'Sign in to {brandName}',
+      intro: 'Click the button below to finish signing in. The link expires in {expiryMinutes} minutes.',
+      cta: 'Continue to {brandName}',
+      ignore: 'If you did not request this email, you can ignore it.',
+    },
+  },
+}
+
+function buildDefaultWorldEmailBody(t, withLogo) {
+  return [
+    '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;color:#111">',
+    ...(withLogo ? [
+      '  <!-- edit:header:start -->',
+      '  <div style="text-align:center;padding:24px 0"><img src="{brandLogo}" height="48" alt="{brandName}"></div>',
+      '  <!-- edit:header:end -->',
+    ] : []),
+    '  <!-- edit:heading:start -->',
+    `  <h2 style="color:{brandAccent};margin:0 0 12px">${t.heading}</h2>`,
+    '  <!-- edit:heading:end -->',
+    '  <!-- edit:intro:start -->',
+    `  <p>${t.intro}</p>`,
+    '  <!-- edit:intro:end -->',
+    '  <!-- edit:cta:start -->',
+    `  <p style="text-align:center;margin:28px 0"><a href="{magicLink}" style="background:{brandAccent};color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;display:inline-block">${t.cta}</a></p>`,
+    '  <!-- edit:cta:end -->',
+    `  <p>${t.ignore}</p>`,
+    '  <!-- edit:footer:start -->',
+    '  <p style="font-size:12px;color:#888;border-top:1px solid #eee;padding-top:12px">{brandFooter}</p>',
+    '  <!-- edit:footer:end -->',
+    '</div>',
+  ].join('\n')
+}
+
+// WCAG contrast of white text on a hex background.
+function whiteTextContrast(hex) {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
+    .map((x) => (x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4))
+  const L = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+  return 1.05 / (L + 0.05)
+}
+
+// accent "auto": pick a brand colour FROM the logo that white button text stays readable on
+// (WCAG AA, 4.5:1). Reads imgix's own palette (?palette=json) — the logo already lives on imgix.
+// The palette is read from the ORIGINAL image (size params stripped): imgix computes it on the
+// resized copy, and the 96px nibi logo yielded a different set whose most saturated readable entry was
+// a near-black navy. Picks the LIGHTEST clearly-coloured entry that still clears 4.5:1 — the one
+// closest to what the logo looks like; if none qualifies, darkens the most vibrant colour until it does.
+async function pickAccentFromLogo(logoUrl) {
+  const FALLBACK = '#1f3a5f'
+  if (!/^https:\/\/[^/\s]*imgix\.net\//i.test(logoUrl || '')) {
+    return { accent: FALLBACK, contrast: Number(whiteTextContrast(FALLBACK).toFixed(2)), source: 'fallback', note: 'Logo is not on imgix, so no palette could be read; used a neutral navy.' }
+  }
+  let pal
+  try {
+    const u = new URL(logoUrl)
+    for (const k of ['w', 'h', 'fit', 'crop', 'dpr', 'q', 'auto', 'fm']) u.searchParams.delete(k)
+    u.searchParams.set('palette', 'json')
+    u.searchParams.set('colors', '6')
+    const r = await fetch(u.toString())
+    pal = r.ok ? await r.json() : null
+  } catch { pal = null }
+  if (!pal) return { accent: FALLBACK, contrast: Number(whiteTextContrast(FALLBACK).toFixed(2)), source: 'fallback', note: 'Could not read the logo palette from imgix; used a neutral navy.' }
+  const hexes = [...(pal.colors || []).map((c) => c.hex), ...Object.values(pal.dominant_colors || {}).map((c) => c && c.hex)]
+    .filter((h) => /^#[0-9a-f]{6}$/i.test(h || '')).map((h) => h.toLowerCase())
+  const sat = (h) => {
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255)
+    const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2
+    return max === min ? 0 : (max - min) / (1 - Math.abs(2 * l - 1))
+  }
+  const ok = [...new Set(hexes)].filter((h) => whiteTextContrast(h) >= 4.5 && sat(h) >= 0.35).sort((a, b) => whiteTextContrast(a) - whiteTextContrast(b))
+  if (ok.length) return { accent: ok[0], contrast: Number(whiteTextContrast(ok[0]).toFixed(2)), source: 'logo palette' }
+  const base = (pal.dominant_colors && pal.dominant_colors.vibrant && pal.dominant_colors.vibrant.hex) || hexes[0]
+  if (!base) return { accent: FALLBACK, contrast: Number(whiteTextContrast(FALLBACK).toFixed(2)), source: 'fallback', note: 'The logo has no usable colour; used a neutral navy.' }
+  let [r, g, b] = [1, 3, 5].map((i) => parseInt(base.slice(i, i + 2), 16))
+  let hex = base.toLowerCase()
+  for (let i = 0; i < 20 && whiteTextContrast(hex) < 4.5; i++) {
+    r = Math.round(r * 0.9); g = Math.round(g * 0.9); b = Math.round(b * 0.9)
+    hex = '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')
+  }
+  return { accent: hex, contrast: Number(whiteTextContrast(hex).toFixed(2)), source: `darkened logo colour ${base.toLowerCase()}` }
+}
+
 async function executeSetWorldEmailTemplate(input, env) {
   const domain = (input.domain || '').trim().toLowerCase()
   if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "universi.no")')
+
+  // Caller gate. The login email is what a World's members click to sign in — anyone able to rewrite
+  // it could point {magicLink}'s button somewhere else. It had NO check at all (found 2026-09-15).
+  // Allowed: Superadmin, or the founder / account holder of THIS World.
+  const callerProfile = input.userId ? await resolveUserProfile(input.userId, env) : null
+  const callerRole = String(callerProfile?.role || callerProfile?.Role || '').trim().toLowerCase()
+  const callerEmail = String(callerProfile?.email || '').trim().toLowerCase()
+  if (callerRole !== 'superadmin') {
+    const own = callerEmail
+      ? await env.DB.prepare('SELECT 1 AS ok FROM world_founders WHERE domain = ? AND (lower(founder_email) = ? OR lower(account_holder_email) = ?) LIMIT 1').bind(domain, callerEmail, callerEmail).first()
+      : null
+    if (!own) return { success: false, error: `Only a Superadmin or the World Founder of ${domain} can change its email templates.` }
+  }
+
   const purpose = (input.purpose || '').trim().toLowerCase()
   if (!purpose) throw new Error('purpose is required (e.g. "login", "meeting")')
   const language = (input.language || 'no').trim().toLowerCase()
-  const subject = (input.subject || '').trim()
-  const body = typeof input.body === 'string' ? input.body : ''
-  if (!subject) throw new Error('subject is required')
-  if (!body) throw new Error('body (HTML) is required')
-  const brand = input.brand && typeof input.brand === 'object' ? input.brand : null
+  const defaults = DEFAULT_WORLD_EMAIL_TEMPLATES[purpose] && (DEFAULT_WORLD_EMAIL_TEMPLATES[purpose][language] || DEFAULT_WORLD_EMAIL_TEMPLATES[purpose].en)
+  const subject = (input.subject || '').trim() || (defaults ? defaults.subject : '')
+  let body = typeof input.body === 'string' ? input.body : ''
+  const usedDefaultBody = !body.trim() && !!defaults
+  if (!subject) throw new Error(`subject is required (only purpose "login" has a built-in default)`)
+  if (!body.trim() && !defaults) throw new Error(`body (HTML) is required — only purpose "login" has a built-in default template`)
+  const brand = input.brand && typeof input.brand === 'object' ? { ...input.brand } : null
+  let accentPick = null
+  if (brand && String(brand.accent || '').trim().toLowerCase() === 'auto') {
+    accentPick = await pickAccentFromLogo(brand.logo)
+    brand.accent = accentPick.accent
+  }
 
   // Ensure the body carries at least one editable-section marker so it plugs into the SAME
   // section-editing machinery html-nodes use (HtmlPreview Rediger/HTML/Erstatt; replace_html_section).
   // Sections are delimited by <!-- edit:<id>:start --> … <!-- edit:<id>:end -->. Keep any the author
   // added; if none, wrap the whole body as one section "email-body". email-worker strips these markers
   // at send time so delivered emails stay clean.
-  const bodyMarked = /<!--\s*edit:[a-z0-9-]+:start\s*-->/i.test(body)
-    ? body
-    : `<!-- edit:email-body:start -->\n${body}\n<!-- edit:email-body:end -->`
+  const markBody = (b) => (/<!--\s*edit:[a-z0-9-]+:start\s*-->/i.test(b)
+    ? b
+    : `<!-- edit:email-body:start -->\n${b}\n<!-- edit:email-body:end -->`)
 
   // Graph ids MUST be UUIDs, so we can't use a deterministic id. Instead the email graph is a UUID
   // graph tagged with a metaArea marker `#EMAIL-<domain>`; we locate it by that marker. Superadmin
@@ -6302,6 +6420,11 @@ async function executeSetWorldEmailTemplate(input, env) {
     }
   }
 
+  // The built-in body needs to know whether the World's brand (new or already stored) has a logo.
+  const storedBrand = (nodes.find((n) => (n.type || '').toLowerCase() === 'email-brand') || {}).metadata || {}
+  if (usedDefaultBody) body = buildDefaultWorldEmailBody(defaults, !!String(storedBrand.logo || '').trim())
+  const bodyMarked = markBody(body)
+
   // Upsert the email-template node for (purpose, language).
   const tMeta = { purpose, language, subject }
   const tIdx = nodes.findIndex((n) =>
@@ -6351,9 +6474,14 @@ async function executeSetWorldEmailTemplate(input, env) {
     html: bodyMarked,
     purpose,
     language,
+    subject,
     brandUpdated: !!brand,
+    brand: storedBrand,
+    used_default_template: usedDefaultBody,
+    ...(accentPick ? { accent_pick: accentPick } : {}),
     message:
-      `Saved the ${purpose}/${language} email template for ${domain} in graph ${graphId} (${graphExists ? 'updated' : 'created'})${brand ? ' + brand node' : ''}. ` +
+      `Saved the ${purpose}/${language} email template for ${domain} in graph ${graphId} (${graphExists ? 'updated' : 'created'})${brand ? ' + brand node' : ''}${usedDefaultBody ? ' using the built-in template' : ''}. ` +
+      (accentPick ? `Accent ${accentPick.accent} chosen from ${accentPick.source} (white text contrast ${accentPick.contrast}:1).${accentPick.note ? ' ' + accentPick.note : ''} ` : '') +
       `email-worker locates this at send time via the metaArea marker ${emailMetaArea} — from the ${domain} World's graph (the SSOT).`,
     viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
   }

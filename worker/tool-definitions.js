@@ -1623,29 +1623,29 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_world_email_template',
-    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — in the graph tagged metaArea "#EMAIL-<domain>" (created on first use, found by that tag afterwards; universi.no and vegr.ai already have one), which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals.',
+    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — in the graph tagged metaArea "#EMAIL-<domain>" (created on first use, found by that tag afterwards; universi.no and vegr.ai already have one), which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals. For purpose "login" the subject and body are OPTIONAL: omit both to use the built-in login template (Norwegian or English, logo row only when the brand has a logo) — prefer this over writing HTML. Run the World Email Template wizard (system prompt) to collect the brand first. Superadmin, or the World Founder of that domain.',
     input_schema: {
       type: 'object',
       properties: {
         domain: { type: 'string', description: 'The World domain, e.g. "universi.no". Determines both the sender World and the template graph (tagged #EMAIL-<domain>).' },
         purpose: { type: 'string', description: 'Which email this template is for, e.g. "login" (magic-link sign-in) or "meeting" (meeting invite).' },
         language: { type: 'string', description: 'ISO language code, e.g. "no" or "en". Defaults to "no".' },
-        subject: { type: 'string', description: 'Email subject line (required). May contain {placeholders}.' },
-        body: { type: 'string', description: 'Email body as HTML (required) with {placeholders}. Reference the link via {magicLink} and brand via {brandName}/{brandLogo}/{brandAccent}.' },
+        subject: { type: 'string', description: 'Email subject line. May contain {placeholders}. Optional for purpose "login" (built-in default).' },
+        body: { type: 'string', description: 'Email body as HTML with {placeholders}. Reference the link via {magicLink} and brand via {brandName}/{brandLogo}/{brandAccent}. Omit for purpose "login" to use the built-in template.' },
         brand: {
           type: 'object',
           description: 'Optional. The World\'s email brand — upserts an email-brand node that templates pull from.',
           properties: {
             name: { type: 'string', description: 'Brand/World display name, e.g. "Universi".' },
             logo: { type: 'string', description: 'Logo image URL.' },
-            accent: { type: 'string', description: 'Accent color, hex e.g. "#0f2a43".' },
+            accent: { type: 'string', description: 'Accent color, hex e.g. "#0f2a43" — or "auto" to pick a colour from the logo (imgix palette) that white button text is readable on (WCAG 4.5:1). The chosen colour is returned in accent_pick.' },
             fromName: { type: 'string', description: 'Display From name.' },
             fromEmail: { type: 'string', description: "The address this World's mail is SENT from, e.g. \"post@universi.no\". Must be an email account configured (with a credential) on the World founder's profile — or, for a platform domain, on the System Owner's. When omitted, email-worker infers a sender from the account list, which often picks the wrong address." },
             footer: { type: 'string', description: 'Footer line, e.g. "Universi AS · universi.no".' }
           }
         }
       },
-      required: ['domain', 'purpose', 'subject', 'body']
+      required: ['domain', 'purpose']
     }
   },
   {
