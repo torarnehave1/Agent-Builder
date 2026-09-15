@@ -1672,7 +1672,7 @@ const TOOL_DEFINITIONS = [
         },
         forUserEmail: {
           type: 'string',
-          description: 'Superadmin only. Send from ANOTHER user account (their configured sender) instead of your own. Use to trigger a verified send on a founder behalf without them logging in; the email-worker stamps last_verified_at on that founder. The sender must already be configured on that user with an app password.'
+          description: 'Superadmin only. Send from ANOTHER user account (their configured sender) instead of your own. Use to trigger a verified send on a founder behalf without them logging in; the email-worker stamps last_verified_at on that founder. The sender must already be configured on that user with an app password. Optional when fromEmail is given: for a Superadmin, a fromEmail stored in another profile (e.g. a World sender such as post@nibi.no) is found automatically. A "No configured account matches" error does NOT mean the sender must be added again — never ask for its token before checking.'
         }
       },
       required: ['to', 'subject', 'html']

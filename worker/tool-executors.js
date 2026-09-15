@@ -6352,17 +6352,58 @@ async function executeSendEmail(input, env) {
   if (profile.data) {
     try { userData = JSON.parse(profile.data) } catch { /* ignore */ }
   }
-  const accounts = userData?.settings?.emailAccounts || []
+  let accounts = userData?.settings?.emailAccounts || []
+  const requestedFrom = (input.fromEmail || '').trim().toLowerCase()
+  let resolvedProfileNote = null
+
+  // A Superadmin asking to send FROM an address that lives in ANOTHER user's profile (a World's
+  // sender is stored on the founder, e.g. post@nibi.no on post@nibi.no) used to fail with "No
+  // configured account matches" unless the model also remembered forUserEmail — a fresh Grok chat
+  // did not, and then asked for the token again (2026-09-15). forUserEmail already lets a Superadmin
+  // send as anyone, so finding the holding profile grants nothing new. Order: the profile whose
+  // login IS that address → the World founder / account holder of its domain → a single unique
+  // holder. Several unrelated holders → refuse and name them.
+  const ownMatch = requestedFrom && accounts.find(a => (a.email || '').toLowerCase() === requestedFrom)
+  if (requestedFrom && !ownMatch && !forUser && (callerProfile.role || '').toLowerCase() === 'superadmin') {
+    const holders = await env.DB.prepare(
+      `SELECT DISTINCT c.email AS email FROM config c, json_each(json_extract(c.data, '$.settings.emailAccounts')) j
+       WHERE lower(json_extract(j.value, '$.email')) = ?`
+    ).bind(requestedFrom).all()
+    const holderEmails = ((holders && holders.results) || []).map(r => String(r.email || '').toLowerCase()).filter(Boolean)
+    let chosen = holderEmails.find(e => e === requestedFrom) || null
+    if (!chosen && holderEmails.length) {
+      const senderDomain = requestedFrom.split('@')[1] || ''
+      const wf = senderDomain
+        ? await env.DB.prepare('SELECT founder_email, account_holder_email FROM world_founders WHERE domain = ? ORDER BY created_at').bind(senderDomain).all()
+        : null
+      const worldPeople = ((wf && wf.results) || []).flatMap(r => [r.founder_email, r.account_holder_email]).map(e => String(e || '').toLowerCase())
+      chosen = holderEmails.find(e => worldPeople.includes(e)) || (holderEmails.length === 1 ? holderEmails[0] : null)
+    }
+    if (!chosen && holderEmails.length > 1) {
+      throw new Error(`"${requestedFrom}" is configured in several profiles (${holderEmails.join(', ')}). Pass forUserEmail to pick one.`)
+    }
+    if (chosen) {
+      const holderProfile = await resolveUserProfile(chosen, env)
+      let holderData = {}
+      try { holderData = JSON.parse(holderProfile?.data || '{}') } catch { /* ignore */ }
+      const holderAccounts = holderData?.settings?.emailAccounts || []
+      if (holderProfile?.email && holderAccounts.some(a => (a.email || '').toLowerCase() === requestedFrom)) {
+        profile = holderProfile
+        accounts = holderAccounts
+        resolvedProfileNote = `Sender ${requestedFrom} is stored in ${holderProfile.email}'s profile; sent from there.`
+      }
+    }
+  }
+
   if (accounts.length === 0) {
     throw new Error(`No email accounts configured for ${profile.email}. Set one up in vemail.vegvisr.org first.`)
   }
 
   // Find the right account: use fromEmail if specified, otherwise default account
-  const requestedFrom = (input.fromEmail || '').trim().toLowerCase()
   let account
   if (requestedFrom) {
     account = accounts.find(a => a.email.toLowerCase() === requestedFrom)
-    if (!account) throw new Error(`No configured account matches "${requestedFrom}". Available: ${accounts.map(a => a.email).join(', ')}`)
+    if (!account) throw new Error(`No configured account matches "${requestedFrom}" in ${profile.email}'s profile or any other profile. Available on ${profile.email}: ${accounts.map(a => a.email).join(', ')}. Only then add it with add_email_account.`)
   } else {
     // Prefer @vegvisr.org accounts (SMTP relay, no app password needed)
     account = accounts.find(a => a.email.endsWith('@vegvisr.org')) || accounts.find(a => a.isDefault) || accounts[0]
@@ -6415,7 +6456,8 @@ async function executeSendEmail(input, env) {
     from: account.email,
     to: toEmail,
     subject,
-    message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}".`
+    sender_profile: profile.email,
+    message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}".${resolvedProfileNote ? ` ${resolvedProfileNote}` : ''}`
   }
 }
 
