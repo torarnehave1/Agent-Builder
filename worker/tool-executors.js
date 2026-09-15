@@ -7421,10 +7421,12 @@ async function executeEnhanceText(input, env) {
   const textBlock = (claudeData.content || []).find(b => b.type === 'text')
   if (!textBlock) throw new Error('No response from Claude')
 
+  // The prompt quotes the selection, so the model often echoes the quotes back.
+  const enhancedText = textBlock.text.trim().replace(/^["“«](.*)["”»]$/s, '$1').trim()
   return {
-    enhancedText: textBlock.text.trim(),
+    enhancedText,
     mode,
-    message: `Enhanced text (${mode}) — ${textBlock.text.trim().length} chars`,
+    message: `Enhanced text (${mode}) — ${enhancedText.length} chars`,
   }
 }
 
