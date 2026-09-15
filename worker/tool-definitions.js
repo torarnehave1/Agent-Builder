@@ -336,13 +336,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'create_subdomain',
-    description: "Create a new subdomain (CNAME + worker route -> brand-worker) so an html-node page can be published to it, e.g. fonemer.vegvisr.org. Wraps api-worker's /create-custom-domain. Zone is auto-resolved for norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training, vegr.ai and alivenesslab.org — pass zone_id ONLY for a root domain outside that list (found in the Cloudflare dashboard, domain Overview). Protected subdomains (api, www, admin, knowledge, auth, brand, ...) are rejected by the endpoint. After creation, publish content with the viewer's Publish button on an html-node (or the publish flow) — the new host serves html:<hostname> from brand-worker's HTML_PAGES KV. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Create a new subdomain (CNAME + worker route -> brand-worker) so an html-node page can be published to it, e.g. fonemer.vegvisr.org. Wraps api-worker's /create-custom-domain. Zone is auto-resolved for norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training, vegr.ai and alivenesslab.org. For a registered World domain (e.g. nibi.no) the tool attaches the subdomain to that World's own brand proxy with the World's stored Cloudflare token — NO zone_id is needed, never ask the user for one. Pass zone_id only for a root domain that is neither in that list nor a registered World. Protected subdomains (api, www, admin, knowledge, auth, brand, ...) are rejected by the endpoint. After creation, publish content with the viewer's Publish button on an html-node (or the publish flow) — the new host serves html:<hostname> from brand-worker's HTML_PAGES KV. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
         subdomain: { type: 'string', description: "The subdomain label only, e.g. 'fonemer' for fonemer.vegvisr.org" },
         root_domain: { type: 'string', description: "The root domain, e.g. 'vegvisr.org'" },
-        zone_id: { type: 'string', description: 'Cloudflare Zone ID — required only for root domains outside the built-in mapping (norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training)' }
+        zone_id: { type: 'string', description: 'Cloudflare Zone ID — only for a root domain that is neither in the built-in mapping (norsegong.com, xyzvibe.com, vegvisr.org, slowyou.training, vegr.ai, alivenesslab.org) nor a registered World. Never needed for a World domain such as nibi.no.' }
       },
       required: ['subdomain', 'root_domain']
     }

@@ -2586,6 +2586,9 @@ async function resolveSuperadminCaller(input, env, action) {
 // Create a subdomain (CNAME + route -> brand-worker) via api-worker's /create-custom-domain.
 // Superadmin only. Zone auto-resolves for the domains in api-worker's DOMAIN_ZONE_MAPPING;
 // other root domains need input.zone_id.
+// Root domains api-worker's /create-custom-domain can serve (its DOMAIN_ZONE_MAPPING, platform account).
+const PLATFORM_SUBDOMAIN_ZONES = ['norsegong.com', 'xyzvibe.com', 'vegvisr.org', 'slowyou.training', 'vegr.ai', 'alivenesslab.org']
+
 async function executeCreateSubdomain(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'create a subdomain')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -2598,6 +2601,40 @@ async function executeCreateSubdomain(input, env) {
   }
   if (!rootDomain || !rootDomain.includes('.')) {
     return { success: false, error: "root_domain must be a domain like 'vegvisr.org'" }
+  }
+
+  // A World domain in its OWN Cloudflare account cannot use api-worker's /create-custom-domain: that
+  // endpoint points the host at the PLATFORM brand-worker with the platform token, and Cloudflare will
+  // not route a zone in one account to a worker in another. On nibi.no (2026-09-15) the agent instead
+  // asked the user for a Zone ID and promised the call would then succeed — it could not. For a
+  // registered World outside the platform zone list, attach the host to the World's own brand proxy
+  // (the worker already serving me.<domain>) as a Workers Custom Domain, with the World's stored token.
+  if (!PLATFORM_SUBDOMAIN_ZONES.includes(rootDomain)) {
+    const world = await env.DB.prepare('SELECT domain FROM world_founders WHERE domain = ? LIMIT 1').bind(rootDomain).first()
+    if (world) {
+      const ctx = await resolveWorldInfraContext({ ...input, domain: rootDomain }, env)
+      if (ctx.error) return { success: false, error: ctx.error }
+      const host = `${subdomain}.${rootDomain}`
+      const stem = rootDomain.split('.')[0]
+      const probe = await inspectBrandProxy(ctx.cfAccount, ctx.cfToken, `me.${rootDomain}`, `${stem}-brand-proxy`)
+      if (!probe.exists) {
+        return { success: false, error: `${rootDomain} has no brand proxy worker yet (looked for ${probe.name}). Run deploy_world_proxy for ${rootDomain} first, then create the subdomain again.` }
+      }
+      const dom = await attachBrandProxyDomain(ctx.cfAccount, ctx.cfToken, rootDomain, probe.name, host)
+      if (!dom.ok) {
+        return { success: false, host, world: rootDomain, worker_name: probe.name, error: `Could not attach ${host} to ${probe.name} (${dom.status}): ${dom.detail}`, note: dom.note }
+      }
+      return {
+        success: true,
+        host,
+        world: rootDomain,
+        worker_name: probe.name,
+        already_attached: !!dom.alreadyAttached,
+        createdBy: gate.email,
+        message: `${host} is ${dom.alreadyAttached ? 'already' : 'now'} attached to ${rootDomain}'s brand proxy ${probe.name} (Cloudflare account ${ctx.cfAccount}). No Zone ID needed.`,
+        next: `Publish an html-node to https://${host} with publish_html_node. A new custom domain can take a minute for DNS and the certificate.`,
+      }
+    }
   }
 
   const body = JSON.stringify({ subdomain, rootDomain, ...(zoneId ? { zoneId } : {}) })
