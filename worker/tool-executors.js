@@ -4603,6 +4603,7 @@ async function executeSetWorldCredentials(input, env) {
     cf_api_token: 'stored (never echoed)',
     token_suffix: `...${cfToken.slice(-6)}`,
     token_status: verifyData.result?.status,
+    message: `Cloudflare credentials stored for ${founderEmail}: account ${cfAccount || '(unchanged)'}, token ...${cfToken.slice(-6)} (${verifyData.result?.status || 'status unknown'}).`,
     next: 'You can now run provision_world_kv / publish_world_page for this founder.',
   }
 }

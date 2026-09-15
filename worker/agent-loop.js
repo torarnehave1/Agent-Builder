@@ -221,6 +221,9 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // Same gap one step later: after registering post@nibi.no, Grok could not link it to the nibi.no
   // World and again said "switch to Claude". Pure D1 registry write, Superadmin-gated, no secrets.
   'register_world_founder',
+  // Superadmin-gated; stores the token, returns only its last 6 chars. The token is still a tool
+  // INPUT, so it reaches the model provider here exactly as it reaches Anthropic on the Claude path.
+  'set_world_credentials',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
