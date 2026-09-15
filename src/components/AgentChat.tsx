@@ -1601,7 +1601,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   }, [selectedAudioFile, audioProcessing, userId, audioAutoDetect, audioLanguage, audioLanguageOptions, getAudioDurationSeconds, splitAudioIntoChunks, callWhisperTranscription, formatChunkTimestamp, clearSelectedAudio]);
 
   // ── Image attachment helpers ──────────────────────────────────────
-  const isImageUrl = useCallback((url: string) => /\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?|$)/i.test(url) || url.includes('imgix.net'), []);
+  // Only a string that IS one web address counts. `includes('imgix.net')` on the whole paste turned a
+  // prompt that merely mentioned an imgix logo URL into a broken image attachment named "div>" and
+  // threw the text away (nibi.no email template, 2026-09-15).
+  const isImageUrl = useCallback((url: string) => /^https?:\/\/\S+$/i.test(url) && (/\.(jpg|jpeg|png|gif|webp|svg|bmp|avif)(\?|#|$)/i.test(url) || /^https?:\/\/[^/\s]*imgix\.net\//i.test(url)), []);
 
   const addImageFromUrl = useCallback((url: string, label?: string) => {
     setPendingImages(prev => [...prev, { type: 'url', url, label: label || url.split('/').pop() || 'image' }]);
