@@ -120,6 +120,30 @@ for (const [name, input, pattern] of [
   check('refusal leaves the registry untouched: already a founder', JSON.stringify(rows(db)) === before, JSON.stringify(rows(db)))
 }
 
+// 3b. Re-running a replacement that already happened is idempotent (nibi.no, 2026-09-15: the second
+//     run errored with no stored state, and the Grok agent described the account holder anyway).
+{
+  const { db, env } = makeEnv(); seedNibi(db)
+  const input = { ...AUTH, founder_email: 'post@nibi.no', replace_founder_email: 'torarnehave@gmail.com', domain: 'nibi.no', account_holder_email: 'post@nibi.no' }
+  const first = await executeTool('register_world_founder', input, env)
+  const afterFirst = JSON.stringify(rows(db))
+  const again = await executeTool('register_world_founder', input, env)
+  const after = rows(db)
+  check('first run replaces', first.success === true && first.replaced_founder_email === 'torarnehave@gmail.com', JSON.stringify(first))
+  check('re-run succeeds instead of erroring', again.success === true && again.replacement_already_applied === true, JSON.stringify(again))
+  check('re-run leaves the registry as the first run did', JSON.stringify(after) === afterFirst && after.length === 1, JSON.stringify(after))
+  check('re-run returns the STORED holder and hosting',
+    again.account_holder_email === 'post@nibi.no' && /Stored account holder: post@nibi\.no, hosting: own_account/.test(again.message || ''), JSON.stringify(again))
+  check('re-run does not claim a replacement happened', !again.replaced_founder_email, JSON.stringify(again))
+}
+{
+  // Already replaced earlier WITHOUT moving the holder; a re-run that passes the holder applies it.
+  const { db, env } = makeEnv(); seedNibi(db)
+  await executeTool('register_world_founder', { ...AUTH, founder_email: 'post@nibi.no', replace_founder_email: 'torarnehave@gmail.com', domain: 'nibi.no' }, env)
+  const r = await executeTool('register_world_founder', { ...AUTH, founder_email: 'post@nibi.no', replace_founder_email: 'torarnehave@gmail.com', domain: 'nibi.no', account_holder_email: 'post@nibi.no' }, env)
+  check('re-run applies a newly supplied holder', r.success === true && rows(db)[0].account_holder_email === 'post@nibi.no' && r.account_holder_email === 'post@nibi.no', JSON.stringify({ r, rows: rows(db) }))
+}
+
 // 4. Without replace_founder_email the old behaviour holds: a second row is added.
 {
   const { db, env } = makeEnv(); seedNibi(db)

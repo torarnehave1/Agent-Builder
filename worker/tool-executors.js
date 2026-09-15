@@ -4211,30 +4211,37 @@ async function executeRegisterWorldFounder(input, env) {
   const replaceEmail = (input.replace_founder_email || '').trim().toLowerCase()
   let replacedFrom = null
   let keptHolder = null
+  let replaceAlreadyApplied = false
   if (replaceEmail && replaceEmail !== founderEmail) {
     const oldRow = await env.DB
       .prepare('SELECT id, account_holder_email FROM world_founders WHERE founder_email = ? AND domain = ?')
       .bind(replaceEmail, domain).first()
-    if (!oldRow) {
+    const newRow = await env.DB
+      .prepare('SELECT id FROM world_founders WHERE founder_email = ? AND domain = ?')
+      .bind(founderEmail, domain).first()
+    if (!oldRow && newRow) {
+      // Re-running the same replacement must stay idempotent: the old founder is gone because the
+      // new one already holds the row. Erroring here (nibi.no, 2026-09-15) dropped the other supplied
+      // fields and returned no stored state, so the Grok agent described the account holder from
+      // nothing. Fall through to the normal update path, which applies them and reads the row back.
+      replaceAlreadyApplied = true
+    } else if (!oldRow) {
       const cur = await env.DB.prepare('SELECT founder_email FROM world_founders WHERE domain = ? ORDER BY created_at').bind(domain).all()
       const names = ((cur && cur.results) || []).map(r => r.founder_email)
       return { success: false, error: `${replaceEmail} is not a founder of ${domain}, so there is nothing to replace. Current founders: ${names.length ? names.join(', ') : 'none'}.` }
-    }
-    const clash = await env.DB
-      .prepare('SELECT id FROM world_founders WHERE founder_email = ? AND domain = ?')
-      .bind(founderEmail, domain).first()
-    if (clash) {
+    } else if (newRow) {
       return { success: false, error: `${founderEmail} is already a founder of ${domain}, so replacing ${replaceEmail} would leave two rows for the same person. Nothing was changed.` }
+    } else {
+      // The World's login allowlist is founder_email; pointing it at an address with no account
+      // would leave the World with a founder nobody can log in as.
+      const user = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
+      if (!user) {
+        return { success: false, error: `${founderEmail} has no Vegvisr account. Register it with admin_register_user first, then replace the founder. Nothing was changed.` }
+      }
+      await env.DB.prepare('UPDATE world_founders SET founder_email = ? WHERE id = ?').bind(founderEmail, oldRow.id).run()
+      replacedFrom = replaceEmail
+      keptHolder = oldRow.account_holder_email || null
     }
-    // The World's login allowlist is founder_email; pointing it at an address with no account
-    // would leave the World with a founder nobody can log in as.
-    const user = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
-    if (!user) {
-      return { success: false, error: `${founderEmail} has no Vegvisr account. Register it with admin_register_user first, then replace the founder. Nothing was changed.` }
-    }
-    await env.DB.prepare('UPDATE world_founders SET founder_email = ? WHERE id = ?').bind(founderEmail, oldRow.id).run()
-    replacedFrom = replaceEmail
-    keptHolder = oldRow.account_holder_email || null
   }
 
   // Re-registering an EXISTING (founder, domain) used to be a silent no-op that still returned
@@ -4294,7 +4301,9 @@ async function executeRegisterWorldFounder(input, env) {
 
   const wfState = replacedFrom
     ? `founder replaced (${replacedFrom} → ${founderEmail})${wfUpdated ? ' and fields updated' : ''}`
-    : wfCreated ? 'created' : wfUpdated ? 'updated' : 'already present (nothing to change)'
+    : replaceAlreadyApplied
+      ? `replacement already applied (${founderEmail} holds the row; ${replaceEmail} is not a founder)${wfUpdated ? ', fields updated' : ''}`
+      : wfCreated ? 'created' : wfUpdated ? 'updated' : 'already present (nothing to change)'
   const storedHolder = (stored && stored.account_holder_email) || null
   return {
     success: true,
@@ -4304,6 +4313,10 @@ async function executeRegisterWorldFounder(input, env) {
         (keptHolder && storedHolder === keptHolder && storedHolder !== founderEmail
           ? ` Cloudflare account holder is still ${storedHolder}; pass account_holder_email to change it.`
           : ''),
+    } : {}),
+    ...(replaceAlreadyApplied ? {
+      replacement_already_applied: true,
+      message: `${domain}: ${founderEmail} is already the founder (${replaceEmail} is not). Stored account holder: ${storedHolder || 'none'}, hosting: ${(stored && stored.hosting_model) || 'unknown'}.${wfUpdated ? ' Supplied fields were written; the values above are read back from the registry.' : ' Nothing changed.'}`,
     } : {}),
     founder_email: founderEmail,
     domain,
