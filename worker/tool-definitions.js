@@ -1452,7 +1452,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'admin_register_user',
-    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, phone, and role. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id and emailVerificationToken.',
+    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, phone, and role. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user".',
     input_schema: {
       type: 'object',
       properties: {

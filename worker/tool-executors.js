@@ -4164,7 +4164,8 @@ async function executeAdminRegisterUser(input, env) {
     name,
     phone,
     role,
-    emailVerificationToken,
+    // emailVerificationToken is deliberately NOT returned: it is the user's API credential, and a
+    // tool result is sent to the model provider (xAI/OpenAI on those paths) and shown in chat.
     loginUrl: `https://login.vegvisr.org`,
     message: `User ${email} (${name || 'no name'}) registered with role "${role}". They can log in at login.vegvisr.org by entering their email.`
   }
