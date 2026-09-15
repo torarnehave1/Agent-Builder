@@ -1623,11 +1623,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_world_email_template',
-    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — under the deterministic graph id "email-templates-<domain>", which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals.',
+    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — in the graph tagged metaArea "#EMAIL-<domain>" (created on first use, found by that tag afterwards; universi.no and vegr.ai already have one), which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals.',
     input_schema: {
       type: 'object',
       properties: {
-        domain: { type: 'string', description: 'The World domain, e.g. "universi.no". Determines both the sender World and the KG graph id (email-templates-<domain>).' },
+        domain: { type: 'string', description: 'The World domain, e.g. "universi.no". Determines both the sender World and the template graph (tagged #EMAIL-<domain>).' },
         purpose: { type: 'string', description: 'Which email this template is for, e.g. "login" (magic-link sign-in) or "meeting" (meeting invite).' },
         language: { type: 'string', description: 'ISO language code, e.g. "no" or "en". Defaults to "no".' },
         subject: { type: 'string', description: 'Email subject line (required). May contain {placeholders}.' },
