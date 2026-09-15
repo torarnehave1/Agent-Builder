@@ -1153,7 +1153,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       `${systemPrompt}\n\n` +
       `## ${provider.label} AgentChat Tooling\n` +
       `You are running through the ${provider.label} provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
-      `Use the available function tools when they are needed. If a user asks for a capability that is not available in this ${provider.label} tool list, say that this provider path does not expose that specific tool yet and offer to switch to a Claude model for the full orchestrator toolbox.` +
+      `Use the available function tools when they are needed, and call them again whenever the user repeats a request — never answer from an earlier tool result. If a user asks for a capability that is not in this ${provider.label} tool list, name the specific missing tool so it can be added to this path; do not tell the user to switch models.` +
       (taskSlot ? `\n\n${taskSlot}` : '')
 
     const openAIMessages = [
