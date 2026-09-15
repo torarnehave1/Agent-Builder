@@ -78,6 +78,7 @@ function hostFromRef(r: unknown): string {
 }
 
 interface NodeRefs { references?: unknown[]; bibl?: unknown[]; path?: string }
+interface PublishGate { gate: boolean; gateRole?: string; gateAppName?: string; gateLogo?: string; gateLang?: string; gateRegisterMode?: string }
 function extractPublishedHosts(node: NodeRefs | null | undefined): string[] {
   if (!node) return [];
   const src = [
@@ -444,6 +445,10 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState('');
   const [publishNeedsSubdomain, setPublishNeedsSubdomain] = useState(false);
+  // Login gate per host, as stored on node.metadata.publishGate by publish_html_node.
+  const [storedGates, setStoredGates] = useState<Record<string, PublishGate>>({});
+  const [gateOn, setGateOn] = useState(false);
+  const [gateLang, setGateLang] = useState('nb');
 
   // Read the node's recorded live host(s) from references/bibl whenever the pinned node changes.
   const loadPublishedHosts = useCallback(async () => {
@@ -454,6 +459,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       const data = await res.json();
       const node = (data.nodes || []).find((n: { id: string }) => n.id === nodeId);
       setPublishedHosts(extractPublishedHosts(node));
+      const pg = node?.metadata?.publishGate;
+      setStoredGates(pg && typeof pg === 'object' ? pg : {});
     } catch { /* non-fatal — publish still works, just no prefill */ }
   }, [graphId, nodeId]);
 
@@ -463,6 +470,14 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   useEffect(() => {
     if (publishOpen && !publishHost) setPublishHost(publishedHosts[0] || '');
   }, [publishOpen, publishedHosts, publishHost]);
+
+  // The checkbox mirrors what is stored for the target host, so Republiser keeps the gate.
+  const publishHostKey = publishHost.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  useEffect(() => {
+    const g = storedGates[publishHostKey];
+    setGateOn(!!g?.gate);
+    setGateLang(g?.gateLang || 'nb');
+  }, [publishHostKey, storedGates]);
 
   const runPublish = async (host: string, force = false) => {
     const target = host.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
@@ -477,11 +492,17 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       const res = await fetch(`${AGENT_API}/publish`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ graphId, nodeId, host: target, force, authToken: getAuthToken() }),
+        body: JSON.stringify({
+          graphId, nodeId, host: target, force, authToken: getAuthToken(),
+          // Explicit on every UI publish: the checkbox shows the stored state, so this keeps it.
+          // Role/app-name/logo/register-mode set by the agent are carried over from the stored gate.
+          gate: gateOn,
+          ...(gateOn ? { ...storedGates[target], gate: true, gateLang } : {}),
+        }),
       });
       const data = await res.json().catch(() => null);
       if (res.ok && data?.success) {
-        setPublishMsg(`Publisert · ${target} er live`);
+        setPublishMsg(`Publisert · ${target} er live · ${gateOn ? 'innlogging kreves' : 'åpen for alle'}`);
         setPublishNeedsSubdomain(false);
         loadPublishedHosts();
         return;
@@ -1235,6 +1256,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             >
               {publishing ? 'Publiserer…' : (publishedHosts.includes(publishHost.trim().toLowerCase()) ? 'Republiser' : 'Publiser')}
             </button>
+            <label className="flex items-center gap-1 text-[11px] text-emerald-100/80 select-none cursor-pointer" title="Hele siden krever innlogging (vegvisr-auth login-kort)">
+              <input type="checkbox" checked={gateOn} onChange={e => setGateOn(e.target.checked)} />
+              Krev innlogging
+            </label>
+            {gateOn && (
+              <select
+                value={gateLang}
+                onChange={e => setGateLang(e.target.value)}
+                className="text-[11px] bg-slate-800 text-white/80 border border-white/10 rounded px-1.5 py-0.5"
+                title="Språk på innloggingskortet"
+              >
+                <option value="nb">Norsk</option>
+                <option value="en">English</option>
+              </select>
+            )}
             {publishNeedsSubdomain && (
               <button
                 type="button"

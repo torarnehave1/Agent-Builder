@@ -2784,7 +2784,7 @@ export default {
       // host-recording all preserved). Body: { graphId, nodeId, host, force?, authToken }.
       if (pathname === '/publish' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
-        const { graphId, nodeId, host, force, authToken } = body
+        const { graphId, nodeId, host, force, authToken, gate, gateRole, gateAppName, gateLogo, gateLang, gateRegisterMode } = body
         if (!graphId || !nodeId || !host) {
           return new Response(JSON.stringify({ success: false, error: 'graphId, nodeId and host are required' }), {
             status: 400, headers: corsHeaders
@@ -2795,6 +2795,8 @@ export default {
           : await resolveAuthorizedCaller(request, env)
         const result = await executeTool('publish_html_node', {
           graphId, nodeId, host, force: force === true,
+          // gate omitted → publish_html_node reuses the gate stored for this host.
+          ...(typeof gate === 'boolean' ? { gate, gateRole, gateAppName, gateLogo, gateLang, gateRegisterMode } : {}),
           authContext, userId: authContext.userId || body.userId || null,
         }, env)
         return new Response(JSON.stringify(result), {

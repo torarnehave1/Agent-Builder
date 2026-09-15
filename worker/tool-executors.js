@@ -2420,17 +2420,26 @@ async function executePublishHtmlNode(input, env) {
     }
   }
   const overwrite = input.overwrite !== false // default true — republish in place
+  // LOGIN GATE PERSISTENCE: the gate lives only in the served copy, so a republish that omits
+  // `gate` used to silently publish the page PUBLIC (iiba.vegr.ai lost its gate to the preview's
+  // Republiser button, 2026-09-15). The settings are now stored per host on node.metadata.publishGate:
+  // gate:true stores them, gate:false clears them, gate omitted reuses what is stored.
+  const storedGates = (node.metadata && typeof node.metadata.publishGate === 'object' && node.metadata.publishGate) || {}
+  const gateExplicit = typeof input.gate === 'boolean'
+  const gateOpts = gateExplicit
+    ? (input.gate ? {
+        gate: true,
+        gateRole: input.gateRole || '',
+        gateAppName: input.gateAppName || '',
+        gateLogo: input.gateLogo || '',
+        gateRegisterMode: input.gateRegisterMode || '',
+        gateLang: input.gateLang || '',
+      } : null)
+    : (storedGates[host] && storedGates[host].gate ? storedGates[host] : null)
   // Inject the runtime auth bridge so in-page saves (window.vegvisrPatchNode) work on the
   // live domain, same as in preview. Injected into the SERVED copy only — node.info in the
   // graph stays clean, so republish never accumulates bridges.
-  const htmlToPublish = injectPublishedAuthBridge(html, input.graphId, {
-    gate: input.gate === true,
-    gateRole: input.gateRole || '',
-    gateAppName: input.gateAppName || '',
-    gateLogo: input.gateLogo || '',
-    gateRegisterMode: input.gateRegisterMode || '',
-    gateLang: input.gateLang || '',
-  })
+  const htmlToPublish = injectPublishedAuthBridge(html, input.graphId, gateOpts || { gate: false })
   const publishBody = JSON.stringify({ hostname: host, html: htmlToPublish, overwrite, graphId: input.graphId, nodeId: input.nodeId })
   const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
   const useBinding = sharedHost && env.BRAND_WORKER && !input.proxy_url
@@ -2480,6 +2489,23 @@ async function executePublishHtmlNode(input, env) {
     }
   } catch (e) { /* bookkeeping only — publish already succeeded */ }
 
+  if (gateExplicit) {
+    try {
+      const nextGates = { ...storedGates }
+      if (gateOpts) nextGates[host] = gateOpts
+      else delete nextGates[host]
+      // Re-read: the host-recording patch above may have bumped the node.
+      const fresh = await (await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`)).json()
+      const freshNode = (fresh.nodes || []).find(n => n.id === input.nodeId) || node
+      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
+        metadata: { ...(freshNode.metadata || {}), publishGate: nextGates },
+      })
+    } catch (e) { /* bookkeeping only — publish already succeeded */ }
+  }
+  const gateNote = gateOpts
+    ? ` Login gate ON${gateOpts.gateRole ? ` (roles: ${gateOpts.gateRole})` : ''}${gateExplicit ? '' : ' — kept from the previous publish'}.`
+    : ` Page is PUBLIC (no login gate).`
+
   // PROOF OF LIFE — read the key back FROM THE HOST ITSELF (Lesson 49). "Publish accepted" only
   // proves that SOME store took the bytes; it does not prove that store is the one serving `host`.
   // The previous check merely rejected 530/1016, which passed happily for charlie.iamazing.page
@@ -2525,7 +2551,8 @@ async function executePublishHtmlNode(input, env) {
     hostRoutes,
     verified: isLive,
     verification: verify,
-    message,
+    gate: gateOpts,
+    message: message + gateNote,
   }
 }
 
