@@ -4204,6 +4204,39 @@ async function executeRegisterWorldFounder(input, env) {
   const hostingModel = (input.hosting_model || 'own_account').trim()
   const holder = (input.account_holder_email || '').trim().toLowerCase() || founderEmail
 
+  // Replacing a founder. Registering a second email on a domain only ADDS a row, and every
+  // domain-keyed resolver picks the oldest row, so the placeholder founder kept winning (nibi.no,
+  // 2026-09-15: torarnehave@gmail.com stood in until post@nibi.no existed). Re-point the existing
+  // row instead: world_name, cf_account_id, hosting_model, account_holder_email and created_at stay.
+  const replaceEmail = (input.replace_founder_email || '').trim().toLowerCase()
+  let replacedFrom = null
+  let keptHolder = null
+  if (replaceEmail && replaceEmail !== founderEmail) {
+    const oldRow = await env.DB
+      .prepare('SELECT id, account_holder_email FROM world_founders WHERE founder_email = ? AND domain = ?')
+      .bind(replaceEmail, domain).first()
+    if (!oldRow) {
+      const cur = await env.DB.prepare('SELECT founder_email FROM world_founders WHERE domain = ? ORDER BY created_at').bind(domain).all()
+      const names = ((cur && cur.results) || []).map(r => r.founder_email)
+      return { success: false, error: `${replaceEmail} is not a founder of ${domain}, so there is nothing to replace. Current founders: ${names.length ? names.join(', ') : 'none'}.` }
+    }
+    const clash = await env.DB
+      .prepare('SELECT id FROM world_founders WHERE founder_email = ? AND domain = ?')
+      .bind(founderEmail, domain).first()
+    if (clash) {
+      return { success: false, error: `${founderEmail} is already a founder of ${domain}, so replacing ${replaceEmail} would leave two rows for the same person. Nothing was changed.` }
+    }
+    // The World's login allowlist is founder_email; pointing it at an address with no account
+    // would leave the World with a founder nobody can log in as.
+    const user = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
+    if (!user) {
+      return { success: false, error: `${founderEmail} has no Vegvisr account. Register it with admin_register_user first, then replace the founder. Nothing was changed.` }
+    }
+    await env.DB.prepare('UPDATE world_founders SET founder_email = ? WHERE id = ?').bind(founderEmail, oldRow.id).run()
+    replacedFrom = replaceEmail
+    keptHolder = oldRow.account_holder_email || null
+  }
+
   // Re-registering an EXISTING (founder, domain) used to be a silent no-op that still returned
   // success with the INPUT echoed back — so correcting hosting_model / account_holder_email looked
   // applied while the row never changed (slowyou.training, 2026-08-19: the agent reported
@@ -4259,9 +4292,19 @@ async function executeRegisterWorldFounder(input, env) {
     .prepare('SELECT world_name, domain, cf_account_id, meta_area_tag, account_holder_email, hosting_model, status FROM world_founders WHERE founder_email = ? AND domain = ?')
     .bind(founderEmail, domain).first()
 
-  const wfState = wfCreated ? 'created' : wfUpdated ? 'updated' : 'already present (nothing to change)'
+  const wfState = replacedFrom
+    ? `founder replaced (${replacedFrom} → ${founderEmail})${wfUpdated ? ' and fields updated' : ''}`
+    : wfCreated ? 'created' : wfUpdated ? 'updated' : 'already present (nothing to change)'
+  const storedHolder = (stored && stored.account_holder_email) || null
   return {
     success: true,
+    ...(replacedFrom ? {
+      replaced_founder_email: replacedFrom,
+      message: `${domain}: founder ${replacedFrom} replaced by ${founderEmail}.` +
+        (keptHolder && storedHolder === keptHolder && storedHolder !== founderEmail
+          ? ` Cloudflare account holder is still ${storedHolder}; pass account_holder_email to change it.`
+          : ''),
+    } : {}),
     founder_email: founderEmail,
     domain,
     world_name: (stored && stored.world_name) || worldName,

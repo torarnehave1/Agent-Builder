@@ -3243,11 +3243,12 @@ const TOOL_DEFINITIONS = [
   {
     name: 'register_world_founder',
     description:
-      'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare. Use for "connect/link user X as World Founder of domain Y" (register the user with admin_register_user first if they do not exist). A domain that already has a founder gets an ADDITIONAL founder row; the existing founder is not replaced.',
+      'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare. Use for "connect/link user X as World Founder of domain Y" (register the user with admin_register_user first if they do not exist). A domain that already has a founder gets an ADDITIONAL founder row unless replace_founder_email is given; use that for "replace/change/transfer the founder".',
     input_schema: {
       type: 'object',
       properties: {
         founder_email: { type: 'string', description: "The founder's Vegvisr login email, e.g. kristoffer@vitalinnsikt.no" },
+        replace_founder_email: { type: 'string', description: "The CURRENT founder email on this domain to replace with founder_email. Moves that registry row to founder_email and keeps world_name, cf_account_id, hosting_model and account_holder_email. Fails, changing nothing, if that email is not a founder of the domain, if founder_email already is one, or if founder_email has no Vegvisr account. Omit to add a founder instead." },
         domain: { type: 'string', description: "The World's domain, e.g. vitalinnsikt.no" },
         world_name: { type: 'string', description: 'Display name for the World, e.g. Vitalinnsikt. Defaults to the capitalized domain stem.' },
         meta_area_tag: { type: 'string', description: "Content tag, e.g. '#VITALINNSIKT'. Defaults to '#' + the uppercased domain stem." },
