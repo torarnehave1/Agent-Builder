@@ -3243,7 +3243,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'register_world_founder',
     description:
-      'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare.',
+      'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare. Use for "connect/link user X as World Founder of domain Y" (register the user with admin_register_user first if they do not exist). A domain that already has a founder gets an ADDITIONAL founder row; the existing founder is not replaced.',
     input_schema: {
       type: 'object',
       properties: {

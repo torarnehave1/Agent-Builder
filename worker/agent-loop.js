@@ -218,6 +218,9 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'who_am_i', 'onboarding_status', 'describe_capabilities', 'get_system_registry',
   // Superadmin-gated inside the executor; without it Grok answered "add user X" with "switch to Claude".
   'admin_register_user',
+  // Same gap one step later: after registering post@nibi.no, Grok could not link it to the nibi.no
+  // World and again said "switch to Claude". Pure D1 registry write, Superadmin-gated, no secrets.
+  'register_world_founder',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
