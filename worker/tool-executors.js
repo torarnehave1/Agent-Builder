@@ -4859,6 +4859,102 @@ const cfApi = async (path, token, init = {}) => {
   return { ok: res.ok && json && json.success, status: res.status, json, error: errMsg }
 }
 
+// Add or update DNS records on a World's zone with the World's stored Cloudflare token (Superadmin,
+// via resolveWorldInfraContext). Built for mail authentication at an outside mailbox host (nibi.no,
+// 2026-09-15: Uniweb SPF + four DKIM CNAMEs + DMARC had to be hand-typed in the dashboard, and the
+// only API route was the owner-only arbitrary-code MCP server, which no model should get for this).
+// Deliberately narrow: TXT/CNAME/MX only, never proxied, never deletes. A name holds ONE DMARC, ONE
+// SPF and ONE CNAME, so those are updated in place — a second DMARC or SPF record invalidates both.
+const normTxt = (s) => String(s || '').trim().replace(/^"|"$/g, '').replace(/"\s*"/g, '')
+const quoteTxt = (s) => {
+  const t = String(s || '').trim()
+  return /^".*"$/.test(t) || t.length > 255 ? t : `"${t}"`
+}
+
+async function executeSetWorldDnsRecords(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfToken, credentialEmail } = ctx
+  const domain = (ctx.domain || '').trim().toLowerCase()
+  if (!domain) return { success: false, error: 'domain is required, e.g. nibi.no' }
+  const records = Array.isArray(input.records) ? input.records : []
+  if (!records.length) return { success: false, error: 'records is required: [{ type, name, content, priority? }]' }
+
+  const zr = await cfApi(`/zones?name=${encodeURIComponent(domain)}`, cfToken)
+  const zoneId = zr.ok && Array.isArray(zr.json.result) && zr.json.result[0] && zr.json.result[0].id
+  if (!zoneId) {
+    return { success: false, error: `Could not find zone ${domain} with the token stored for ${credentialEmail} (${zr.status}: ${zr.error || 'zone not found'}). The token needs Zone → Zone → Read, and the zone must be in that account.` }
+  }
+
+  const results = []
+  for (const rec of records) {
+    const type = String(rec.type || '').trim().toUpperCase()
+    const rawName = String(rec.name || '').trim().toLowerCase().replace(/\.$/, '')
+    const name = !rawName || rawName === '@' ? domain : (rawName === domain || rawName.endsWith(`.${domain}`) ? rawName : `${rawName}.${domain}`)
+    const content = String(rec.content || '').trim()
+    const row = { type, name }
+    if (!['TXT', 'CNAME', 'MX'].includes(type)) { results.push({ ...row, action: 'failed', error: 'type must be TXT, CNAME or MX' }); continue }
+    if (!content) { results.push({ ...row, action: 'failed', error: 'content is required' }); continue }
+    if (type === 'MX' && name === domain && input.allow_apex_mx !== true) {
+      results.push({ ...row, action: 'failed', error: `Refused: an MX record on ${domain} itself changes where its mail is delivered. Pass allow_apex_mx: true only after the user confirms.` })
+      continue
+    }
+
+    const listed = await cfApi(`/zones/${zoneId}/dns_records?type=${type}&name.exact=${encodeURIComponent(name)}&per_page=100`, cfToken)
+    if (!listed.ok) {
+      results.push({ ...row, action: 'failed', error: `${listed.status}: ${listed.error || 'could not list records'}`, note: listed.status === 403 || /auth/i.test(listed.error || '') ? 'The token needs Zone → DNS → Edit.' : undefined })
+      continue
+    }
+    const existing = listed.json.result || []
+    const isDmarc = type === 'TXT' && /^v=DMARC1/i.test(normTxt(content))
+    const isSpf = type === 'TXT' && /^v=spf1/i.test(normTxt(content))
+    const sameKind = type === 'CNAME'
+      ? existing
+      : isDmarc ? existing.filter((r) => /^v=DMARC1/i.test(normTxt(r.content)))
+      : isSpf ? existing.filter((r) => /^v=spf1/i.test(normTxt(r.content)))
+      : []
+    const exact = existing.find((r) => (type === 'TXT' ? normTxt(r.content) === normTxt(content) : String(r.content).toLowerCase().replace(/\.$/, '') === content.toLowerCase().replace(/\.$/, '')) && (type !== 'MX' || Number(r.priority) === Number(rec.priority ?? 10)))
+
+    const body = { type, name, content: type === 'TXT' ? quoteTxt(content) : content, ttl: Number(rec.ttl) || 1 }
+    if (type === 'CNAME') body.proxied = false
+    if (type === 'MX') body.priority = Number(rec.priority ?? 10)
+
+    let res
+    let action
+    if (exact && !(type === 'CNAME' && exact.proxied)) {
+      results.push({ ...row, action: 'unchanged', id: exact.id, content: exact.content, ...(sameKind.length > 1 ? { warning: `${sameKind.length} records of this kind at ${name} — only one is valid; remove the extras.` } : {}) })
+      continue
+    } else if (sameKind.length) {
+      const target = exact || sameKind[0]
+      res = await cfApi(`/zones/${zoneId}/dns_records/${target.id}`, cfToken, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      action = 'updated'
+      row.previous = target.content
+    } else {
+      res = await cfApi(`/zones/${zoneId}/dns_records`, cfToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      action = 'created'
+    }
+    if (!res.ok) {
+      results.push({ ...row, action: 'failed', error: `${res.status}: ${res.error || 'write failed'}`, note: res.status === 403 || /auth/i.test(res.error || '') ? 'The token needs Zone → DNS → Edit.' : undefined })
+      continue
+    }
+    const stored = res.json.result || {}
+    results.push({ ...row, action, id: stored.id, content: stored.content, proxied: stored.proxied, ...(sameKind.length > 1 ? { warning: `${sameKind.length} records of this kind at ${name} — only one is valid; remove the extras.` } : {}) })
+  }
+
+  const count = (a) => results.filter((r) => r.action === a).length
+  const failed = count('failed')
+  return {
+    success: failed === 0,
+    domain,
+    zone_id: zoneId,
+    credentials_of: credentialEmail,
+    results,
+    message: `${domain}: ${count('created')} created, ${count('updated')} updated, ${count('unchanged')} unchanged, ${failed} failed.` +
+      (failed ? ` First failure: ${results.find((r) => r.action === 'failed').name} — ${results.find((r) => r.action === 'failed').error}` : '') +
+      ' Values shown are what Cloudflare stored.',
+  }
+}
+
 // HS256 publish-token signing (same shape api-worker/html-publish-token.js mints). agent-worker is
 // the SINGLE owner of the publish secret: it SIGNS the token here AND STAMPS the same secret into
 // each World's brand proxy (setBrandProxySecret), so signer and verifier can never drift and no
@@ -12312,6 +12408,12 @@ async function executeOnboardingStatus(input, env) {
 //    doubt, but this tool intentionally mirrors cfApi()/resolveWorldCredentials()'s existing
 //    config-based lookup rather than silently substituting a different table.
 async function executeCloudflareApi(input, env) {
+  // Superadmin only. It reads ANY founder's Cloudflare account with that founder's stored token, and
+  // had no role check at all — any signed-in chat user could list another World's buckets, Workers
+  // and DNS (found 2026-09-15 while exposing the World tools on the Grok path).
+  const callerProfile = input.userId ? await resolveUserProfile(input.userId, env) : null
+  const callerRole = String(callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to inspect Cloudflare accounts.' }
   const founderEmail = (input.founder_email || '').trim().toLowerCase()
   let path = (input.path || '').trim()
   if (!path) throw new Error('path is required, e.g. /r2/buckets or /storage/kv/namespaces/<id>/keys')
@@ -14813,6 +14915,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeProffTool('network', toolInput)
     case 'provision_world_email':
       return await executeProvisionWorldEmail(toolInput, env)
+    case 'set_world_dns_records':
+      return await executeSetWorldDnsRecords(toolInput, env)
     case 'list_stripe_prices':
       return await executeListStripePrices(toolInput, env)
     case 'list_products':

@@ -3757,6 +3757,34 @@ const TOOL_DEFINITIONS = [
       required: ['domain']
     }
   },
+  {
+    name: 'set_world_dns_records',
+    description: "Add or update DNS records (TXT, CNAME, MX) on a World's Cloudflare zone, using the World's stored Cloudflare token — e.g. the SPF, DKIM and DMARC records an outside mail host (Uniweb, Google Workspace, …) gives the user. Use this for \"add these DNS records\", \"legg inn SPF/DKIM/DMARC\". Put the records in Cloudflare (the zone's real DNS), never at the mail host. Behaviour: CNAMEs are always DNS only (never proxied); a name keeps ONE DMARC record, ONE SPF record and ONE CNAME, so an existing one is UPDATED in place instead of duplicated; identical records are reported unchanged; nothing is ever deleted; an MX on the domain itself is refused unless allow_apex_mx is true. Returns each record's action (created/updated/unchanged/failed) with the content Cloudflare stored. Needs the token to carry Zone → Zone → Read and Zone → DNS → Edit. Superadmin only. This does NOT set up Cloudflare Email Routing (that is provision_world_email, which replaces the domain's MX).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World\'s domain (the Cloudflare zone), e.g. "nibi.no".' },
+        records: {
+          type: 'array',
+          description: 'Records to add or update.',
+          items: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['TXT', 'CNAME', 'MX'] },
+              name: { type: 'string', description: '"@" for the domain itself, or the part before the domain, e.g. "_dmarc" or "ed1._domainkey". A full name ending in the domain also works.' },
+              content: { type: 'string', description: 'TXT text without quotes (e.g. "v=spf1 include:_spf.uniweb.no ~all"), the CNAME target host, or the MX mail server host.' },
+              priority: { type: 'number', description: 'MX only. Default 10.' },
+              ttl: { type: 'number', description: 'Seconds, or 1 for automatic (default).' },
+            },
+            required: ['type', 'name', 'content'],
+          },
+        },
+        founder_email: { type: 'string', description: "Optional — resolved from the domain via world_founders if omitted." },
+        allow_apex_mx: { type: 'boolean', description: 'Only true after the user confirms: an MX on the domain itself changes where its mail is delivered.' },
+      },
+      required: ['domain', 'records'],
+    }
+  },
   // ── Billing (catalog-only) ────────────────────────────────────────
   // These decide what is SOLD, never what it COSTS. Stripe products and prices are
   // created by a human in the Stripe dashboard; the agent only chooses which existing

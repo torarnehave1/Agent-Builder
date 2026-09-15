@@ -224,6 +224,17 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // Superadmin-gated; stores the token, returns only its last 6 chars. The token is still a tool
   // INPUT, so it reaches the model provider here exactly as it reaches Anthropic on the Claude path.
   'set_world_credentials',
+  // The whole World-setup family, not one tool per failure (L66/L32: enumerate the family). Adding
+  // them one at a time kept stranding the Grok user on "switch to Claude" at the next step of the
+  // same journey (nibi.no, 2026-09-15). Every executor below is Superadmin-gated and returns no
+  // token or secret value (checked: publish/upload secrets come back as status objects only).
+  'check_world_credentials', 'get_world_app_interests',
+  'provision_world_kv', 'provision_world_photos', 'provision_world_email', 'set_world_dns_records',
+  'deploy_world_proxy', 'set_world_publish_secret', 'check_world_publish', 'setup_world_homepage',
+  'publish_world_page', 'publish_all_world_pages', 'upload_world_image', 'set_world_email_template',
+  'list_world_founder_templates', 'save_world_founder_template',
+  'backup_world_founder_templates_to_kg', 'restore_world_founder_template_from_kg',
+  'set_realtime_recordings_domain', 'cloudflare_api',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
