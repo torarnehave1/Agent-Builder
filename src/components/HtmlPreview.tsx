@@ -405,6 +405,23 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [visualSaving, setVisualSaving] = useState(false);
   const [visualMsg, setVisualMsg] = useState('');
 
+  // AI "✨ Enhance" over a text selection made inside a contentEditable block (visual edit
+  // mode only). Mirrors the elaborate-text modal in vegvisr-frontend's GNewViewer.vue
+  // (expand/question/template), but applies straight into the live DOM so it flows through
+  // saveVisual()'s existing baseline-diff save — no separate save path needed.
+  const enhanceRangeRef = useRef<Range | null>(null);
+  const [enhanceSelText, setEnhanceSelText] = useState('');
+  const [enhanceOpen, setEnhanceOpen] = useState(false);
+  const enhanceOpenRef = useRef(false);
+  enhanceOpenRef.current = enhanceOpen;
+  const [enhanceMode, setEnhanceMode] = useState<'expand' | 'question' | 'template'>('expand');
+  const [enhanceInstructions, setEnhanceInstructions] = useState('');
+  const [enhanceQuestion, setEnhanceQuestion] = useState('');
+  const [enhanceTemplateContent, setEnhanceTemplateContent] = useState('');
+  const [enhancedText, setEnhancedText] = useState('');
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceMsg, setEnhanceMsg] = useState('');
+
   // What the iframe actually renders. Edit mode renders the STAMPED source so every text
   // block can be mapped back to the source on save; every other mode renders exactly what
   // it rendered before (email templates get their send-time placeholders filled in), so
@@ -529,6 +546,32 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     },
   });
 
+  // Tracks a non-collapsed selection that lives fully inside one contentEditable block, so
+  // the "✨ Enhance" button knows what to send and applyEnhancedText() knows what to replace.
+  // A stale Range (element re-rendered, iframe reloaded) simply fails silently on apply —
+  // guarded there with try/catch.
+  const handleSelectionChange = useCallback(() => {
+    // While the panel is open the user is typing instructions in the parent document; keep the
+    // captured selection even if the iframe's own selection collapses meanwhile.
+    if (enhanceOpenRef.current) return;
+    const doc = iframeRef.current?.contentDocument;
+    const sel = doc?.getSelection();
+    const clear = () => { enhanceRangeRef.current = null; setEnhanceSelText(''); };
+    if (!doc || !sel || sel.isCollapsed || sel.rangeCount === 0) return clear();
+    const text = sel.toString().trim();
+    if (!text) return clear();
+    const range = sel.getRangeAt(0);
+    const container = range.commonAncestorContainer;
+    const elNode = (container.nodeType === 1 ? (container as Element) : container.parentElement) as Element | null;
+    // A stamped source block, not only an already-opened one: a drag-select fires selectionchange
+    // BEFORE the click that sets contenteditable. Open it here so saveVisual() includes it.
+    const host = elNode?.closest(`[${V_IDX}]`) as HTMLElement | null;
+    if (!host) return clear();
+    host.setAttribute('contenteditable', 'true');
+    enhanceRangeRef.current = range.cloneRange();
+    setEnhanceSelText(text);
+  }, []);
+
   const enableVisualEdit = useCallback((doc: Document | null | undefined) => {
     if (!doc || !doc.documentElement) return;
     if (!doc.getElementById('__v_edit_style__')) {
@@ -547,27 +590,44 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     });
     baselineRef.current = base;
     doc.addEventListener('click', handlersRef.current.click, true);
-  }, []);
+    doc.addEventListener('selectionchange', handleSelectionChange);
+  }, [handleSelectionChange]);
 
   const disableVisualEdit = useCallback((doc: Document | null | undefined) => {
     if (!doc) return;
     doc.removeEventListener('click', handlersRef.current.click, true);
+    doc.removeEventListener('selectionchange', handleSelectionChange);
     doc.getElementById('__v_edit_style__')?.remove();
     // The stamps themselves stay — they come from the rendered srcDoc, not from here, and
     // leaving edit mode re-renders the iframe from the unstamped source anyway.
     doc.querySelectorAll('[contenteditable]').forEach(el => el.removeAttribute('contenteditable'));
-  }, []);
+  }, [handleSelectionChange]);
 
   // Re-apply / remove edit mode whenever it toggles (on the current iframe doc).
   useEffect(() => {
     const doc = iframeRef.current?.contentDocument;
     if (visualEdit) enableVisualEdit(doc);
-    else { disableVisualEdit(doc); baselineRef.current = []; setVisualMsg(''); }
+    else {
+      disableVisualEdit(doc);
+      baselineRef.current = [];
+      setVisualMsg('');
+      enhanceRangeRef.current = null;
+      setEnhanceSelText('');
+      setEnhanceOpen(false);
+      setEnhancedText('');
+      setEnhanceMsg('');
+    }
   }, [visualEdit, enableVisualEdit, disableVisualEdit]);
 
-  // Fired on every iframe (re)load — re-arm edit mode if it's on.
+  // Fired on every iframe (re)load — re-arm edit mode if it's on. A reload replaces every DOM
+  // node, so any Range from before it is stale — drop the selection rather than let Apply
+  // silently target detached nodes.
   const handleIframeLoad = () => {
     if (visualEdit) enableVisualEdit(iframeRef.current?.contentDocument);
+    enhanceRangeRef.current = null;
+    setEnhanceSelText('');
+    setEnhanceOpen(false);
+    setEnhancedText('');
   };
 
   const saveVisual = async () => {
@@ -638,6 +698,65 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     } finally {
       setVisualSaving(false);
     }
+  };
+
+  const enhanceCanGenerate =
+    enhanceMode === 'expand' ? !!enhanceInstructions.trim()
+    : enhanceMode === 'question' ? !!enhanceQuestion.trim()
+    : !!enhanceTemplateContent.trim();
+
+  const runEnhance = async () => {
+    if (!enhanceSelText || !enhanceCanGenerate) return;
+    setEnhancing(true);
+    setEnhanceMsg('');
+    setEnhancedText('');
+    try {
+      const res = await fetch(`${AGENT_API}/enhance-text`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          selectedText: enhanceSelText,
+          mode: enhanceMode,
+          instructions: enhanceMode === 'expand' ? enhanceInstructions : undefined,
+          question: enhanceMode === 'question' ? enhanceQuestion : undefined,
+          templateContent: enhanceMode === 'template' ? enhanceTemplateContent : undefined,
+          documentContext: (html || '').replace(/<[^>]*>/g, ' ').slice(0, 2000),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.enhancedText) {
+        setEnhanceMsg(data?.error || `Feilet (${res.status})`);
+        setEnhancing(false);
+        return;
+      }
+      setEnhancedText(data.enhancedText);
+    } catch (e) {
+      setEnhanceMsg(e instanceof Error ? e.message : 'Feil');
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  // Replaces the ORIGINAL selection in the live DOM with the AI text — nothing is saved here.
+  // The edited block already carries contenteditable from the click that started the
+  // selection, so saveVisual()'s baseline diff picks this up exactly like a manual edit.
+  const applyEnhancedText = () => {
+    const range = enhanceRangeRef.current;
+    const doc = iframeRef.current?.contentDocument;
+    if (!range || !enhancedText || !doc) return;
+    try {
+      range.deleteContents();
+      range.insertNode(doc.createTextNode(enhancedText));
+      doc.getSelection()?.removeAllRanges();
+    } catch {
+      setVisualMsg('Kunne ikke sette inn — siden har endret seg, prøv å velge teksten på nytt');
+      return;
+    }
+    enhanceRangeRef.current = null;
+    setEnhanceSelText('');
+    setEnhancedText('');
+    setEnhanceOpen(false);
+    setVisualMsg('AI-tekst satt inn — husk å trykke «Lagre»');
   };
 
   const saveSection = async () => {
@@ -1146,8 +1265,102 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           >
             {visualSaving ? 'Lagrer…' : 'Lagre'}
           </button>
+          <button
+            type="button"
+            onClick={() => setEnhanceOpen(o => !o)}
+            disabled={!enhanceSelText && !enhanceOpen}
+            className={`text-[11px] px-2.5 py-0.5 rounded font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${enhanceOpen ? 'bg-fuchsia-500/40 text-fuchsia-100' : 'bg-fuchsia-500/20 text-fuchsia-300 hover:bg-fuchsia-500/40'}`}
+            title={enhanceSelText ? 'Forbedre den valgte teksten med AI' : 'Merk en tekst i siden først'}
+          >
+            ✨ AI
+          </button>
+          {!enhanceSelText && !enhanceOpen && (
+            <span className="text-[10px] text-white/35">merk tekst for AI-hjelp</span>
+          )}
           {visualMsg && <span className="text-[11px] text-white/60">{visualMsg}</span>}
           <span className="ml-auto text-[9px] text-white/25">visuell redigering · ingen agent</span>
+        </div>
+      )}
+      {visualEdit && enhanceOpen && (
+        <div className="px-3 py-2 border-b border-white/10 bg-fuchsia-950/25 flex-shrink-0 flex flex-col gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] text-white/40 flex-shrink-0">Valgt tekst:</span>
+            <span className="text-[10px] text-white/70 italic truncate max-w-[320px]">
+              "{enhanceSelText.length > 100 ? enhanceSelText.slice(0, 100) + '…' : enhanceSelText}"
+            </span>
+            <select
+              value={enhanceMode}
+              onChange={e => { setEnhanceMode(e.target.value as typeof enhanceMode); setEnhancedText(''); setEnhanceMsg(''); }}
+              className="text-[11px] bg-slate-800 text-white/80 border border-white/10 rounded px-1.5 py-0.5"
+            >
+              <option value="expand">Utvid tekst</option>
+              <option value="question">Still spørsmål</option>
+              <option value="template">Bruk som mal</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => { setEnhanceOpen(false); setEnhancedText(''); setEnhanceMsg(''); }}
+              className="ml-auto text-[10px] text-white/40 hover:text-white"
+            >
+              Lukk
+            </button>
+          </div>
+          {enhanceMode === 'expand' && (
+            <textarea
+              value={enhanceInstructions}
+              onChange={e => setEnhanceInstructions(e.target.value)}
+              spellCheck={false}
+              placeholder="F.eks. «legg til et eksempel», «gjør det mer muntlig», «legg til faglig belegg»…"
+              className="w-full h-14 bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1 text-[11px] resize-y"
+            />
+          )}
+          {enhanceMode === 'question' && (
+            <textarea
+              value={enhanceQuestion}
+              onChange={e => setEnhanceQuestion(e.target.value)}
+              spellCheck={false}
+              placeholder="F.eks. «Hva mangler her?», «Er dette for bastant?»…"
+              className="w-full h-14 bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1 text-[11px] resize-y"
+            />
+          )}
+          {enhanceMode === 'template' && (
+            <textarea
+              value={enhanceTemplateContent}
+              onChange={e => setEnhanceTemplateContent(e.target.value)}
+              spellCheck={false}
+              placeholder="Nytt innhold/tema som skal formateres med samme struktur som den valgte teksten…"
+              className="w-full h-14 bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1 text-[11px] resize-y"
+            />
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={runEnhance}
+              disabled={enhancing || !enhanceCanGenerate}
+              className="text-[11px] px-2.5 py-0.5 rounded bg-fuchsia-500/30 text-fuchsia-200 hover:bg-fuchsia-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+            >
+              {enhancing ? 'Genererer…' : 'Generer'}
+            </button>
+            {enhanceMsg && <span className="text-[11px] text-white/60">{enhanceMsg}</span>}
+          </div>
+          {enhancedText && (
+            <div className="flex flex-col gap-1">
+              <span className="text-[10px] text-white/40">AI-forslag:</span>
+              <div className="text-[11px] text-white/85 bg-slate-950 border border-white/10 rounded px-2 py-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap">
+                {enhancedText}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={applyEnhancedText}
+                  className="text-[11px] px-2.5 py-0.5 rounded bg-emerald-500/30 text-emerald-200 hover:bg-emerald-500/50 hover:text-white transition-colors font-medium"
+                >
+                  Sett inn
+                </button>
+                <span className="text-[9px] text-white/25">erstatter valgt tekst · husk «Lagre» etterpå</span>
+              </div>
+            </div>
+          )}
         </div>
       )}
       {codeOpen && (

@@ -13,7 +13,7 @@
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode } from './tool-executors.js'
+import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { runAutomation, runSingleStep } from './automation-runner.js'
 import { buildAutomationSpec } from './automation-builder.js'
@@ -2539,6 +2539,20 @@ export default {
         } catch (err) {
           return new Response(JSON.stringify({ error: err.message }), {
             status: 500, headers: corsHeaders
+          })
+        }
+      }
+
+      // POST /enhance-text — AI-enhance a text selection from the visual html-node editor
+      // (no agent, no tools, single Claude call). See executeEnhanceText in tool-executors.js.
+      if (pathname === '/enhance-text' && request.method === 'POST') {
+        const body = await request.json()
+        try {
+          const result = await executeEnhanceText(body, env)
+          return new Response(JSON.stringify(result), { headers: corsHeaders })
+        } catch (err) {
+          return new Response(JSON.stringify({ error: err.message }), {
+            status: 400, headers: corsHeaders
           })
         }
       }

@@ -7374,6 +7374,60 @@ Return ONLY the JSON object, no markdown fences or explanation.`
   }
 }
 
+// ── AI text enhancement (visual html-node editor "✨ Enhance") ──────
+// Single-turn, non-agentic Claude call over a text selection made in the live
+// preview. Three modes mirror the elaborate-text modal in vegvisr-frontend's
+// GNewViewer.vue (expand/question/template), reusing this worker's own
+// ANTHROPIC binding instead of the separate grok-ask endpoint.
+async function executeEnhanceText(input, env) {
+  const { selectedText, mode, instructions, question, templateContent, documentContext } = input
+
+  if (!selectedText || !String(selectedText).trim()) {
+    throw new Error('selectedText is required')
+  }
+
+  const context = documentContext
+    ? `Document context: ${String(documentContext).slice(0, 4000)}\n\n`
+    : ''
+
+  let prompt
+  if (mode === 'expand') {
+    if (!instructions || !String(instructions).trim()) throw new Error('instructions is required for mode "expand"')
+    prompt = `${context}Text to enhance: "${selectedText}"\n\nPlease expand and enhance the selected text according to these instructions: "${instructions}". Maintain the original meaning but add the requested improvements, examples, or perspective. IMPORTANT: Return ONLY the enhanced text without any explanations, introductions, or meta-commentary.`
+  } else if (mode === 'question') {
+    if (!question || !String(question).trim()) throw new Error('question is required for mode "question"')
+    prompt = `${context}Text in question: "${selectedText}"\n\n${question} IMPORTANT: Provide a direct answer without explanations about what you're doing or how you're answering. Return only the requested content.`
+  } else if (mode === 'template') {
+    if (!templateContent || !String(templateContent).trim()) throw new Error('templateContent is required for mode "template"')
+    prompt = `Template structure to analyze: "${selectedText}"\n\nNew content to format: "${templateContent}"\n\nAnalyze the structure, pattern, format, and style of the template text. Then apply this exact structure to the new content provided. Maintain the same: 1) Section organization, 2) Paragraph structure, 3) Sentence patterns, 4) Formatting style, 5) Tone and voice. IMPORTANT: Return ONLY the newly formatted content without any explanations or meta-commentary about what you did.`
+  } else {
+    throw new Error(`Unknown mode "${mode}" — expected "expand", "question", or "template"`)
+  }
+
+  const claudeRes = await env.ANTHROPIC.fetch('https://anthropic.vegvisr.org/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: input.userId || 'system-enhance-text',
+      messages: [{ role: 'user', content: prompt }],
+      model: ANALYSIS_MODEL,
+      max_tokens: 2000,
+      temperature: 0.4,
+    }),
+  })
+
+  if (!claudeRes.ok) throw new Error(`Claude enhance failed (status: ${claudeRes.status})`)
+  const claudeData = await claudeRes.json()
+  const textBlock = (claudeData.content || []).find(b => b.type === 'text')
+  if (!textBlock) throw new Error('No response from Claude')
+
+  return {
+    enhancedText: textBlock.text.trim(),
+    mode,
+    message: `Enhanced text (${mode}) — ${textBlock.text.trim().length} chars`,
+  }
+}
+
 // ── Transcription analysis (Enkel Endring) ──────────────────────
 
 const TRANSCRIPTION_PROMPT_1_1 = `Analyser denne samtalen fra Enkel Endring-programmet og gi en strukturert rapport
@@ -15440,4 +15494,4 @@ async function executeCheckPagesDeploymentStatus(input, env) {
   }
 }
 
-export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph }
+export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText }
