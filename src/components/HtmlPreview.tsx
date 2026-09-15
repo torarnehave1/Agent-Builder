@@ -449,6 +449,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [storedGates, setStoredGates] = useState<Record<string, PublishGate>>({});
   const [gateOn, setGateOn] = useState(false);
   const [gateLang, setGateLang] = useState('nb');
+  const [gateAppName, setGateAppName] = useState('');
+  const [gateLogo, setGateLogo] = useState('');
 
   // Read the node's recorded live host(s) from references/bibl whenever the pinned node changes.
   const loadPublishedHosts = useCallback(async () => {
@@ -477,6 +479,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     const g = storedGates[publishHostKey];
     setGateOn(!!g?.gate);
     setGateLang(g?.gateLang || 'nb');
+    setGateAppName(g?.gateAppName || '');
+    setGateLogo(g?.gateLogo || '');
   }, [publishHostKey, storedGates]);
 
   const runPublish = async (host: string, force = false) => {
@@ -497,7 +501,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
           // Explicit on every UI publish: the checkbox shows the stored state, so this keeps it.
           // Role/app-name/logo/register-mode set by the agent are carried over from the stored gate.
           gate: gateOn,
-          ...(gateOn ? { ...storedGates[target], gate: true, gateLang } : {}),
+          ...(gateOn ? { ...storedGates[target], gate: true, gateLang, gateAppName: gateAppName.trim(), gateLogo: gateLogo.trim() } : {}),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -1287,6 +1291,30 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               </span>
             )}
           </div>
+          {gateOn && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] text-emerald-200/60 flex-shrink-0">Innloggingskort</span>
+              <input
+                type="text"
+                value={gateAppName}
+                onChange={e => setGateAppName(e.target.value)}
+                placeholder="Navn på kortet (standard: Vegvisr)"
+                title="Vises som «Welcome to …» / «Velkommen til …» på innloggingskortet"
+                className="text-[11px] bg-slate-800 text-white/90 border border-white/10 rounded px-2 py-0.5 min-w-[200px] focus:outline-none focus:border-emerald-500/50"
+              />
+              <input
+                type="text"
+                value={gateLogo}
+                onChange={e => setGateLogo(e.target.value)}
+                placeholder="Logo-URL (https://…)"
+                spellCheck={false}
+                className="text-[11px] bg-slate-800 text-white/90 border border-white/10 rounded px-2 py-0.5 min-w-[240px] focus:outline-none focus:border-emerald-500/50"
+              />
+              {/^https:\/\//.test(gateLogo.trim()) && (
+                <img src={gateLogo.trim()} alt="" className="h-6 w-6 rounded object-cover border border-white/10" />
+              )}
+            </div>
+          )}
           {publishMsg && <span className="text-[11px] text-white/70">{publishMsg}</span>}
         </div>
       )}
