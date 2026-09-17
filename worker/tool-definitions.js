@@ -932,6 +932,21 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'setup_realtime_kit',
+    description: "Configure and audit a World Founder's RealtimeKit recordings setup. Stores supplied RealtimeKit app ID, RealtimeKit API token, R2 bucket, and public recordings domain, then returns a checklist of configured and missing fields. Tokens are never returned.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        founder_email: { type: 'string', description: "The World Founder's email, e.g. post@nibi.no." },
+        app_id: { type: 'string', description: 'RealtimeKit app ID from the RealtimeKit dashboard.' },
+        rtk_token: { type: 'string', description: 'RealtimeKit API token. Stored securely and never returned.' },
+        bucket: { type: 'string', description: 'Exact existing R2 bucket name for recordings.' },
+        recordings_domain: { type: 'string', description: 'Public HTTPS origin for recordings, e.g. https://recordings.nibi.no.' },
+      },
+      required: ['founder_email'],
+    },
+  },
+  {
     name: 'search_unsplash',
     description: 'Search Unsplash for free stock photos. Returns image URLs, photographer credits, and dimensions. Use the returned URLs in image nodes or as header images in templates.',
     input_schema: {
@@ -1452,7 +1467,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'admin_register_user',
-    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, phone, and role. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user".',
+    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, name, phone, role, and optional postal address fields. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user".',
     input_schema: {
       type: 'object',
       properties: {
@@ -1468,6 +1483,12 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           description: 'Phone number for the new user (optional)'
         },
+        address: { type: 'string', description: 'Address line (optional)' },
+        street: { type: 'string', description: 'Street or road name (optional)' },
+        postal_code: { type: 'string', description: 'Postal code (optional)' },
+        place: { type: 'string', description: 'Postal place/locality (optional)' },
+        city: { type: 'string', description: 'City/municipality (optional)' },
+        country: { type: 'string', description: 'Country (optional)' },
         role: {
           type: 'string',
           enum: ['Admin', 'user', 'Subscriber', 'Superadmin'],
@@ -3480,11 +3501,12 @@ const TOOL_DEFINITIONS = [
   {
     name: 'set_realtime_recordings_domain',
     description:
-      "Set the permanent public URL for a founder's realtime-video recordings bucket (config.cf_r2_public_base, read by realtime-worker). When set, recording playUrls are permanent links on the founder's own domain (e.g. https://recordings.<founderdomain>) instead of short-lived presigned R2 URLs. This does NOT provision DNS/CNAME or Cloudflare custom-domain routing — the hostname must already resolve to the founder's R2 bucket (or a proxy in front of it) before calling this. Superadmin only. Requires an existing config row for the founder (register the user first).",
+      "Set the R2 bucket and permanent public URL for a founder's realtime-video recordings (config.cf_r2_bucket and config.cf_r2_public_base, read by realtime-worker). Pass bucket when the bucket was created outside the system, then pass recordings_domain such as https://recordings.<founderdomain>. This does NOT provision DNS/CNAME or Cloudflare custom-domain routing — the hostname must already resolve to the founder's R2 bucket (or a proxy in front of it) before calling this. Superadmin only. Requires an existing config row for the founder (register the user first).",
     input_schema: {
       type: 'object',
       properties: {
         founder_email: { type: 'string', description: "The founder's email — must already have a config row." },
+        bucket: { type: 'string', description: 'Exact existing R2 bucket name, e.g. meeting-recordings. Stores config.cf_r2_bucket when supplied.' },
         recordings_domain: { type: 'string', description: 'Full https URL for the recordings origin, e.g. https://recordings.stineoksvolddesign.no' },
       },
       required: ['founder_email', 'recordings_domain'],

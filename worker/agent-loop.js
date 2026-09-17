@@ -235,6 +235,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'list_world_founder_templates', 'save_world_founder_template',
   'backup_world_founder_templates_to_kg', 'restore_world_founder_template_from_kg',
   'set_realtime_recordings_domain', 'cloudflare_api',
+  'setup_realtime_kit',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
@@ -1146,6 +1147,20 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
     let { allTools, operationMap } = await loadAllTools(env)
     allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
+    // Grok/OpenAI must not route chat work through the Claude-only chat subagent.
+    // Expose the existing chat tools directly on this provider path instead.
+    const chatToolNames = new Set([
+      'list_chat_groups', 'create_chat_group', 'update_chat_group',
+      'delete_chat_group', 'restore_chat_group', 'add_user_to_chat_group',
+      'get_group_members', 'get_group_messages', 'get_group_stats',
+      'send_group_message', 'create_poll', 'close_poll', 'get_poll_results',
+      'chat_db_list_tables', 'chat_db_query',
+    ])
+    const existingToolNames = new Set(allTools.map((tool) => tool.name))
+    allTools = [
+      ...allTools.filter((tool) => tool.name !== 'delegate_to_chat'),
+      ...TOOL_DEFINITIONS.filter((tool) => chatToolNames.has(tool.name) && !existingToolNames.has(tool.name)),
+    ]
     const openAIAllowedTools = new Set(allTools.map((tool) => tool.name))
     const openAITools = allTools.map(toOpenAITool)
 

@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="nb">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>NIBI | Min side</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <style>
+    :root { --ink:#202c29; --muted:#56645f; --line:#d8e1dc; --green:#17634b; --surface:#f0f5f2; --accent:#9b334b; font-family:"Source Sans 3",sans-serif; color:var(--ink); background:#f7f9f8; letter-spacing:0; }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; }
+    button,input { font:inherit; }
+    button { cursor:pointer; }
+    button:disabled { cursor:wait; opacity:.6; }
+    button,input { border-radius:6px; }
+    :focus-visible { outline:3px solid #ba5276; outline-offset:3px; }
+    header { border-bottom:1px solid var(--line); background:white; }
+    .top { max-width:1200px; margin:auto; min-height:88px; display:flex; align-items:center; gap:24px; padding:16px 24px; }
+    .brand { font-size:30px; font-weight:700; color:var(--green); }
+    .subtitle { border-left:1px solid var(--line); padding-left:24px; font-size:18px; }
+    .account { margin-left:auto; display:flex; align-items:center; gap:14px; min-width:0; }
+    #identity { overflow-wrap:anywhere; font-size:14px; }
+    .plain { border:1px solid var(--line); background:white; padding:7px 12px; color:var(--ink); }
+    .primary { border:0; background:var(--green); color:white; padding:10px 18px; font-weight:600; }
+    main { max-width:1200px; margin:auto; padding:26px 24px; }
+    h1 { font-size:28px; line-height:1.2; margin:0 0 12px; }
+    h2 { font-size:18px; margin:0; }
+    p { line-height:1.5; }
+    .muted { color:var(--muted); }
+    #login { max-width:430px; margin:60px auto; }
+    label { display:block; margin-bottom:8px; font-weight:600; }
+    input { width:100%; border:1px solid var(--line); padding:10px 12px; background:white; }
+    #loginForm button { width:100%; margin-top:16px; }
+    .status { min-height:24px; overflow-wrap:anywhere; }
+    .status[data-error="true"] { color:var(--accent); }
+    nav { display:flex; flex-wrap:wrap; gap:0 24px; border-bottom:1px solid var(--line); margin-bottom:24px; }
+    nav button { border:0; border-radius:0; background:none; padding:12px 2px; border-bottom:3px solid transparent; font-weight:600; color:var(--muted); }
+    nav button[aria-selected="true"] { border-bottom-color:var(--green); color:var(--green); }
+    .chat-layout { display:grid; grid-template-columns:290px minmax(0,1fr); min-height:580px; border:1px solid var(--line); background:white; }
+    .groups { border-right:1px solid var(--line); min-width:0; }
+    .group-toolbar { padding:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; }
+    .search { padding:0 16px 12px; }
+    #groupStatus { margin:4px 16px 12px; font-size:14px; }
+    #groupList { max-height:510px; overflow:auto; }
+    .group { display:block; width:100%; border:0; border-radius:0; border-top:1px solid var(--line); background:white; text-align:left; padding:16px; color:var(--ink); overflow-wrap:anywhere; }
+    .group strong,.group small { display:block; }
+    .group small { color:var(--muted); margin-top:4px; }
+    .group[aria-pressed="true"] { background:var(--surface); box-shadow:inset 3px 0 var(--green); }
+    .conversation { min-width:0; display:flex; flex-direction:column; }
+    .conversation-head { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:70px; border-bottom:1px solid var(--line); padding:16px; }
+    #chatTitle { overflow-wrap:anywhere; }
+    #back { display:none; }
+    #chatHost { position:relative; flex:1; min-height:510px; }
+    #chatHost iframe { display:block; width:100%; height:100%; min-height:510px; position:absolute; inset:0; border:0; }
+    .empty { padding:50px 24px; text-align:center; color:var(--muted); }
+    .article-heading { display:flex; align-items:baseline; justify-content:space-between; gap:16px; margin-bottom:20px; }
+    #personalHost iframe { display:block; width:100%; height:70vh; min-height:560px; border:0; }
+    #commonHost iframe { display:block; width:100%; min-height:280px; border:0; }
+    .meeting-host { min-height:720px; border:1px solid var(--line); background:#020617; }
+    .meeting-host iframe { display:block; width:100%; height:720px; border:0; }
+    .common-intro { padding:4px 0 24px; }
+    .common-intro h1 { font-size:30px; line-height:1.15; margin:0 0 10px; font-weight:600; }
+    .common-intro p { max-width:690px; font-size:17px; color:var(--muted); margin:0 0 12px; line-height:1.6; }
+    .common-links { display:flex; flex-wrap:wrap; gap:12px 24px; margin-top:22px; }
+    #commonSection a { color:var(--green); text-underline-offset:4px; }
+    .common-links a { font-size:15px; font-weight:600; }
+    .common-footer { padding:22px 0 30px; color:var(--muted); font-size:13px; display:flex; justify-content:space-between; gap:20px; }
+    @media(max-width:680px) {
+      .top { padding:14px 16px; gap:12px; flex-wrap:wrap; }
+      .subtitle { padding-left:12px; }
+      .account { flex-basis:100%; justify-content:space-between; }
+      main { padding:16px; }
+      #login { margin:35px auto; }
+      .chat-layout { grid-template-columns:minmax(0,1fr); min-height:520px; }
+      .groups { border-right:0; }
+      .conversation { display:none; }
+      .chat-layout[data-open="true"] .groups { display:none; }
+      .chat-layout[data-open="true"] .conversation { display:flex; }
+      #back { display:block; flex-shrink:0; }
+      #chatHost,#chatHost iframe { min-height:480px; }
+      .meeting-host { min-height:620px; }
+      .meeting-host iframe { height:620px; }
+      .article-heading { align-items:flex-start; flex-direction:column; gap:0; }
+    }
+  </style>
+</head>
+<body>
+  <header><div class="top">
+    <div class="brand">NIBI</div><div class="subtitle">Min side</div>
+    <div class="account" id="account" hidden><span id="identity"></span><button class="plain" id="signout">Logg ut</button></div>
+  </div></header>
+  <main>
+    <section id="login">
+      <h1>Logg inn</h1>
+      <form id="loginForm">
+        <label for="email">E-postadresse</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <button class="primary" id="sendLink" type="submit">Send innloggingslenke</button>
+      </form>
+      <p id="loginStatus" class="status" role="status" aria-live="polite"></p>
+    </section>
+    <section id="checking" hidden><p class="status" role="status">Kontrollerer innlogging ...</p></section>
+    <section id="member" hidden>
+      <nav role="tablist" aria-label="Min side">
+        <button id="chatTab" role="tab" aria-selected="true" aria-controls="chatSection">Chatrom</button>
+        <button id="meetingTab" role="tab" aria-selected="false" aria-controls="meetingSection" tabindex="-1">Møterom</button>
+        <button id="articlesTab" role="tab" aria-selected="false" aria-controls="articlesSection" tabindex="-1">Artikler</button>
+        <button id="commonTab" role="tab" aria-selected="false" aria-controls="commonSection" tabindex="-1">Felles Info</button>
+        <button id="personalTab" role="tab" aria-selected="false" aria-controls="personalSection" tabindex="-1">Min Info</button>
+      </nav>
+      <section id="chatSection" role="tabpanel" aria-labelledby="chatTab">
+        <div class="chat-layout" id="chatLayout">
+          <aside class="groups">
+            <div class="group-toolbar"><h2>Mine grupper</h2><button class="plain" id="refresh">Oppdater</button></div>
+            <div class="search"><label for="groupSearch">Finn gruppe</label><input id="groupSearch" type="search" autocomplete="off"></div>
+            <p id="groupStatus" class="status" role="status" aria-live="polite"></p>
+            <div id="groupList"></div>
+          </aside>
+          <section class="conversation" aria-label="Samtale">
+            <div class="conversation-head"><button class="plain" id="back">Til gruppene</button><h2 id="chatTitle">Velg en samtale</h2></div>
+            <div id="chatHost"><p class="empty">Ingen samtale valgt.</p></div>
+          </section>
+        </div>
+      </section>
+      <section id="meetingSection" role="tabpanel" aria-labelledby="meetingTab" hidden>
+        <div class="article-heading"><h1>NIBI møte</h1><span class="muted">Felles team-rom</span></div>
+        <p id="meetingStatus" class="status" role="status" aria-live="polite">Klargjør møte ...</p>
+        <div id="meetingHost" class="meeting-host" role="region" aria-label="NIBI møte"></div>
+      </section>
+      <section id="articlesSection" role="tabpanel" aria-labelledby="articlesTab" hidden>
+        <!-- edit:articles-heading:start -->
+        <div class="article-heading"><h1>Artikler fra NIBI</h1><span class="muted">Offentlige artikler</span></div>
+        <!-- edit:articles-heading:end -->
+        <p id="articleStatus" class="status" role="status"></p>
+        <div id="portfolio" data-vegvisr-portfolio="NIBI" data-include="published" data-lang="no" data-open="modal"></div>
+      </section>
+      <section id="commonSection" role="tabpanel" aria-labelledby="commonTab" hidden>
+        <!-- edit:common-intro:start -->
+        <div class="common-intro">
+          <h1>NIBI Felles</h1>
+          <p>Beskjeder og kommende arrangementer for NIBI-medlemmer.</p>
+          <div class="common-links"><a href="#commonHost" data-common-section="aktuelt">Aktuelt</a><a href="#commonHost" data-common-section="kalender">Kalender</a></div>
+        </div>
+        <!-- edit:common-intro:end -->
+        <div id="commonHost" role="region" aria-label="Aktuelt og Kalender"></div>
+        <!-- edit:common-footer:start -->
+        <footer class="common-footer"><span>NIBI &middot; Fellesskapet</span><a href="#commonSection">Til toppen</a></footer>
+        <!-- edit:common-footer:end -->
+      </section>
+      <section id="personalSection" role="tabpanel" aria-labelledby="personalTab" hidden>
+        <!-- edit:personal-heading:start -->
+        <div class="article-heading"><h1>Min medlemsgraf</h1></div>
+        <!-- edit:personal-heading:end -->
+        <div id="personalHost" role="region" aria-label="Medlemsgraf"></div>
+      </section>
+    </section>
+  </main>
+  <script src="nibi-members.js" defer></script>
+</body>
+</html>

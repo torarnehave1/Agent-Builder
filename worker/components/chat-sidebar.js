@@ -146,6 +146,11 @@
     return null
   }
 
+  function sessionToken (root, stores) {
+    if (root.hasAttribute('data-session-token')) return root.getAttribute('data-session-token') || null
+    return tokenFromStores(stores)
+  }
+
   function isBot (userId) {
     return String(userId || '').indexOf('bot:') === 0
   }
@@ -643,7 +648,7 @@
       })
       // vegvisr-auth writes the store on sign-in; pick it up without a reload.
       var watch = setInterval(function () {
-        if (tokenFromStores(readStores())) { clearInterval(watch); start() }
+        if (sessionToken(root, readStores())) { clearInterval(watch); start() }
       }, 1500)
     }
 
@@ -652,7 +657,7 @@
         if (!state.timer && state.open) startPolling()
         return
       }
-      var token = tokenFromStores(readStores())
+      var token = sessionToken(root, readStores())
       if (!token) { showSignIn(); return }
       note(body, t.loading)
       resolveIdentity(identityApi, token).then(function (me) {

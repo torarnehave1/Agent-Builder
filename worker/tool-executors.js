@@ -4174,6 +4174,12 @@ async function executeAdminRegisterUser(input, env) {
 
   const name = (input.name || '').trim() || null
   const phone = (input.phone || '').trim() || null
+  const address = (input.address || '').trim() || null
+  const street = (input.street || '').trim() || null
+  const postalCode = (input.postal_code || '').trim() || null
+  const place = (input.place || '').trim() || null
+  const city = (input.city || '').trim() || null
+  const country = (input.country || '').trim() || null
   const role = (input.role || 'Admin').trim()
 
   // Check if user already exists
@@ -4187,12 +4193,12 @@ async function executeAdminRegisterUser(input, env) {
   const emailVerificationToken = Array.from(crypto.getRandomValues(new Uint8Array(20)))
     .map(b => b.toString(16).padStart(2, '0')).join('')
 
-  const data = JSON.stringify({ profile: { user_id, email, name, phone }, settings: {} })
+  const data = JSON.stringify({ profile: { user_id, email, name, phone, address, street, postal_code: postalCode, place, city, country }, settings: {} })
 
   await env.DB.prepare(`
-    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, data)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).bind(user_id, email, emailVerificationToken, role, phone, data).run()
+    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, data, address, street, postal_code, place, city, country)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(user_id, email, emailVerificationToken, role, phone, data, address, street, postalCode, place, city, country).run()
 
   return {
     success: true,
@@ -4200,6 +4206,12 @@ async function executeAdminRegisterUser(input, env) {
     email,
     name,
     phone,
+    address,
+    street,
+    postal_code: postalCode,
+    place,
+    city,
+    country,
     role,
     // emailVerificationToken is deliberately NOT returned: it is the user's API credential, and a
     // tool result is sent to the model provider (xAI/OpenAI on those paths) and shown in chat.
@@ -4658,9 +4670,9 @@ async function executeSetWorldCredentials(input, env) {
   }
 }
 
-// Set config.cf_r2_public_base — the permanent public origin for a founder's realtime-recordings
-// R2 bucket (read by realtime-worker's getStorageCredentials, index.js:64). Does NOT touch DNS or
-// Cloudflare custom-domain routing; the hostname must already resolve to the bucket/proxy.
+// Set config.cf_r2_bucket + config.cf_r2_public_base — the R2 bucket and permanent public origin
+// for a founder's realtime recordings (read by realtime-worker's getStorageCredentials). Does NOT
+// touch DNS or Cloudflare custom-domain routing; the hostname must already resolve to the bucket/proxy.
 async function executeSetRealtimeRecordingsDomain(input, env) {
   const callerProfile = await resolveUserProfile(input.userId, env)
   const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
@@ -4668,6 +4680,11 @@ async function executeSetRealtimeRecordingsDomain(input, env) {
 
   const founderEmail = (input.founder_email || '').trim().toLowerCase()
   if (!founderEmail) return { success: false, error: 'founder_email is required' }
+
+  const bucket = (input.bucket || '').trim()
+  if (bucket && !/^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(bucket)) {
+    return { success: false, error: 'bucket must be a valid R2 bucket name using lowercase letters, numbers, and hyphens.' }
+  }
 
   let recordingsDomain = (input.recordings_domain || '').trim()
   if (!recordingsDomain) return { success: false, error: 'recordings_domain is required' }
@@ -4677,15 +4694,76 @@ async function executeSetRealtimeRecordingsDomain(input, env) {
 
   const existing = await env.DB.prepare('SELECT email, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket FROM config WHERE email = ?').bind(founderEmail).first()
   if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
-  if (!existing.cf_r2_bucket) return { success: false, error: `${founderEmail} has no cf_r2_bucket configured yet — recordings have nowhere to land.` }
+  const configuredBucket = bucket || existing.cf_r2_bucket || ''
+  if (!configuredBucket) return { success: false, error: `${founderEmail} has no cf_r2_bucket configured yet — provide the exact R2 bucket name in bucket.` }
 
-  await env.DB.prepare('UPDATE config SET cf_r2_public_base = ? WHERE email = ?').bind(recordingsDomain, founderEmail).run()
+  await env.DB.prepare('UPDATE config SET cf_r2_bucket = ?, cf_r2_public_base = ? WHERE email = ?').bind(configuredBucket, recordingsDomain, founderEmail).run()
   return {
     success: true,
     founder_email: founderEmail,
+    cf_r2_bucket: configuredBucket,
     cf_r2_public_base: recordingsDomain,
     has_own_rtk_app: !!(existing.cf_rtk_app_id && existing.cf_rtk_token),
     note: 'Set in config only. If the hostname is not yet routed to the R2 bucket/proxy, playback links will 404 until that DNS/route work is done.',
+  }
+}
+
+async function executeSetupRealtimeKit(input, env) {
+  const callerProfile = await resolveUserProfile(input.userId, env)
+  const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
+  if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required to configure RealtimeKit.' }
+
+  const founderEmail = String(input.founder_email || '').trim().toLowerCase()
+  if (!founderEmail) return { success: false, error: 'founder_email is required' }
+  const appId = String(input.app_id || '').trim()
+  const rtkToken = String(input.rtk_token || '').trim()
+  const bucket = String(input.bucket || '').trim()
+  let recordingsDomain = String(input.recordings_domain || '').trim()
+  if (recordingsDomain && !/^https:\/\//i.test(recordingsDomain)) recordingsDomain = `https://${recordingsDomain}`
+  if (recordingsDomain) {
+    try { new URL(recordingsDomain) } catch { return { success: false, error: 'recordings_domain must be a valid HTTPS URL' } }
+    recordingsDomain = recordingsDomain.replace(/\/+$/, '')
+  }
+  if (bucket && !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(bucket)) {
+    return { success: false, error: 'bucket must use lowercase letters, numbers, and hyphens.' }
+  }
+  if (appId && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(appId)) {
+    return { success: false, error: 'app_id must be a UUID.' }
+  }
+
+  const existing = await env.DB.prepare(
+    'SELECT email, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket, cf_r2_public_base FROM config WHERE lower(email) = ? LIMIT 1'
+  ).bind(founderEmail).first()
+  if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
+
+  const values = {
+    appId: appId || existing.cf_rtk_app_id || null,
+    rtkToken: rtkToken || existing.cf_rtk_token || null,
+    bucket: bucket || existing.cf_r2_bucket || null,
+    domain: recordingsDomain || existing.cf_r2_public_base || null,
+  }
+  await env.DB.prepare(
+    'UPDATE config SET cf_rtk_app_id = ?, cf_rtk_token = ?, cf_r2_bucket = ?, cf_r2_public_base = ? WHERE lower(email) = ?'
+  ).bind(values.appId, values.rtkToken, values.bucket, values.domain, founderEmail).run()
+
+  const missing = []
+  if (!values.appId) missing.push('app_id')
+  if (!values.rtkToken) missing.push('rtk_token')
+  if (!values.bucket) missing.push('bucket')
+  if (!values.domain) missing.push('recordings_domain')
+  return {
+    success: missing.length === 0,
+    founder_email: founderEmail,
+    configured: {
+      app_id: !!values.appId,
+      rtk_token: !!values.rtkToken,
+      bucket: values.bucket,
+      recordings_domain: values.domain,
+    },
+    missing,
+    message: missing.length
+      ? `RealtimeKit setup incomplete for ${founderEmail}. Missing: ${missing.join(', ')}.`
+      : `RealtimeKit recordings setup is complete for ${founderEmail}.`,
   }
 }
 
@@ -9533,6 +9611,24 @@ async function executeUpdateChatGroup(input, env) {
   let groupId = input.groupId
   if (!groupId && input.groupName) {
     groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  }
+
+  const requestedName = typeof input.name === 'string' ? input.name.trim() : ''
+  if (requestedName) {
+    const auth = await chatAuth(input.userId, env)
+    const groupsRes = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups?${auth.qs}`)
+    const groupsData = await groupsRes.json()
+    if (!groupsRes.ok) throw new Error(groupsData.error || 'Failed to check existing group names')
+    const duplicate = (groupsData.groups || []).find(
+      group => group.id !== groupId && typeof group.name === 'string' && group.name.trim().toLowerCase() === requestedName.toLowerCase()
+    )
+    if (duplicate) {
+      return {
+        success: false,
+        groupId,
+        error: `Cannot rename group "${groupId}" to "${requestedName}": another group already has that name ("${duplicate.name}", id ${duplicate.id}). Choose a unique name or target the existing group.`,
+      }
+    }
   }
 
   const callerProfile = await resolveUserProfile(input.userId, env)
@@ -14719,8 +14815,15 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeClosePoll(toolInput, env)
     case 'get_poll_results':
       return await executeGetPollResults(toolInput, env)
+    case 'setup_realtime_kit':
+      return await executeSetupRealtimeKit(toolInput, env)
     case 'delegate_to_chat': {
       const result = await runChatSubagent(toolInput, env, progress, executeTool)
+      const error = typeof result.error === 'string'
+        ? result.error
+        : result.error
+          ? JSON.stringify(result.error)
+          : 'Unknown error'
       return {
         success: result.success,
         summary: result.summary,
@@ -14734,7 +14837,7 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         })),
         message: result.success
           ? `Chat subagent completed: ${(result.summary || '').slice(0, 500)}`
-          : `Chat subagent failed: ${result.error || 'Unknown error'}`,
+          : `Chat subagent failed: ${error}`,
       }
     }
     case 'describe_capabilities':

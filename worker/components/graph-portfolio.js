@@ -1652,6 +1652,9 @@
     if (isNaN(limit) || limit < 0) limit = 0
     var sort = (root.getAttribute('data-sort') || 'updated').trim()
     var areas = parseAreas(root.getAttribute('data-vegvisr-portfolio') || root.getAttribute('data-meta-areas') || '')
+    var graphId = root.getAttribute('data-portfolio-graph')
+    var sections = root.getAttribute('data-display') === 'sections'
+    var matchAll = root.getAttribute('data-match') === 'all'
     var filterMode = (root.getAttribute('data-filters') || 'auto').trim().toLowerCase()
     var include = (root.getAttribute('data-include') || 'published').trim().toLowerCase()
     var open = (root.getAttribute('data-open') || 'modal').trim().toLowerCase()
@@ -1677,13 +1680,60 @@
     loading.textContent = t.loading
     host.appendChild(loading)
 
+    if (sections && graphId) {
+      root.appendChild(host)
+      fetch(GRAPH_ENDPOINT + encodeURIComponent(graphId), { headers: { accept: 'application/json' }, cache: 'no-store' })
+        .then(function (response) {
+          if (!response.ok) throw new Error('HTTP ' + response.status)
+          return response.json()
+        }).then(function (graph) {
+          var tags = graphAreas(graph).map(function (area) { return area.toUpperCase() })
+          if (!visibleRows([graph], include).length || !areas.every(function (area) { return tags.indexOf(area.toUpperCase()) !== -1 })) {
+            host.textContent = ''
+            message(host, t.empty)
+            return
+          }
+          return ensureFulltext().then(function (ft) {
+            host.textContent = ''
+            host.className = 'vgp-sections'
+            visibleNodes(graph).forEach(function (node) {
+              if (node.type !== 'fulltext') return
+              var section = document.createElement('section')
+              section.setAttribute('data-node-id', node.id)
+              var heading = document.createElement('h2')
+              heading.textContent = String(node.label || '').replace(/^#+\s*/, '')
+              section.appendChild(heading)
+              var content = document.createElement('div')
+              renderGraphInto(content, { nodes: [node], edges: [] }, ft, Object.assign({}, opts, { dialogTitle: heading.textContent }))
+              section.appendChild(content)
+              host.appendChild(section)
+            })
+            if (!host.children.length) message(host, t.emptyGraph)
+          })
+        }).catch(function (error) {
+          console.error('[graph-portfolio] section load failed:', error)
+          host.textContent = ''
+          message(host, t.error, true)
+        })
+      return
+    }
+
     // One request per area (server-side filter), or a single unfiltered sweep.
-    var jobs = areas.length
+    var jobs = graphId ? [fetch(GRAPH_ENDPOINT + encodeURIComponent(graphId), { headers: { accept: 'application/json' } }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status)
+      return response.json()
+    }).then(function (graph) {
+      return [{ id: graphId, metadata: graph.metadata, nodeCount: (graph.nodes || []).length }]
+    })] : areas.length
       ? areas.map(function (a) { return fetchArea(endpoint, a) })
       : [fetchArea(endpoint, '')]
 
     Promise.all(jobs).then(function (lists) {
       var fetched = mergeById(lists)
+      if (matchAll) fetched = fetched.filter(function (row) {
+        var tags = graphAreas(row).map(function (area) { return area.toUpperCase() })
+        return areas.every(function (area) { return tags.indexOf(area.toUpperCase()) !== -1 })
+      })
       var rows = sortRows(visibleRows(fetched, include), sort)
       // Concatenated, not a %s format string: the message is read back through
       // consoles that print the arguments after the template instead of into it.

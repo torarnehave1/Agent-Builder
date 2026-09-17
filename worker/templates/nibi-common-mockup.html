@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="nb">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NIBI Felles | Designforslag</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap">
+  <style>
+    :root { font-family:"Source Sans 3",sans-serif; color:#202c29; background:#f7f9f8; --green:#17634b; --muted:#56645f; --line:#d8e1dc; --berry:#943e58; letter-spacing:0; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:24px; }
+    body { margin:0; }
+    a { color:var(--green); text-underline-offset:4px; }
+    a:hover { text-decoration-thickness:2px; }
+    :focus-visible { outline:3px solid var(--berry); outline-offset:5px; }
+    .wrap { max-width:1200px; margin:auto; padding-inline:24px; }
+    .preview { background:#f3eaf0; color:#703349; font-size:13px; padding:8px 24px; text-align:center; }
+    .topbar { background:#fff; border-bottom:1px solid var(--line); }
+    .top { min-height:88px; display:flex; align-items:center; gap:24px; }
+    .brand { font-weight:700; color:var(--green); font-size:30px; }
+    .subtitle { padding-left:24px; border-left:1px solid var(--line); font-size:18px; }
+    .account { margin-left:auto; font-size:14px; color:var(--muted); }
+    .tabs { display:flex; flex-wrap:wrap; gap:0 28px; border-bottom:1px solid var(--line); margin-top:20px; }
+    .tabs span { padding:15px 0; font-weight:600; color:var(--muted); }
+    .tabs .selected { color:var(--green); border-bottom:3px solid var(--green); }
+    .intro { padding:28px 0 24px; border-bottom:1px solid var(--line); }
+    h1 { font-size:30px; line-height:1.15; margin:0 0 10px; font-weight:600; }
+    h2 { font-size:25px; font-weight:600; margin:0; line-height:1.2; }
+    h3 { font-size:20px; line-height:1.3; margin:0 0 8px; font-weight:600; }
+    p { line-height:1.6; margin:0 0 12px; }
+    .intro p { max-width:690px; font-size:17px; color:var(--muted); }
+    .jump-links { display:flex; flex-wrap:wrap; gap:12px 24px; margin-top:22px; }
+    .jump-links a { font-size:15px; font-weight:600; }
+    .body-grid { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:44px; }
+    #kalender { border-left:1px solid var(--line); padding-left:32px; }
+    .month { color:var(--green); font-size:14px; font-weight:600; margin:24px 0 16px; }
+    .section { padding:32px 0; border-bottom:1px solid var(--line); scroll-margin-top:20px; }
+    .section-heading { display:flex; align-items:baseline; gap:16px; justify-content:space-between; margin-bottom:23px; }
+    .section-heading .small { color:var(--muted); font-size:14px; }
+    .news { padding:22px 0; border-top:1px solid var(--line); }
+    .news:first-of-type { padding-top:0; border-top:0; }
+    .meta { color:var(--muted); font-size:13px; margin-bottom:7px; }
+    .news p { max-width:630px; }
+    .event { display:grid; grid-template-columns:60px minmax(0,1fr); gap:18px; padding:18px 0; border-bottom:1px solid var(--line); }
+    .event h3 { font-size:18px; }
+    .event p { font-size:15px; }
+    .date { border-top:3px solid var(--green); padding:10px 0; text-align:center; background:#edf3ef; align-self:start; }
+    .date strong { display:block; font-size:24px; font-weight:600; }
+    .date span { display:block; font-size:13px; color:var(--muted); }
+    .photo { margin:18px 0 0; }
+    .photo img { width:100%; height:auto; aspect-ratio:16/5; object-fit:cover; display:block; border-radius:4px; }
+    .photo figcaption { color:var(--muted); font-size:12px; padding-top:7px; }
+    footer { padding:22px 0 30px; color:var(--muted); font-size:13px; display:flex; justify-content:space-between; gap:20px; }
+    [data-node] { min-width:0; }
+    @media(max-width:900px) {
+      .body-grid { gap:24px; }
+      #kalender { padding-left:24px; }
+    }
+    @media(max-width:680px) {
+      .wrap { padding-inline:18px; }
+      .preview { text-align:left; padding-inline:18px; }
+      .top { min-height:76px; gap:14px; flex-wrap:wrap; padding-block:14px; }
+      .subtitle { padding-left:14px; }
+      .account { flex-basis:100%; margin:0; }
+      .tabs { gap:0 20px; margin-top:8px; font-size:14px; }
+      .tabs span { padding:12px 0; }
+      .intro { padding-top:28px; }
+      h1 { font-size:30px; }
+      .body-grid { grid-template-columns:minmax(0,1fr); gap:0; }
+      #kalender { border-left:0; padding-left:0; }
+      .section { padding-block:27px; }
+      .section-heading { align-items:flex-start; flex-wrap:wrap; gap:8px; }
+      .event { grid-template-columns:64px minmax(0,1fr); gap:15px; }
+      .photo img { aspect-ratio:16/7; }
+      footer { flex-wrap:wrap; }
+    }
+    @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } }
+  </style>
+</head>
+<body>
+  <div class="preview">Designforslag · Eksempelinnhold, ikke publiserte beskjeder eller arrangementer</div>
+  <header class="topbar"><div class="wrap top"><span class="brand">NIBI</span><span class="subtitle">Min side</span><span class="account">Tor Arne Håve</span></div></header>
+  <main class="wrap" id="top">
+    <div class="tabs" aria-label="Plassering på medlemssiden"><span>Samtaler</span><span>Artikler</span><span class="selected" aria-current="page">NIBI Felles Graf</span><span>Min medlemsgraf</span></div>
+    <div class="intro">
+      <h1>NIBI Felles</h1>
+      <p>Beskjeder og kommende arrangementer for NIBI-medlemmer.</p>
+      <nav class="jump-links" aria-label="På denne siden"><a href="#aktuelt">Aktuelt</a><a href="#kalender">Kalender</a></nav>
+    </div>
+    <div class="body-grid">
+        <section class="section" id="aktuelt" data-node="aktuelt">
+          <div class="section-heading"><h2>Aktuelt</h2><span class="small">Fra administrator</span></div>
+          <article class="news"><p class="meta">16. september 2026 · Tor Arne Håve</p><h3>Høstens samlinger</h3><p>Vi starter høsten med en fellessamling. I kalenderen finner du tidspunkt og praktisk informasjon om de neste møtene.</p><p>Programmet for den første samlingen blir en introduksjon til høstens temaer og en felles samtale.</p><figure class="photo"><img src="https://images.unsplash.com/photo-1441974231531-c6227db76b6e?auto=format&amp;fit=crop&amp;w=800&amp;q=85" alt="Sollys mellom grønne trær i en skog" width="800" height="250"><figcaption>Illustrasjonsfoto · Unsplash</figcaption></figure></article>
+          <article class="news"><p class="meta">14. september 2026 · Tor Arne Håve</p><h3>Praktisk informasjon før møtene</h3><p>Sett av noen minutter før møtestart. Lenke til digitale samlinger legges sammen med arrangementet når den er klar.</p><p class="meta">Alle beskjeder og datoer her er eksempelinnhold.</p></article>
+        </section>
+        <section class="section" id="kalender" data-node="kalender">
+          <div class="section-heading"><h2>Kalender</h2><span class="small">Kommende</span></div>
+          <p class="month">September 2026</p>
+          <article class="event"><div class="date"><strong>24</strong><span>TOR</span></div><div><p class="meta">18.00–19.30 · Digitalt</p><h3>Fellessamling</h3><p>Introduksjon til høstens temaer og en felles samtale.</p><p class="meta">Møtelenke kommer.</p></div></article>
+          <p class="month">Oktober 2026</p>
+          <article class="event"><div class="date"><strong>08</strong><span>TOR</span></div><div><p class="meta">18.00–19.00 · Digitalt</p><h3>Temakveld</h3><p>En kveld med fordypning. Tema og program kunngjøres senere.</p></div></article>
+          <article class="event"><div class="date"><strong>22</strong><span>TOR</span></div><div><p class="meta">18.00–19.30 · Sted avklares</p><h3>Medlemssamling</h3><p>Felles oppsummering og informasjon om neste periode.</p></div></article>
+        </section>
+    </div>
+    <footer><span>NIBI · Fellesskapet</span><a href="#top">Til toppen</a></footer>
+  </main>
+</body>
+</html>
