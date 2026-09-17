@@ -1156,10 +1156,13 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       'send_group_message', 'create_poll', 'close_poll', 'get_poll_results',
       'chat_db_list_tables', 'chat_db_query',
     ])
+    const contactToolNames = new Set([
+      'list_contacts', 'search_contacts', 'get_contact_logs', 'add_contact_log', 'create_contact',
+    ])
     const existingToolNames = new Set(allTools.map((tool) => tool.name))
     allTools = [
-      ...allTools.filter((tool) => tool.name !== 'delegate_to_chat'),
-      ...TOOL_DEFINITIONS.filter((tool) => chatToolNames.has(tool.name) && !existingToolNames.has(tool.name)),
+      ...allTools.filter((tool) => tool.name !== 'delegate_to_chat' && tool.name !== 'delegate_to_contact'),
+      ...TOOL_DEFINITIONS.filter((tool) => (chatToolNames.has(tool.name) || contactToolNames.has(tool.name)) && !existingToolNames.has(tool.name)),
     ]
     const openAIAllowedTools = new Set(allTools.map((tool) => tool.name))
     const openAITools = allTools.map(toOpenAITool)

@@ -11,6 +11,17 @@ import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { DEFAULT_MODEL } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
+function formatErrorValue(value, fallback = 'Unknown error') {
+  if (!value) return fallback
+  if (typeof value === 'string') return value
+  if (value instanceof Error) return value.message || fallback
+  if (typeof value === 'object') {
+    if (typeof value.message === 'string') return value.message
+    try { return JSON.stringify(value) } catch { return fallback }
+  }
+  return String(value)
+}
+
 // ---------------------------------------------------------------------------
 // System Prompt
 // ---------------------------------------------------------------------------
@@ -146,8 +157,9 @@ async function runContactSubagent(input, env, onProgress, executeTool) {
 
     const data = await response.json()
     if (!response.ok) {
-      log(`ERROR: ${JSON.stringify(data.error)}`)
-      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
+      const error = formatErrorValue(data.error, `Anthropic API error (${response.status})`)
+      log(`ERROR: ${error}`)
+      return { success: false, error, turns: turn, actions, inputTokens, outputTokens }
     }
 
     if (data.usage) {

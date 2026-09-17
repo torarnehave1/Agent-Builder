@@ -15193,6 +15193,11 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
     }
     case 'delegate_to_contact': {
       const result = await runContactSubagent(toolInput, env, progress, executeTool)
+      const error = typeof result.error === 'string'
+        ? result.error
+        : result.error
+          ? JSON.stringify(result.error)
+          : 'Unknown error'
       return {
         success: result.success,
         summary: result.summary,
@@ -15206,7 +15211,7 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
         })),
         message: result.success
           ? `Contact subagent completed: ${(result.summary || '').slice(0, 500)}`
-          : `Contact subagent failed: ${result.error || 'Unknown error'}`,
+          : `Contact subagent failed: ${error}`,
       }
     }
     case 'proff_search_companies':
