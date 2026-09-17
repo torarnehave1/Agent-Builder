@@ -34,5 +34,11 @@ dist-ssr
 worker/wrangler.toml
 # wrangler build/dev cache — regenerated on every deploy, never committed
 .wrangler/
+
+# Local regression tests and generated NIBI test artifacts
+worker/test-chat-sidebar.mjs
+worker/test-nibi-members.mjs
+outputs/nibi-members/
+
 /_project/
 .claude/settings.local.json

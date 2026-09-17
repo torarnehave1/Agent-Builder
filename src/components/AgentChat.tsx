@@ -932,6 +932,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // File attachment state (PDF, text files)
   const [pendingFiles, setPendingFiles] = useState<FileAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const vCardInputRef = useRef<HTMLInputElement>(null);
 
   // Audio transcription state (same UX as GrokChatPanel)
   const [selectedAudioFile, setSelectedAudioFile] = useState<AudioFileInfo | null>(null);
@@ -1757,6 +1758,23 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       }
     }
     if (e.target) e.target.value = '';
+  }, []);
+
+  const handleVCardSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPendingFiles(prev => [...prev, {
+        name: file.name,
+        mediaType: 'text/vcard',
+        data: reader.result as string,
+        size: file.size,
+      }]);
+      setInput(prev => prev.trim() || 'Importer kontakten fra den vedlagte vCard-filen.');
+    };
+    reader.readAsText(file);
+    e.target.value = '';
   }, []);
 
   const removeFile = useCallback((index: number) => {
@@ -3610,6 +3628,15 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           >
             &#x1F4CE;
           </button>
+          <button
+            type="button"
+            onClick={() => vCardInputRef.current?.click()}
+            className="px-3 py-2.5 rounded-xl border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors"
+            title="Importer vCard-kontakt"
+            aria-label="Importer vCard-kontakt"
+          >
+            &#x1F4C7;
+          </button>
           <div className="flex-1 min-w-0 relative">
             {/* Bot @mention dropdown */}
             {input.match(/^@\S*$/) && bots.length > 0 && (
@@ -3684,6 +3711,13 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.ts,.vcf,.vcard,text/vcard"
           multiple
           onChange={handleFileSelect}
+          className="hidden"
+        />
+        <input
+          ref={vCardInputRef}
+          type="file"
+          accept=".vcf,.vcard,text/vcard"
+          onChange={handleVCardSelect}
           className="hidden"
         />
       </div>
