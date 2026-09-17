@@ -1726,7 +1726,9 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     const files = Array.from(e.target.files || []);
     for (const file of files) {
       const isPdf = file.type === 'application/pdf';
-      const isText = file.type === 'text/plain' || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv') || file.name.endsWith('.json') || file.name.endsWith('.xml') || file.name.endsWith('.html') || file.name.endsWith('.css') || file.name.endsWith('.js') || file.name.endsWith('.ts');
+      const lowerName = file.name.toLowerCase();
+      const isVCard = lowerName.endsWith('.vcf') || lowerName.endsWith('.vcard') || file.type === 'text/vcard';
+      const isText = file.type === 'text/plain' || isVCard || lowerName.endsWith('.txt') || lowerName.endsWith('.md') || lowerName.endsWith('.csv') || lowerName.endsWith('.json') || lowerName.endsWith('.xml') || lowerName.endsWith('.html') || lowerName.endsWith('.css') || lowerName.endsWith('.js') || lowerName.endsWith('.ts');
       if (!isPdf && !isText) continue;
 
       const reader = new FileReader();
@@ -1745,10 +1747,11 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         reader.onload = () => {
           setPendingFiles(prev => [...prev, {
             name: file.name,
-            mediaType: file.type || 'text/plain',
+            mediaType: isVCard ? 'text/vcard' : (file.type || 'text/plain'),
             data: reader.result as string,
             size: file.size,
           }]);
+          if (isVCard) setInput(prev => prev.trim() || 'Importer kontakten fra den vedlagte vCard-filen.');
         };
         reader.readAsText(file);
       }
@@ -3603,7 +3606,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             type="button"
             onClick={() => fileInputRef.current?.click()}
             className="px-3 py-2.5 rounded-xl border app-border app-surface app-text-muted app-hover-surface-strong app-hover-text-strong transition-colors"
-            title="Attach PDF or text file"
+            title="Attach PDF, text file, or vCard"
           >
             &#x1F4CE;
           </button>
@@ -3678,7 +3681,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         <input
           ref={fileInputRef}
           type="file"
-          accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.ts"
+          accept=".pdf,.txt,.md,.csv,.json,.xml,.html,.css,.js,.ts,.vcf,.vcard,text/vcard"
           multiple
           onChange={handleFileSelect}
           className="hidden"
