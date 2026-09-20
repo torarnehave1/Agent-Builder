@@ -5,11 +5,10 @@
   const chatComponent = new URL('../components/chat-sidebar.js', scriptBase).href
   const portfolioComponent = new URL('../components/graph-portfolio.js', scriptBase).href
   const identityApi = 'https://vegvisr-frontend.torarnehave.workers.dev'
-  const worldConfigApi = 'https://knowledge-graph-worker.torarnehave.workers.dev'
+  const worldConfigApi = 'https://group-chat-worker.torarnehave.workers.dev'
   const chatApi = 'https://group-chat-worker.torarnehave.workers.dev'
   const worldDomain = 'nibi.no'
-  const magicApi = 'https://cookie.vegvisr.org'
-  const sessionKey = 'nibi_member_token'
+  const directCommunity = worldDomain === 'nibi.no' ? 'b1e906b9-8fab-45a0-8cb9-df5c7624b030' : null
   const tabs = ['chat', 'meeting', 'articles', 'common', 'personal']
   const teamMeetingId = 'bbb3cdd1-e34c-4b29-86b4-4281c0eecae0'
   const realtimeApp = 'https://realtime.vegvisr.org/'
@@ -21,7 +20,68 @@
   let activeGroup = null
   let groupTimer = null
   let loadingGroups = false
+  let chatMode = 'conversations'
+  let people = []
+  let peopleOffset = null
+  let peopleRequest = 0
+  let listRevision = 0
+  let chatSelection = 0
+  let openingPerson = false
+  let directAvailable = false
+  let peopleSearchTimer = null
   let portfolioLoaded = false
+  let meetingPollTimer = null
+  let settingsLoaded = false
+
+  function profileData() {
+    const data = session?.user?.data
+    const profile = data && typeof data.profile === 'object' ? data.profile : {}
+    return { ...profile, ...(session?.user || {}) }
+  }
+
+  function profileText(value) {
+    return value === null || value === undefined || String(value).trim() === '' ? '-' : String(value)
+  }
+
+  function renderProfile() {
+    const profile = profileData()
+    const address = profile.street || profile.address
+    const place = [profile.postal_code || profile.postalCode, profile.place || profile.city].filter(Boolean).join(' ')
+    element('profileEmail').textContent = profileText(profile.email)
+    element('profileName').textContent = profileText(profile.display_name || profile.name)
+    element('profilePhone').textContent = profileText(profile.phone)
+    element('profileVerified').textContent = profile.phone_verified_at || profile.phoneVerifiedAt ? 'Verifisert' : 'Ikke verifisert'
+    element('profileStreet').textContent = profileText(address)
+    element('profilePlace').textContent = profileText(place)
+    element('profileCountry').textContent = profileText(profile.country)
+  }
+
+  async function loadSettings() {
+    if (!session) return
+    settingsLoaded = false
+    status('settingsStatus', 'Henter innstillinger ...')
+    try {
+      const data = await json(identityApi + '/nibi-settings', { headers: { Authorization: 'Bearer ' + session.token } })
+      element('graphAlerts').checked = data.preferences?.graph_updates === true
+      element('messageAlerts').checked = data.preferences?.message_updates === true
+      settingsLoaded = true
+      status('settingsStatus', '')
+    } catch (error) {
+      status('settingsStatus', error.message, true)
+    }
+  }
+
+  async function openSettings() {
+    if (!session) return
+    renderProfile()
+    element('settingsModal').hidden = false
+    await loadSettings()
+    element('closeSettings').focus()
+  }
+
+  function closeSettings() {
+    element('settingsModal').hidden = true
+  }
 
   function status(id, text, error = false) {
     const target = element(id)
@@ -45,11 +105,27 @@
     controller.abort()
     controller = new AbortController()
     clearInterval(groupTimer)
+    clearTimeout(meetingPollTimer)
+    meetingPollTimer = null
     groupTimer = null
     session = null
     groups = []
     activeGroup = null
     loadingGroups = false
+    chatMode = 'conversations'
+    people = []
+    peopleOffset = null
+    peopleRequest += 1
+    listRevision += 1
+    chatSelection += 1
+    openingPerson = false
+    directAvailable = false
+    clearTimeout(peopleSearchTimer)
+    element('chatModes').hidden = true
+    element('peopleMore').hidden = true
+    element('conversationsMode').setAttribute('aria-pressed', 'true')
+    element('peopleMode').setAttribute('aria-pressed', 'false')
+    element('chatSearchLabel').textContent = 'Finn samtale'
     clearChat()
     element('personalHost').replaceChildren()
     element('commonHost').replaceChildren()
@@ -58,13 +134,19 @@
     element('groupSearch').value = ''
     element('identity').textContent = ''
     element('refresh').disabled = false
-    element('sendLink').disabled = false
+    if (element('sendLink')) element('sendLink').disabled = false
     document.querySelector('.vgp-back:not([hidden]) .vgp-close')?.click()
+    closeSettings()
   }
 
-  function signOut(message = '') {
+  function signOut(message = '', notifyAuth = true) {
     resetSession()
-    try { sessionStorage.removeItem(sessionKey) } catch {}
+    try {
+      localStorage.removeItem('vegvisr_user')
+      localStorage.removeItem('user')
+      localStorage.removeItem('userStore')
+    } catch {}
+    if (notifyAuth) window.dispatchEvent(new Event('vegvisr-auth-changed'))
     screen('login')
     status('loginStatus', message, Boolean(message))
   }
@@ -80,11 +162,19 @@
     return data
   }
 
+  function standardToken() {
+    try {
+      const stored = JSON.parse(localStorage.getItem('vegvisr_user') || '{}')
+      return stored.token || stored.emailVerificationToken || ''
+    } catch { return '' }
+  }
+
   function groupQuery() {
     return new URLSearchParams({ user_id: session.user.user_id, phone: session.user.phone, email: session.user.email })
   }
 
   function renderGroups() {
+    if (chatMode === 'people') { renderPeople(); return }
     const search = element('groupSearch').value.trim().toLocaleLowerCase('nb')
     element('groupList').replaceChildren()
     const visible = groups.filter(group => String(group.name || '').toLocaleLowerCase('nb').includes(search))
@@ -96,16 +186,96 @@
       const name = document.createElement('strong')
       name.textContent = group.name || 'Samtale'
       const role = document.createElement('small')
-      role.textContent = ({ owner: 'Eier', admin: 'Administrator', member: 'Medlem' })[group.role] || 'Medlem'
+      role.textContent = group.kind === 'direct' ? 'Privat samtale' : ({ owner: 'Eier', admin: 'Administrator', member: 'Medlem' })[group.role] || 'Medlem'
       button.append(name, role)
       button.addEventListener('click', () => openGroup(group))
       element('groupList').append(button)
     }
-    status('groupStatus', groups.length ? (visible.length ? groups.length + (groups.length === 1 ? ' gruppe' : ' grupper') : 'Ingen grupper matcher s\u00f8ket.') : 'Du er ikke medlem av noen chatgrupper enn\u00e5.')
+    status('groupStatus', groups.length ? (visible.length ? groups.length + (groups.some(group => group.kind === 'direct') ? ' samtaler' : groups.length === 1 ? ' gruppe' : ' grupper') : 'Ingen samtaler matcher s\u00f8ket.') : 'Du er ikke medlem av noen chatgrupper enn\u00e5.')
+  }
+
+  function renderPeople() {
+    element('groupList').replaceChildren()
+    for (const person of people) {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'group'
+      button.textContent = person.name
+      button.disabled = openingPerson
+      button.addEventListener('click', () => openPerson(person))
+      element('groupList').append(button)
+    }
+    element('peopleMore').hidden = peopleOffset === null
+  }
+
+  async function loadPeople(append = false) {
+    if (!session || !directAvailable || chatMode !== 'people') return
+    const requestGeneration = generation
+    const requestId = ++peopleRequest
+    const query = new URLSearchParams({ source_group_id: directCommunity, q: element('groupSearch').value.trim(), offset: String(append ? peopleOffset || 0 : 0) })
+    if (!append) { people = []; peopleOffset = null; renderPeople() }
+    element('peopleMore').disabled = true
+    status('groupStatus', 'Henter personer ...')
+    try {
+      const data = await json(chatApi + '/direct/people?' + query, { headers: { Authorization: 'Bearer ' + session.token } })
+      if (generation !== requestGeneration || requestId !== peopleRequest || chatMode !== 'people') return
+      if (!Array.isArray(data.people)) throw new Error('Ugyldig personliste.')
+      people = append ? people.concat(data.people) : data.people
+      peopleOffset = data.next_offset ?? null
+      renderPeople()
+      status('groupStatus', people.length ? people.length + (people.length === 1 ? ' person' : ' personer') : 'Ingen personer funnet.')
+    } catch (error) {
+      if (generation === requestGeneration && requestId === peopleRequest && error.name !== 'AbortError') status('groupStatus', error.message, true)
+    } finally {
+      if (generation === requestGeneration && requestId === peopleRequest) element('peopleMore').disabled = false
+    }
+  }
+
+  function setChatMode(mode) {
+    chatSelection += 1
+    chatMode = mode
+    peopleRequest += 1
+    element('groupSearch').value = ''
+    element('chatSearchLabel').textContent = mode === 'people' ? 'Finn person' : 'Finn samtale'
+    element('conversationsMode').setAttribute('aria-pressed', String(mode === 'conversations'))
+    element('peopleMode').setAttribute('aria-pressed', String(mode === 'people'))
+    element('peopleMore').hidden = true
+    if (mode === 'people') loadPeople()
+    else renderGroups()
+  }
+
+  async function openPerson(person) {
+    if (!session || openingPerson || !directAvailable) return
+    const requestGeneration = generation
+    const requestSelection = chatSelection
+    openingPerson = true
+    renderPeople()
+    status('groupStatus', '\u00c5pner samtale ...')
+    try {
+      const data = await json(chatApi + '/direct/conversations', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.token },
+        body: JSON.stringify({ source_group_id: directCommunity, peer_id: person.user_id }),
+      })
+      if (generation !== requestGeneration) return
+      if (!data.group?.id || data.group.kind !== 'direct') throw new Error('Ugyldig samtale.')
+      listRevision += 1
+      groups = [data.group, ...groups.filter(group => group.id !== data.group.id)]
+      if (chatSelection !== requestSelection) { renderGroups(); return }
+      setChatMode('conversations')
+      openGroup(data.group)
+    } catch (error) {
+      if (generation === requestGeneration && error.name !== 'AbortError') status('groupStatus', error.message, true)
+    } finally {
+      if (generation === requestGeneration) {
+        openingPerson = false
+        if (chatMode === 'people') renderPeople()
+      }
+    }
   }
 
   function openGroup(group) {
     if (!session || !groups.some(item => item.id === group.id)) return
+    chatSelection += 1
     clearChat()
     activeGroup = group
     renderGroups()
@@ -122,6 +292,7 @@
       const marker = page.createElement('div')
       marker.setAttribute('data-vegvisr-chat', group.id)
       marker.setAttribute('data-session-token', capturedSession.token)
+      if (group.kind === 'direct') marker.setAttribute('data-chat-kind', 'direct')
       marker.setAttribute('data-title', group.name || 'Chat')
       marker.setAttribute('data-start', 'open')
       marker.setAttribute('data-lang', 'no')
@@ -144,6 +315,7 @@
       return
     }
     const requestGeneration = generation
+    const requestRevision = listRevision
     loadingGroups = true
     element('refresh').disabled = true
     status('groupStatus', 'Henter grupper ...')
@@ -153,18 +325,42 @@
       })
       if (generation !== requestGeneration) return
       if (!Array.isArray(data.groups)) throw new Error('Ugyldig svar fra chat-tjenesten.')
-      groups = data.groups.slice().sort((first, second) => second.updated_at - first.updated_at)
+      directAvailable = Boolean(directCommunity && data.groups.some(group => group.id === directCommunity))
+      element('chatModes').hidden = !directAvailable
+      let directGroups = []
+      let directError = ''
+      if (directAvailable) {
+        try {
+          const direct = await json(chatApi + '/direct/conversations?source_group_id=' + encodeURIComponent(directCommunity), { headers: { Authorization: 'Bearer ' + session.token } })
+          if (!Array.isArray(direct.groups)) throw new Error('Ugyldig samtaleliste.')
+          directGroups = direct.groups
+        } catch (error) {
+          if (error.name === 'AbortError') return
+          directError = error.message
+          if (error.status !== 401 && error.status !== 403) directGroups = groups.filter(group => group.kind === 'direct')
+        }
+      }
+      if (generation !== requestGeneration || listRevision !== requestRevision) return
+      groups = [...data.groups.filter(group => !group.id.startsWith('dm_')), ...directGroups].sort((first, second) => second.updated_at - first.updated_at)
+      if (!directAvailable && chatMode === 'people') setChatMode('conversations')
       if (activeGroup && !groups.some(group => group.id === activeGroup.id)) {
         activeGroup = null
         clearChat()
       }
       renderGroups()
+      if (directError) status('groupStatus', 'Private samtaler: ' + directError, true)
+      else if (chatMode === 'people') loadPeople()
     } catch (error) {
       if (generation !== requestGeneration || error.name === 'AbortError') return
       if (error.status === 401 || error.status === 403) {
         clearChat()
         activeGroup = null
         groups = []
+        directAvailable = false
+        people = []
+        peopleRequest += 1
+        element('chatModes').hidden = true
+        element('peopleMore').hidden = true
         element('groupList').replaceChildren()
       }
       status('groupStatus', error.message + ' Bruk Oppdater for \u00e5 pr\u00f8ve igjen.', true)
@@ -359,10 +555,29 @@
 
   async function openRealtimeMeeting() {
     const host = element('meetingHost')
-    host.replaceChildren()
+    clearTimeout(meetingPollTimer)
+    meetingPollTimer = null
     if (!session?.token || !session.user?.email) return
-    status('meetingStatus', 'Kobler til NIBI team-rommet ...')
+    const isLeader = session.user.email.toLowerCase() === 'post@nibi.no'
     try {
+      const infoResponse = await fetch('https://api.vegvisr.org/realtime/meeting-info?meetingId=' + encodeURIComponent(teamMeetingId) + '&_ts=' + Date.now(), { signal: controller.signal, cache: 'no-store' })
+      const info = await infoResponse.json().catch(() => ({}))
+      if (!isLeader && info?.waitingRoomEnabled && info?.hostOnline === false) {
+        if (!host.querySelector('.meeting-waiting')) {
+          const waiting = document.createElement('div')
+          waiting.className = 'meeting-waiting'
+          const title = String(info.meetingTitle || 'NIBI team-møte').replace(/[<&>"']/g, '')
+          const logo = info.waitingImage
+            ? '<img class="meeting-waiting-logo" src="' + String(info.waitingImage).replace(/[<&>"']/g, '') + '" alt="" />'
+            : '<div class="meeting-waiting-icon">NIBI</div>'
+          waiting.innerHTML = '<div class="meeting-waiting-card">' + logo + '<h2>' + title + '</h2><p>Venter på at møteleder skal starte møtet.</p><div class="meeting-waiting-spinner" aria-label="Venter på møteleder"></div><small>Dette oppdateres automatisk.</small></div>'
+          host.replaceChildren(waiting)
+        }
+        status('meetingStatus', 'Venter på møteleder ...')
+        meetingPollTimer = setTimeout(() => openRealtimeMeeting(), 3000)
+        return
+      }
+      status('meetingStatus', isLeader ? 'Starter NIBI team-rommet ...' : 'Kobler til NIBI team-rommet ...')
       const data = await json('https://api.vegvisr.org/realtime/join-token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-API-Token': session.token },
@@ -394,6 +609,11 @@
       const handleReady = event => {
         if (event.origin !== 'https://realtime.vegvisr.org' || event.source !== frame.contentWindow) return
         if (event.data?.type === 'VEGVISR_REALTIME_READY' && event.data.meetingId === teamMeetingId) sendBootstrap()
+        if (event.data?.type === 'VEGVISR_REALTIME_LEFT' && event.data.meetingId === teamMeetingId) {
+          window.removeEventListener('message', handleReady)
+          host.replaceChildren()
+          status('meetingStatus', 'Du har forlatt møtet.')
+        }
       }
       window.addEventListener('message', handleReady)
       frame.addEventListener('load', sendBootstrap, { once: true })
@@ -455,22 +675,16 @@
     } else if (activeGroup) openGroup(activeGroup)
   }
 
-  async function authenticate(token, magic = false) {
+  async function authenticate(token) {
     resetSession()
     screen('checking')
     const requestGeneration = generation
     try {
-      if (magic) {
-        const result = await json(magicApi + '/login/magic/verify?token=' + encodeURIComponent(token))
-        if (generation !== requestGeneration) return
-        if (!result.apiToken) throw new Error('Innloggingslenken ga ingen gyldig sesjon.')
-        token = result.apiToken
-      }
       const user = await json(identityApi + '/userdata-from-token', { headers: { Authorization: 'Bearer ' + token } })
       if (generation !== requestGeneration) return
       if (!user.email || !user.user_id) throw new Error('Brukerprofilen mangler e-post eller bruker-ID.')
       session = { token, user }
-      try { sessionStorage.setItem(sessionKey, token) } catch {}
+      try { localStorage.setItem('vegvisr_user', JSON.stringify({ email: user.email, role: user.role || null, token })) } catch {}
       element('identity').textContent = user.email
       screen('member')
       selectTab(new URL(location.href).searchParams.has('vgp') ? 'articles' : 'chat')
@@ -497,31 +711,41 @@
     return true
   }
 
-  element('loginForm').addEventListener('submit', async event => {
+  element('loginForm')?.addEventListener('submit', event => event.preventDefault())
+  element('signout').addEventListener('click', () => signOut())
+  element('settings').addEventListener('click', openSettings)
+  element('closeSettings').addEventListener('click', closeSettings)
+  element('cancelSettings').addEventListener('click', closeSettings)
+  element('settingsModal').addEventListener('click', event => { if (event.target === element('settingsModal')) closeSettings() })
+  element('settingsForm').addEventListener('submit', async event => {
     event.preventDefault()
-    const requestGeneration = generation
-    element('sendLink').disabled = true
-    status('loginStatus', 'Sender innloggingslenke ...')
+    if (!session || !settingsLoaded) return
+    element('saveSettings').disabled = true
+    status('settingsStatus', 'Lagrer ...')
     try {
-      const redirect = new URL(location.href)
-      const articleId = redirect.searchParams.get('vgp')
-      redirect.search = ''
-      redirect.hash = ''
-      if (articleId) redirect.searchParams.set('vgp', articleId)
-      await json(magicApi + '/login/magic/send', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: element('email').value.trim(), redirectUrl: redirect.href }),
+      await json(identityApi + '/nibi-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.token },
+        body: JSON.stringify({ graph_updates: element('graphAlerts').checked, message_updates: element('messageAlerts').checked }),
       })
-      if (generation === requestGeneration) status('loginStatus', 'Sjekk e-posten din for innloggingslenken.')
+      status('settingsStatus', 'Innstillingene er lagret.')
     } catch (error) {
-      if (generation === requestGeneration && error.name !== 'AbortError') status('loginStatus', error.message, true)
+      status('settingsStatus', error.message, true)
     } finally {
-      if (generation === requestGeneration) element('sendLink').disabled = false
+      element('saveSettings').disabled = false
     }
   })
-  element('signout').addEventListener('click', () => signOut())
   element('refresh').addEventListener('click', loadGroups)
-  element('groupSearch').addEventListener('input', renderGroups)
+  element('groupSearch').addEventListener('input', () => {
+    if (chatMode === 'people') {
+      peopleRequest += 1
+      clearTimeout(peopleSearchTimer)
+      peopleSearchTimer = setTimeout(() => loadPeople(), 250)
+    } else renderGroups()
+  })
+  element('conversationsMode').addEventListener('click', () => setChatMode('conversations'))
+  element('peopleMode').addEventListener('click', () => setChatMode('people'))
+  element('peopleMore').addEventListener('click', () => loadPeople(true))
   element('back').addEventListener('click', () => { clearChat(); activeGroup = null; renderGroups() })
   for (const name of tabs) {
     element(name + 'Tab').addEventListener('click', () => selectTab(name))
@@ -535,20 +759,17 @@
   }
   window.addEventListener('pagehide', resetSession)
   window.addEventListener('pageshow', event => { if (event.persisted) restore() })
-  window.addEventListener('storage', event => { if (event.key === sessionKey && !event.newValue) signOut() })
+  window.addEventListener('storage', event => { if (event.key === 'vegvisr_user' && !event.newValue) signOut('', false) })
+  window.addEventListener('vegvisr-auth-changed', () => {
+    const token = standardToken()
+    if (token) authenticate(token)
+    else if (session) signOut('', false)
+  })
 
   function restore() {
     if (restorePreview()) return
     const url = new URL(location.href)
-    const magic = url.searchParams.get('magic')
-    if (magic) {
-      url.searchParams.delete('magic')
-      history.replaceState({}, '', url)
-      authenticate(magic, true)
-      return
-    }
-    let stored = null
-    try { stored = sessionStorage.getItem(sessionKey) } catch {}
+    const stored = standardToken()
     if (stored) authenticate(stored)
     else screen('login')
   }

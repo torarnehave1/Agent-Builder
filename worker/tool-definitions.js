@@ -2525,6 +2525,23 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'setup_chat_workspace',
+    description: 'Add the registered chat-workspace to an existing html-node in one guided, idempotent operation. Resolves the existing Component Registry entry and an existing chat group by name, inserts the graph-js script and the correct data-vegvisr-chat-workspace mount with chat API, identity API, source group, and World domain. NEVER creates a chat group, Worker, brand proxy, database, or replacement component. Refuses duplicate setup. Saved in the graph, not live until publish_html_node. Superadmin only.',
+    input_schema: {
+      type: 'object',
+      required: ['graphId', 'nodeId', 'groupName', 'worldDomain'],
+      properties: {
+        graphId: { type: 'string' },
+        nodeId: { type: 'string' },
+        groupName: { type: 'string', description: 'Existing chat group name; never creates a group.' },
+        worldDomain: { type: 'string', description: 'World domain, e.g. movemetime.com.' },
+        chatApi: { type: 'string' },
+        identityApi: { type: 'string' },
+        overwrite: { type: 'boolean', description: 'Repair an existing workspace block; default false.' }
+      }
+    }
+  },
+  {
     name: 'get_secure_worker_template',
     description: 'Return the canonical Vegvisr server-side auth pattern and worker template for new Cloudflare Workers. ALWAYS call this before deploy_worker when creating or modifying a privileged worker that updates data, deletes data, reads private user data, or deploys infrastructure. Includes secure admin and user-scoped templates plus mandatory rules.',
     input_schema: {
@@ -3171,20 +3188,20 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'create_contact',
-    description: 'Create a new contact record.',
+    description: 'Create a complete contact record. Name, email, and phone are required; incomplete contacts are rejected.',
     input_schema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Full name (required)' },
-        email: { type: 'string', description: 'Email address' },
-        phone: { type: 'string', description: 'Phone number' },
+        email: { type: 'string', description: 'Email address (required)' },
+        phone: { type: 'string', description: 'Phone number (required)' },
         company: { type: 'string', description: 'Company/organisation name' },
         job_title: { type: 'string', description: 'Job title / role' },
         tags: { type: 'string', description: 'Comma-separated tags' },
         labels: { type: 'string', description: 'Comma-separated labels (e.g. "Aktiv,Kunde")' },
         notes: { type: 'string', description: 'General notes about the contact' }
       },
-      required: ['name']
+      required: ['name', 'email', 'phone']
     }
   },
   {
@@ -3468,7 +3485,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'deploy_world_proxy',
     description:
-      "Create (deploy) a World's brand-proxy worker (<stem>-brand-proxy) in the founder's OWN Cloudflare account — the piece that serves me.<domain> plus the /__html/publish + /__html/check endpoints. This is the step that fixes 'HTTP 530 (worker not reachable)', i.e. when no brand proxy exists yet. It uploads the canonical brand-proxy script (template:brand-proxy in WORLD_TEMPLATES), creates the HTML_PAGES + BRAND_CONFIG KV namespaces if missing, binds them, stamps HTML_PUBLISH_SECRET at deploy, and attaches me.<domain> as a custom domain. After this the World is publishable — run publish_world_page. Superadmin only; requires the founder's stored token (set_world_credentials) with Workers Scripts edit + Workers KV Storage edit + DNS/Routes edit + Zone read. Idempotent: skips an existing worker (still (re)attaches the route); pass force=true to redeploy the script.",
+      "Create (deploy) a founder-owned World's brand-proxy worker. PROHIBITED for hosting_model='central' Worlds: those use the existing shared brand-worker and must never create <stem>-brand-proxy. For central domains use create_subdomain and publish_html_node. For own_account Worlds this uploads the canonical proxy, creates/binds HTML_PAGES + BRAND_CONFIG, sets the per-World secret, and attaches the custom domain. Superadmin only.",
     input_schema: {
       type: 'object',
       properties: {
@@ -3528,7 +3545,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'provision_world_kv',
     description:
-      "Make a World publishable in one step: (1) create/find the HTML_PAGES KV namespace in the founder's OWN Cloudflare account (idempotent) and record its id in config.cf_kv_namespace_id, and (2) set the brand proxy's HTML_PUBLISH_SECRET to agent-worker's value so publish_world_page works. This is the routine that was previously only printed as a manual step (Lesson 44). Superadmin only. Requires the founder's stored token (set_world_credentials) to have Workers KV Storage edit + Workers Scripts edit scope, agent-worker to have its HTML_PUBLISH_SECRET set, and the brand proxy to exist. Reports KV + publish_secret results separately.",
+      "Make an own_account World publishable by creating/binding its HTML_PAGES KV and setting its per-World proxy secret. PROHIBITED for hosting_model='central' Worlds: shared brand-worker and shared HTML_PAGES are used instead; use create_subdomain/publish_html_node. Superadmin only.",
     input_schema: {
       type: 'object',
       properties: {
@@ -3591,7 +3608,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'set_world_publish_secret',
     description:
-      "Set a World's brand-proxy HTML_PUBLISH_SECRET to agent-worker's own value, so publish_world_page works for that World. Standalone version of the secret step that provision_world_kv also does. Uses the World's stored Cloudflare token (needs Workers Scripts edit scope) to write the secret into the brand proxy worker via the CF API; the value is held on agent-worker (env.HTML_PUBLISH_SECRET, set once by the operator via `wrangler secret put` — a value they generate) and never passes through chat. Superadmin only. Prereqs: register_world_founder + set_world_credentials (stored token) for the domain.",
+      "Set an own_account World's per-World brand-proxy secret. PROHIBITED for hosting_model='central' Worlds, which use shared brand-worker and need no World-specific secret. Superadmin only.",
     input_schema: {
       type: 'object',
       properties: {

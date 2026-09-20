@@ -240,7 +240,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'list_components', 'get_component', 'list_layouts', 'get_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
   // retype registry components through insert_html_at and could not delete a leftover script.
-  'insert_component', 'fill_slot_with_component', 'bind_node_text', 'apply_layout',
+  'insert_component', 'setup_chat_workspace', 'fill_slot_with_component', 'bind_node_text', 'apply_layout',
   'move_html_element', 'remove_html_element',
   'list_tabs', 'apply_tabs', 'add_tab',
   'get_secure_worker_template', 'create_capability_blueprint',
@@ -279,7 +279,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
   'apply_tabs', 'add_tab',
-  'insert_component', 'translate_html_node',
+  'insert_component', 'setup_chat_workspace', 'translate_html_node',
   'restore_html_node_version', 'restore_graph_version', 'patch_node_metadata', 'remove_node',
   'create_html_from_template', 'save_component', 'save_layout',
   'create_app_table', 'insert_app_record', 'add_user_to_chat_group', 'send_group_message', 'create_chat_group',

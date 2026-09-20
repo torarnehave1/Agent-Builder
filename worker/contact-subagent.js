@@ -47,7 +47,7 @@ const CONTACT_SUBAGENT_SYSTEM_PROMPT = `You are a Contact Management specialist 
 2. \`get_contact_logs\` with the contactId
 
 ### Creating a contact:
-1. \`create_contact\` with at minimum a name
+1. \`create_contact\` with name, email, and phone. Never create an incomplete contact.
 2. Confirm the new contact ID
 
 ## Contact Log Types

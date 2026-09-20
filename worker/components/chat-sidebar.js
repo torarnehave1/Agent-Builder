@@ -353,6 +353,8 @@
     var chatApi = (root.getAttribute('data-chat-api') || CHAT_API).replace(/\/+$/, '')
     var identityApi = (root.getAttribute('data-identity-api') || IDENTITY_API).replace(/\/+$/, '')
     var heading = (root.getAttribute('data-title') || t.title).trim()
+    var direct = root.getAttribute('data-chat-kind') === 'direct'
+    var authenticatedToken = null
     var launcherLabel = root.getAttribute('data-launcher') || '💬'
 
     if (!groupId) {
@@ -474,7 +476,7 @@
       bub.className = 'vcs-bub'
       var who = document.createElement('div')
       who.className = 'vcs-who'
-      who.textContent = mine ? t.you : shortLabel(m.user_id, t)
+      who.textContent = mine ? t.you : direct ? heading : shortLabel(m.user_id, t)
       bub.appendChild(who)
 
       var kind = messageKind(m)
@@ -564,9 +566,9 @@
         if (!value || state.sending) return
         state.sending = true
         send.disabled = true
-        fetch(chatApi + '/groups/' + encodeURIComponent(groupId) + '/messages', {
+        fetch(chatApi + (direct ? '/direct/' : '/groups/') + encodeURIComponent(groupId) + '/messages', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(direct ? { Authorization: 'Bearer ' + authenticatedToken } : {}) },
           body: JSON.stringify({
             user_id: state.me.user_id, phone: state.me.phone, email: state.me.email || undefined,
             body: value, message_type: 'text',
@@ -590,7 +592,8 @@
     // 403 is the documented answer for a non-member — the panel says so plainly
     // rather than showing an empty conversation that looks broken.
     function handleLoadError (r) {
-      if (r && r.status === 403) {
+      if (r && (r.status === 403 || r.status === 401)) {
+        state.messages = []
         note(body, t.notMember, t.notMemberHint)
         foot.textContent = ''
         return true
@@ -601,8 +604,8 @@
     function poll () {
       if (!state.me || state.stopped) return Promise.resolve()
       var after = lastId(state.messages)
-      return fetch(chatUrl(chatApi, groupId, state.me, '&after=' + after + '&limit=' + PAGE_SIZE), {
-        headers: { accept: 'application/json' },
+      return fetch(direct ? chatApi + '/direct/' + encodeURIComponent(groupId) + '/messages?after=' + after + '&limit=' + PAGE_SIZE : chatUrl(chatApi, groupId, state.me, '&after=' + after + '&limit=' + PAGE_SIZE), {
+        headers: { accept: 'application/json', ...(direct ? { Authorization: 'Bearer ' + authenticatedToken } : {}) },
       }).then(function (r) {
         if (!r.ok) { if (handleLoadError(r)) { stopPolling(); state.stopped = true } return null }
         return r.json()
@@ -618,8 +621,8 @@
 
     function loadFirstPage () {
       note(body, t.loading)
-      return fetch(chatUrl(chatApi, groupId, state.me, '&latest=1&limit=' + PAGE_SIZE), {
-        headers: { accept: 'application/json' },
+      return fetch(direct ? chatApi + '/direct/' + encodeURIComponent(groupId) + '/messages?latest=1&limit=' + PAGE_SIZE : chatUrl(chatApi, groupId, state.me, '&latest=1&limit=' + PAGE_SIZE), {
+        headers: { accept: 'application/json', ...(direct ? { Authorization: 'Bearer ' + authenticatedToken } : {}) },
       }).then(function (r) {
         if (!r.ok) { if (handleLoadError(r)) return null; throw new Error('messages HTTP ' + r.status) }
         return r.json()
@@ -659,6 +662,7 @@
       }
       var token = sessionToken(root, readStores())
       if (!token) { showSignIn(); return }
+      authenticatedToken = token
       note(body, t.loading)
       resolveIdentity(identityApi, token).then(function (me) {
         if (!me) { showSignIn(); return }

@@ -1515,6 +1515,40 @@ async function executeInsertInElement(input, env) {
   }
 }
 
+async function executeSetupChatWorkspace(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'set up chat workspace')
+  if (!gate.ok) return { success: false, error: gate.error }
+  if (!input.graphId || !input.nodeId || !input.groupName || !input.worldDomain) return { success: false, error: 'graphId, nodeId, groupName and worldDomain are required.' }
+  const component = await executeGetComponent({ name: 'chat-workspace' }, env)
+  if (!component) return { success: false, error: 'Registered chat-workspace component was not found.' }
+  const groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
+  if (!groupId) return { success: false, error: `Existing chat group "${input.groupName}" was not found. No group was created.` }
+  const safe = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  const authScript = '<script src="https://api.vegvisr.org/components/vegvisr-auth.js" defer></script>'
+  const authMount = `<vegvisr-auth require-auth app-name="${safe(input.worldDomain)}"></vegvisr-auth>`
+  const script = '<script src="https://api.vegvisr.org/components/chat-workspace.js" defer></script>'
+  const mount = `<div data-vegvisr-chat-workspace data-source-group-id="${safe(groupId)}" data-world-domain="${safe(input.worldDomain)}" data-chat-api="${safe(input.chatApi || 'https://group-chat-worker.torarnehave.workers.dev')}" data-identity-api="${safe(input.identityApi || 'https://vegvisr-frontend.torarnehave.workers.dev')}"></div>`
+  const current = await fetchHtmlNode(env, input.graphId, input.nodeId)
+  if (!current.node) return { success: false, error: `Node "${input.nodeId}" not found.` }
+  const html = String(current.node.info || '')
+  const hasCorrectMount = html.includes('data-vegvisr-chat-workspace') && html.includes(`data-source-group-id="${groupId}"`)
+  const hasAuthScript = /<script[^>]+src=["']https:\/\/api\.vegvisr\.org\/components\/vegvisr-auth\.js[^>]*>/i.test(html)
+  const hasAuthMount = /<vegvisr-auth\b/i.test(html)
+  if (hasCorrectMount && hasAuthScript && hasAuthMount && input.overwrite !== true) return { success: true, changed: false, groupId, auth: 'already configured', message: 'chat-workspace and shared authentication are already configured. No duplicate was inserted.' }
+  let next = html
+  // Always repair malformed prior workspace attempts: remove all workspace scripts,
+  // the old data-mode/data-group marker, and the correct marker before inserting one
+  // canonical block. This does not touch chat-sidebar.
+  next = next.replace(/<script[^>]+src=["']https:\/\/api\.vegvisr\.org\/components\/chat-workspace\.js[^>]*><\/script>/gi, '')
+  next = next.replace(/<div[^>]*(?:data-vegvisr-chat-workspace|data-mode=["']workspace["'])[^>]*><\/div>/gi, '')
+  if (!hasAuthScript) next = next.replace(/<\/body>/i, authScript + '</body>')
+  if (!hasAuthMount) next = next.replace(/<\/body>/i, authMount + '</body>')
+  next = next.replace(/<\/body>/i, script + mount + '</body>')
+  if (next === html) return { success: false, error: 'Could not find </body> insertion point.' }
+  const saved = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { info: next, updatedAt: new Date().toISOString(), updatedBy: gate.email || null })
+  return { success: true, changed: true, graphId: input.graphId, nodeId: input.nodeId, groupId, component: 'chat-workspace', auth: hasAuthScript && hasAuthMount ? 'already configured' : 'added shared vegvisr-auth', version: saved.newVersion, savedNotLive: true, message: `Configured chat-workspace and shared authentication for "${input.groupName}". Saved as v${saved.newVersion}; publish_html_node is still required.` }
+}
+
 async function executeListHtmlAnchors(input, env) {
   if (!input.graphId || !input.nodeId) return { success: false, error: 'graphId and nodeId are required.' }
   const { node } = await fetchHtmlNode(env, input.graphId, input.nodeId)
@@ -2253,7 +2287,7 @@ async function probeDeadBackendUrls(html) {
 // hint). Treating every host as shared is what silently wrote charlie.iamazing.page's page into the
 // Vegvisr account's KV while the founder's proxy — the one actually serving the host — never saw it
 // (2026-09-05). The classification only PICKS a path; readPublishedKey below is what proves it.
-const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'vegr.ai', 'alivenesslab.org']
+const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'vegr.ai', 'alivenesslab.org', 'movemetime.com']
 const isSharedBrandHost = (host) => SHARED_BRAND_ZONES.some((z) => host === z || host.endsWith(`.${z}`))
 
 // Ask a brand proxy what it holds for `hostname`. BOTH proxies expose /__html/check and answer it
@@ -2384,9 +2418,10 @@ async function executePublishHtmlNode(input, env) {
       return { success: false, error: `Publish-token mint failed: ${e.message}` }
     }
   } else {
-    const secret = env.HTML_PUBLISH_SECRET
+    const secretInfo = await getWorldPublishSecret(env, host)
+    const secret = secretInfo?.secret
     if (!secret) {
-      return { success: false, error: `${host} is not a vegvisr.org-family host, so it is served by a World brand-proxy that verifies publish tokens against agent-worker's HTML_PUBLISH_SECRET — and agent-worker has no such binding. One-time setup: run \`wrangler secret put HTML_PUBLISH_SECRET\` in the Agent-Builder/worker dir (the same secret provision_world_kv stamps into each proxy).` }
+      return { success: false, error: `${host} has no per-World publish secret and no legacy fallback is configured. Run set_world_publish_secret for this World first.` }
     }
     const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
     publishToken = await signPublishToken(
@@ -2610,11 +2645,19 @@ async function executeCreateSubdomain(input, env) {
   // registered World outside the platform zone list, attach the host to the World's own brand proxy
   // (the worker already serving me.<domain>) as a Workers Custom Domain, with the World's stored token.
   if (!PLATFORM_SUBDOMAIN_ZONES.includes(rootDomain)) {
-    const world = await env.DB.prepare('SELECT domain FROM world_founders WHERE domain = ? LIMIT 1').bind(rootDomain).first()
+    const world = await env.DB.prepare('SELECT domain, hosting_model FROM world_founders WHERE domain = ? LIMIT 1').bind(rootDomain).first()
     if (world) {
       const ctx = await resolveWorldInfraContext({ ...input, domain: rootDomain }, env)
       if (ctx.error) return { success: false, error: ctx.error }
       const host = `${subdomain}.${rootDomain}`
+      if (String(world.hosting_model || '').trim().toLowerCase() === 'central') {
+        const sharedAccount = String(env.CF_ACCOUNT_ID || ctx.cfAccount || '').trim()
+        const sharedToken = env.CF_API_TOKEN || ctx.cfToken
+        if (!sharedAccount || !sharedToken) return { success: false, error: `${rootDomain} is a central World, but the shared Cloudflare account credentials are not configured.` }
+        const dom = await attachBrandProxyDomain(sharedAccount, sharedToken, rootDomain, 'brand-worker', host)
+        if (!dom.ok) return { success: false, host, world: rootDomain, worker_name: 'brand-worker', error: `Could not attach ${host} to shared brand-worker (${dom.status}): ${dom.detail}`, note: dom.note }
+        return { success: true, host, world: rootDomain, worker_name: 'brand-worker', central: true, already_attached: !!dom.alreadyAttached, createdBy: gate.email, message: `${host} is ${dom.alreadyAttached ? 'already' : 'now'} attached to the shared brand-worker. No World-specific Worker was created.` }
+      }
       const stem = rootDomain.split('.')[0]
       const probe = await inspectBrandProxy(ctx.cfAccount, ctx.cfToken, `me.${rootDomain}`, `${stem}-brand-proxy`)
       if (!probe.exists) {
@@ -4158,6 +4201,11 @@ async function executeWhoAmI(input, env) {
 
 // ── Admin operations ──────────────────────────────────────────────
 
+const SUPERADMIN_VERIFIED_TEST_PHONES = new Map([
+  ['post@slowyou.net', '+4712003400'],
+  ['post@nibi.no', '+4712003401'],
+])
+
 async function executeAdminRegisterUser(input, env) {
   const callerUserId = input.userId
   if (!callerUserId) throw new Error('No user context available')
@@ -4175,17 +4223,61 @@ async function executeAdminRegisterUser(input, env) {
   const name = (input.name || '').trim() || null
   const phone = (input.phone || '').trim() || null
   const address = (input.address || '').trim() || null
-  const street = (input.street || '').trim() || null
+  const street = (input.street || input.address || '').trim() || null
   const postalCode = (input.postal_code || '').trim() || null
   const place = (input.place || '').trim() || null
   const city = (input.city || '').trim() || null
   const country = (input.country || '').trim() || null
   const role = (input.role || 'Admin').trim()
+  const testPhoneVerified = phone && SUPERADMIN_VERIFIED_TEST_PHONES.get(email) === phone
 
-  // Check if user already exists
-  const existing = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(email).first()
+  // Existing rows are updated only for fields supplied by this request. This lets a vCard
+  // complete an account that already exists without replacing its login token or role.
+  const existing = await env.DB.prepare(
+    'SELECT email, user_id, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country FROM config WHERE email = ?'
+  ).bind(email).first()
   if (existing) {
-    return { success: false, error: 'User with this email already exists', email }
+    const existingData = (() => {
+      try { return JSON.parse(existing.data || '{}') } catch { return {} }
+    })()
+    const existingProfile = existingData.profile && typeof existingData.profile === 'object' ? existingData.profile : {}
+    const next = {
+      phone: phone || existing.phone || null,
+      address: address || existing.address || null,
+      street: street || existing.street || null,
+      postalCode: postalCode || existing.postal_code || null,
+      place: place || existing.place || null,
+      city: city || existing.city || null,
+      country: country || existing.country || null,
+      name: name || existingProfile.name || null,
+    }
+    const mergedData = JSON.stringify({
+      ...existingData,
+      profile: { ...existingProfile, user_id: existing.user_id, email, ...next, postal_code: next.postalCode },
+    })
+    const verifiedAt = testPhoneVerified ? (existing.phone_verified_at || Date.now()) : existing.phone_verified_at || null
+    await env.DB.prepare(`
+      UPDATE config
+      SET phone = ?, phone_verified_at = ?, data = ?, address = ?, street = ?, postal_code = ?, place = ?, city = ?, country = ?
+      WHERE email = ?
+    `).bind(next.phone, verifiedAt, mergedData, next.address, next.street, next.postalCode, next.place, next.city, next.country, email).run()
+    return {
+      success: true,
+      updated: true,
+      user_id: existing.user_id,
+      email,
+      name: next.name,
+      phone: next.phone,
+      phoneVerifiedAt: verifiedAt,
+      address: next.address,
+      street: next.street,
+      postal_code: next.postalCode,
+      place: next.place,
+      city: next.city,
+      country: next.country,
+      role: existing.Role || role,
+      message: `Existing user ${email} was completed with the supplied profile fields.`,
+    }
   }
 
   // Generate user_id and emailVerificationToken
@@ -4196,9 +4288,9 @@ async function executeAdminRegisterUser(input, env) {
   const data = JSON.stringify({ profile: { user_id, email, name, phone, address, street, postal_code: postalCode, place, city, country }, settings: {} })
 
   await env.DB.prepare(`
-    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, data, address, street, postal_code, place, city, country)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(user_id, email, emailVerificationToken, role, phone, data, address, street, postalCode, place, city, country).run()
+    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(user_id, email, emailVerificationToken, role, phone, phone ? Date.now() : null, data, address, street, postalCode, place, city, country).run()
 
   return {
     success: true,
@@ -4206,6 +4298,7 @@ async function executeAdminRegisterUser(input, env) {
     email,
     name,
     phone,
+    phoneVerifiedAt: testPhoneVerified ? Date.now() : null,
     address,
     street,
     postal_code: postalCode,
@@ -4404,10 +4497,9 @@ async function executePublishWorldPage(input, env) {
   // to /__html/publish. agent-worker is the single owner of the publish secret: it signs here AND
   // stamps the same secret into each brand proxy (provision_world_kv / set_world_publish_secret),
   // so signer and verifier never drift and no unreadable api-worker value is needed (Lesson 44).
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) {
-    return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding. One-time: run `wrangler secret put HTML_PUBLISH_SECRET` in the Agent-Builder/worker dir with a value you generate (e.g. `openssl rand -hex 32`). The same secret is stamped into each World brand proxy by provision_world_kv / set_world_publish_secret.' }
-  }
+  const secretInfo = await getWorldPublishSecret(env, host)
+  const secret = secretInfo?.secret
+  if (!secret) return { success: false, error: `No publish secret configured for ${host}. Run set_world_publish_secret first.` }
   const uid = callerProfile?.user_id || callerProfile?.email || 'agent-worker'
   const exp = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
   const publishToken = await signPublishToken({ uid, appId: 'world-founder-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
@@ -4469,8 +4561,9 @@ async function executeSetupWorldHomepage(input, env) {
     if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }
   }
 
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+  const secretInfo = await getWorldPublishSecret(env, apex)
+  const secret = secretInfo?.secret
+  if (!secret) return { success: false, error: `No publish secret configured for ${apex}. Run set_world_publish_secret first.` }
 
   // Step 1 — write html:<apex> into the brand proxy's KV via a host that ALREADY routes to the proxy
   // (me.<domain> default), so this succeeds even before apex/www are attached (no chicken-and-egg).
@@ -4545,9 +4638,6 @@ async function executePublishAllWorldPages(input, env) {
   const templateKey = (input.template_key || 'template:world-founder-page').trim()
   const html = await env.WORLD_TEMPLATES.get(templateKey)
   if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
-
   // Distinct active World domains from the registry.
   let domains = []
   try {
@@ -4564,7 +4654,12 @@ async function executePublishAllWorldPages(input, env) {
   for (const domain of domains) {
     const host = 'me.' + domain
     try {
-      const publishToken = await signPublishToken({ uid, appId: 'world-founder-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secret)
+      const secretInfo = await getWorldPublishSecret(env, host)
+      if (!secretInfo?.secret) {
+        results.push({ domain, host, ok: false, error: 'No per-World publish secret configured' })
+        continue
+      }
+      const publishToken = await signPublishToken({ uid, appId: 'world-founder-page', hostname: host, scope: ['save', 'load', 'loadAll', 'delete'], exp }, secretInfo.secret)
       const proxyUrl = `https://${host}/__html/publish`
       const pubRes = await fetch(proxyUrl, {
         method: 'POST',
@@ -5070,10 +5165,10 @@ async function executeSetWorldDnsRecords(input, env) {
   }
 }
 
-// HS256 publish-token signing (same shape api-worker/html-publish-token.js mints). agent-worker is
-// the SINGLE owner of the publish secret: it SIGNS the token here AND STAMPS the same secret into
-// each World's brand proxy (setBrandProxySecret), so signer and verifier can never drift and no
-// unreadable api-worker value is ever needed (Lesson 44).
+// HS256 publish-token signing. World proxies use per-host secrets stored in the private
+// WORLD_TEMPLATES KV namespace; the old global secret remains a read-only fallback for Worlds
+// that have not been migrated yet. This prevents changing one World from invalidating every other
+// World while preserving existing published sites during the migration.
 const b64url = (bytes) => {
   let bin = ''
   const u = new Uint8Array(bytes)
@@ -5088,6 +5183,39 @@ async function signPublishToken(payload, secret) {
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data))
   return `${data}.${b64url(sig)}`
+}
+
+const WORLD_PUBLISH_SECRET_PREFIX = 'world-publish-secret:'
+
+async function getWorldPublishSecret(env, host) {
+  const normalized = String(host || '').trim().toLowerCase()
+  if (env.WORLD_TEMPLATES && normalized) {
+    const labels = normalized.split('.').filter(Boolean)
+    const candidates = [normalized]
+    // World provisioning stores the secret under the apex (movemetime.com),
+    // while publishing targets a host (minside.movemetime.com). Try the full
+    // host first, then each parent domain so subdomains inherit only their own
+    // World secret and never another World's secret.
+    for (let index = 1; index < labels.length - 1; index += 1) {
+      candidates.push(labels.slice(index).join('.'))
+    }
+    for (const candidate of candidates) {
+      const isolated = await env.WORLD_TEMPLATES.get(WORLD_PUBLISH_SECRET_PREFIX + candidate)
+      if (isolated) return { secret: isolated, scope: 'world', key: candidate }
+    }
+  }
+  return env.HTML_PUBLISH_SECRET ? { secret: env.HTML_PUBLISH_SECRET, scope: 'legacy-global' } : null
+}
+
+async function createWorldPublishSecret(env, host) {
+  if (!env.WORLD_TEMPLATES) return { error: 'WORLD_TEMPLATES KV is not bound; cannot store a per-World publish secret.' }
+  const normalized = String(host || '').trim().toLowerCase()
+  if (!normalized) return { error: 'host is required for a per-World publish secret.' }
+  const existing = await env.WORLD_TEMPLATES.get(WORLD_PUBLISH_SECRET_PREFIX + normalized)
+  if (existing) return { secret: existing, created: false }
+  const secret = `${crypto.randomUUID()}-${crypto.randomUUID()}`
+  await env.WORLD_TEMPLATES.put(WORLD_PUBLISH_SECRET_PREFIX + normalized, secret)
+  return { secret, created: true }
 }
 
 // Write HTML_PUBLISH_SECRET onto a World's brand-proxy worker via the CF API (Workers Scripts edit).
@@ -5315,6 +5443,9 @@ async function executeDeployWorldProxy(input, env) {
   const ctx = await resolveWorldInfraContext(input, env)
   if (ctx.error) return { success: false, error: ctx.error }
   const { founderEmail, cfAccount, cfToken, domain } = ctx
+  if (String(ctx.hostingModel || '').trim().toLowerCase() === 'central') {
+    return { success: false, error: `${domain} is registered as a central World. deploy_world_proxy is prohibited: use the existing shared brand-worker and create_subdomain/publish_html_node. No Worker was created or changed.` }
+  }
   const stem = (domain || '').split('.')[0]
   const targetHost = (input.host || `me.${domain}`).trim().toLowerCase()
 
@@ -5452,6 +5583,9 @@ async function executeProvisionWorldKv(input, env) {
   const ctx = await resolveWorldInfraContext(input, env)
   if (ctx.error) return { success: false, error: ctx.error }
   const { founderEmail, cfAccount, cfToken, domain } = ctx
+  if (String(ctx.hostingModel || '').trim().toLowerCase() === 'central') {
+    return { success: false, error: `${domain} is registered as a central World. provision_world_kv is prohibited: shared brand-worker HTML_PAGES is used instead. No founder KV or Worker secret was changed.` }
+  }
   const title = (input.title || 'HTML_PAGES').trim()
 
   const list = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken)
@@ -5487,18 +5621,16 @@ async function executeProvisionWorldKv(input, env) {
       : { ok: false, worker_name: b.workerName, error: `${b.status}: ${b.detail}`, note: b.note || 'could not bind HTML_PAGES — bind it manually in the dashboard (Workers & Pages → brand proxy → Settings → Bindings → KV Namespace: HTML_PAGES).' }
   }
 
-  // Also set the brand-proxy publish secret so the World is immediately publishable — the step that
-  // world.sh only PRINTED and was never run, which is why lydmorah had HTML_PAGES but no secret
-  // (Lesson 44). Uses agent-worker's HTML_PUBLISH_SECRET — the exact secret publish_world_page mints
-  // with. Needs Workers Scripts edit scope on the token + the brand proxy to exist.
+  // Also set an isolated per-World publish secret so this World is immediately publishable.
+  // The legacy global HTML_PUBLISH_SECRET remains available only for Worlds not yet migrated.
   let publish_secret
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) {
-    publish_secret = { ok: false, note: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET` (e.g. `openssl rand -hex 32`), then re-run to configure the brand-proxy secret.' }
+  const isolatedSecret = await createWorldPublishSecret(env, domain)
+  if (isolatedSecret.error) {
+    publish_secret = { ok: false, note: isolatedSecret.error }
   } else {
-    const r = await setBrandProxySecret(cfAccount, cfToken, domain, secret, input.worker_name)
+    const r = await setBrandProxySecret(cfAccount, cfToken, domain, isolatedSecret.secret, input.worker_name)
     publish_secret = r.ok
-      ? { ok: true, worker_name: r.workerName, note: 'HTML_PUBLISH_SECRET set on the brand proxy — World is publishable.' }
+      ? { ok: true, worker_name: r.workerName, isolated: true, created: isolatedSecret.created, note: 'Per-World HTML_PUBLISH_SECRET set on the brand proxy — this does not affect other Worlds.' }
       : { ok: false, worker_name: r.workerName, error: `${r.status}: ${r.detail}`, scripts: r.scripts || undefined, note: r.status === 404 ? 'brand proxy worker not found — pass worker_name (see scripts list).' : 'could not set secret — token likely lacks Workers Scripts edit scope.' }
   }
 
@@ -5845,11 +5977,13 @@ async function executeSetWorldPublishSecret(input, env) {
   const ctx = await resolveWorldInfraContext(input, env)
   if (ctx.error) return { success: false, error: ctx.error }
   const { founderEmail, cfAccount, cfToken, domain } = ctx
-
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) {
-    return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding. One-time setup: in the Agent-Builder/worker dir run `wrangler secret put HTML_PUBLISH_SECRET` with a value you generate (e.g. `openssl rand -hex 32`). publish_world_page mints with this same secret.' }
+  if (String(ctx.hostingModel || '').trim().toLowerCase() === 'central') {
+    return { success: false, error: `${domain} is registered as a central World. set_world_publish_secret is prohibited: the shared brand-worker owns its publish path. No World-specific secret was changed.` }
   }
+
+  const isolated = await createWorldPublishSecret(env, domain)
+  if (isolated.error) return { success: false, error: isolated.error }
+  const secret = isolated.secret
 
   const r = await setBrandProxySecret(cfAccount, cfToken, domain, secret, input.worker_name)
   if (!r.ok) {
@@ -5865,8 +5999,10 @@ async function executeSetWorldPublishSecret(input, env) {
     founder_email: founderEmail,
     cf_account_id: cfAccount,
     worker_name: r.workerName,
-    secret: "set to agent-worker's shared value (never echoed)",
-    next: `HTML_PUBLISH_SECRET set on ${r.workerName}. Now run publish_world_page for ${domain}.`,
+    secret: 'set to this World only (never echoed)',
+    isolated: true,
+    created: isolated.created,
+    next: `Per-World publish secret set on ${r.workerName}. Now run publish_html_node or publish_world_page for ${domain}.`,
   }
 }
 
@@ -8393,7 +8529,9 @@ async function executeAddContactLog(input, env) {
 
 async function executeCreateContact(input, env) {
   const { name, email, phone, company, job_title, tags, labels, notes, userId } = input
-  if (!name) throw new Error('name is required')
+  if (!name || !email || !phone) {
+    throw new Error('A complete contact requires name, email, and phone. Nothing was created.')
+  }
   const { contactsTableId } = await resolveContactTableIds(userId, env)
   const record = { full_name: name }
   if (email) record.emails = JSON.stringify([{ label: 'home', value: email }])
@@ -14866,6 +15004,8 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
       return await executeBindNodeText(toolInput, env)
     case 'insert_component':
       return await executeInsertComponent(toolInput, env)
+    case 'setup_chat_workspace':
+      return await executeSetupChatWorkspace(toolInput, env)
     case 'get_secure_worker_template':
       return await executeGetSecureWorkerTemplate(toolInput, env)
     case 'create_capability_blueprint':

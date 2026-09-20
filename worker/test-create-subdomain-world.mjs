@@ -67,25 +67,49 @@ function makeEnv() {
   return { env: { DB, API_WORKER }, platformCalls }
 }
 
-function fakeCloudflare({ proxyExists = true } = {}) {
+// Central Worlds must never create or attach a domain to a guessed per-World proxy.
+// The production path uses the platform account's existing shared brand-worker.
+{
+  const { env, platformCalls } = makeEnv()
+  const centralDb = new DatabaseSync(':memory:')
+  centralDb.exec(`
+    CREATE TABLE config (user_id TEXT, email TEXT, Role TEXT, bio TEXT, profileimage TEXT, phone TEXT, phone_verified_at TEXT, data TEXT, cf_account_id TEXT, cf_api_token TEXT);
+    CREATE TABLE world_founders (id TEXT, founder_email TEXT, account_holder_email TEXT, hosting_model TEXT, cf_account_id TEXT, domain TEXT, created_at TEXT);
+  `)
+  centralDb.prepare("INSERT INTO config (user_id,email,Role) VALUES ('owner-uuid','owner@example.com','Superadmin')").run()
+  centralDb.prepare("INSERT INTO world_founders VALUES ('wf','msneeggen@gmail.com','torarnehave@gmail.com','central',?,'movemetime.com','2026-09-19')").run(ACCOUNT)
+  env.DB = { prepare(sql) { let args=[]; const stmt={ bind(...values){args=values;return stmt}, async first(){return centralDb.prepare(sql).get(...args) ?? null}, async all(){return {results:centralDb.prepare(sql).all(...args)}}, async run(){centralDb.prepare(sql).run(...args);return {success:true}}}; return stmt } }
+  env.CF_ACCOUNT_ID = ACCOUNT
+  env.CF_API_TOKEN = 'platform-token'
+  const cf = fakeCloudflare({ proxyExists: true, token: 'platform-token', host: 'me.movemetime.com', worker: 'brand-worker', root: 'movemetime.com' })
+  const routed = await executeTool('create_subdomain', { userId: 'owner-uuid', subdomain: 'minside', root_domain: 'movemetime.com' }, env)
+  check('central World uses shared brand-worker', routed.success === true && routed.worker_name === 'brand-worker' && cf.puts.at(-1)?.service === 'brand-worker', JSON.stringify({ routed, puts: cf.puts }))
+  const deploy = await executeTool('deploy_world_proxy', { userId: 'owner-uuid', domain: 'movemetime.com' }, env)
+  check('central World blocks deploy_world_proxy', deploy.success === false && /central World/.test(deploy.error || ''), JSON.stringify(deploy))
+  const provision = await executeTool('provision_world_kv', { userId: 'owner-uuid', domain: 'movemetime.com' }, env)
+  check('central World blocks provision_world_kv', provision.success === false && /central World/.test(provision.error || ''), JSON.stringify(provision))
+  check('central World does not call platform custom-domain API', platformCalls.length === 0, JSON.stringify(platformCalls))
+}
+
+function fakeCloudflare({ proxyExists = true, account = ACCOUNT, token = 'tok-nibi', host = 'me.nibi.no', worker = 'nibi-brand-proxy', root = 'nibi.no' } = {}) {
   const puts = []
-  const domains = [{ hostname: 'me.nibi.no', service: 'nibi-brand-proxy' }]
+  const domains = [{ hostname: host, service: worker }]
   const json = (result, status = 200) => new Response(JSON.stringify({ success: status < 300, errors: status < 300 ? [] : [{ message: 'not found' }], result }), { status })
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url)
     const p = u.pathname.replace('/client/v4', '')
     const method = (init.method || 'GET').toUpperCase()
-    if (init.headers?.Authorization !== 'Bearer tok-nibi') return json(null, 403)
-    if (p === `/accounts/${ACCOUNT}/workers/domains` && method === 'GET') {
+    if (init.headers?.Authorization !== `Bearer ${token}`) return json(null, 403)
+    if (p === `/accounts/${account}/workers/domains` && method === 'GET') {
       const h = u.searchParams.get('hostname')
       return json(h ? domains.filter((d) => d.hostname === h) : domains)
     }
-    if (p === `/accounts/${ACCOUNT}/workers/domains` && method === 'PUT') {
+    if (p === `/accounts/${account}/workers/domains` && method === 'PUT') {
       const b = JSON.parse(init.body); puts.push(b); domains.push({ hostname: b.hostname, service: b.service }); return json(b)
     }
-    if (p === `/accounts/${ACCOUNT}/workers/scripts/nibi-brand-proxy/settings`) return proxyExists ? json({ bindings: [] }) : json(null, 404)
-    if (p === `/accounts/${ACCOUNT}/workers/scripts/nibi-brand-proxy`) return proxyExists ? new Response('export default {}', { status: 200 }) : json(null, 404)
-    if (p === '/zones' && u.searchParams.get('name') === 'nibi.no') return json([{ id: 'zone-nibi', name: 'nibi.no' }])
+    if (p === `/accounts/${account}/workers/scripts/${worker}/settings`) return proxyExists ? json({ bindings: [] }) : json(null, 404)
+    if (p === `/accounts/${account}/workers/scripts/${worker}`) return proxyExists ? new Response('export default {}', { status: 200 }) : json(null, 404)
+    if (p === '/zones' && u.searchParams.get('name') === root) return json([{ id: root === 'nibi.no' ? 'zone-nibi' : `zone-${root}`, name: root }])
     return json(null, 404)
   }
   return { puts }

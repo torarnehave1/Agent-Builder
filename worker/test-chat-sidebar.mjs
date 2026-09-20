@@ -26,7 +26,7 @@ for (const part of src.split(/\n(?=  function\s)/)) {
 }
 const need = [
   'parseSide', 'clampPoll', 'clampWidth', 'tokenFromStores', 'isBot', 'isMine',
-  'shortLabel', 'messageKind', 'fmtTime', 'mergeMessages', 'lastId',
+  'shortLabel', 'messageKind', 'fmtTime', 'mergeMessages', 'lastId', 'sessionToken',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/chat-sidebar.js`); process.exit(1) }
@@ -66,6 +66,15 @@ check('corrupt JSON in one key does not hide a good token in the next',
   api.tokenFromStores({ vegvisr_user: '{not json', user: JSON.stringify({ token: 'tok-4' }) }) === 'tok-4')
 check('a stored record without a token yields null',
   api.tokenFromStores({ vegvisr_user: JSON.stringify({ email: 'a@b.c' }) }) === null)
+
+const sessionRoot = value => ({ hasAttribute: () => value !== undefined, getAttribute: () => value })
+const previousStore = { vegvisr_user: JSON.stringify({ token: 'previous-user' }) }
+check('an explicit session wins over a different stored user',
+  api.sessionToken(sessionRoot('current-user'), previousStore) === 'current-user')
+check('an explicitly empty session never falls back to a stored user',
+  api.sessionToken(sessionRoot(''), previousStore) === null)
+check('existing embeds retain storage-based authentication',
+  api.sessionToken(sessionRoot(undefined), previousStore) === 'previous-user')
 
 // 3. Who wrote it. No display names exist in this API.
 check('a bot id is recognised', api.isBot('bot:2f1c-…') && !api.isBot('2f1c-…'))
