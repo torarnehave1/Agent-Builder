@@ -2233,12 +2233,19 @@ function injectPublishedAuthBridge(html, graphId, opts) {
       } else out = bridge + out
     }
   }
-  // Gate element (if requested) — one per page, before </body>.
-  if (opts && opts.gate && out.indexOf('require-auth') === -1) {
+  // Gate element (if requested) — update an existing mount as well as adding a new one.
+  // Some pages, such as NIBI, own their <vegvisr-auth> mount in node.info.
+  const gatePattern = /<vegvisr-auth\b[^>]*\brequire-auth\b[^>]*(?:><\/vegvisr-auth>|\/)>/i
+  if (opts && opts.gate) {
     const gate = buildGateElement(opts)
-    const bodyClose = out.lastIndexOf('</body>')
-    if (bodyClose !== -1) out = out.slice(0, bodyClose) + gate + out.slice(bodyClose)
-    else out = out + gate
+    if (gatePattern.test(out)) out = out.replace(gatePattern, gate)
+    else {
+      const bodyClose = out.lastIndexOf('</body>')
+      if (bodyClose !== -1) out = out.slice(0, bodyClose) + gate + out.slice(bodyClose)
+      else out = out + gate
+    }
+  } else if (opts && opts.gate === false) {
+    out = out.replace(gatePattern, '')
   }
   return out
 }
