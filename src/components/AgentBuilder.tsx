@@ -176,6 +176,7 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
                 onHtmlChange={setPreviewHtml}
                 graphId={activeHtmlGraphId ?? graphId}
                 nodeId={activeHtmlNodeId}
+                userId={userId}
                 previewVars={previewVars}
                 userEmail={userEmail}
               />

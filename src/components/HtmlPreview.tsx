@@ -62,7 +62,9 @@ const AGENT_API = 'https://agent.vegvisr.org';
 
 function getAuthToken(): string {
   try {
-    return JSON.parse(localStorage.getItem('user') || '{}').emailVerificationToken || '';
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    const canonical = JSON.parse(localStorage.getItem('vegvisr_user') || '{}');
+    return user.emailVerificationToken || user.token || canonical.token || canonical.emailVerificationToken || '';
   } catch {
     return '';
   }
@@ -197,6 +199,7 @@ interface Props {
   onHtmlChange?: (html: string) => void;
   graphId?: string | null;
   nodeId?: string | null;
+  userId?: string;
   userEmail?: string;
   // Real brand values (brandName/brandLogo/brandAccent/…) for an email-template preview; merged over
   // the generic sample values so the preview renders with the World's actual brand.
@@ -330,7 +333,7 @@ function nodeMissingMsg(g: { nodes?: Array<{ id?: string }> } | null, nodeId: st
     : `Noden «${nodeId}» finnes ikke i grafen ${graphId} — åpne siden på nytt fra riktig graf`;
 }
 
-export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userEmail, previewVars }: Props) {
+export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChange, graphId, nodeId, userId, userEmail, previewVars }: Props) {
   const [entries, setEntries] = useState<ConsoleEntry[]>([]);
   const [consoleOpen, setConsoleOpen] = useState(true);
   const consoleEndRef = useRef<HTMLDivElement>(null);
@@ -497,7 +500,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          graphId, nodeId, host: target, force, authToken: getAuthToken(),
+          graphId, nodeId, host: target, force, userId, userEmail, authToken: getAuthToken(),
           // Explicit on every UI publish: the checkbox shows the stored state, so this keeps it.
           // Role/app-name/logo/register-mode set by the agent are carried over from the stored gate.
           gate: gateOn,
