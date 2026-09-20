@@ -712,7 +712,6 @@
   }
 
   element('loginForm')?.addEventListener('submit', event => event.preventDefault())
-  element('signout').addEventListener('click', () => signOut())
   element('settings').addEventListener('click', openSettings)
   element('closeSettings').addEventListener('click', closeSettings)
   element('cancelSettings').addEventListener('click', closeSettings)
