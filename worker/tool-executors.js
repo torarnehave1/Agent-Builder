@@ -2235,7 +2235,7 @@ function injectPublishedAuthBridge(html, graphId, opts) {
   }
   // Gate element (if requested) — update an existing mount as well as adding a new one.
   // Some pages, such as NIBI, own their <vegvisr-auth> mount in node.info.
-  const gatePattern = /<vegvisr-auth\b[^>]*\brequire-auth\b[^>]*(?:><\/vegvisr-auth>|\/)>/i
+  const gatePattern = /<vegvisr-auth\b[^>]*\brequire-auth\b[^>]*><\/vegvisr-auth\s*>/i
   if (opts && opts.gate) {
     const gate = buildGateElement(opts)
     if (gatePattern.test(out)) out = out.replace(gatePattern, gate)
