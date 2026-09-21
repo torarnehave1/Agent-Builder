@@ -91,28 +91,33 @@ function makeEnv() {
   check('central World does not call platform custom-domain API', platformCalls.length === 0, JSON.stringify(platformCalls))
 }
 
-function fakeCloudflare({ proxyExists = true, account = ACCOUNT, token = 'tok-nibi', host = 'me.nibi.no', worker = 'nibi-brand-proxy', root = 'nibi.no' } = {}) {
+// token: the one token Cloudflare accepts (string) or several (array); any other bearer gets 403.
+// zoneAccount: when set, /zones returns the zone with account.id, as the real API does.
+function fakeCloudflare({ proxyExists = true, account = ACCOUNT, token = 'tok-nibi', host = 'me.nibi.no', worker = 'nibi-brand-proxy', root = 'nibi.no', zoneAccount = null } = {}) {
   const puts = []
+  const writes = []
+  const accepted = [].concat(token).map((t) => `Bearer ${t}`)
   const domains = [{ hostname: host, service: worker }]
-  const json = (result, status = 200) => new Response(JSON.stringify({ success: status < 300, errors: status < 300 ? [] : [{ message: 'not found' }], result }), { status })
+  const json = (result, status = 200) => new Response(JSON.stringify({ success: status < 300, errors: status < 300 ? [] : [{ message: status === 403 ? 'Authentication error' : 'not found' }], result }), { status })
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url)
     const p = u.pathname.replace('/client/v4', '')
     const method = (init.method || 'GET').toUpperCase()
-    if (init.headers?.Authorization !== `Bearer ${token}`) return json(null, 403)
+    if (!accepted.includes(init.headers?.Authorization)) return json(null, 403)
+    if (method !== 'GET') writes.push(p)
     if (p === `/accounts/${account}/workers/domains` && method === 'GET') {
       const h = u.searchParams.get('hostname')
       return json(h ? domains.filter((d) => d.hostname === h) : domains)
     }
     if (p === `/accounts/${account}/workers/domains` && method === 'PUT') {
-      const b = JSON.parse(init.body); puts.push(b); domains.push({ hostname: b.hostname, service: b.service }); return json(b)
+      const b = JSON.parse(init.body); puts.push({ ...b, auth: init.headers.Authorization }); domains.push({ hostname: b.hostname, service: b.service }); return json(b)
     }
     if (p === `/accounts/${account}/workers/scripts/${worker}/settings`) return proxyExists ? json({ bindings: [] }) : json(null, 404)
     if (p === `/accounts/${account}/workers/scripts/${worker}`) return proxyExists ? new Response('export default {}', { status: 200 }) : json(null, 404)
-    if (p === '/zones' && u.searchParams.get('name') === root) return json([{ id: root === 'nibi.no' ? 'zone-nibi' : `zone-${root}`, name: root }])
+    if (p === '/zones' && u.searchParams.get('name') === root) return json([{ id: root === 'nibi.no' ? 'zone-nibi' : `zone-${root}`, name: root, ...(zoneAccount ? { account: { id: zoneAccount } } : {}) }])
     return json(null, 404)
   }
-  return { puts }
+  return { puts, writes }
 }
 
 const OWNER = { userId: 'owner-uuid' }
@@ -161,6 +166,71 @@ const OWNER = { userId: 'owner-uuid' }
   const cf = fakeCloudflare()
   const r = await executeTool('create_subdomain', { userId: 'admin-uuid', subdomain: 'shop', root_domain: 'nibi.no' }, env)
   check('non-Superadmin refused', r.success === false && /Superadmin/.test(r.error || '') && cf.puts.length === 0 && platformCalls.length === 0, JSON.stringify(r))
+}
+
+// 6. The 2026-09-21 log: the stored World token cannot read Workers (403). It used to come back as
+//    "nibi.no has no brand proxy worker yet" while nibi-brand-proxy served six hosts. With the
+//    platform token bound (option B), the tool retries inside the World's account and attaches.
+{
+  const { env, platformCalls } = makeEnv()
+  env.CF_API_TOKEN = 'platform-token'
+  const cf = fakeCloudflare({ token: 'platform-token' })
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  check('refused World token → platform fallback attaches to the existing proxy', r.success === true && r.worker_name === 'nibi-brand-proxy' && cf.puts.length === 1 && cf.puts[0].hostname === 'test.nibi.no' && cf.puts[0].service === 'nibi-brand-proxy' && cf.puts[0].auth === 'Bearer platform-token', JSON.stringify({ r, puts: cf.puts }))
+  check('fallback is reported, not hidden', /platform CF_API_TOKEN/.test(r.credential_source || '') && /refused \(403\)/.test(r.world_token_refused || '') && /Credentials: platform/.test(r.message || ''), JSON.stringify(r))
+  check('fallback never touches the platform custom-domain API', platformCalls.length === 0, JSON.stringify(platformCalls))
+}
+
+// 7. Same refusal, no platform token bound → a truthful permissions error, never "no brand proxy".
+{
+  const { env } = makeEnv()
+  const cf = fakeCloudflare({ token: 'some-other-token' })
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  check('refusal without fallback is reported as a refusal', r.success === false && /refused \(403\)/.test(r.error || '') && /NOT a missing brand proxy/.test(r.error || '') && !/has no brand proxy/.test(r.error || '') && cf.puts.length === 0, JSON.stringify(r))
+}
+
+// 8. World token reads fine but may not attach (403 on the PUT) → retry the attach with the platform token.
+{
+  const { env } = makeEnv()
+  env.CF_API_TOKEN = 'platform-token'
+  const cf = fakeCloudflare({ token: ['tok-nibi', 'platform-token'] })
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    if ((init.method || 'GET').toUpperCase() === 'PUT' && init.headers?.Authorization === 'Bearer tok-nibi') {
+      return new Response(JSON.stringify({ success: false, errors: [{ message: 'Authentication error' }], result: null }), { status: 403 })
+    }
+    return realFetch(url, init)
+  }
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  check('refused attach retried with the platform token', r.success === true && cf.puts.length === 1 && cf.puts[0].auth === 'Bearer platform-token' && /attach test\.nibi\.no/.test(r.world_token_refused || ''), JSON.stringify({ r, puts: cf.puts }))
+}
+
+// 9. A central World whose zone is in ANOTHER account cannot use brand-worker → refused with the reason.
+{
+  const { env } = makeEnv()
+  const db = new DatabaseSync(':memory:')
+  db.exec(`
+    CREATE TABLE config (user_id TEXT, email TEXT, Role TEXT, bio TEXT, profileimage TEXT, phone TEXT, phone_verified_at TEXT, data TEXT, cf_account_id TEXT, cf_api_token TEXT);
+    CREATE TABLE world_founders (id TEXT, founder_email TEXT, account_holder_email TEXT, hosting_model TEXT, cf_account_id TEXT, domain TEXT, created_at TEXT);
+  `)
+  db.prepare("INSERT INTO config (user_id,email,Role) VALUES ('owner-uuid','owner@example.com','Superadmin')").run()
+  db.prepare("INSERT INTO world_founders VALUES ('wf','post@nibi.no','torarnehave@gmail.com','central','zone-acct-nibi','nibi.no','2026-09-13')").run()
+  env.DB = { prepare(sql) { let args = []; const stmt = { bind(...v) { args = v; return stmt }, async first() { return db.prepare(sql).get(...args) ?? null }, async all() { return { results: db.prepare(sql).all(...args) } }, async run() { db.prepare(sql).run(...args); return { success: true } } }; return stmt } }
+  env.CF_ACCOUNT_ID = ACCOUNT
+  env.CF_API_TOKEN = 'platform-token'
+  const cf = fakeCloudflare({ token: 'platform-token', worker: 'brand-worker', host: 'x.vegvisr.org', zoneAccount: 'zone-acct-nibi' })
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  check('central World with zone in another account is refused with the reason', r.success === false && /zone is in Cloudflare account zone-acct-nibi/.test(r.error || '') && cf.puts.length === 0, JSON.stringify(r))
+}
+
+// 10. deploy_world_proxy on a refused read must not fall through to a blind upload.
+{
+  const { env } = makeEnv()
+  env.WORLD_TEMPLATES = { async get() { return 'export default { fetch() {} } // DEFAULT_ORIGIN || env.TARGET_ORIGIN' } }
+  env.HTML_PUBLISH_SECRET = 'secret'
+  const cf = fakeCloudflare({ token: 'some-other-token' })
+  const r = await executeTool('deploy_world_proxy', { ...OWNER, domain: 'nibi.no' }, env)
+  check('deploy_world_proxy refuses when it cannot see what is live', r.success === false && /refused \(403\)/.test(r.error || '') && /Nothing was deployed/.test(r.error || '') && cf.writes.length === 0, JSON.stringify({ r, writes: cf.writes }))
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

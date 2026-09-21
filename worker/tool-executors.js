@@ -2654,25 +2654,66 @@ async function executeCreateSubdomain(input, env) {
   if (!PLATFORM_SUBDOMAIN_ZONES.includes(rootDomain)) {
     const world = await env.DB.prepare('SELECT domain, hosting_model FROM world_founders WHERE domain = ? LIMIT 1').bind(rootDomain).first()
     if (world) {
-      const ctx = await resolveWorldInfraContext({ ...input, domain: rootDomain }, env)
-      if (ctx.error) return { success: false, error: ctx.error }
       const host = `${subdomain}.${rootDomain}`
       if (String(world.hosting_model || '').trim().toLowerCase() === 'central') {
-        const sharedAccount = String(env.CF_ACCOUNT_ID || ctx.cfAccount || '').trim()
-        const sharedToken = env.CF_API_TOKEN || ctx.cfToken
+        // The shared brand-worker lives in the platform account, so the platform binding is the
+        // credential. Resolving World credentials first made a central World whose registry account
+        // differs from the platform's fail on a token mismatch before the real reason could surface.
+        let sharedAccount = String(env.CF_ACCOUNT_ID || '').trim()
+        let sharedToken = env.CF_API_TOKEN
+        if (!sharedAccount || !sharedToken) {
+          const ctx = await resolveWorldInfraContext({ ...input, domain: rootDomain }, env)
+          if (ctx.error) return { success: false, error: ctx.error }
+          sharedAccount = String(sharedAccount || ctx.cfAccount || '').trim()
+          sharedToken = sharedToken || ctx.cfToken
+        }
         if (!sharedAccount || !sharedToken) return { success: false, error: `${rootDomain} is a central World, but the shared Cloudflare account credentials are not configured.` }
         const dom = await attachBrandProxyDomain(sharedAccount, sharedToken, rootDomain, 'brand-worker', host)
+        if (!dom.ok && dom.status === 'zone-in-other-account') {
+          return { success: false, host, world: rootDomain, worker_name: 'brand-worker', error: `${rootDomain} is registered as a central World, but its zone is in Cloudflare account ${dom.zoneAccount}, not the platform account ${sharedAccount} where the shared brand-worker runs. Cloudflare only attaches a custom domain to a worker in the zone's own account, so ${host} cannot be served by brand-worker. Nothing was changed. Either move the ${rootDomain} zone into the platform account, or register the World as own_account (register_world_founder hosting_model='own_account') so the subdomain goes on the brand proxy in its own account.` }
+        }
         if (!dom.ok) return { success: false, host, world: rootDomain, worker_name: 'brand-worker', error: `Could not attach ${host} to shared brand-worker (${dom.status}): ${dom.detail}`, note: dom.note }
         return { success: true, host, world: rootDomain, worker_name: 'brand-worker', central: true, already_attached: !!dom.alreadyAttached, createdBy: gate.email, message: `${host} is ${dom.alreadyAttached ? 'already' : 'now'} attached to the shared brand-worker. No World-specific Worker was created.` }
       }
+      const ctx = await resolveWorldInfraContext({ ...input, domain: rootDomain }, env)
+      if (ctx.error) return { success: false, error: ctx.error }
       const stem = rootDomain.split('.')[0]
-      const probe = await inspectBrandProxy(ctx.cfAccount, ctx.cfToken, `me.${rootDomain}`, `${stem}-brand-proxy`)
-      if (!probe.exists) {
-        return { success: false, error: `${rootDomain} has no brand proxy worker yet (looked for ${probe.name}). Run deploy_world_proxy for ${rootDomain} first, then create the subdomain again.` }
+      // Architect's decision (2026-09-21, option B): when the World's stored token is REFUSED (401/403),
+      // retry with the platform CF_API_TOKEN, still inside the World's own account. nibi.no's stored
+      // token (post@nibi.no, scoped for DNS + Email Sending) could not read Workers, and the refusal was
+      // reported as "no brand proxy yet" while nibi-brand-proxy served six nibi.no hosts.
+      const platformToken = env.CF_API_TOKEN && env.CF_API_TOKEN !== ctx.cfToken ? env.CF_API_TOKEN : ''
+      let cfToken = ctx.cfToken
+      let credentialSource = ctx.credentialSource || `stored token for ${ctx.credentialEmail}`
+      let worldTokenRefused = ''
+      const usePlatform = (call, status, detail) => {
+        worldTokenRefused = `the stored World token (${credentialSource}) was refused (${status}) when trying to ${call}${detail ? `: ${detail}` : ''}`
+        cfToken = platformToken
+        credentialSource = 'platform CF_API_TOKEN (World token refused)'
       }
-      const dom = await attachBrandProxyDomain(ctx.cfAccount, ctx.cfToken, rootDomain, probe.name, host)
+      const notMissing = `This is a permissions refusal, NOT a missing brand proxy — do not run deploy_world_proxy.`
+
+      let probe = await inspectBrandProxy(ctx.cfAccount, cfToken, `me.${rootDomain}`, `${stem}-brand-proxy`)
+      if (probe.denied) {
+        if (!platformToken) {
+          return { success: false, host, world: rootDomain, error: `Could not check ${rootDomain}'s brand proxy: the stored World token (${credentialSource}) was refused (${probe.deniedStatus}) when trying to ${probe.deniedCall}. ${notMissing} No platform CF_API_TOKEN is bound to fall back to.` }
+        }
+        usePlatform(probe.deniedCall, probe.deniedStatus, probe.deniedDetail)
+        probe = await inspectBrandProxy(ctx.cfAccount, cfToken, `me.${rootDomain}`, `${stem}-brand-proxy`)
+        if (probe.denied) {
+          return { success: false, host, world: rootDomain, error: `Could not check ${rootDomain}'s brand proxy in Cloudflare account ${ctx.cfAccount}: ${worldTokenRefused}, and the platform CF_API_TOKEN was refused too (${probe.deniedStatus}) when trying to ${probe.deniedCall}. ${notMissing}` }
+        }
+      }
+      if (!probe.exists) {
+        return { success: false, error: `${rootDomain} has no brand proxy worker yet (looked for ${probe.name} in Cloudflare account ${ctx.cfAccount}). Run deploy_world_proxy for ${rootDomain} first, then create the subdomain again.` }
+      }
+      let dom = await attachBrandProxyDomain(ctx.cfAccount, cfToken, rootDomain, probe.name, host)
+      if (!dom.ok && isCfAuthRefusal(dom.status) && platformToken && cfToken !== platformToken) {
+        usePlatform(`attach ${host} to ${probe.name}`, dom.status, dom.detail)
+        dom = await attachBrandProxyDomain(ctx.cfAccount, cfToken, rootDomain, probe.name, host)
+      }
       if (!dom.ok) {
-        return { success: false, host, world: rootDomain, worker_name: probe.name, error: `Could not attach ${host} to ${probe.name} (${dom.status}): ${dom.detail}`, note: dom.note }
+        return { success: false, host, world: rootDomain, worker_name: probe.name, credential_source: credentialSource, error: `Could not attach ${host} to ${probe.name} (${dom.status}): ${dom.detail}`, note: dom.note }
       }
       return {
         success: true,
@@ -2680,8 +2721,10 @@ async function executeCreateSubdomain(input, env) {
         world: rootDomain,
         worker_name: probe.name,
         already_attached: !!dom.alreadyAttached,
+        credential_source: credentialSource,
+        ...(worldTokenRefused ? { world_token_refused: worldTokenRefused } : {}),
         createdBy: gate.email,
-        message: `${host} is ${dom.alreadyAttached ? 'already' : 'now'} attached to ${rootDomain}'s brand proxy ${probe.name} (Cloudflare account ${ctx.cfAccount}). No Zone ID needed.`,
+        message: `${host} is ${dom.alreadyAttached ? 'already' : 'now'} attached to ${rootDomain}'s brand proxy ${probe.name} (Cloudflare account ${ctx.cfAccount}), the worker that already serves me.${rootDomain} — no new proxy was created. No Zone ID needed. Credentials: ${credentialSource}.${worldTokenRefused ? ` Note: ${worldTokenRefused}.` : ''}`,
         next: `Publish an html-node to https://${host} with publish_html_node. A new custom domain can take a minute for DNS and the certificate.`,
       }
     }
@@ -5308,7 +5351,16 @@ async function attachBrandProxyDomain(cfAccount, cfToken, domain, workerNameOver
 
   // Resolve the zone id for the apex domain (the custom-domain API requires zone_id).
   const zr = await cfApi(`/zones?name=${encodeURIComponent(domain)}`, cfToken)
-  const zoneId = zr.ok && Array.isArray(zr.json.result) && zr.json.result[0] && zr.json.result[0].id
+  // A Workers Custom Domain can only point at a worker in the SAME account as the zone. A token that
+  // spans accounts (the platform token) finds the zone anyway, so check whose it is before the PUT —
+  // a central World whose zone lives in its own account (nibi.no in e4584037…) cannot reach brand-worker.
+  const zones = zr.ok && Array.isArray(zr.json.result) ? zr.json.result : []
+  const zone = zones.find((z) => !z.account || !z.account.id || z.account.id === cfAccount) || null
+  if (!zone && zones.length) {
+    const zoneAccount = zones[0].account && zones[0].account.id
+    return { ok: false, host, workerName, status: 'zone-in-other-account', zoneAccount, detail: `zone ${domain} is in Cloudflare account ${zoneAccount}, not ${cfAccount}`, note: `Cloudflare attaches a custom domain only to a worker in the zone's own account, so ${workerName} in ${cfAccount} cannot serve ${host}.` }
+  }
+  const zoneId = zone && zone.id
   if (!zoneId) {
     return { ok: false, host, workerName, status: zr.status, detail: zr.error || 'zone not found', note: 'could not resolve zone_id — token likely lacks Zone:Read, or the domain is not on this Cloudflare account.' }
   }
@@ -5334,8 +5386,21 @@ async function attachBrandProxyDomain(cfAccount, cfToken, domain, workerNameOver
 // were wrong in production on 2026-08-21: me.stineoksvolddesign.no is served by `stine-brand-proxy`
 // and me.iamazing.page by `vegvisr-brand-proxy`, so the guessed name built a SECOND worker that no
 // hostname routed to while the tool reported success. Read the route, then read the script.
+// A 401/403 from the Cloudflare API means "these credentials may not look", never "nothing is there".
+const isCfAuthRefusal = (status) => status === 401 || status === 403
+
 async function inspectBrandProxy(cfAccount, cfToken, host, guessedName) {
-  const out = { host, guessedName, routedName: null, name: guessedName, exists: false, bindings: [], source: '', templateDerived: null, customMarkers: [] }
+  const out = { host, guessedName, routedName: null, name: guessedName, exists: false, denied: false, bindings: [], source: '', templateDerived: null, customMarkers: [] }
+  // Record the first refused call. Reading a refusal as "no worker" told the agent nibi.no had no
+  // brand proxy (2026-09-21) while nibi-brand-proxy served six nibi.no hosts: the stored token simply
+  // had no Workers permission. Callers must treat denied as "unknown", not as absent.
+  const deny = (call, r) => {
+    if (out.denied) return
+    out.denied = true
+    out.deniedCall = call
+    out.deniedStatus = r.status
+    out.deniedDetail = r.error || ''
+  }
 
   const doms = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken)
   if (doms.ok) {
@@ -5344,6 +5409,8 @@ async function inspectBrandProxy(cfAccount, cfToken, host, guessedName) {
       out.routedName = hit.service
       out.name = hit.service
     }
+  } else if (isCfAuthRefusal(doms.status)) {
+    deny('list Workers custom domains', doms)
   }
 
   const settings = await cfApi(`/accounts/${cfAccount}/workers/scripts/${out.name}/settings`, cfToken)
@@ -5351,6 +5418,8 @@ async function inspectBrandProxy(cfAccount, cfToken, host, guessedName) {
     out.exists = true
     out.bindings = (settings.json.result && settings.json.result.bindings) || []
     out.compatibilityDate = settings.json.result && settings.json.result.compatibility_date
+  } else if (isCfAuthRefusal(settings.status)) {
+    deny(`read Worker ${out.name}`, settings)
   }
   if (!out.exists) return out
 
@@ -5466,6 +5535,11 @@ async function executeDeployWorldProxy(input, env) {
   // owns the hostname beats the <stem>-brand-proxy guess — the guess creates an orphan worker that
   // nothing routes to and reports success (Stine + iamazing, 2026-08-21).
   const probe = await inspectBrandProxy(cfAccount, cfToken, targetHost, `${stem}-brand-proxy`)
+  // Every guard below (which worker owns the host, is it template-derived) depends on that read. A
+  // refused read would let the deploy fall through to the <stem>-brand-proxy guess and a blind upload.
+  if (probe.denied) {
+    return { success: false, domain, error: `The stored Cloudflare token (${ctx.credentialSource || ctx.credentialEmail}) was refused (${probe.deniedStatus}) when trying to ${probe.deniedCall} in account ${cfAccount}. That is a permissions refusal, not a missing proxy: the tool cannot see which worker serves ${targetHost}, so it cannot protect it from being overwritten. Nothing was deployed. Give that token Workers read/edit permission, then retry.` }
+  }
   const workerName = (input.worker_name || probe.name || `${stem}-brand-proxy`).trim()
   const renamedFromGuess = !input.worker_name && probe.routedName && probe.routedName !== `${stem}-brand-proxy`
 
