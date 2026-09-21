@@ -3532,7 +3532,7 @@ const TOOL_DEFINITIONS = [
   {
     name: 'check_world_credentials',
     description:
-      "Read-only: report whether a World's Cloudflare credentials (cf_account_id + cf_api_token) are stored in config — presence ONLY, the token is never returned (just a last-6 suffix to identify it). Checks every candidate email for the domain: the registry founder, the registry account_holder_email, and any founder_email you pass. Use it to answer 'are the World credentials set, and under which account?' — e.g. iamazing.page's token may live under iamazing.page@gmail.com, not the founder msneeggen@gmail.com. Superadmin only.",
+      "Read-only: report whether a World's Cloudflare credentials (cf_account_id + cf_api_token) are stored in config — the token value is never returned (just a last-6 suffix). It also names each stored token as it appears in the Cloudflare dashboard (cf_tokens[].name, and a 'Cloudflare token used: <name> …' line in the summary), or says REJECTED when Cloudflare no longer accepts it. Use it to answer 'which Cloudflare token does this World use'. Every World tool result carries the same token line — quote the token name to the user when a World tool fails. Checks every candidate email for the domain: the registry founder, the registry account_holder_email, and any founder_email you pass. Use it to answer 'are the World credentials set, and under which account?' — e.g. iamazing.page's token may live under iamazing.page@gmail.com, not the founder msneeggen@gmail.com. Superadmin only.",
     input_schema: {
       type: 'object',
       properties: {

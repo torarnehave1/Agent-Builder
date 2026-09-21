@@ -93,16 +93,29 @@ function makeEnv() {
 
 // token: the one token Cloudflare accepts (string) or several (array); any other bearer gets 403.
 // zoneAccount: when set, /zones returns the zone with account.id, as the real API does.
-function fakeCloudflare({ proxyExists = true, account = ACCOUNT, token = 'tok-nibi', host = 'me.nibi.no', worker = 'nibi-brand-proxy', root = 'nibi.no', zoneAccount = null } = {}) {
+// limited: tokens Cloudflare knows (verify + reading their own details work) that may touch nothing
+//   else — a valid token without Workers permission, the nibi.no case.
+// names: token value → dashboard name. Account tokens: /user/tokens/verify always says 401.
+function fakeCloudflare({ proxyExists = true, account = ACCOUNT, token = 'tok-nibi', host = 'me.nibi.no', worker = 'nibi-brand-proxy', root = 'nibi.no', zoneAccount = null, limited = [], names = {} } = {}) {
   const puts = []
   const writes = []
   const accepted = [].concat(token).map((t) => `Bearer ${t}`)
+  const knownTokens = [...[].concat(token), ...limited]
+  const idOf = (t) => `tokid-${knownTokens.indexOf(t) + 1}`
   const domains = [{ hostname: host, service: worker }]
-  const json = (result, status = 200) => new Response(JSON.stringify({ success: status < 300, errors: status < 300 ? [] : [{ message: status === 403 ? 'Authentication error' : 'not found' }], result }), { status })
+  const json = (result, status = 200) => new Response(JSON.stringify({ success: status < 300, errors: status < 300 ? [] : [{ message: status === 403 ? 'Authentication error' : status === 401 ? 'Invalid API Token' : 'not found' }], result }), { status })
   globalThis.fetch = async (url, init = {}) => {
     const u = new URL(url)
     const p = u.pathname.replace('/client/v4', '')
     const method = (init.method || 'GET').toUpperCase()
+    const bearer = String(init.headers?.Authorization || '').replace(/^Bearer /, '')
+    if (p === '/user/tokens/verify') return json(null, 401)
+    if (p === `/accounts/${account}/tokens/verify`) return knownTokens.includes(bearer) ? json({ id: idOf(bearer), status: 'active' }) : json(null, 401)
+    if (p.startsWith(`/accounts/${account}/tokens/tokid-`)) {
+      const target = knownTokens[Number(p.split('-').pop()) - 1]
+      const canRead = target && (bearer === target || accepted.includes(`Bearer ${bearer}`))
+      return canRead ? json({ id: idOf(target), name: names[target] || null, policies: [{ permission_groups: [{ name: 'DNS Write' }] }] }) : json(null, 403)
+    }
     if (!accepted.includes(init.headers?.Authorization)) return json(null, 403)
     if (method !== 'GET') writes.push(p)
     if (p === `/accounts/${account}/workers/domains` && method === 'GET') {
@@ -231,6 +244,58 @@ const OWNER = { userId: 'owner-uuid' }
   const cf = fakeCloudflare({ token: 'some-other-token' })
   const r = await executeTool('deploy_world_proxy', { ...OWNER, domain: 'nibi.no' }, env)
   check('deploy_world_proxy refuses when it cannot see what is live', r.success === false && /refused \(403\)/.test(r.error || '') && /Nothing was deployed/.test(r.error || '') && cf.writes.length === 0, JSON.stringify({ r, writes: cf.writes }))
+}
+
+// 11. The copied agent log must NAME the token (2026-09-21: the architect could not tell which
+//     token create_subdomain had used). Valid World token without Workers permission + platform
+//     fallback → both tokens named, in order, on the Summary text; never a token value.
+{
+  const { env } = makeEnv()
+  await env.DB.prepare("UPDATE config SET cf_api_token = 'tok-nibi-dns' WHERE email = 'post@nibi.no'").run()
+  env.CF_API_TOKEN = 'platform-token-2'
+  fakeCloudflare({ token: 'platform-token-2', limited: ['tok-nibi-dns'], names: { 'tok-nibi-dns': 'nibi-dns-email', 'platform-token-2': 'agent-worker-CF_API_TOKEN' } })
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  const text = r.message || ''
+  check('log names the World token and the platform token, in order', r.success === true && /Cloudflare tokens used: "nibi-dns-email" \(account token, account e458\S*, id tokid-2, from config row for post@nibi\.no\); "agent-worker-CF_API_TOKEN"/.test(text), text)
+  check('cf_tokens carries name, id and source', r.cf_tokens?.length === 2 && r.cf_tokens[0].name === 'nibi-dns-email' && r.cf_tokens[1].used_as === 'platform CF_API_TOKEN (World token refused)', JSON.stringify(r.cf_tokens))
+  check('no token value anywhere in the result', !/tok-nibi-dns|platform-token-2/.test(JSON.stringify(r)), JSON.stringify(r))
+}
+
+// 12. A revoked/rolled stored token is named as REJECTED on the failure text, not as a missing proxy.
+{
+  const { env } = makeEnv()
+  await env.DB.prepare("UPDATE config SET cf_api_token = 'tok-rolled' WHERE email = 'post@nibi.no'").run()
+  fakeCloudflare({ token: 'someone-else' })
+  const r = await executeTool('create_subdomain', { ...OWNER, subdomain: 'test', root_domain: 'nibi.no' }, env)
+  check('rejected token is named as rejected on the error', r.success === false && /REJECTED token \(account e458\S*, from config row for post@nibi\.no\) — Cloudflare rejects this token \(401: Invalid API Token\) — it is revoked, rolled or mistyped/.test(r.error || ''), r.error)
+  check('rejected token value not echoed', !/tok-rolled/.test(JSON.stringify(r)), JSON.stringify(r))
+}
+
+// 13. check_world_credentials answers "which token is stored" by name.
+{
+  const { env } = makeEnv()
+  await env.DB.prepare("UPDATE config SET cf_api_token = 'tok-nibi-check', cf_account_id = ? WHERE email = 'post@nibi.no'").bind(ACCOUNT).run()
+  fakeCloudflare({ token: 'x', limited: ['tok-nibi-check'], names: { 'tok-nibi-check': 'lingering-sky-c27f' } })
+  const r = await executeTool('check_world_credentials', { ...OWNER, domain: 'nibi.no' }, env)
+  check('check_world_credentials names the stored token', r.success === true && /"lingering-sky-c27f"/.test(r.summary || '') && !/tok-nibi-check/.test(JSON.stringify(r)), JSON.stringify(r))
+}
+
+// 14. set_world_credentials names the token it stores — the moment to remember it.
+{
+  const { env } = makeEnv()
+  fakeCloudflare({ token: 'x', limited: ['tok-new'], names: { 'tok-new': 'nibi-workers-2026' } })
+  const r = await executeTool('set_world_credentials', { ...OWNER, domain: 'nibi.no', cf_api_token: 'tok-new', cf_account_id: ACCOUNT }, env)
+  check('set_world_credentials names the stored token', r.success === true && /"nibi-workers-2026" \(account token, account e458\S*, id tokid-2, from set_world_credentials for post@nibi\.no\)/.test(r.message || '') && !/tok-new/.test(JSON.stringify(r)), JSON.stringify(r))
+}
+
+// 15. Overwriting a stored token names BOTH — the 2026-09-17 R2 setup replaced nibi.no's token silently.
+{
+  const { env } = makeEnv()
+  await env.DB.prepare("UPDATE config SET cf_api_token = 'tok-old-workers' WHERE email = 'post@nibi.no'").run()
+  fakeCloudflare({ token: 'x', limited: ['tok-r2-0123456789abcdef', 'tok-old-workers'], names: { 'tok-r2-0123456789abcdef': 'R2 User Token', 'tok-old-workers': 'lingering-sky-c27f' } })
+  const r = await executeTool('set_world_credentials', { ...OWNER, domain: 'nibi.no', cf_api_token: 'tok-r2-0123456789abcdef', cf_account_id: ACCOUNT }, env)
+  const m = r.message || ''
+  check('replacing a token says so and names old and new', r.success === true && r.replaced_previous_token === true && /REPLACED the token previously stored/.test(m) && /"R2 User Token" \([^)]*from set_world_credentials for post@nibi\.no\); "lingering-sky-c27f" \([^)]*from REPLACED — previously stored for post@nibi\.no\)/.test(m) && !/tok-r2-0123456789abcdef|tok-old-workers/.test(JSON.stringify(r)), m)
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

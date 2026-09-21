@@ -2668,6 +2668,7 @@ async function executeCreateSubdomain(input, env) {
           sharedToken = sharedToken || ctx.cfToken
         }
         if (!sharedAccount || !sharedToken) return { success: false, error: `${rootDomain} is a central World, but the shared Cloudflare account credentials are not configured.` }
+        if (sharedToken === env.CF_API_TOKEN) noteCfToken(input, sharedToken, { account: sharedAccount, source: 'platform CF_API_TOKEN (shared brand-worker)' })
         const dom = await attachBrandProxyDomain(sharedAccount, sharedToken, rootDomain, 'brand-worker', host)
         if (!dom.ok && dom.status === 'zone-in-other-account') {
           return { success: false, host, world: rootDomain, worker_name: 'brand-worker', error: `${rootDomain} is registered as a central World, but its zone is in Cloudflare account ${dom.zoneAccount}, not the platform account ${sharedAccount} where the shared brand-worker runs. Cloudflare only attaches a custom domain to a worker in the zone's own account, so ${host} cannot be served by brand-worker. Nothing was changed. Either move the ${rootDomain} zone into the platform account, or register the World as own_account (register_world_founder hosting_model='own_account') so the subdomain goes on the brand proxy in its own account.` }
@@ -2690,6 +2691,7 @@ async function executeCreateSubdomain(input, env) {
         worldTokenRefused = `the stored World token (${credentialSource}) was refused (${status}) when trying to ${call}${detail ? `: ${detail}` : ''}`
         cfToken = platformToken
         credentialSource = 'platform CF_API_TOKEN (World token refused)'
+        noteCfToken(input, platformToken, { account: ctx.cfAccount, source: credentialSource })
       }
       const notMissing = `This is a permissions refusal, NOT a missing brand proxy — do not run deploy_world_proxy.`
 
@@ -4762,6 +4764,9 @@ async function executeSetWorldCredentials(input, env) {
   const cfToken = (input.cf_api_token || '').trim()
   const cfAccount = (input.cf_account_id || '').trim()
   if (!cfToken) return { success: false, error: 'cf_api_token is required' }
+  // Name the token being stored in the log, so "which token does nibi.no use?" has an answer later.
+  const labelAccount = cfAccount || String((await env.DB.prepare('SELECT cf_account_id FROM config WHERE email = ?').bind(founderEmail).first())?.cf_account_id || '')
+  noteCfToken(input, cfToken, { account: labelAccount, source: `set_world_credentials for ${founderEmail}`, email: founderEmail })
 
   // Validate the token against the CF API before storing. /user/tokens/verify ONLY recognizes
   // USER-owned tokens — an ACCOUNT-owned token (scoped to "Entire account", which is what the
@@ -4795,8 +4800,13 @@ async function executeSetWorldCredentials(input, env) {
     }
   }
 
-  const existing = await env.DB.prepare('SELECT email FROM config WHERE email = ?').bind(founderEmail).first()
+  const existing = await env.DB.prepare('SELECT email, cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
   if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
+  // Name the token being REPLACED too. On 2026-09-17 an R2 setup on Grok stored an R2-only
+  // "R2 User Token" over nibi.no's Workers-capable token without a word, and create_subdomain broke
+  // four days later with nobody able to say what had changed.
+  const replacing = existing.cf_api_token && existing.cf_api_token !== cfToken
+  if (replacing) noteCfToken(input, existing.cf_api_token, { account: existing.cf_account_id || labelAccount, source: `REPLACED — previously stored for ${founderEmail}`, email: founderEmail })
 
   if (cfAccount) {
     await env.DB.prepare('UPDATE config SET cf_api_token = ?, cf_account_id = ? WHERE email = ?').bind(cfToken, cfAccount, founderEmail).run()
@@ -4810,7 +4820,8 @@ async function executeSetWorldCredentials(input, env) {
     cf_api_token: 'stored (never echoed)',
     token_suffix: `...${cfToken.slice(-6)}`,
     token_status: verifyData.result?.status,
-    message: `Cloudflare credentials stored for ${founderEmail}: account ${cfAccount || '(unchanged)'}, token ...${cfToken.slice(-6)} (${verifyData.result?.status || 'status unknown'}).`,
+    ...(replacing ? { replaced_previous_token: true } : {}),
+    message: `Cloudflare credentials stored for ${founderEmail}: account ${cfAccount || '(unchanged)'}, token ...${cfToken.slice(-6)} (${verifyData.result?.status || 'status unknown'}).${replacing ? ` This REPLACED the token previously stored for ${founderEmail} — every World tool for this founder now uses the new token; check its permissions cover them.` : ''}`,
     next: 'You can now run provision_world_kv / publish_world_page for this founder.',
   }
 }
@@ -4877,7 +4888,7 @@ async function executeSetupRealtimeKit(input, env) {
   }
 
   const existing = await env.DB.prepare(
-    'SELECT email, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket, cf_r2_public_base FROM config WHERE lower(email) = ? LIMIT 1'
+    'SELECT email, cf_account_id, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket, cf_r2_public_base FROM config WHERE lower(email) = ? LIMIT 1'
   ).bind(founderEmail).first()
   if (!existing) return { success: false, error: `No config row for ${founderEmail} — register the user first.` }
 
@@ -4890,6 +4901,8 @@ async function executeSetupRealtimeKit(input, env) {
   await env.DB.prepare(
     'UPDATE config SET cf_rtk_app_id = ?, cf_rtk_token = ?, cf_r2_bucket = ?, cf_r2_public_base = ? WHERE lower(email) = ?'
   ).bind(values.appId, values.rtkToken, values.bucket, values.domain, founderEmail).run()
+  // Name the RealtimeKit token (a Cloudflare API token of its own) in the log, stored or just supplied.
+  if (values.rtkToken) noteCfToken(input, values.rtkToken, { account: existing.cf_account_id || '', source: `${rtkToken ? 'rtk_token supplied to' : 'rtk_token stored by'} setup_realtime_kit for ${founderEmail}`, email: founderEmail })
 
   const missing = []
   if (!values.appId) missing.push('app_id')
@@ -4940,6 +4953,8 @@ async function executeCheckWorldCredentials(input, env) {
   for (const email of candidates) {
     const r = await env.DB.prepare('SELECT email, cf_account_id, cf_api_token FROM config WHERE email = ?').bind(email).first()
     const tokenSet = !!(r && r.cf_api_token)
+    // Names each stored token (executeTool appends it) — the answer to "which token is in use".
+    if (tokenSet) noteCfToken(input, r.cf_api_token, { account: r.cf_account_id || (registry && registry.cf_account_id) || '', source: `config row for ${email}`, email })
     accounts.push({
       email,
       config_row: !!r,
@@ -5106,6 +5121,7 @@ async function resolveWorldInfraContext(input, env) {
     : ''
   if (!cfAccount) return { error: `No cf_account_id for ${credentialEmail} — run set_world_credentials first.${centralHint}` }
   if (!cfToken) return { error: `No cf_api_token stored for ${credentialEmail} that opens account ${cfAccount} — run set_world_credentials for ${credentialEmail}.${accountMismatch}${centralHint}` }
+  noteCfToken(input, cfToken, { account: cfAccount, source: credentialSource || `config row for ${credentialEmail}`, email: credentialEmail })
   return { founderEmail, cfAccount, cfToken, domain, selfServed, credentialEmail, credentialSource, hostingModel, holderEmail }
 }
 
@@ -5117,6 +5133,103 @@ const cfApi = async (path, token, init = {}) => {
   const json = await res.json().catch(() => null)
   const errMsg = json && json.errors && json.errors[0] && (json.errors[0].message || json.errors[0].code)
   return { ok: res.ok && json && json.success, status: res.status, json, error: errMsg }
+}
+
+// ---- Which Cloudflare token did this call use? ---------------------------------------------
+// The dashboard lists tokens by NAME only, and a stored token is never echoed, so a failing World
+// tool left nobody able to say which token it had used. nibi.no, 2026-09-21: create_subdomain
+// failed with the same code that attached minside.nibi.no on 09-16; the stored credential had
+// changed and neither the log nor the agent could name it. Every tool that picks up a Cloudflare
+// token notes it here, and executeTool appends the token's dashboard name to the result's
+// message / error, which is the Summary line of the copied agent log. Never a secret character.
+const CF_TOKEN_LEDGER = Symbol('cfTokenLedger')
+
+function noteCfToken(input, token, { account = '', source = '', email = '' } = {}) {
+  const ledger = input && input[CF_TOKEN_LEDGER]
+  if (!Array.isArray(ledger) || !token) return
+  if (ledger.some((e) => e.token === token && e.account === account)) return
+  ledger.push({ token, account: String(account || '').trim(), source, email })
+}
+
+const cfTokenInfoCache = new Map()
+
+// Token identity from Cloudflare itself: verify (no permission needed) gives id + status; the
+// details endpoint gives the dashboard name and permission groups, and needs API Tokens Read — the
+// token may read itself, otherwise the platform token tries. Contract: Cloudflare openapi.json,
+// /user/tokens/verify, /accounts/{account_id}/tokens/verify, /…/tokens/{token_id}.
+async function describeCfToken(token, accountId, env) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${accountId}|${token}`))
+  const key = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const hit = cfTokenInfoCache.get(key)
+  if (hit && Date.now() - hit.at < 5 * 60 * 1000) return hit.info
+
+  const info = { name: null, id: null, owner: null, status: null }
+  let v = await cfApi('/user/tokens/verify', token)
+  if (v.ok && v.json.result && v.json.result.id) {
+    info.owner = 'user'
+  } else if (accountId) {
+    v = await cfApi(`/accounts/${accountId}/tokens/verify`, token)
+    if (v.ok && v.json.result && v.json.result.id) info.owner = 'account'
+  }
+  if (!info.owner) {
+    info.status = 'rejected'
+    info.error = `Cloudflare rejects this token (${v.status}${v.error ? `: ${v.error}` : ''}) — it is revoked, rolled or mistyped`
+  } else {
+    info.id = v.json.result.id
+    info.status = v.json.result.status || null
+    const path = info.owner === 'user' ? `/user/tokens/${info.id}` : `/accounts/${accountId}/tokens/${info.id}`
+    const readers = [['self', token]]
+    if (env.CF_API_TOKEN && env.CF_API_TOKEN !== token) readers.push(['platform', env.CF_API_TOKEN])
+    for (const [by, t] of readers) {
+      const d = await cfApi(path, t)
+      if (d.ok && d.json.result && d.json.result.name) {
+        info.name = d.json.result.name
+        info.name_read_by = by
+        info.last_used_on = d.json.result.last_used_on || null
+        info.permissions = [...new Set((d.json.result.policies || []).flatMap((p) => (p.permission_groups || []).map((g) => g.name)).filter(Boolean))]
+        break
+      }
+    }
+    if (!info.name) info.name_error = `name not readable — neither this token nor the platform token has ${info.owner === 'user' ? 'API Tokens Read' : 'Account API Tokens Read'}`
+  }
+  cfTokenInfoCache.set(key, { at: Date.now(), info })
+  return info
+}
+
+function cfTokenLabel(t) {
+  const who = t.name ? `"${t.name}"` : t.error ? 'REJECTED token' : 'unnamed token'
+  const facts = [
+    t.owner ? `${t.owner} token` : null,
+    t.account ? `account ${t.account}` : null,
+    t.id ? `id ${t.id}` : null,
+    t.status && t.status !== 'active' && t.status !== 'rejected' ? `status ${t.status}` : null,
+    t.used_as ? `from ${t.used_as}` : null,
+  ].filter(Boolean).join(', ')
+  return `${who} (${facts})${t.error ? ` — ${t.error}` : t.name_error ? ` — ${t.name_error}` : ''}`
+}
+
+async function annotateCfTokens(result, ledger, env, toolName) {
+  const tokens = []
+  for (const e of ledger) {
+    let info
+    try { info = await describeCfToken(e.token, e.account, env) } catch (err) { info = { error: `token lookup failed: ${err.message}` } }
+    tokens.push({
+      name: info.name || null, id: info.id || null, owner: info.owner || null, status: info.status || null,
+      account: e.account || null, used_as: e.source || null, for_email: e.email || null,
+      ...(info.permissions ? { permissions: info.permissions } : {}),
+      ...(info.last_used_on ? { last_used_on: info.last_used_on } : {}),
+      ...(info.error ? { error: info.error } : {}),
+      ...(info.name_error ? { name_error: info.name_error } : {}),
+    })
+  }
+  const line = `Cloudflare token${tokens.length > 1 ? 's' : ''} used: ${tokens.map(cfTokenLabel).join('; ')}.`
+  const failed = result.success === false
+  result.cf_tokens = tokens
+  const textKey = ['message', 'summary'].find((k) => typeof result[k] === 'string' && result[k].trim())
+  if (textKey) result[textKey] = `${result[textKey]} ${line}`
+  if (typeof result.error === 'string' && result.error.trim()) result.error = `${result.error} ${line}`
+  else if (!textKey) result.message = `${toolName} ${failed ? 'failed' : 'completed'}. ${line}`
+  return result
 }
 
 // Add or update DNS records on a World's zone with the World's stored Cloudflare token (Superadmin,
@@ -12955,6 +13068,7 @@ async function executeCloudflareApi(input, env) {
     cfToken = env.CF_API_TOKEN || ''
     if (!cfAccount || !cfToken) throw new Error('CF_ACCOUNT_ID/CF_API_TOKEN not configured on this worker')
   }
+  noteCfToken(input, cfToken, { account: cfAccount, source: founderEmail ? `config row for ${founderEmail}` : 'platform CF_API_TOKEN', email: founderEmail || '' })
 
   // Accept paths already scoped to /accounts/<id>/... or bare resource paths like /r2/buckets —
   // auto-prefix the latter with this founder's account id so callers don't have to know it.
@@ -12992,6 +13106,7 @@ async function executeRunCloudflareSelftest(input, env) {
     tokenSource = 'platform CF_API_TOKEN'
     if (!cfAccount || !cfToken) throw new Error('CF_ACCOUNT_ID/CF_API_TOKEN not configured on this worker')
   }
+  noteCfToken(input, cfToken, { account: cfAccount, source: tokenSource, email: founderEmail || '' })
   const pagesToken = env.CF_PAGES_TOKEN || null
 
   // A self-test must ALWAYS produce a full report — one check throwing must not abort the suite.
@@ -13312,18 +13427,21 @@ async function executeMcpCall(input, env) {
   if (server.requiresToken) {
     const founderEmail = (input.founder_email || '').trim().toLowerCase()
     if (founderEmail) {
-      const row = await env.DB.prepare('SELECT cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+      const row = await env.DB.prepare('SELECT cf_api_token, cf_account_id FROM config WHERE email = ?').bind(founderEmail).first()
       authToken = (row && row.cf_api_token) || null
       if (!authToken) throw new Error(`No cf_api_token stored for ${founderEmail} — run set_world_credentials first.`)
+      noteCfToken(input, authToken, { account: (row && row.cf_account_id) || '', source: `config row for ${founderEmail}`, email: founderEmail })
     } else if (input.use_pages_token === true) {
       // A separate, narrower token (Cloudflare Pages: Edit only) — opt-in so this
       // never silently changes behavior for any existing zones/DNS/Workers call,
       // which still defaults to CF_API_TOKEN below.
       authToken = env.CF_PAGES_TOKEN || null
       if (!authToken) throw new Error('use_pages_token was set but CF_PAGES_TOKEN is not configured on this worker.')
+      noteCfToken(input, authToken, { account: env.CF_ACCOUNT_ID || '', source: 'platform CF_PAGES_TOKEN' })
     } else {
       authToken = env.CF_API_TOKEN || null
       if (!authToken) throw new Error(`MCP server "${serverName}" needs a Cloudflare API token. Pass founder_email to use that founder's token, or configure CF_API_TOKEN on this worker.`)
+      noteCfToken(input, authToken, { account: env.CF_ACCOUNT_ID || '', source: 'platform CF_API_TOKEN' })
     }
   }
 
@@ -14629,7 +14747,30 @@ async function executeListOrders(input, env) {
 
 // ── Tool dispatcher ───────────────────────────────────────────────
 
+// Every tool runs through here so a Cloudflare token picked up anywhere in the call (noteCfToken)
+// is named on the result — the agent log then shows which dashboard token was used.
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
+  const ledger = []
+  if (toolInput && typeof toolInput === 'object') toolInput[CF_TOKEN_LEDGER] = ledger
+  let result
+  try {
+    result = await dispatchTool(toolName, toolInput, env, operationMap, onProgress)
+  } catch (err) {
+    if (ledger.length && err && typeof err.message === 'string') {
+      const annotated = await annotateCfTokens({ success: false, error: err.message }, ledger, env, toolName).catch(() => null)
+      if (annotated) err.message = annotated.error
+    }
+    throw err
+  }
+  if (!ledger.length || !result || typeof result !== 'object') return result
+  try {
+    return await annotateCfTokens(result, ledger, env, toolName)
+  } catch {
+    return result
+  }
+}
+
+async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) {
   const progress = typeof onProgress === 'function' ? onProgress : () => {}
   switch (toolName) {
     case 'create_graph':
