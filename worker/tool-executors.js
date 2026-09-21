@@ -2213,6 +2213,43 @@ function buildGateElement(opts) {
   return `<vegvisr-auth${attrs}></vegvisr-auth>`
 }
 
+// VERSION PILL — a small fixed badge in the SERVED copy that says which node, graph version and
+// publish this page is, so test.nibi.no and minside.nibi.no (same graph, different nodes) can be
+// told apart at a glance (architect, 2026-09-21). Opt-in per host via publish_html_node
+// version_pill; node.info never contains it. The fingerprint is the node HTML's SHA-256 prefix, so
+// two publishes of the same graph version still differ if their content does.
+const VERSION_PILL_START = '<!-- vegvisr-version-pill -->'
+const VERSION_PILL_END = '<!-- /vegvisr-version-pill -->'
+
+function buildVersionPill({ host, graphId, nodeId, version, fingerprint, publishedAt }) {
+  const esc = (v) => String(v == null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  // Assembled from parts: the nb-NO pattern differs between ICU builds ("21.9., 11:15").
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(publishedAt)).map((x) => [x.type, x.value]))
+  const short = `${p.day}.${p.month} ${p.hour}:${p.minute}`
+  const full = `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`
+  const v = version != null && version !== '' ? `v${esc(version)}` : 'v?'
+  return VERSION_PILL_START +
+    '<style>#vv-version-pill summary{cursor:pointer;list-style:none;white-space:nowrap}#vv-version-pill summary::-webkit-details-marker{display:none}' +
+    '#vv-version-pill[open]{border-radius:12px}#vv-version-pill div{padding:6px 0 2px;white-space:normal;word-break:break-all}</style>' +
+    '<details id="vv-version-pill" data-node-id="' + esc(nodeId) + '" data-graph-version="' + esc(version) + '" data-fingerprint="' + esc(fingerprint) + '" ' +
+    'style="position:fixed;left:8px;bottom:8px;z-index:2147483647;max-width:calc(100vw - 16px);box-sizing:border-box;' +
+    'font:12px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#fff;background:rgba(17,24,39,.88);' +
+    'border-radius:999px;padding:4px 10px;box-shadow:0 1px 4px rgba(0,0,0,.3)">' +
+    `<summary title="Publisert versjon — trykk for detaljer">${esc(host)} · ${v} · ${esc(short)}</summary>` +
+    `<div>node ${esc(nodeId)}<br>graf ${esc(graphId)} ${v}<br>innhold ${esc(fingerprint)}<br>publisert ${esc(full)} (Oslo)</div>` +
+    '</details>' + VERSION_PILL_END
+}
+
+function injectVersionPill(html, pill) {
+  const start = html.indexOf(VERSION_PILL_START)
+  const end = html.indexOf(VERSION_PILL_END)
+  let out = start !== -1 && end > start ? html.slice(0, start) + html.slice(end + VERSION_PILL_END.length) : html
+  const bodyClose = out.lastIndexOf('</body>')
+  return bodyClose !== -1 ? out.slice(0, bodyClose) + pill + out.slice(bodyClose) : out + pill
+}
+
 function injectPublishedAuthBridge(html, graphId, opts) {
   if (!html) return html
   // Idempotent: skip the head script if already present (republish reads clean node.info anyway).
@@ -2481,7 +2518,25 @@ async function executePublishHtmlNode(input, env) {
   // Inject the runtime auth bridge so in-page saves (window.vegvisrPatchNode) work on the
   // live domain, same as in preview. Injected into the SERVED copy only — node.info in the
   // graph stays clean, so republish never accumulates bridges.
-  const htmlToPublish = injectPublishedAuthBridge(html, input.graphId, gateOpts || { gate: false })
+  let htmlToPublish = injectPublishedAuthBridge(html, input.graphId, gateOpts || { gate: false })
+  // VERSION PILL — remembered per host like the gate: version_pill:true stores it, false clears
+  // it, omitted reuses what is stored, so a plain republish keeps (or keeps out) the pill.
+  const storedPills = (node.metadata && typeof node.metadata.publishVersionPill === 'object' && node.metadata.publishVersionPill) || {}
+  const pillExplicit = typeof input.version_pill === 'boolean'
+  const pillOn = pillExplicit ? input.version_pill : !!storedPills[host]
+  let versionPill = null
+  if (pillOn) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(html))
+    versionPill = {
+      host,
+      graphId: input.graphId,
+      nodeId: input.nodeId,
+      version: graphData.metadata && graphData.metadata.version != null ? graphData.metadata.version : null,
+      fingerprint: [...new Uint8Array(digest)].slice(0, 4).map((b) => b.toString(16).padStart(2, '0')).join(''),
+      publishedAt: new Date().toISOString(),
+    }
+    htmlToPublish = injectVersionPill(htmlToPublish, buildVersionPill(versionPill))
+  }
   const publishBody = JSON.stringify({ hostname: host, html: htmlToPublish, overwrite, graphId: input.graphId, nodeId: input.nodeId })
   const publishHeaders = { 'Content-Type': 'application/json', 'X-Publish-Token': publishToken }
   const useBinding = sharedHost && env.BRAND_WORKER && !input.proxy_url
@@ -2531,17 +2586,26 @@ async function executePublishHtmlNode(input, env) {
     }
   } catch (e) { /* bookkeeping only — publish already succeeded */ }
 
-  if (gateExplicit) {
+  if (gateExplicit || pillExplicit) {
     try {
-      const nextGates = { ...storedGates }
-      if (gateOpts) nextGates[host] = gateOpts
-      else delete nextGates[host]
-      // Re-read: the host-recording patch above may have bumped the node.
+      // Re-read: the host-recording patch above may have bumped the node. One metadata write for
+      // both settings, so a publish never costs more than one extra graph version for bookkeeping.
       const fresh = await (await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`)).json()
       const freshNode = (fresh.nodes || []).find(n => n.id === input.nodeId) || node
-      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, {
-        metadata: { ...(freshNode.metadata || {}), publishGate: nextGates },
-      })
+      const nextMeta = { ...(freshNode.metadata || {}) }
+      if (gateExplicit) {
+        const nextGates = { ...storedGates }
+        if (gateOpts) nextGates[host] = gateOpts
+        else delete nextGates[host]
+        nextMeta.publishGate = nextGates
+      }
+      if (pillExplicit) {
+        const nextPills = { ...storedPills }
+        if (input.version_pill) nextPills[host] = true
+        else delete nextPills[host]
+        nextMeta.publishVersionPill = nextPills
+      }
+      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { metadata: nextMeta })
     } catch (e) { /* bookkeeping only — publish already succeeded */ }
   }
   const gateNote = gateOpts
@@ -2594,7 +2658,10 @@ async function executePublishHtmlNode(input, env) {
     verified: isLive,
     verification: verify,
     gate: gateOpts,
-    message: message + gateNote,
+    version_pill: versionPill,
+    message: message + gateNote + (versionPill
+      ? ` Version pill ON${pillExplicit ? '' : ' — kept from the previous publish'}: ${host} · v${versionPill.version ?? '?'} · node ${versionPill.nodeId} · innhold ${versionPill.fingerprint}.`
+      : ''),
   }
 }
 

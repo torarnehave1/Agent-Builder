@@ -364,7 +364,8 @@ const TOOL_DEFINITIONS = [
         gateAppName: { type: 'string', description: "With gate:true, the title shown on the login card (e.g. the app/world name)." },
         gateLogo: { type: 'string', description: "With gate:true, an optional logo image URL for the login card." },
         gateLang: { type: 'string', enum: ['nb', 'en'], description: "With gate:true, the language of the login card and signed-in bar. 'nb' (default) is Norwegian; use 'en' for a page whose audience reads English." },
-        gateRegisterMode: { type: 'string', enum: ['invite', 'open'], description: "With gate:true, 'open' shows a Register button on the login card (email → creates a ViewOnly account → magic link) for self-signup; 'invite' (default) is login-only (new accounts provisioned elsewhere)." }
+        gateRegisterMode: { type: 'string', enum: ['invite', 'open'], description: "With gate:true, 'open' shows a Register button on the login card (email → creates a ViewOnly account → magic link) for self-signup; 'invite' (default) is login-only (new accounts provisioned elsewhere)." },
+        version_pill: { type: 'boolean', description: "Show a small VERSION PILL in the bottom-left corner of the served page: host · graph version · publish time (Oslo); tapping it shows the node id, graph id and a content fingerprint. Use it to tell two published pages apart (e.g. a test host and the production host). Injected into the SERVED copy only — the node's HTML is not changed. Remembered per host like gate: true turns it on, false removes it, omitting it keeps the previous setting." },
       },
       required: ['graphId', 'nodeId', 'host']
     }
