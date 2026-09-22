@@ -293,9 +293,17 @@ function buildAuthBridge(graphId?: string | null, userEmail?: string): string {
     `<script src="https://api.vegvisr.org/components/vegvisr-auth.js"></script>`;
 }
 
+// The preview iframe shares Agent-Builder's origin (allow-same-origin — the visual editor needs it),
+// so a previewed page's own sign-out (vegvisr-auth, World member pages: removeItem('user'), …)
+// deleted Agent-Builder's login and forced a new login on the next refresh (2026-09-22). Inside the
+// preview, Agent-Builder's session keys are read-only; everything else in storage works as usual.
+function buildStorageGuard(): string {
+  return `<script>(function(){try{var keys={user:1,originalUser:1,vegvisr_user:1,userStore:1};var P=Storage.prototype,rm=P.removeItem,set=P.setItem,clr=P.clear;function own(s){try{return s===window.localStorage}catch(e){return false}}P.removeItem=function(k){if(own(this)&&keys[k])return;return rm.call(this,k)};P.setItem=function(k,v){if(own(this)&&keys[k])return;return set.call(this,k,v)};P.clear=function(){if(own(this)){for(var i=this.length-1;i>=0;i--){var k=this.key(i);if(!keys[k])rm.call(this,k)}return}return clr.call(this)}}catch(e){}})();</script>`;
+}
+
 function injectBridge(html: string, graphId?: string | null, nodeId?: string | null, userEmail?: string): string {
-  // Auth bridge FIRST so window.__VEGVISR_USER / vegvisrPatchNode exist before any page script runs.
-  const bridge = buildAuthBridge(graphId, userEmail) + buildConsoleBridge(graphId, nodeId);
+  // Storage guard, then the auth bridge, FIRST so they are in place before any page script runs.
+  const bridge = buildStorageGuard() + buildAuthBridge(graphId, userEmail) + buildConsoleBridge(graphId, nodeId);
   const headIdx = html.indexOf('<head>');
   if (headIdx !== -1) {
     return html.slice(0, headIdx + 6) + bridge + html.slice(headIdx + 6);
