@@ -8,7 +8,9 @@
   const worldConfigApi = 'https://group-chat-worker.torarnehave.workers.dev'
   const chatApi = 'https://group-chat-worker.torarnehave.workers.dev'
   const worldDomain = 'nibi.no'
-  const directCommunity = worldDomain === 'nibi.no' ? 'b1e906b9-8fab-45a0-8cb9-df5c7624b030' : null
+  // The World's community (world_founders.main_chat_group_id), read from /world-chat-groups. Its members
+  // are the World's members and can chat privately; nothing about the World is written into the page.
+  let directCommunity = null
   const tabs = ['chat', 'meeting', 'articles', 'common', 'personal']
   const teamMeetingId = 'bbb3cdd1-e34c-4b29-86b4-4281c0eecae0'
   const realtimeApp = 'https://realtime.vegvisr.org/'
@@ -325,6 +327,7 @@
       })
       if (generation !== requestGeneration) return
       if (!Array.isArray(data.groups)) throw new Error('Ugyldig svar fra chat-tjenesten.')
+      directCommunity = typeof data.main_chat_group_id === 'string' && data.main_chat_group_id ? data.main_chat_group_id : null
       directAvailable = Boolean(directCommunity && data.groups.some(group => group.id === directCommunity))
       element('chatModes').hidden = !directAvailable
       let directGroups = []
