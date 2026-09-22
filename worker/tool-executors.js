@@ -1515,38 +1515,85 @@ async function executeInsertInElement(input, env) {
   }
 }
 
+// setup_chat_workspace — put the registered chat workspace release into a World member page
+// (architect's decisions 4B + A1, 2026-09-22). The Component Registry entry `chat-workspace`
+// (delivery "embedded") names the current release: version, bundle SHA-256, source tag, and the
+// release graph node holding the bundle. Each member page carries its own copy as a base64 data
+// URL in `const workspaceComponent = "…"` and records what it carries in metadata.chatWorkspace.
+// The bundle is refused unless its hash matches the release. The page must already contain the
+// workspace host (the World member-page template); this tool never builds a page.
+const CHAT_WORKSPACE_EMBED = /const workspaceComponent = "data:text\/javascript;base64,[A-Za-z0-9+/=]*"/
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('')
+}
+
+function utf8ToBase64(text) {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(binary)
+}
+
 async function executeSetupChatWorkspace(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'set up chat workspace')
   if (!gate.ok) return { success: false, error: gate.error }
-  if (!input.graphId || !input.nodeId || !input.groupName || !input.worldDomain) return { success: false, error: 'graphId, nodeId, groupName and worldDomain are required.' }
-  const component = await executeGetComponent({ name: 'chat-workspace' }, env)
-  if (!component) return { success: false, error: 'Registered chat-workspace component was not found.' }
-  const groupId = await resolveGroupIdByName(input.groupName, input.userId, env)
-  if (!groupId) return { success: false, error: `Existing chat group "${input.groupName}" was not found. No group was created.` }
-  const safe = value => String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;')
-  const authScript = '<script src="https://api.vegvisr.org/components/vegvisr-auth.js" defer></script>'
-  const authMount = `<vegvisr-auth require-auth app-name="${safe(input.worldDomain)}"></vegvisr-auth>`
-  const script = '<script src="https://api.vegvisr.org/components/chat-workspace.js" defer></script>'
-  const mount = `<div data-vegvisr-chat-workspace data-source-group-id="${safe(groupId)}" data-world-domain="${safe(input.worldDomain)}" data-chat-api="${safe(input.chatApi || 'https://group-chat-worker.torarnehave.workers.dev')}" data-identity-api="${safe(input.identityApi || 'https://vegvisr-frontend.torarnehave.workers.dev')}"></div>`
-  const current = await fetchHtmlNode(env, input.graphId, input.nodeId)
-  if (!current.node) return { success: false, error: `Node "${input.nodeId}" not found.` }
-  const html = String(current.node.info || '')
-  const hasCorrectMount = html.includes('data-vegvisr-chat-workspace') && html.includes(`data-source-group-id="${groupId}"`)
-  const hasAuthScript = /<script[^>]+src=["']https:\/\/api\.vegvisr\.org\/components\/vegvisr-auth\.js[^>]*>/i.test(html)
-  const hasAuthMount = /<vegvisr-auth\b/i.test(html)
-  if (hasCorrectMount && hasAuthScript && hasAuthMount && input.overwrite !== true) return { success: true, changed: false, groupId, auth: 'already configured', message: 'chat-workspace and shared authentication are already configured. No duplicate was inserted.' }
-  let next = html
-  // Always repair malformed prior workspace attempts: remove all workspace scripts,
-  // the old data-mode/data-group marker, and the correct marker before inserting one
-  // canonical block. This does not touch chat-sidebar.
-  next = next.replace(/<script[^>]+src=["']https:\/\/api\.vegvisr\.org\/components\/chat-workspace\.js[^>]*><\/script>/gi, '')
-  next = next.replace(/<div[^>]*(?:data-vegvisr-chat-workspace|data-mode=["']workspace["'])[^>]*><\/div>/gi, '')
-  if (!hasAuthScript) next = next.replace(/<\/body>/i, authScript + '</body>')
-  if (!hasAuthMount) next = next.replace(/<\/body>/i, authMount + '</body>')
-  next = next.replace(/<\/body>/i, script + mount + '</body>')
-  if (next === html) return { success: false, error: 'Could not find </body> insertion point.' }
-  const saved = await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { info: next, updatedAt: new Date().toISOString(), updatedBy: gate.email || null })
-  return { success: true, changed: true, graphId: input.graphId, nodeId: input.nodeId, groupId, component: 'chat-workspace', auth: hasAuthScript && hasAuthMount ? 'already configured' : 'added shared vegvisr-auth', version: saved.newVersion, savedNotLive: true, message: `Configured chat-workspace and shared authentication for "${input.groupName}". Saved as v${saved.newVersion}; publish_html_node is still required.` }
+  const graphId = String(input.graphId || '').trim()
+  const nodeId = String(input.nodeId || '').trim()
+  if (!graphId || !nodeId) return { success: false, error: 'graphId and nodeId (the World member page html-node) are required.' }
+
+  const { items, error } = await fetchRegistryItems(env, 'component')
+  if (error) return { success: false, error: `Component registry unavailable: ${error}` }
+  const entry = items.find(n => (n.label || '').toLowerCase() === 'chat-workspace')
+  const reg = entry?.metadata || {}
+  if (!entry || reg.delivery !== 'embedded' || !reg.releaseGraphId || !reg.releaseNodeId || !reg.bundleSha256) {
+    return { success: false, error: 'The registry entry chat-workspace does not name a release (delivery embedded, releaseGraphId, releaseNodeId, bundleSha256). Release it from vegvisr-chat with scripts/release-chat-workspace.mjs --write.' }
+  }
+  const wanted = input.version ? String(input.version).trim() : null
+  const releaseNodeId = wanted ? `chat-workspace-${wanted}` : reg.releaseNodeId
+  const releaseRes = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(reg.releaseGraphId)}`)
+  if (!releaseRes.ok) return { success: false, error: `Release graph ${reg.releaseGraphId} unreachable (${releaseRes.status}).` }
+  const releaseGraph = await releaseRes.json()
+  const release = (releaseGraph.nodes || []).find(n => n.id === releaseNodeId)
+  if (!release) {
+    const available = (releaseGraph.nodes || []).map(n => n.metadata?.version).filter(Boolean)
+    return { success: false, error: `Release ${wanted || reg.version} not found. Available versions: ${available.join(', ') || '(none)'}.` }
+  }
+  const rel = release.metadata || {}
+  const bundle = String(rel.bundle || '')
+  const sha = await sha256Hex(bundle)
+  if (!bundle || sha !== rel.bundleSha256 || (!wanted && sha !== reg.bundleSha256)) {
+    return { success: false, error: `Refused: the stored bundle for ${rel.version || releaseNodeId} does not match its registered SHA-256. Nothing was changed.` }
+  }
+
+  const { node } = await fetchHtmlNode(env, graphId, nodeId)
+  if (!node) return { success: false, error: `Node "${nodeId}" not found in graph "${graphId}".` }
+  if (node.type !== 'html-node') return { success: false, error: `setup_chat_workspace works on a World member page html-node; "${nodeId}" is type "${node.type}".` }
+  const html = String(node.info || '')
+  if (!CHAT_WORKSPACE_EMBED.test(html)) {
+    return { success: false, error: `"${nodeId}" has no chat workspace host (const workspaceComponent = "data:…"). Build the page from the World member-page template first; this tool only puts the chat package into such a page.` }
+  }
+  const previous = node.metadata?.chatWorkspace || null
+  const stamp = { package: rel.package || '@vegvisr/chat-workspace', version: rel.version, bundleSha256: sha, source: rel.source || null, release: { graphId: reg.releaseGraphId, nodeId: releaseNodeId } }
+  const next = html.replace(CHAT_WORKSPACE_EMBED, () => `const workspaceComponent = "data:text/javascript;base64,${utf8ToBase64(bundle)}"`)
+  if (next === html && previous?.bundleSha256 === sha) {
+    return { success: true, changed: false, version: rel.version, message: `"${nodeId}" already carries chat-workspace ${rel.version} (sha256 ${sha.slice(0, 12)}…). Nothing to change.` }
+  }
+  await patchNodeWithVersionRetry(env, graphId, nodeId, {
+    info: next,
+    metadata: { ...(node.metadata || {}), chatWorkspace: { ...(previous || {}), ...stamp, updatedAt: new Date().toISOString(), updatedBy: gate.email || null } },
+  })
+  return {
+    success: true,
+    changed: true,
+    graphId,
+    nodeId,
+    version: rel.version,
+    previousVersion: previous?.version || null,
+    bundleSha256: sha,
+    message: `Put chat-workspace ${rel.version} (sha256 ${sha.slice(0, 12)}…, ${rel.source?.tag || 'release'}) into "${nodeId}"${previous?.version ? `, replacing ${previous.version}` : ''}. Not live yet: publish the page (publish_html_node) to update the site.`,
+  }
 }
 
 async function executeListHtmlAnchors(input, env) {
@@ -10411,6 +10458,15 @@ async function executeGetComponent(input, env) {
   const node = items.find(n => (n.label || '').toLowerCase() === name.toLowerCase())
   if (!node) return { success: false, error: `Component "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
   const m = node.metadata || {}
+  // EMBEDDED delivery — the package is copied into each page by its own tool; there is no
+  // script line to insert and no source to paste.
+  if (String(m.delivery || '') === 'embedded') {
+    return {
+      success: true, name: node.label, delivery: 'embedded', version: m.version || null, bundleSha256: m.bundleSha256 || null,
+      source: m.source || null, release: { graphId: m.releaseGraphId || null, nodeId: m.releaseNodeId || null }, usage: m.usage || null,
+      message: `${node.label} ${m.version || ''} is embedded per page. Put it on or update it in a World member page with setup_chat_workspace(graphId, nodeId); never paste the bundle.`,
+    }
+  }
   if (!m.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
 
   // REFERENCE delivery — hand back one <script src> line, never the source. The served
@@ -10789,6 +10845,7 @@ async function executeInsertComponent(input, env) {
   const comp = items.find(n => (n.label || '').toLowerCase() === name)
   if (!comp) return { success: false, error: `Component "${name}" not found. Available: ${items.map(n => n.label).join(', ') || '(none)'}.` }
   const meta = comp.metadata || {}
+  if (String(meta.delivery || '') === 'embedded') return { success: false, error: `"${name}" is embedded per page by its own tool: use setup_chat_workspace(graphId, nodeId).` }
   if (!meta.impl) return { success: false, error: `Component "${name}" has no stored impl.` }
   if (isGraphJsDelivery(meta)) {
     return { success: false, error: `"${name}" is a served (graph-js) component: a page references it with one <script src> line plus mount markup that needs values only you have. Call get_component("${name}") and insert the two pieces it returns.` }

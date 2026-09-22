@@ -2527,18 +2527,14 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'setup_chat_workspace',
-    description: 'Add the registered chat-workspace to an existing html-node in one guided, idempotent operation. Resolves the existing Component Registry entry and an existing chat group by name, inserts the graph-js script and the correct data-vegvisr-chat-workspace mount with chat API, identity API, source group, and World domain. NEVER creates a chat group, Worker, brand proxy, database, or replacement component. Refuses duplicate setup. Saved in the graph, not live until publish_html_node. Superadmin only.',
+    description: 'Put the registered chat workspace (Component Registry entry chat-workspace, delivery "embedded") into a World member page html-node, or update the copy it carries. Uses the release the registry names (or an earlier version for rollback), refuses a bundle whose SHA-256 does not match, replaces the page\'s embedded copy (const workspaceComponent = "data:…") and records version, hash and source tag in the node\'s metadata.chatWorkspace. The page must already contain the workspace host from the World member-page template; this tool never builds a page or picks chat groups (the page reads the World\'s groups from /world-chat-groups). Idempotent: an up-to-date page is left unchanged. Does not publish: call publish_html_node afterwards.',
     input_schema: {
       type: 'object',
-      required: ['graphId', 'nodeId', 'groupName', 'worldDomain'],
+      required: ['graphId', 'nodeId'],
       properties: {
-        graphId: { type: 'string' },
-        nodeId: { type: 'string' },
-        groupName: { type: 'string', description: 'Existing chat group name; never creates a group.' },
-        worldDomain: { type: 'string', description: 'World domain, e.g. movemetime.com.' },
-        chatApi: { type: 'string' },
-        identityApi: { type: 'string' },
-        overwrite: { type: 'boolean', description: 'Repair an existing workspace block; default false.' }
+        graphId: { type: 'string', description: 'Graph holding the World member page.' },
+        nodeId: { type: 'string', description: 'The member page html-node.' },
+        version: { type: 'string', description: 'Optional release version, e.g. "0.3.0", to install an earlier release (rollback). Default: the version the registry names.' }
       }
     }
   },
