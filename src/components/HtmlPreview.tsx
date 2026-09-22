@@ -448,6 +448,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const [publishing, setPublishing] = useState(false);
   const [publishMsg, setPublishMsg] = useState('');
   const [publishNeedsSubdomain, setPublishNeedsSubdomain] = useState(false);
+  // Host the node is not linked to (e.g. a copy of the test page going to minside): the server's
+  // wrong-host guard refuses; a person choosing the host here may confirm it deliberately.
+  const [publishNeedsForce, setPublishNeedsForce] = useState<string | null>(null);
   // Login gate per host, as stored on node.metadata.publishGate by publish_html_node.
   const [storedGates, setStoredGates] = useState<Record<string, PublishGate>>({});
   const [gateOn, setGateOn] = useState(false);
@@ -495,6 +498,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     setPublishing(true);
     setPublishMsg('Publiserer…');
     setPublishNeedsSubdomain(false);
+    setPublishNeedsForce(null);
     try {
       const res = await fetch(`${AGENT_API}/publish`, {
         method: 'POST',
@@ -519,6 +523,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (/create_subdomain|does not route|create it first|route to brand-worker/i.test(err)) {
         setPublishNeedsSubdomain(true);
         setPublishMsg(`${target} finnes ikke som vert ennå — opprett subdomenet først.`);
+      } else if (!force && Array.isArray(data?.associatedHosts) && data.associatedHosts.length) {
+        setPublishNeedsForce(target);
+        setPublishMsg(`Denne noden er knyttet til ${data.associatedHosts.join(', ')}. Vil du publisere den til ${target}?`);
       } else {
         setPublishMsg(err);
       }
@@ -1286,6 +1293,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
                 className="text-[11px] px-2.5 py-0.5 rounded bg-sky-500/30 text-sky-100 hover:bg-sky-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
               >
                 Opprett subdomene og publiser
+              </button>
+            )}
+            {publishNeedsForce && (
+              <button
+                type="button"
+                onClick={() => runPublish(publishNeedsForce, true)}
+                disabled={publishing}
+                className="text-[11px] px-2.5 py-0.5 rounded bg-amber-500/30 text-amber-100 hover:bg-amber-500/50 hover:text-white transition-colors disabled:opacity-40 font-medium"
+              >
+                Publiser likevel til {publishNeedsForce}
               </button>
             )}
             {publishedHosts.length > 0 && (
