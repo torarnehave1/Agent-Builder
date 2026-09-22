@@ -36,9 +36,6 @@ worker/wrangler.toml
 .wrangler/
 
 # Local regression tests and generated NIBI test artifacts
-worker/test-chat-sidebar.mjs
-worker/test-nibi-members.mjs
-outputs/nibi-members/
 
 /_project/
 .claude/settings.local.json
