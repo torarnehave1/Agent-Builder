@@ -2584,8 +2584,35 @@ async function probeDeadBackendUrls(html) {
 // hint). Treating every host as shared is what silently wrote charlie.iamazing.page's page into the
 // Vegvisr account's KV while the founder's proxy — the one actually serving the host — never saw it
 // (2026-09-05). The classification only PICKS a path; readPublishedKey below is what proves it.
-const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'vegr.ai', 'alivenesslab.org', 'movemetime.com']
+const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'alivenesslab.org', 'movemetime.com']
 const isSharedBrandHost = (host) => SHARED_BRAND_ZONES.some((z) => host === z || host.endsWith(`.${z}`))
+
+// A STATIC list cannot answer "who serves this host" — a domain moves. vegr.ai was on this list and
+// on PLATFORM_SUBDOMAIN_ZONES when it became an own_account World on 2026-09-23; every publish then
+// wrote into the platform's KV, reported success, and never reached the live site. The REGISTRY
+// knows: a World with hosting_model 'own_account' is served by its own proxy, whatever any list says.
+// The list remains only for zones with no registry row of their own.
+const domainCandidates = (host) => {
+  const labels = String(host || '').toLowerCase().split('.').filter(Boolean)
+  const out = []
+  for (let i = 0; i < labels.length - 1; i += 1) out.push(labels.slice(i).join('.'))
+  return out
+}
+
+async function isSharedBrandHostFor(host, env) {
+  const listed = isSharedBrandHost(host)
+  if (!env?.DB) return listed
+  for (const candidate of domainCandidates(host)) {
+    let row = null
+    try {
+      row = await env.DB.prepare('SELECT hosting_model FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(candidate).first()
+    } catch { /* registry unreadable — fall back to the list */ }
+    if (row && row.hosting_model) {
+      return String(row.hosting_model).trim().toLowerCase() === 'own_account' ? false : listed
+    }
+  }
+  return listed
+}
 
 // Ask a brand proxy what it holds for `hostname`. BOTH proxies expose /__html/check and answer it
 // from the SAME KV they serve pages out of, so this is the only trustworthy proof that the bytes
@@ -2688,7 +2715,7 @@ async function executePublishHtmlNode(input, env) {
   //      HTML_PUBLISH_SECRET: agent-worker signs here AND stamps the same value into every proxy
   //      (provision_world_kv / set_world_publish_secret), so signer and verifier cannot drift
   //      (Lesson 44). This is the path publish_world_page has always used.
-  const sharedHost = isSharedBrandHost(host)
+  const sharedHost = await isSharedBrandHostFor(host, env)
   let publishToken
   if (sharedHost) {
     const ac = input.authContext || {}
