@@ -6699,14 +6699,34 @@ async function executeAddEmailAccount(input, env) {
     throw new Error(`accountType must be "smtp", "gmail", or "cf-email-service" (got "${accountType}")`)
   }
 
-  const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
-  const cfAccountId = typeof input.cfAccountId === 'string' ? input.cfAccountId.trim() : ''
+  let appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
+  let cfAccountId = typeof input.cfAccountId === 'string' ? input.cfAccountId.trim() : ''
+  let credentialNote = ''
   if (accountType === 'gmail' && !appPassword) {
     throw new Error('appPassword is required for Gmail accounts. Generate one at https://myaccount.google.com/apppasswords')
   }
   if (accountType === 'cf-email-service') {
-    if (!cfAccountId) throw new Error('cfAccountId (the Cloudflare account id that owns the sending domain) is required for cf-email-service accounts.')
-    if (!appPassword) throw new Error('appPassword (a Cloudflare API token with "Email Sending: Edit" permission on that account) is required for cf-email-service accounts.')
+    // A secret pasted into the agent chat does not survive the model: asked to pass a Cloudflare
+    // token, Grok dropped it from the tool call eight times in a row (vegr.ai, 2026-09-23; the
+    // same failure hit nibi.no on 2026-09-15). The World's token is ALREADY stored by
+    // set_world_credentials, and a cf-email-service sender needs exactly that token for exactly
+    // that account — so resolve it from the sender's own domain instead of asking for it again.
+    // Explicit arguments still win, so every existing caller behaves as before.
+    if (!appPassword || !cfAccountId) {
+      const senderDomain = emailLower.split('@')[1] || ''
+      if (senderDomain) {
+        const ctx = await resolveWorldInfraContext({ ...input, domain: senderDomain }, env)
+        if (!ctx.error) {
+          if (!appPassword && ctx.cfToken) {
+            appPassword = ctx.cfToken
+            credentialNote = `Used the Cloudflare token already stored for ${senderDomain} (${ctx.credentialSource || 'World credentials'}) — no token had to be pasted.`
+          }
+          if (!cfAccountId && ctx.cfAccount) cfAccountId = String(ctx.cfAccount).trim()
+        }
+      }
+    }
+    if (!cfAccountId) throw new Error(`cfAccountId (the Cloudflare account id that owns the sending domain) is required for cf-email-service accounts, and none is stored for ${emailLower.split('@')[1] || 'that domain'}. Run set_world_credentials for the domain first.`)
+    if (!appPassword) throw new Error(`appPassword (a Cloudflare API token with "Email Sending: Edit" permission on that account) is required for cf-email-service accounts, and no World token is stored for ${emailLower.split('@')[1] || 'that domain'}. Run set_world_credentials for the domain first — then this tool reuses that token and you never paste a secret into the chat.`)
   }
   if (accountType === 'smtp' && appPassword) {
     // Not fatal — server stores it — but the SMTP path doesn't use it. Warn upstream.
@@ -6790,7 +6810,8 @@ async function executeAddEmailAccount(input, env) {
     account: stored,
     message:
       `Added email account ${email} (id: ${stored.id}, accountType: ${accountType}, isDefault: ${stored.isDefault}). ` +
-      `Sender path: ${sendPath}. Use send_email with fromEmail="${email}" to send from this address.`,
+      `Sender path: ${sendPath}. Use send_email with fromEmail="${email}" to send from this address.` +
+      (credentialNote ? ` ${credentialNote}` : ''),
   }
 }
 

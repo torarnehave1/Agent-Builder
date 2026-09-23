@@ -1575,7 +1575,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'add_email_account',
-    description: 'Add a new sender email account to the user\'s profile so it can be used by send_email. For @vegvisr.org addresses, no password is needed — the email is sent via Cloudflare Email Service automatically. For Gmail addresses, an app password is required (the user generates one at https://myaccount.google.com/apppasswords). For a domain that lives in a DIFFERENT Cloudflare account (e.g. a customer domain onboarded for Cloudflare Email Sending in their own account), use accountType "cf-email-service" with cfAccountId + a Cloudflare API token (Email Sending: Edit) passed as appPassword. Use this when the user asks to add, register, or configure a new From address. Dedupes by email — fails clearly if the address is already configured (use set_email_password to change an existing one).',
+    description: 'Add a new sender email account to the user\'s profile so it can be used by send_email. For @vegvisr.org addresses, no password is needed — the email is sent via Cloudflare Email Service automatically. For Gmail addresses, an app password is required (the user generates one at https://myaccount.google.com/apppasswords). For a domain that lives in a DIFFERENT Cloudflare account (e.g. a customer domain onboarded for Cloudflare Email Sending in their own account), use accountType "cf-email-service". The Cloudflare token and account id stored for that domain by set_world_credentials are reused automatically, so do NOT ask the user for a token or an account id — pass only email, accountType and (for an operator) forUserEmail. Use this when the user asks to add, register, or configure a new From address. Dedupes by email — fails clearly if the address is already configured (use set_email_password to change an existing one).',
     input_schema: {
       type: 'object',
       properties: {
@@ -1602,7 +1602,7 @@ const TOOL_DEFINITIONS = [
         },
         appPassword: {
           type: 'string',
-          description: 'The account secret, stored server-side and never returned. For "gmail": a Gmail app password (required). For "cf-email-service": a Cloudflare API token with "Email Sending: Edit" permission on the cfAccountId account (required). Never needed for "smtp".'
+          description: 'The account secret, stored server-side and never returned. For "gmail": a Gmail app password (required). For "cf-email-service": OMIT IT — the Cloudflare token already stored for the sender\'s domain by set_world_credentials is reused automatically, and cfAccountId is filled in from the same place. Only pass it to override that stored token. Never needed for "smtp". Do not ask the user to paste a secret into the chat.'
         },
         forUserEmail: {
           type: 'string',
