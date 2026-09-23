@@ -88,7 +88,7 @@ rep('<button class="settings-button" id="settings" type="button" aria-label="Inn
     '<button class="settings-button" id="settings" type="button" aria-label="Innstillinger" title="Innstillinger">&#9881;</button>'
     '<button class="settings-button logout-button" id="logout" type="button" title="Logg ut">Logg ut</button>')
 rep('.settings-button { width:38px; height:38px;',
-    '.logout-button { width:auto; padding:0 12px; font-size:13px; font-weight:600; }\n'
+    '.logout-button { width:auto; height:38px; padding:0 14px; font-size:13px; font-weight:600; white-space:nowrap; flex:none; }\n'
     '    .settings-button { width:38px; height:38px;')
 
 # ---- hide what this World does not have ------------------------------------
