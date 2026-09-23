@@ -80,6 +80,17 @@ rep("common ? 'NIBI Felles: Aktuelt og Kalender' : 'Min medlemsgraf'",
     "common ? (worldName + ' Felles: Aktuelt og Kalender') : 'Min medlemsgraf'")
 rep("'Du er deltaker i NIBI team-rommet.'", "('Du er deltaker i ' + worldName + ' team-rommet.')")
 
+# ---- a member must be able to leave ---------------------------------------
+# Neither published member page had any way to sign out (found on minside.vegr.ai 2026-09-23,
+# and minside.nibi.no had the same gap). The signOut() function already existed — only the
+# control was missing, so add a button beside the settings gear and wire it up.
+rep('<button class="settings-button" id="settings" type="button" aria-label="Innstillinger" title="Innstillinger">&#9881;</button>',
+    '<button class="settings-button" id="settings" type="button" aria-label="Innstillinger" title="Innstillinger">&#9881;</button>'
+    '<button class="settings-button logout-button" id="logout" type="button" title="Logg ut">Logg ut</button>')
+rep('.settings-button { width:38px; height:38px;',
+    '.logout-button { width:auto; padding:0 12px; font-size:13px; font-weight:600; }\n'
+    '    .settings-button { width:38px; height:38px;')
+
 # ---- hide what this World does not have ------------------------------------
 rep("  element('settings').addEventListener('click', openSettings)\n",
     "  // A World without a meeting room, a common-info graph or personal graphs does not show those\n"
@@ -92,7 +103,8 @@ rep("  element('settings').addEventListener('click', openSettings)\n",
     "    element(name + 'Section').hidden = true\n"
     "  }\n"
     "  if (!worldAlerts) element('settingsForm').hidden = true\n"
-    "  element('settings').addEventListener('click', openSettings)\n")
+    "  element('settings').addEventListener('click', openSettings)\n"
+    "  element('logout').addEventListener('click', () => signOut())\n")
 
 for old, new in subs:
     s = s.replace(old, new)
