@@ -1,4 +1,3 @@
-import WORLD_MEMBER_PAGE_TEMPLATE from './templates/world-member-page.js'
 /**
  * Tool executors — runtime functions that execute each tool
  *
@@ -1526,6 +1525,13 @@ async function executeInsertInElement(input, env) {
 const WORLD_MEMBER_PAGE_VERSION = '1.0.0'
 const WORLD_MEMBER_PAGE_DEFAULTS = { BRAND_GREEN: '#17634b', BRAND_ACCENT: '#9b334b' }
 
+// Loaded on first use: the tool's own test copies templates/, other harnesses copy only *.js.
+let worldMemberPageTemplate = null
+async function loadWorldMemberPageTemplate() {
+  if (!worldMemberPageTemplate) worldMemberPageTemplate = (await import('./templates/world-member-page.js')).default
+  return worldMemberPageTemplate
+}
+
 function fillWorldMemberPage(template, values) {
   const filled = template.replace(/\{\{([A-Z_]+)\}\}/g, (whole, key) => (key in values ? String(values[key]) : whole))
   const left = filled.match(/\{\{[A-Z_]+\}\}/g)
@@ -1573,7 +1579,7 @@ async function executeCreateWorldMemberPage(input, env) {
     return { success: false, error: e.message }
   }
   if (Object.values(values).some(value => String(value).includes('{{'))) return { success: false, error: 'Values cannot contain "{{".' }
-  const html = fillWorldMemberPage(WORLD_MEMBER_PAGE_TEMPLATE, values)
+  const html = fillWorldMemberPage(await loadWorldMemberPageTemplate(), values)
 
   const host = `minside.${domain}`
   const nodeId = String(input.nodeId || `member-page-${stem}`).trim()
