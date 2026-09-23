@@ -239,7 +239,7 @@ function NotifyInspector({ id, data, onUpdate }: { id: string; data: NotifyData;
           <FieldLabel label="SUBJECT" />
           <FieldInput value={data.subject || ''} onChange={(v) => onUpdate(id, { ...data, subject: v })} />
           <FieldLabel label="FROM" />
-          <FieldInput value={data.fromEmail || 'noreply@vegr.ai'} onChange={(v) => onUpdate(id, { ...data, fromEmail: v })} />
+          <FieldInput value={data.fromEmail || 'noreply@vegvisr.org'} onChange={(v) => onUpdate(id, { ...data, fromEmail: v })} />
         </>
       )}
       <FieldLabel label={data.channel === 'email' ? 'BODY' : 'MESSAGE'} />

@@ -20,7 +20,11 @@ import { executeTool } from './tool-executors.js'
 // Hard cap so a cyclic graph (loop back-edge) can never run away in-request.
 const MAX_STEPS = 200
 
-const DEFAULT_NOTIFY_FROM = 'noreply@vegr.ai'
+// Platform system mail goes out on the PLATFORM's own domain. vegr.ai is becoming a World in its
+// own Cloudflare account (2026-09-23), so sending as noreply@vegr.ai would mean the platform
+// borrowing a World's credentials for its own notices. vegvisr.org is onboarded for Cloudflare
+// sending and noreply@vegvisr.org is a configured sender.
+const DEFAULT_NOTIFY_FROM = 'noreply@vegvisr.org'
 
 // --- Step-to-step data passing -------------------------------------------------
 // Templates in a step's config reference an earlier step's output:

@@ -149,7 +149,7 @@ export async function buildAutomationSpec({ prompt, tools, userId, callerEmail, 
             to: input.to,
             subject: input.subject,
             message: input.message,
-            fromEmail: 'noreply@vegr.ai',
+            fromEmail: 'noreply@vegvisr.org',
           }
         } else if (stepType === 'delay') {
           id = `d${(counters.delay += 1)}`

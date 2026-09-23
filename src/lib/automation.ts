@@ -84,7 +84,7 @@ export function createAutomationNode(
     case 'loop':
       return { id, type: 'loop', position, data: { label: 'Loop', over: '', times: 3 } satisfies LoopData };
     case 'notify':
-      return { id, type: 'notify', position, data: { label: 'Notify', channel: 'email', message: '', to: '', subject: '', fromEmail: 'noreply@vegr.ai' } satisfies NotifyData };
+      return { id, type: 'notify', position, data: { label: 'Notify', channel: 'email', message: '', to: '', subject: '', fromEmail: 'noreply@vegvisr.org' } satisfies NotifyData };
     case 'note':
       return { id, type: 'note', position, data: { text: 'Note…' } satisfies NoteData };
     default:
