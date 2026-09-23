@@ -46,7 +46,13 @@ function makeEnv() {
     if (!sql.includes('world_founders')) return null
     return worlds.find(w => w.domain === values[0]) || null
   } } } } } }
-  return { env: { KG_WORKER, DB }, graphs }
+  const store = new Map()
+  const WORLD_TEMPLATES = {
+    async get(key) { return store.has(key) ? store.get(key) : null },
+    async put(key, value) { store.set(key, value) },
+    async list({ prefix }) { return { keys: [...store.keys()].filter(k => k.startsWith(prefix)).map(name => ({ name })) } },
+  }
+  return { env: { KG_WORKER, DB, WORLD_TEMPLATES }, graphs, store }
 }
 const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'owner@example.com' } }
 const page = (graphs, graphId, nodeId = 'member-page-vegr') => graphs[graphId].nodes.find(n => n.id === nodeId)
@@ -93,6 +99,60 @@ const page = (graphs, graphId, nodeId = 'member-page-vegr') => graphs[graphId].n
   check('a World without a community group is built, with a warning', lonely.success === true && lonely.warnings.some(w => /community group/.test(w)), JSON.stringify(lonely.warnings))
 }
 
+// 4. The template is DATA: a stored copy wins over the bundled seed, and the build says which it used.
+{
+  const { env, graphs, store } = makeEnv()
+  const seed = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai' }, env)
+  check('with nothing stored the bundled seed is used and named', seed.success === true && page(graphs, seed.graphId).metadata.worldMemberPage.templateSource === 'bundled seed', JSON.stringify(page(graphs, seed.graphId).metadata.worldMemberPage))
+
+  // What save_world_founder_template would have written — the template with its placeholders intact.
+  const stored = page(graphs, seed.graphId).info
+    .replace("const worldDomain = 'vegr.ai'", "const worldDomain = '{{WORLD_DOMAIN}}'")
+    .replace('<body', '<body data-from-store="yes"')
+  store.set('template:world-member-page', stored)
+
+  const fromStore = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai' }, env)
+  const storedNode = page(graphs, fromStore.graphId)
+  check('a stored template is used instead of the bundle', fromStore.success === true && storedNode.info.includes('data-from-store="yes"') && storedNode.metadata.worldMemberPage.templateSource === 'stored', JSON.stringify(storedNode.metadata.worldMemberPage))
+  check('the stored template is still filled with the World values', storedNode.info.includes("const worldDomain = 'vegr.ai'") && !/\{\{[A-Z_]+\}\}/.test(storedNode.info), 'placeholders left')
+
+  // A stored copy that is not a template (no placeholders) must not be served as one.
+  store.set('template:world-member-page', '<html>not a template</html>')
+  const junk = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai' }, env)
+  check('a stored copy that is not a template falls back to the seed', junk.success === true && page(graphs, junk.graphId).metadata.worldMemberPage.templateSource === 'bundled seed', JSON.stringify(page(graphs, junk.graphId).metadata.worldMemberPage))
+
+  const listed = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-' })
+  check('the member template sits under the prefix the backup tool reads', listed.keys.some(k => k.name === 'template:world-member-page'), JSON.stringify(listed.keys))
+}
+
+// 5. A rebuild carries the founder's own edits instead of discarding them.
+{
+  const { env, graphs } = makeEnv()
+  const first = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai', graphId: 'existing', overwrite: true }, env)
+  check('page built into the existing graph', first.success === true, JSON.stringify(first).slice(0, 200))
+
+  // What a founder's edit through replace_html_section leaves behind: a changed anchored region.
+  const node0 = page(graphs, 'existing')
+  const start = '<!-- edit:articles-heading:start -->'
+  const end = '<!-- edit:articles-heading:end -->'
+  const a = node0.info.indexOf(start), b = node0.info.indexOf(end)
+  check('the template carries the anchors a founder edits', a !== -1 && b > a, 'anchors missing from the built page')
+  node0.info = node0.info.slice(0, a + start.length) + '<h1>Founder wrote this</h1>' + node0.info.slice(b)
+
+  const rebuilt = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai', graphId: 'existing', overwrite: true }, env)
+  const node = page(graphs, 'existing')
+  check('the rebuild keeps the founder edit', rebuilt.success === true && node.info.includes('Founder wrote this'), 'edit lost on rebuild')
+  check('and records which regions were carried', (node.metadata.worldMemberPage.carriedAnchors || []).includes('articles-heading'), JSON.stringify(node.metadata.worldMemberPage.carriedAnchors))
+  check('the rest of the page still comes from the template', node.info.includes("const worldDomain = 'vegr.ai'") && node.info.includes('id="logout"'), 'template content missing')
+
+  // Same edit again, then an explicit clean rebuild.
+  const node1 = page(graphs, 'existing')
+  const a1 = node1.info.indexOf(start), b1 = node1.info.indexOf(end)
+  node1.info = node1.info.slice(0, a1 + start.length) + '<h1>Founder wrote this</h1>' + node1.info.slice(b1)
+  const clean = await executeTool('create_world_member_page', { ...CALLER, domain: 'vegr.ai', graphId: 'existing', overwrite: true, discard_edits: true }, env)
+  check('discard_edits gives a clean page from the template', clean.success === true && !page(graphs, 'existing').info.includes('Founder wrote this'), 'edit survived an explicit discard')
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log(failures ? `\n${failures} FAILED` : '\nPASS — create_world_member_page builds a World page from the template with its own values, installs the chat package, hides tabs without content, prepares the gate, and refuses unknown Worlds, bad colours and accidental overwrites.')
+console.log(failures ? `\n${failures} FAILED` : '\nPASS — create_world_member_page builds a World page from the template with its own values, installs the chat package, hides tabs without content, prepares the gate, and refuses unknown Worlds, bad colours and accidental overwrites; the template is stored data with the bundle as a seed, and a rebuild carries the founder\'s anchored edits.')
 process.exit(failures ? 1 : 0)

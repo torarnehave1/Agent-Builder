@@ -2527,12 +2527,13 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'create_world_member_page',
-    description: 'Build a World\'s member page ("Min side") from the shared World member-page template and install the chat workspace in it. Reads the World from the registry (name, founder, tag, community group) — register_world_founder first. Everything World-specific is a setting: name, brand mark, colours, founder, and the ids of the meeting room, common-info graph and personal graphs; a World without those does not show those tabs. The page reads its groups and its community from /world-chat-groups, so no chat id is written into it. Creates a new graph for the page when no graphId is given, prepares the login gate for minside.<domain>, and does NOT publish: run create_subdomain for minside.<domain> and publish_html_node afterwards. Use overwrite:true to rebuild an existing page from the template.',
+    description: 'Build a World\'s member page ("Min side") from the shared World member-page template and install the chat workspace in it. Reads the World from the registry (name, founder, tag, community group) — register_world_founder first. Everything World-specific is a setting: name, brand mark, colours, founder, and the ids of the meeting room, common-info graph and personal graphs; a World without those does not show those tabs. The page reads its groups and its community from /world-chat-groups, so no chat id is written into it. Creates a new graph for the page when no graphId is given, prepares the login gate for minside.<domain>, and does NOT publish: run create_subdomain for minside.<domain> and publish_html_node afterwards. Use overwrite:true to rebuild an existing page from the template — a rebuild KEEPS whatever the founder changed inside the page's named anchors (pass discard_edits:true for a clean page instead). The template itself is data: WORLD_TEMPLATES["template:world-member-page"] when it exists, else the copy bundled with the worker as a seed; edit it with save_world_founder_template and the result says which was used.',
     input_schema: {
       type: 'object',
       required: ['domain'],
       properties: {
         domain: { type: 'string', description: 'The World domain, e.g. vegr.ai.' },
+        discard_edits: { type: 'boolean', description: "Rebuild from the template WITHOUT carrying the founder's anchored edits across. Default false — a rebuild keeps them." },
         graphId: { type: 'string', description: 'Existing graph to put the page in. Omit to create a new graph named "<World> | Min side".' },
         nodeId: { type: 'string', description: 'Node id for the page. Default member-page-<domain stem>.' },
         world_name: { type: 'string', description: 'Display name. Default: the registered World name.' },

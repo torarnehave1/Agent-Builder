@@ -1527,9 +1527,60 @@ const WORLD_MEMBER_PAGE_DEFAULTS = { BRAND_GREEN: '#17634b', BRAND_ACCENT: '#9b3
 
 // Loaded on first use: the tool's own test copies templates/, other harnesses copy only *.js.
 let worldMemberPageTemplate = null
-async function loadWorldMemberPageTemplate() {
+// The member-page template is DATA, not code (architect, 2026-09-23: the console template is stored
+// and editable while this one lived only in the worker bundle, so a logout button needed a deploy and
+// no founder could change anything). Order: WORLD_TEMPLATES KV first, the bundled copy as the SEED —
+// the repo ships a starting point, the stored copy is the source of truth once it exists.
+const WORLD_MEMBER_TEMPLATE_KEY = 'template:world-member-page'
+
+async function loadBundledMemberPageTemplate() {
   if (!worldMemberPageTemplate) worldMemberPageTemplate = (await import('./templates/world-member-page.js')).default
   return worldMemberPageTemplate
+}
+
+async function loadWorldMemberPageTemplate(env) {
+  if (env?.WORLD_TEMPLATES) {
+    const stored = await env.WORLD_TEMPLATES.get(WORLD_MEMBER_TEMPLATE_KEY)
+    // A stored copy is only a TEMPLATE if it still has placeholders to fill. Someone pasting a
+    // finished page in here would otherwise publish one World's page to every World.
+    if (stored && /\{\{[A-Z_]+\}\}/.test(stored)) return { html: stored, source: 'stored' }
+  }
+  return { html: await loadBundledMemberPageTemplate(), source: 'bundled seed' }
+}
+
+// Carry a founder's own edits across a rebuild. Regions are the same anchors edit_html_node uses:
+// <!-- edit:<id>:start --> … <!-- edit:<id>:end -->. Without this, every rebuild silently discarded
+// whatever the founder had changed — customise OR receive template updates, never both.
+function readAnchorRegion(html, anchorId) {
+  const { start, end } = anchorMarkers(anchorId)
+  const a = html.indexOf(start)
+  if (a === -1) return null
+  const b = html.indexOf(end, a + start.length)
+  if (b === -1) return null
+  return html.slice(a + start.length, b)
+}
+
+function writeAnchorRegion(html, anchorId, content) {
+  const { start, end } = anchorMarkers(anchorId)
+  const a = html.indexOf(start)
+  if (a === -1) return html
+  const b = html.indexOf(end, a + start.length)
+  if (b === -1) return html
+  return html.slice(0, a + start.length) + content + html.slice(b)
+}
+
+function carryFounderEdits(freshHtml, previousHtml) {
+  const carried = []
+  if (!previousHtml) return { html: freshHtml, carried }
+  let out = freshHtml
+  for (const anchorId of listAnchorIds(freshHtml)) {
+    const before = readAnchorRegion(previousHtml, anchorId)
+    const now = readAnchorRegion(freshHtml, anchorId)
+    if (before === null || now === null || before === now) continue
+    out = writeAnchorRegion(out, anchorId, before)
+    carried.push(anchorId)
+  }
+  return { html: out, carried }
 }
 
 function fillWorldMemberPage(template, values) {
@@ -1579,14 +1630,37 @@ async function executeCreateWorldMemberPage(input, env) {
     return { success: false, error: e.message }
   }
   if (Object.values(values).some(value => String(value).includes('{{'))) return { success: false, error: 'Values cannot contain "{{".' }
-  const html = fillWorldMemberPage(await loadWorldMemberPageTemplate(), values)
+  const template = await loadWorldMemberPageTemplate(env)
+  let html = fillWorldMemberPage(template.html, values)
+  let carriedAnchors = []
 
   const host = `minside.${domain}`
   const nodeId = String(input.nodeId || `member-page-${stem}`).trim()
   const metadata = {
     publishGate: { [host]: { gate: true, gateRole: '', gateAppName: `${worldName} Min side`, gateLogo: String(input.logo_url || '').trim(), gateRegisterMode: '', gateLang: 'nb' } },
-    worldMemberPage: { domain, templateVersion: WORLD_MEMBER_PAGE_VERSION, worldName, tag, createdAt: new Date().toISOString(), createdBy: gate.email || null },
+    worldMemberPage: { domain, templateVersion: WORLD_MEMBER_PAGE_VERSION, templateSource: template.source, worldName, tag, createdAt: new Date().toISOString(), createdBy: gate.email || null },
   }
+  let graphId = String(input.graphId || '').trim()
+  let created = 'graph'
+  let existing = null
+  let graphData = null
+  if (graphId) {
+    ;({ node: existing, graphData } = await fetchHtmlNode(env, graphId, nodeId))
+    if (existing && input.overwrite !== true) {
+      return { success: false, error: `"${nodeId}" already exists in graph ${graphId}. Pass overwrite:true to rebuild it from the template (its content is replaced).` }
+    }
+  }
+
+  // A rebuild must not throw away what the founder changed. Their edits live in the page's named
+  // anchors, so read those out of the page being replaced and write them into the fresh build,
+  // unless the caller explicitly asked for a clean page.
+  if (existing?.info && input.discard_edits !== true) {
+    const carry = carryFounderEdits(html, String(existing.info))
+    html = carry.html
+    carriedAnchors = carry.carried
+  }
+  metadata.worldMemberPage.carriedAnchors = carriedAnchors
+
   const node = {
     id: nodeId,
     label: `${worldName} | Min side`,
@@ -1599,13 +1673,7 @@ async function executeCreateWorldMemberPage(input, env) {
     metadata,
   }
 
-  let graphId = String(input.graphId || '').trim()
-  let created = 'graph'
   if (graphId) {
-    const { node: existing, graphData } = await fetchHtmlNode(env, graphId, nodeId)
-    if (existing && input.overwrite !== true) {
-      return { success: false, error: `"${nodeId}" already exists in graph ${graphId}. Pass overwrite:true to rebuild it from the template (its content is replaced).` }
-    }
     if (existing) {
       await patchNodeWithVersionRetry(env, graphId, nodeId, { info: html, label: node.label, color: node.color, bibl: node.bibl, metadata: { ...(existing.metadata || {}), ...metadata, publishGate: { ...(existing.metadata?.publishGate || {}), ...metadata.publishGate } } }, { expectedVersion: graphData?.metadata?.version })
       created = 'node-replaced'
@@ -16193,7 +16261,7 @@ async function executeListWorldFounderTemplates(input, env) {
   if (callerRole !== 'Superadmin') return { success: false, error: 'Superadmin role required.' }
   if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
 
-  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-founder' })
+  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-' })
   const templates = []
   for (const k of keys) {
     const html = await env.WORLD_TEMPLATES.get(k.name)
@@ -16213,7 +16281,7 @@ async function executeSaveWorldFounderTemplate(input, env) {
   const { template_key, html } = input
   if (!template_key) return { success: false, error: 'template_key is required (e.g. "template:world-founder-page").' }
   if (!html) return { success: false, error: 'html is required — the full HTML string to save.' }
-  if (!template_key.startsWith('template:world-founder')) return { success: false, error: 'template_key must start with "template:world-founder" to prevent accidental overwrites.' }
+  if (!template_key.startsWith('template:world-')) return { success: false, error: 'template_key must start with "template:world-" (e.g. "template:world-founder-page" or "template:world-member-page") to prevent accidental overwrites.' }
 
   await env.WORLD_TEMPLATES.put(template_key, html)
   return {
@@ -16233,7 +16301,7 @@ async function executeBackupWorldFounderTemplatesToKg(input, env) {
   if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV not bound.' }
   const callerEmail = callerProfile?.email || 'torarnehave@gmail.com'
 
-  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-founder' })
+  const { keys } = await env.WORLD_TEMPLATES.list({ prefix: 'template:world-' })
   if (!keys.length) return { success: false, error: 'No world-founder templates found in WORLD_TEMPLATES.' }
 
   const graphId = 'graph_world_founder_templates_backup'
