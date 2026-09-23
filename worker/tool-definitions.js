@@ -2526,6 +2526,33 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'create_world_member_page',
+    description: 'Build a World\'s member page ("Min side") from the shared World member-page template and install the chat workspace in it. Reads the World from the registry (name, founder, tag, community group) — register_world_founder first. Everything World-specific is a setting: name, brand mark, colours, founder, and the ids of the meeting room, common-info graph and personal graphs; a World without those does not show those tabs. The page reads its groups and its community from /world-chat-groups, so no chat id is written into it. Creates a new graph for the page when no graphId is given, prepares the login gate for minside.<domain>, and does NOT publish: run create_subdomain for minside.<domain> and publish_html_node afterwards. Use overwrite:true to rebuild an existing page from the template.',
+    input_schema: {
+      type: 'object',
+      required: ['domain'],
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. vegr.ai.' },
+        graphId: { type: 'string', description: 'Existing graph to put the page in. Omit to create a new graph named "<World> | Min side".' },
+        nodeId: { type: 'string', description: 'Node id for the page. Default member-page-<domain stem>.' },
+        world_name: { type: 'string', description: 'Display name. Default: the registered World name.' },
+        world_mark: { type: 'string', description: 'Short mark in the logo circle. Default: the display name.' },
+        world_tag: { type: 'string', description: 'Content tag without #, e.g. VEGR. Default: the registered meta_area_tag.' },
+        founder_email: { type: 'string', description: 'Who counts as leader on the page. Default: the registered founder.' },
+        brand_colour: { type: 'string', description: 'Main colour as hex, e.g. #17634b.' },
+        accent_colour: { type: 'string', description: 'Accent colour as hex.' },
+        logo_url: { type: 'string', description: 'Logo for the login gate.' },
+        team_meeting_id: { type: 'string', description: 'Realtime meeting id for the Møterom tab. Omit to hide that tab.' },
+        common_graph_id: { type: 'string', description: 'Graph behind the Felles Info tab. Omit to hide that tab.' },
+        personal_graph_id: { type: 'string', description: 'Graph behind the Min Info tab. Omit to hide that tab.' },
+        personal_user_id: { type: 'string', description: 'The only user who may open Min Info, when that tab is used.' },
+        section_types: { type: 'object', description: 'Optional map of node id to section type (e.g. aktuelt, kalender) that orders the Felles Info sections.' },
+        email_alerts: { type: 'boolean', description: 'Show the e-mail alert switches. Default false; the alert e-mails themselves are still NIBI-only in group-chat-worker.' },
+        overwrite: { type: 'boolean', description: 'Rebuild an existing page node from the template (replaces its content).' }
+      }
+    }
+  },
+  {
     name: 'setup_chat_workspace',
     description: 'Put the registered chat workspace (Component Registry entry chat-workspace, delivery "embedded") into a World member page html-node, or update the copy it carries. Uses the release the registry names (or an earlier version for rollback), refuses a bundle whose SHA-256 does not match, replaces the page\'s embedded copy (const workspaceComponent = "data:…") and records version, hash and source tag in the node\'s metadata.chatWorkspace. The page must already contain the workspace host from the World member-page template; this tool never builds a page or picks chat groups (the page reads the World\'s groups from /world-chat-groups). Idempotent: an up-to-date page is left unchanged. Does not publish: call publish_html_node afterwards.',
     input_schema: {

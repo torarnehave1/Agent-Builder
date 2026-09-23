@@ -1,3 +1,4 @@
+import WORLD_MEMBER_PAGE_TEMPLATE from './templates/world-member-page.js'
 /**
  * Tool executors — runtime functions that execute each tool
  *
@@ -1512,6 +1513,137 @@ async function executeInsertInElement(input, env) {
     savedNotLive: true,
     publishReminder: `Saved as v${patchData.newVersion} in the graph, NOT live until published. Roll back with restore_html_node_version. Ask before publishing.`,
     message: `Inserted ${snippet.length} chars at the ${where} of <${r.tag}> (${target}) in "${input.nodeId}" — additive, nothing removed.${ambiguity} Saved as v${patchData.newVersion}, not live until published.`,
+  }
+}
+
+// create_world_member_page — build a World's "Min side" from the shared template
+// (worker/templates/world-member-page.html, generated from the published NIBI page). Everything a
+// World differs in is a placeholder: name, domain, tag, founder, brand colours, and the ids of its
+// meeting room, common-info graph and personal graphs. A World without those tabs never sees them.
+// The page reads its groups and community from group-chat-worker's /world-chat-groups, so no chat
+// id is written into it. The chat package is installed by the same code as setup_chat_workspace.
+// It never publishes: create the subdomain and publish afterwards.
+const WORLD_MEMBER_PAGE_VERSION = '1.0.0'
+const WORLD_MEMBER_PAGE_DEFAULTS = { BRAND_GREEN: '#17634b', BRAND_ACCENT: '#9b334b' }
+
+function fillWorldMemberPage(template, values) {
+  const filled = template.replace(/\{\{([A-Z_]+)\}\}/g, (whole, key) => (key in values ? String(values[key]) : whole))
+  const left = filled.match(/\{\{[A-Z_]+\}\}/g)
+  if (left) throw new Error(`Template placeholders not filled: ${[...new Set(left)].join(', ')}`)
+  return filled
+}
+
+async function executeCreateWorldMemberPage(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'build a World member page')
+  if (!gate.ok) return { success: false, error: gate.error }
+  const domain = String(input.domain || '').trim().toLowerCase().replace(/^www\./, '')
+  if (!domain || !domain.includes('.')) return { success: false, error: 'domain (the World domain, e.g. vegr.ai) is required.' }
+  const world = await env.DB
+    .prepare('SELECT world_name, founder_email, meta_area_tag, main_chat_group_id FROM world_founders WHERE lower(domain) = ? ORDER BY created_at LIMIT 1')
+    .bind(domain).first()
+  if (!world) return { success: false, error: `World ${domain} is not registered. Run register_world_founder first.` }
+
+  const stem = domain.split('.')[0]
+  const worldName = String(input.world_name || world.world_name || stem).trim()
+  const tag = String(input.world_tag || world.meta_area_tag || stem).replace(/^#/, '').trim().toUpperCase()
+  const colour = (value, fallback) => {
+    const hex = String(value || '').trim()
+    if (!hex) return fallback
+    if (!/^#[0-9a-f]{6}$/i.test(hex)) throw new Error(`Colour must be a hex value like #17634b (got "${hex}")`)
+    return hex
+  }
+  let values
+  try {
+    values = {
+      WORLD_NAME: worldName,
+      WORLD_MARK: String(input.world_mark || worldName).trim(),
+      WORLD_DOMAIN: domain,
+      WORLD_TAG: tag,
+      FOUNDER_EMAIL: String(input.founder_email || world.founder_email || '').trim().toLowerCase(),
+      TEAM_MEETING_ID: String(input.team_meeting_id || '').trim(),
+      COMMON_GRAPH_ID: String(input.common_graph_id || '').trim(),
+      PERSONAL_GRAPH_ID: String(input.personal_graph_id || '').trim(),
+      PERSONAL_USER_ID: String(input.personal_user_id || '').trim(),
+      SECTION_TYPES: JSON.stringify(input.section_types && typeof input.section_types === 'object' ? input.section_types : {}),
+      BRAND_GREEN: colour(input.brand_colour, WORLD_MEMBER_PAGE_DEFAULTS.BRAND_GREEN),
+      BRAND_ACCENT: colour(input.accent_colour, WORLD_MEMBER_PAGE_DEFAULTS.BRAND_ACCENT),
+      WORLD_ALERTS: input.email_alerts === true ? '1' : '',
+    }
+  } catch (e) {
+    return { success: false, error: e.message }
+  }
+  if (Object.values(values).some(value => String(value).includes('{{'))) return { success: false, error: 'Values cannot contain "{{".' }
+  const html = fillWorldMemberPage(WORLD_MEMBER_PAGE_TEMPLATE, values)
+
+  const host = `minside.${domain}`
+  const nodeId = String(input.nodeId || `member-page-${stem}`).trim()
+  const metadata = {
+    publishGate: { [host]: { gate: true, gateRole: '', gateAppName: `${worldName} Min side`, gateLogo: String(input.logo_url || '').trim(), gateRegisterMode: '', gateLang: 'nb' } },
+    worldMemberPage: { domain, templateVersion: WORLD_MEMBER_PAGE_VERSION, worldName, tag, createdAt: new Date().toISOString(), createdBy: gate.email || null },
+  }
+  const node = {
+    id: nodeId,
+    label: `${worldName} | Min side`,
+    type: 'html-node',
+    info: html,
+    color: values.BRAND_GREEN,
+    bibl: [`https://${host}/`],
+    position: { x: 0, y: 0 },
+    visible: true,
+    metadata,
+  }
+
+  let graphId = String(input.graphId || '').trim()
+  let created = 'graph'
+  if (graphId) {
+    const { node: existing, graphData } = await fetchHtmlNode(env, graphId, nodeId)
+    if (existing && input.overwrite !== true) {
+      return { success: false, error: `"${nodeId}" already exists in graph ${graphId}. Pass overwrite:true to rebuild it from the template (its content is replaced).` }
+    }
+    if (existing) {
+      await patchNodeWithVersionRetry(env, graphId, nodeId, { info: html, label: node.label, color: node.color, bibl: node.bibl, metadata: { ...(existing.metadata || {}), ...metadata, publishGate: { ...(existing.metadata?.publishGate || {}), ...metadata.publishGate } } }, { expectedVersion: graphData?.metadata?.version })
+      created = 'node-replaced'
+    } else {
+      const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ graphId, node }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) return { success: false, error: `Could not add the page to graph ${graphId}: ${data.error || res.status}` }
+      created = 'node'
+    }
+  } else {
+    graphId = crypto.randomUUID()
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: graphId, override: false,
+        graphData: {
+          metadata: { title: `${worldName} | Min side`, description: `Member page for the World ${domain}. Built from the World member-page template ${WORLD_MEMBER_PAGE_VERSION}.`, createdBy: gate.email || 'agent', metaArea: `#${tag}`, category: 'World Member Page', version: 0 },
+          nodes: [node], edges: [],
+        },
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) return { success: false, error: `Could not create the graph for ${domain}: ${data.error || res.status}` }
+  }
+
+  const chat = await executeSetupChatWorkspace({ ...input, graphId, nodeId }, env)
+  const hidden = ['meeting', 'common', 'personal'].filter(name => !values[{ meeting: 'TEAM_MEETING_ID', common: 'COMMON_GRAPH_ID', personal: 'PERSONAL_GRAPH_ID' }[name]])
+  return {
+    success: chat.success !== false,
+    graphId,
+    nodeId,
+    host,
+    world: { domain, name: worldName, tag, founder: values.FOUNDER_EMAIL, community_group: world.main_chat_group_id || null },
+    templateVersion: WORLD_MEMBER_PAGE_VERSION,
+    chatWorkspace: chat.success === false ? `NOT installed: ${chat.error}` : `${chat.version}${chat.changed === false ? ' (already present)' : ''}`,
+    hiddenTabs: hidden,
+    warnings: [
+      world.main_chat_group_id ? null : `${domain} has no community group yet: set main_chat_group_id (World main chat group) or members will see no private conversations.`,
+      chat.success === false ? `The chat package was not installed: ${chat.error}` : null,
+      values.WORLD_ALERTS === '1' ? 'E-mail alerts are switched on, but the alert e-mails themselves are still wired to NIBI FELLES in group-chat-worker.' : null,
+    ].filter(Boolean),
+    message: `Built "${node.label}" (${created === 'graph' ? `new graph ${graphId}` : created === 'node-replaced' ? `rebuilt in ${graphId}` : `added to ${graphId}`}), chat workspace ${chat.success === false ? 'NOT installed' : chat.version}${hidden.length ? `, tabs hidden: ${hidden.join(', ')}` : ''}. Not live yet: create_subdomain ${host}, then publish_html_node to ${host} (login gate is prepared).`,
   }
 }
 
@@ -15350,6 +15482,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeBindNodeText(toolInput, env)
     case 'insert_component':
       return await executeInsertComponent(toolInput, env)
+    case 'create_world_member_page':
+      return await executeCreateWorldMemberPage(toolInput, env)
     case 'setup_chat_workspace':
       return await executeSetupChatWorkspace(toolInput, env)
     case 'get_secure_worker_template':
