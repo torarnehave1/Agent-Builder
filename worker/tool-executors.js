@@ -2881,7 +2881,11 @@ async function resolveSuperadminCaller(input, env, action) {
 // Superadmin only. Zone auto-resolves for the domains in api-worker's DOMAIN_ZONE_MAPPING;
 // other root domains need input.zone_id.
 // Root domains api-worker's /create-custom-domain can serve (its DOMAIN_ZONE_MAPPING, platform account).
-const PLATFORM_SUBDOMAIN_ZONES = ['norsegong.com', 'xyzvibe.com', 'vegvisr.org', 'slowyou.training', 'vegr.ai', 'alivenesslab.org']
+// Zones in the PLATFORM Cloudflare account, where a subdomain is attached to the shared brand-worker
+// with the platform token. A World whose zone lives in its own account must NOT be listed here, or it
+// never reaches the own-account branch below and fails with "Authentication error (code 10000)".
+// vegr.ai moved to the founder's own account on 2026-09-23 and was removed from this list.
+const PLATFORM_SUBDOMAIN_ZONES = ['norsegong.com', 'xyzvibe.com', 'vegvisr.org', 'slowyou.training', 'alivenesslab.org']
 
 async function executeCreateSubdomain(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'create a subdomain')
