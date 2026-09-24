@@ -374,6 +374,34 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   // regions, and most pages carry no anchors at all; this reaches every byte of node.info.
   const [codeOpen, setCodeOpen] = useState(false);
   const [codeValue, setCodeValue] = useState('');
+  // Finding anything in a 3.4 MB minified page meant scrolling a textarea by eye. Search is the
+  // navigation: count the matches, step through them, and put the caret on each one.
+  const codeAreaRef = useRef<HTMLTextAreaElement>(null);
+  const [codeSearch, setCodeSearch] = useState('');
+  const [codeMatchIdx, setCodeMatchIdx] = useState(0);
+  const codeMatches = useMemo(() => {
+    const needle = codeSearch.toLowerCase();
+    if (needle.length < 2) return [] as number[];
+    const hay = codeValue.toLowerCase();
+    const out: number[] = [];
+    let at = hay.indexOf(needle);
+    while (at !== -1 && out.length < 5000) { out.push(at); at = hay.indexOf(needle, at + needle.length); }
+    return out;
+  }, [codeSearch, codeValue]);
+  const goToMatch = useCallback((which: number) => {
+    if (!codeMatches.length) return;
+    const wrapped = (which + codeMatches.length) % codeMatches.length;
+    setCodeMatchIdx(wrapped);
+    const area = codeAreaRef.current;
+    if (!area) return;
+    const start = codeMatches[wrapped];
+    area.focus();
+    area.setSelectionRange(start, start + codeSearch.length);
+    // The source is one long minified line, so line-height maths does not apply; scroll by how far
+    // into the text the match sits, then let the caret do the fine positioning.
+    const ratio = codeValue.length ? start / codeValue.length : 0;
+    area.scrollTop = Math.max(0, ratio * (area.scrollHeight - area.clientHeight) - area.clientHeight / 3);
+  }, [codeMatches, codeSearch, codeValue]);
   const [codeSaving, setCodeSaving] = useState(false);
   const [codeMsg, setCodeMsg] = useState('');
   // A SNAPSHOT of the buffer rendered in the iframe without saving, so a pasted page can be
@@ -1503,13 +1531,58 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               Ikke knyttet til en node — kun visning. Åpne siden med «Develop» for å kunne lagre.
             </span>
           )}
+          <div className="flex items-center gap-2">
+            <input
+              value={codeSearch}
+              onChange={e => { setCodeSearch(e.target.value); setCodeMatchIdx(0); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); goToMatch(e.shiftKey ? codeMatchIdx - 1 : codeMatchIdx + (codeMatches.length && codeMatchIdx === 0 ? 0 : 1)); }
+                if (e.key === 'Escape') { setCodeSearch(''); codeAreaRef.current?.focus(); }
+              }}
+              spellCheck={false}
+              placeholder="Søk i kilden — Enter for neste, Shift+Enter for forrige"
+              className="flex-1 min-w-[180px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1 font-mono text-[11px]"
+            />
+            <span className="text-[10px] text-white/40 tabular-nums whitespace-nowrap">
+              {codeSearch.length < 2 ? 'skriv 2+ tegn' : codeMatches.length ? `${codeMatchIdx + 1} / ${codeMatches.length}${codeMatches.length === 5000 ? '+' : ''}` : 'ingen treff'}
+            </span>
+            <button
+              type="button"
+              onClick={() => goToMatch(codeMatchIdx - 1)}
+              disabled={!codeMatches.length}
+              className="text-[10px] px-2 py-0.5 rounded text-white/50 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-30"
+              title="Forrige treff (Shift+Enter)"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => goToMatch(codeMatchIdx + 1)}
+              disabled={!codeMatches.length}
+              className="text-[10px] px-2 py-0.5 rounded text-white/50 hover:text-white hover:bg-white/10 transition-colors disabled:opacity-30"
+              title="Neste treff (Enter)"
+            >
+              ↓
+            </button>
+          </div>
           <textarea
+            ref={codeAreaRef}
             value={codeValue}
             onChange={e => { setCodeValue(e.target.value); if (codeMsg) setCodeMsg(''); }}
             onKeyDown={e => {
               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveCode(); }
+              // Cmd/Ctrl+F inside the source goes to THIS search, not the browser's — the browser
+              // cannot see text inside a textarea's scrollback anyway.
+              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+                e.preventDefault();
+                const sel = e.currentTarget.value.slice(e.currentTarget.selectionStart, e.currentTarget.selectionEnd);
+                if (sel && sel.length <= 80) { setCodeSearch(sel); setCodeMatchIdx(0); }
+                (e.currentTarget.parentElement?.querySelector('input') as HTMLInputElement | null)?.focus();
+              }
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); goToMatch(codeMatchIdx + 1); }
             }}
             spellCheck={false}
+            wrap="soft"
             className="w-full h-[38vh] min-h-[160px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y"
             placeholder="Hele HTML-kilden for denne noden — rediger, eller lim inn en helt ny side…"
           />
