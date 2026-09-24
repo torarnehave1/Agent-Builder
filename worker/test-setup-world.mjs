@@ -46,6 +46,9 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('stops at credentials when no token is stored', r.success === true && r.complete === false, JSON.stringify(r).slice(0, 220))
   check('the stop names what to create', /API token/i.test(r.next || ''), r.next)
   check('the stop lists the scopes needed', /Workers KV Storage/.test(r.next || '') && /DNS Edit/.test(r.next || ''), r.next)
+  // The pause must not instruct the very thing that burns a token: typing it into the chat.
+  check('the stop does NOT ask for the token in the chat', !/cf_api_token set|with cf_api_token/.test(r.next || ''), r.next)
+  check('the stop names the credential field instead', /World Cloudflare credentials/.test(r.next || ''), r.next)
   check('it says to run setup_world again', /setup_world/.test(r.message || ''), r.message)
   check('nothing was written while stopped', state.calls.length === 0, JSON.stringify(state.calls))
   check('the step list shows the pause, not a failure', r.steps?.some(s => s.step === 'credentials' && s.status === 'needs-you'), JSON.stringify(r.steps))

@@ -4836,7 +4836,7 @@ async function executePreflightWorld(input, env) {
     cfToken = String(row?.cf_api_token || '').trim() || null
     const rowAccount = String(row?.cf_account_id || '').trim()
     if (!cfToken) {
-      add('credentials', 'fail', `No Cloudflare token stored for ${founderEmail}.`, `Create a token in the World's account and run setup_world with cf_api_token.`)
+      add('credentials', 'fail', `No Cloudflare token stored for ${founderEmail}.`, `Create a token in the World's account, then store it in Settings -> World Cloudflare credentials (NOT in the chat — a token typed into a prompt is logged by the model provider and must be rolled). setup_world then finds it.`)
     } else {
       let live = null
       try {
@@ -4844,7 +4844,7 @@ async function executePreflightWorld(input, env) {
         const j = await r.json().catch(() => ({}))
         live = r.ok && j.success !== false
       } catch { live = null }
-      if (live === false) add('credentials', 'fail', `The stored token for ${founderEmail} is REJECTED by Cloudflare (revoked, rolled or mistyped).`, 'Roll or recreate it, then set_world_credentials and set_email_password with the new value.')
+      if (live === false) add('credentials', 'fail', `The stored token for ${founderEmail} is REJECTED by Cloudflare (revoked, rolled or mistyped).`, 'Roll or recreate it, then store the new value in Settings -> World Cloudflare credentials (not in the chat). A mail sender password is separate: set_email_password with forUserEmail set to the FOUNDER.')
       else if (live === null) add('credentials', 'warn', `Could not reach Cloudflare to verify the stored token for ${founderEmail}.`)
       else add('credentials', 'pass', `token stored for ${founderEmail} and accepted by Cloudflare.`)
       if (rowAccount && wfAccount && rowAccount !== wfAccount) add('credentials-account', 'fail', `The founder profile points at ${rowAccount} while the registry says ${wfAccount}.`, 'Run setup_world with the correct cf_account_id.')
@@ -4958,7 +4958,7 @@ async function executeSetupWorld(input, env) {
     record('credentials', 'skipped', `already stored for ${founderEmail}`)
   } else {
     return stopHere('credentials',
-      `Create an API token in the World's Cloudflare account (${cfAccountId || storedAccount || 'the account that owns ' + domain}) with: account-level Workers Scripts, Workers KV Storage, Workers R2 Storage, Pages, Account Settings Read, Email Sending; and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings. Then run setup_world again with cf_api_token set (or run set_world_credentials for ${domain} first).`)
+      `Create an API token in the World's Cloudflare account (${cfAccountId || storedAccount || 'the account that owns ' + domain}) with: account-level Workers Scripts, Workers KV Storage, Workers R2 Storage, Pages, Account Settings Read, Email Sending; and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings. Store it in Settings -> World Cloudflare credentials (Superadmin only) — NOT in this chat: a token typed into a prompt is read and logged by the model provider, and must then be treated as compromised. Then run setup_world for ${domain} again with only cf_account_id; it will find the stored token.`)
   }
 
   const account = cfAccountId || storedAccount || String(wf?.cf_account_id || '').trim()
