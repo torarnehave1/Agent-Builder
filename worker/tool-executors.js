@@ -4775,6 +4775,19 @@ function worldSetupGuide(step = 'step-00-index') {
   }
 }
 
+// Is the World's zone already in the World's own account? Buying the domain INSIDE that account
+// (alivenesslab.net, 2026-09-24) skips the transfer entirely — but both tools kept ending with
+// "next: move the zone" afterwards, which is advice to redo something already done. One read settles
+// it. Returns {id,status} when present, false when the account does not hold it, null when unknown
+// (no credentials, or the token may not list zones) — null must never be reported as either answer.
+async function worldZoneInAccount(domain, account, token) {
+  if (!domain || !account || !token) return null
+  const r = await cfApi(`/zones?name=${encodeURIComponent(domain)}&account.id=${encodeURIComponent(account)}`, token)
+  if (!r.ok || !Array.isArray(r.json?.result)) return null
+  const zone = r.json.result.find(z => String(z.name || '').toLowerCase() === domain)
+  return zone ? { id: zone.id, status: String(zone.status || '').toLowerCase() } : false
+}
+
 async function executePreflightWorld(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'inspect a World')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -4885,6 +4898,18 @@ async function executePreflightWorld(input, env) {
     add('proxy', 'skip', 'no account/token to check with.')
   }
 
+  // ---- does the World's own account actually hold the zone? -------------------------------------
+  let zoneState = null
+  if (hosting === 'own_account') {
+    zoneState = await worldZoneInAccount(domain, cfAccount, cfToken)
+    if (zoneState === null) add('zone', 'skip', 'could not check which account holds the zone (no usable credentials, or the token may not list zones).')
+    else if (zoneState === false) add('zone', 'warn', `${domain} is NOT a zone in ${cfAccount}. Hosts cannot be attached to this World's proxy until it is.`, 'Move the zone into the World account, or add it there if the domain is registered elsewhere.')
+    else if (zoneState.status !== 'active') add('zone', 'warn', `${domain} is in ${cfAccount} but its status is "${zoneState.status}", not active.`, 'Wait for the zone to go Active before attaching hosts — a custom domain created against a pending zone never gets a certificate and then shadows the route with error 1016.')
+    else add('zone', 'pass', `${domain} is an active zone in ${cfAccount} (${zoneState.id}).`)
+  } else {
+    add('zone', 'skip', `hosting_model is ${hosting || 'unset'}, so the zone is not expected in a World account.`)
+  }
+
   // ---- publish secret: publish_html_node cannot write into the proxy without it ------------------
   const secret = await getWorldPublishSecret(env, domain).catch(() => null)
   add('publish-secret', secret?.secret ? 'pass' : 'fail',
@@ -4908,10 +4933,17 @@ async function executePreflightWorld(input, env) {
   const fails = checks.filter(c => c.state === 'fail')
   const warns = checks.filter(c => c.state === 'warn')
   const verdict = fails.length ? 'BLOCKED' : warns.length ? 'PROCEED WITH CARE' : 'READY'
+  // The zone decides what comes next: with it in place the work is hosts and pages, and telling the
+  // reader to move a zone they already own is how a correct tool still wastes an evening.
+  const zoneHeld = zoneState && zoneState.status === 'active'
   const nextAction = fails.length
     ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.'
-    : `The World's infrastructure is ready. If the ${domain} zone is not yet in ${cfAccount || 'the World account'}, move it; otherwise attach hosts with create_subdomain and publish pages with publish_html_node.`
-  const guide = fails.length ? fails[0].guide || worldSetupGuide() : worldSetupGuide('step-08-zone-move')
+    : zoneHeld
+      ? `The World is ready. Attach each host with create_subdomain, then publish its page with publish_html_node.`
+      : `The World's infrastructure is ready, but ${cfAccount || 'the World account'} does not hold an active ${domain} zone yet — move or add it before attaching hosts.`
+  const guide = fails.length
+    ? fails[0].guide || worldSetupGuide()
+    : worldSetupGuide(zoneHeld ? 'step-09-hosts-and-pages' : 'step-08-zone-move')
   return {
     success: true,
     domain,
@@ -5039,6 +5071,12 @@ async function executeSetupWorld(input, env) {
 
   const done = steps.filter(s => s.status === 'done').length
   const skipped = steps.filter(s => s.status === 'skipped').length
+  // Ask whether the zone is already here rather than always ending with "move the zone": a domain
+  // bought inside the World's own account has nothing to move, and saying otherwise sent the
+  // architect back to a transfer screen he did not need (2026-09-24).
+  const zoneState = await worldZoneInAccount(domain, account, (await env.DB.prepare('SELECT cf_api_token FROM config WHERE email = ?').bind(founderEmail).first())?.cf_api_token)
+  const zoneHeld = Boolean(zoneState && zoneState.status === 'active')
+  const nextStep = zoneHeld ? 'step-09-hosts-and-pages' : 'step-08-zone-move'
   return {
     success: true,
     complete: true,
@@ -5046,16 +5084,21 @@ async function executeSetupWorld(input, env) {
     founder_email: founderEmail,
     cf_account_id: account,
     steps,
-    next: `The World's infrastructure is ready. Still human steps, in this order: (1) move the ${domain} zone into account ${account} if it is not there yet, (2) attach each host to the proxy with create_subdomain, (3) publish the pages with publish_html_node, (4) onboard ${domain} for sending in that account and register the sender. Run check_world_publish for ${domain} afterwards.`,
-    guide: worldSetupGuide('step-08-zone-move'),
+    zone_in_account: zoneState === null ? 'unknown' : zoneHeld ? 'active' : zoneState === false ? 'no' : zoneState.status,
+    next: zoneHeld
+      ? `${domain} is already an active zone in ${account}, so there is nothing to move. Next: attach each host with create_subdomain, publish the pages with publish_html_node, and onboard ${domain} for sending in that account. Run preflight_world for ${domain} to confirm.`
+      : `The World's infrastructure is ready. Still human steps, in this order: (1) move or add the ${domain} zone into account ${account}, (2) attach each host to the proxy with create_subdomain, (3) publish the pages with publish_html_node, (4) onboard ${domain} for sending in that account. Run preflight_world for ${domain} afterwards.`,
+    guide: worldSetupGuide(nextStep),
     // Same reason as preflight_world: this line IS the report, whatever the model chooses to say.
     message: [
       `${domain} provisioned — ${done} step(s) done, ${skipped} already in place.`,
       `Founder ${founderEmail}, Cloudflare account ${account}.`,
       ...steps.map(st => `  ${st.status === 'done' ? 'DID ' : st.status === 'skipped' ? 'HAD ' : 'STOP'} ${st.step} — ${st.detail}`),
       'Every step was verified by reading the system back, not from a tool summary.',
-      `Next: if the ${domain} zone is not already in ${account}, move it; then create_subdomain for each host, publish_html_node for each page, and onboard ${domain} for sending. Run preflight_world for ${domain} to confirm.`,
-      `Guide: ${WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
+      zoneHeld
+        ? `Next: ${domain} is already an active zone in ${account} — nothing to move. create_subdomain for each host, publish_html_node for each page, then onboard ${domain} for sending.`
+        : `Next: move or add the ${domain} zone into ${account}, then create_subdomain for each host and publish_html_node for each page.`,
+      `Guide: ${WORLD_SETUP_GUIDE_STEPS[nextStep]} — ${worldSetupGuide().url}`,
     ].join('\n'),
   }
 }

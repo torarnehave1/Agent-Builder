@@ -16,7 +16,8 @@ const find = (r, name) => (r.checks || []).find(c => c.check === name)
 
 // tokenOwner: 'user' (verifies at /user/tokens/verify), 'account' (a World account's own token —
 // REJECTED by the user endpoint, accepted by the account one), or 'none' (genuinely dead).
-function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = 'user' } = {}) {
+// zone: 'active' (the World account holds it), 'pending', 'absent', or null (endpoint unusable).
+function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = 'user', zone = null, proxy = false, publishSecret = null } = {}) {
   const writes = []
   const DB = { prepare(sql) { return { bind(...v) { return {
     async first() {
@@ -36,9 +37,18 @@ function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = '
     const u = String(url)
     if (u.includes('/user/tokens/verify')) return json(tokenOwner === 'user' ? active : rejected)
     if (u.includes('/tokens/verify')) return json(tokenOwner === 'account' ? active : rejected)
+    // A deployed brand proxy, so a zone assertion is not masked by an unrelated failure.
+    if (proxy && u.includes('/workers/domains')) return json({ success: true, result: [] })
+    if (proxy && /\/workers\/scripts\/[^/]+\/settings/.test(u)) return json({ success: true, result: { bindings: [] } })
+    if (u.includes('/zones?name=')) {
+      if (!zone) return json({})
+      const name = decodeURIComponent(u.split('name=')[1].split('&')[0])
+      return json({ success: true, result: zone === 'absent' ? [] : [{ id: 'zone123', name, status: zone }] })
+    }
     return json({})
   }
-  return { env: { DB }, writes, restore: () => { globalThis.fetch = realFetch } }
+  const WORLD_TEMPLATES = { async get(key) { return publishSecret && key.includes(publishSecret) ? 'secret-value' : null } }
+  return { env: { DB, WORLD_TEMPLATES }, writes, restore: () => { globalThis.fetch = realFetch } }
 }
 const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'owner@example.com' } }
 
@@ -123,7 +133,51 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('and it says both ways were tried', /as an account token/.test(find(r, 'credentials')?.detail || ''), find(r, 'credentials')?.detail)
 }
 
-// 5. domain is required.
+// 5. The zone is already in the World's own account — the alivenesslab.net case, where the domain
+// was BOUGHT there. Telling the reader to move it is advice to redo something already done.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    config: { cf_account_id: '077b2127436f8d047c000ecad69e4017', cf_api_token: 'cfat_account_owned', cf_kv_namespace_id: 'kv456' },
+    tokenOwner: 'account', zone: 'active', proxy: true, publishSecret: 'alivenesslab.net', publishSecret: 'alivenesslab.net',
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  check('an owned zone passes its check', find(r, 'zone')?.state === 'pass', JSON.stringify(find(r, 'zone')))
+  check('and the guide points at hosts and pages, NOT the zone move', r.guide?.node_id === 'step-09-hosts-and-pages', JSON.stringify(r.guide))
+  check('and next says there is nothing to move', /Attach each host/.test(r.next || ''), r.next)
+}
+
+// 6. The zone is somewhere else: a caution with the move named, not a pass.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    config: { cf_account_id: '077b2127436f8d047c000ecad69e4017', cf_api_token: 'cfat_account_owned', cf_kv_namespace_id: 'kv456' },
+    tokenOwner: 'account', zone: 'absent', proxy: true, publishSecret: 'alivenesslab.org',
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.org' }, env)
+  restore()
+  check('a zone the account does not hold is a warning', find(r, 'zone')?.state === 'warn', JSON.stringify(find(r, 'zone')))
+  check('and the guide points at the zone move', r.guide?.node_id === 'step-08-zone-move', JSON.stringify(r.guide))
+}
+
+// 7. A pending zone is called out — the error-1016 trap, not a green light.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    config: { cf_account_id: '077b2127436f8d047c000ecad69e4017', cf_api_token: 'cfat_account_owned', cf_kv_namespace_id: 'kv456' },
+    tokenOwner: 'account', zone: 'pending', proxy: true, publishSecret: 'alivenesslab.net',
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  check('a pending zone is a warning, not a pass', find(r, 'zone')?.state === 'warn', JSON.stringify(find(r, 'zone')))
+  check('and it names the certificate trap', /1016/.test(find(r, 'zone')?.fix || ''), find(r, 'zone')?.fix)
+}
+
+// 8. domain is required.
 {
   const { env, restore } = makeEnv({})
   const r = await executeTool('preflight_world', { ...CALLER }, env)
