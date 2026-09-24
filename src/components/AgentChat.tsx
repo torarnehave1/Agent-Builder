@@ -509,6 +509,22 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
     } catch { /* silently fail */ }
   };
 
+  // A tool that reports on a World returns a multi-line REPORT, not a status word: every check with
+  // its detail, the next action, and a link into the setup guide. The header stays a one-line chip
+  // (the first line), and the rest gets its own block with newlines preserved and the links live —
+  // rendered inline in the header it collapsed into an unreadable paragraph (2026-09-24).
+  const summaryText = typeof tc.summary === 'string' ? tc.summary : '';
+  const summaryHead = summaryText.split('\n')[0];
+  const summaryBody = summaryText.split('\n').slice(1).join('\n').trimEnd();
+  const linkify = (text: string) =>
+    text.split(/(https?:\/\/[^\s]+)/g).map((part, i) =>
+      /^https?:\/\//.test(part) ? (
+        <a key={i} href={part} target="_blank" rel="noreferrer" className="text-sky-400 underline break-all">{part}</a>
+      ) : (
+        <span key={i}>{part}</span>
+      )
+    );
+
   return (
     <div className="my-2 border app-border rounded-lg overflow-hidden text-[13px]">
       <button
@@ -518,11 +534,16 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
       >
         <span className="text-sm">&#x1f527;</span>
         <span className="font-semibold app-text">{tc.tool}</span>
-        <span className={`ml-auto text-xs ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
-          {tc.status === 'running' ? (typeof tc.progress === 'string' ? tc.progress : 'Running...') : tc.status === 'success' ? (typeof tc.summary === 'string' ? tc.summary : 'Done') : 'Failed'}
+        <span className={`ml-auto text-xs truncate max-w-[60%] ${tc.status === 'running' ? 'text-sky-400' : tc.status === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+          {tc.status === 'running' ? (typeof tc.progress === 'string' ? tc.progress : 'Running...') : tc.status === 'success' ? (summaryHead || 'Done') : 'Failed'}
         </span>
         <span className={`text-[10px] app-text-soft transition-transform ${expanded ? 'rotate-90' : ''}`}>&#x25B6;</span>
       </button>
+      {tc.status === 'success' && summaryBody && (
+        <div className="px-3 py-2 border-t app-border">
+          <pre className="whitespace-pre-wrap break-words app-text-muted text-xs m-0 font-mono leading-relaxed">{linkify(summaryBody)}</pre>
+        </div>
+      )}
       {expanded && (
         <div className="px-3 py-2 border-t app-border app-surface">
           <pre className="whitespace-pre-wrap break-all app-text-muted font-mono text-xs m-0">{inputStr}</pre>
