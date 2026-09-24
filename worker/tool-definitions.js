@@ -3323,7 +3323,7 @@ const TOOL_DEFINITIONS = [
       properties: {
         domain: { type: 'string', description: "The World domain, e.g. 'alivenesslab.org'." },
         cf_account_id: { type: 'string', description: "The World's OWN Cloudflare account id. Needed the first time; afterwards it is read from what is stored. Pass it whenever you have it — a World registered own_account without one leaves the registry disagreeing with itself." },
-        cf_api_token: { type: 'string', description: "An API token for that account, stored server-side and never returned. Only needed when no token is stored for the founder yet. Scopes: account Workers Scripts / Workers KV / Workers R2 / Pages / Account Settings Read / Email Sending, and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings." },
+        cf_api_token: { type: 'string', description: "DO NOT ASK THE USER TO TYPE A TOKEN INTO THE CHAT. A secret in a prompt is read and logged by the model provider and must then be treated as compromised — one token was burned that way on 2026-09-23. Tell them to paste it in Settings -> World Cloudflare credentials instead, which posts it straight to the worker; then run setup_world again with only cf_account_id and it will find the stored token. Accept this parameter ONLY if the user volunteers a token unprompted, and say plainly that it should be rolled afterwards. Scopes: account Workers Scripts / Workers KV / Workers R2 / Pages / Account Settings Read / Email Sending, and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings." },
         founder_email: { type: 'string', description: "The World's own address, e.g. post@<domain>. Required only when the World is not registered yet; otherwise taken from the registry." },
       },
     },
@@ -3560,7 +3560,7 @@ const TOOL_DEFINITIONS = [
         founder_email: { type: 'string', description: "The founder's email (or pass domain to resolve it from world_founders)." },
         domain: { type: 'string', description: "The World's domain, used to resolve the founder if founder_email is omitted." },
         cf_account_id: { type: 'string', description: "The founder's Cloudflare account id (32 hex). Optional if already set." },
-        cf_api_token: { type: 'string', description: "The founder's Cloudflare API token (scoped to their account). Required. Stored, never returned." },
+        cf_api_token: { type: 'string', description: "The founder's Cloudflare API token (scoped to their account). Stored, never returned. NEVER ask for it in the chat — a secret typed into a prompt is logged by the model provider. Point the user at Settings -> World Cloudflare credentials, which stores it through this same code path without the token passing through the conversation." },
       },
       required: ['cf_api_token'],
     },

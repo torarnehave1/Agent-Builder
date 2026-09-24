@@ -8,6 +8,7 @@ import GraphPortfolioTab from './GraphPortfolioTab';
 import HtmlPreview from './HtmlPreview';
 import ModelSettings, { getStoredModel, isWorkersAIModel } from './ModelSettings';
 import GitHubConnect from './GitHubConnect';
+import WorldCredentials from './WorldCredentials';
 import UsageDashboard from './UsageDashboard';
 import WorkContextTab, { type WorkContext } from './WorkContextTab';
 import AutomationTab from './AutomationTab';
@@ -220,6 +221,7 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
       {view === 'settings' && (
         <div className="flex flex-col gap-4 p-4 overflow-y-auto">
           <GitHubConnect resolvedTheme={resolvedTheme} />
+          {role === 'Superadmin' && <WorldCredentials resolvedTheme={resolvedTheme} />}
           <ModelSettings model={model} onChange={setModel} resolvedTheme={resolvedTheme} />
         </div>
       )}

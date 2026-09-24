@@ -334,6 +334,94 @@ export default {
         return new Response(JSON.stringify({ universe, selected }), { headers: corsHeaders })
       }
 
+      // GET/POST /world-credentials — a World's Cloudflare token, WITHOUT the agent chat.
+      //
+      // Why this endpoint exists: setup_world takes cf_api_token as a tool argument, so the only
+      // way to supply it was to type it into the chat — where the model provider sees and logs it.
+      // One token was burned that way on 2026-09-23. Here the secret goes browser → worker → D1 and
+      // is never part of a prompt, never in a tool call, never in an SSE stream.
+      //
+      // GET  ?domain=<d> → { founder_email, cf_account_id, token_stored, token_suffix, token_live }
+      //                    — state only. The token itself is NEVER returned, by any path.
+      // POST { domain, cf_api_token, cf_account_id?, founder_email? } → stores it via the SAME
+      //                    executor the agent uses (set_world_credentials), which verifies the token
+      //                    against Cloudflare and rejects a typo'd account id before writing.
+      // Auth: X-API-Token (emailVerificationToken) AND role Superadmin.
+      if (pathname === '/world-credentials' && (request.method === 'GET' || request.method === 'POST')) {
+        const xToken = request.headers.get('X-API-Token') || ''
+        const auth = await resolveAuthorizedCallerWithCredentials({ authToken: xToken }, env)
+        if (!auth?.authenticated) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — a valid X-API-Token is required' }), { status: 401, headers: corsHeaders })
+        }
+        if (String(auth.role || '').trim() !== 'Superadmin') {
+          return new Response(JSON.stringify({ error: 'Superadmin role required to read or set World credentials.' }), { status: 403, headers: corsHeaders })
+        }
+
+        const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {}
+        const domain = String((request.method === 'POST' ? body.domain : url.searchParams.get('domain')) || '').trim().toLowerCase()
+        if (!domain) {
+          return new Response(JSON.stringify({ error: "domain is required, e.g. 'alivenesslab.org'." }), { status: 400, headers: corsHeaders })
+        }
+
+        // Which founder this World's credentials belong to. Passing the wrong one is how a World's
+        // token landed on the operator's own profile on 2026-09-23, so resolve it from the registry
+        // rather than from whoever is signed in.
+        let founderEmail = String(body.founder_email || '').trim().toLowerCase()
+        if (!founderEmail) {
+          const wf = await env.DB.prepare('SELECT founder_email FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+          founderEmail = String(wf?.founder_email || '').toLowerCase()
+        }
+        if (!founderEmail) {
+          return new Response(JSON.stringify({ error: `No World is registered for ${domain} and no founder_email was given.` }), { status: 400, headers: corsHeaders })
+        }
+
+        if (request.method === 'POST') {
+          const cfApiToken = String(body.cf_api_token || '').trim()
+          if (!cfApiToken) {
+            return new Response(JSON.stringify({ error: 'cf_api_token is required.' }), { status: 400, headers: corsHeaders })
+          }
+          // Same executor the agent calls: it verifies the token (user- AND account-scoped verify),
+          // rejects an invalid account id, records what it replaced, and never echoes the secret.
+          const result = await executeTool('set_world_credentials', {
+            userId: auth.userId,
+            authContext: { userId: auth.userId, role: auth.role, profile: auth.profile },
+            domain,
+            founder_email: founderEmail,
+            cf_account_id: String(body.cf_account_id || '').trim(),
+            cf_api_token: cfApiToken,
+          }, env)
+          // Belt and braces: strip anything token-shaped before it leaves the worker.
+          const { cf_api_token: _drop, ...safe } = result || {}
+          return new Response(JSON.stringify(safe), { status: result?.success === false ? 400 : 200, headers: corsHeaders })
+        }
+
+        // GET — state only, so the UI can say "stored and accepted" without ever holding the secret.
+        const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token, cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first()
+        const stored = String(row?.cf_api_token || '').trim()
+        let tokenLive = null
+        if (stored) {
+          try {
+            const r = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', { headers: { Authorization: `Bearer ${stored}` } })
+            const j = await r.json().catch(() => ({}))
+            tokenLive = Boolean(j?.success && j?.result?.status === 'active')
+            if (!tokenLive && row?.cf_account_id) {
+              const r2 = await fetch(`https://api.cloudflare.com/client/v4/accounts/${row.cf_account_id}/tokens/verify`, { headers: { Authorization: `Bearer ${stored}` } })
+              const j2 = await r2.json().catch(() => ({}))
+              tokenLive = Boolean(j2?.success && j2?.result?.status === 'active')
+            }
+          } catch { tokenLive = null }
+        }
+        return new Response(JSON.stringify({
+          domain,
+          founder_email: founderEmail,
+          cf_account_id: row?.cf_account_id || null,
+          kv_namespace_id: row?.cf_kv_namespace_id || null,
+          token_stored: Boolean(stored),
+          token_suffix: stored ? `...${stored.slice(-6)}` : null,
+          token_live: tokenLive,
+        }), { headers: corsHeaders })
+      }
+
       // GET /github/status — is the current user connected? Used by the Settings tab.
       if (pathname === '/github/status' && request.method === 'GET') {
         const statusToken = url.searchParams.get('authToken') || ''
