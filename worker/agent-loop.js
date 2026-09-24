@@ -361,11 +361,13 @@ async function loadAllTools(env) {
   const dynamicTools = openAPITools.filter(t => !hardcodedNames.has(t.name))
 
   // Remove tools that subagents handle — forces orchestrator to delegate
-  // edit_html_node → delegate_to_html_builder
   // KG write tools → delegate_to_kg (reads kept for quick lookups)
   // Chat tools → delegate_to_chat (all chat group management)
+  // edit_html_node is NOT blocked: it is a DETERMINISTIC exact-string replacement (it refuses to run
+  // without old_string), so it needs no subagent reasoning. Blocking it meant a one-line removal had to
+  // go through delegate_to_html_builder — and when that subagent's model provider was unavailable, a
+  // trivial edit was impossible by any route (2026-09-24). Open-ended HTML work still delegates.
   const ORCHESTRATOR_BLOCKED_TOOLS = new Set([
-    'edit_html_node',
     'create_graph', 'create_node', 'patch_node', 'add_edge',
     'patch_graph_metadata',
     'list_chat_groups', 'create_chat_group', 'update_chat_group',

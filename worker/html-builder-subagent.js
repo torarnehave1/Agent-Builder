@@ -961,8 +961,22 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
 
     const data = await response.json()
     if (!response.ok) {
-      log(`ERROR: ${JSON.stringify(data.error)}`)
-      return { success: false, error: data.error || 'Anthropic API error', turns: turn, actions, inputTokens, outputTokens }
+      // `data.error` is an OBJECT. Returning it raw produced "HTML Builder failed: [object Object]"
+      // and hid a plain billing failure for an entire session (2026-09-24). Always stringify, and
+      // name the way forward when the whole provider is unavailable: the orchestrator can run
+      // edit_html_node itself for a deterministic old->new replacement.
+      const detail = typeof data.error === 'string'
+        ? data.error
+        : (data.error?.message || JSON.stringify(data.error || data).slice(0, 400))
+      const providerDown = /credit balance|insufficient|quota|rate limit|authentication|invalid api key|unauthorized/i.test(detail)
+      log(`ERROR (${response.status}): ${detail}`)
+      return {
+        success: false,
+        error: providerDown
+          ? `The model provider refused the request (HTTP ${response.status}): ${detail}. This is an ACCOUNT-level failure, not a problem with the page. For a deterministic old->new replacement, call edit_html_node directly instead of delegating.`
+          : `Anthropic API error (HTTP ${response.status}): ${detail}`,
+        turns: turn, actions, inputTokens, outputTokens,
+      }
     }
 
     if (data.usage) {

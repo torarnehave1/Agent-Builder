@@ -15754,7 +15754,11 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
         const proof = contentChanged === true ? ` [verified: content changed, ${charDelta >= 0 ? '+' : ''}${charDelta} chars${graphVersion !== null ? `, now v${graphVersion}` : ''}]` : ''
         message = `HTML Builder completed: ${(result.summary || '').slice(0, 500)}${proof}`
       } else {
-        message = `HTML Builder failed: ${result.error || 'Unknown error'}`
+        // result.error may be an object; `${obj}` renders "[object Object]" and hides the cause.
+        const failDetail = typeof result.error === 'string'
+          ? result.error
+          : (result.error?.message || (result.error ? JSON.stringify(result.error).slice(0, 400) : 'Unknown error'))
+        message = `HTML Builder failed: ${failDetail}`
       }
 
       return {
