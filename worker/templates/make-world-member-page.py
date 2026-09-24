@@ -84,9 +84,27 @@ rep("'Du er deltaker i NIBI team-rommet.'", "('Du er deltaker i ' + worldName + 
 # Neither published member page had any way to sign out (found on minside.vegr.ai 2026-09-23,
 # and minside.nibi.no had the same gap). The signOut() function already existed — only the
 # control was missing, so add a button beside the settings gear and wire it up.
-rep('<button class="settings-button" id="settings" type="button" aria-label="Innstillinger" title="Innstillinger">&#9881;</button>',
-    '<button class="settings-button" id="settings" type="button" aria-label="Innstillinger" title="Innstillinger">&#9881;</button>'
-    '<button class="settings-button logout-button" id="logout" type="button" title="Logg ut">Logg ut</button>')
+rep('</body>\n</html>',
+    '<script>\n'
+    '(function () {\n'
+    '  function addLogout() {\n'
+    "    var account = document.getElementById('account');\n"
+    "    if (!account || document.getElementById('logout')) return;\n"
+    "    var b = document.createElement('button');\n"
+    "    b.id = 'logout'; b.type = 'button'; b.className = 'settings-button logout-button';\n"
+    "    b.title = 'Logg ut'; b.textContent = 'Logg ut';\n"
+    "    b.addEventListener('click', function () {\n"
+    "      try { localStorage.removeItem('vegvisr_user'); localStorage.removeItem('user'); localStorage.removeItem('userStore') } catch (e) {}\n"
+    "      try { window.dispatchEvent(new Event('vegvisr-auth-changed')) } catch (e) {}\n"
+    '      location.reload();\n'
+    '    });\n'
+    '    account.appendChild(b);\n'
+    '  }\n'
+    "  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addLogout); else addLogout();\n"
+    "  window.addEventListener('vegvisr-auth-changed', addLogout);\n"
+    '})();\n'
+    '</script>\n'
+    '</body>\n</html>')
 rep('.settings-button { width:38px; height:38px;',
     '.logout-button { width:auto; height:38px; padding:0 14px; font-size:13px; font-weight:600; white-space:nowrap; flex:none; }\n'
     '    .settings-button { width:38px; height:38px;')
@@ -103,8 +121,7 @@ rep("  element('settings').addEventListener('click', openSettings)\n",
     "    element(name + 'Section').hidden = true\n"
     "  }\n"
     "  if (!worldAlerts) element('settingsForm').hidden = true\n"
-    "  element('settings').addEventListener('click', openSettings)\n"
-    "  element('logout').addEventListener('click', () => signOut())\n")
+    "  element('settings').addEventListener('click', openSettings)\n")
 
 for old, new in subs:
     s = s.replace(old, new)

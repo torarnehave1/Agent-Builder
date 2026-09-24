@@ -143,7 +143,7 @@ const page = (graphs, graphId, nodeId = 'member-page-vegr') => graphs[graphId].n
   const node = page(graphs, 'existing')
   check('the rebuild keeps the founder edit', rebuilt.success === true && node.info.includes('Founder wrote this'), 'edit lost on rebuild')
   check('and records which regions were carried', (node.metadata.worldMemberPage.carriedAnchors || []).includes('articles-heading'), JSON.stringify(node.metadata.worldMemberPage.carriedAnchors))
-  check('the rest of the page still comes from the template', node.info.includes("const worldDomain = 'vegr.ai'") && node.info.includes('id="logout"'), 'template content missing')
+  check('the rest of the page still comes from the template', node.info.includes("const worldDomain = 'vegr.ai'") && node.info.includes("b.id = 'logout'"), 'template content missing')
 
   // Same edit again, then an explicit clean rebuild.
   const node1 = page(graphs, 'existing')
