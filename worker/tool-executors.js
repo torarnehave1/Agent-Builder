@@ -5419,10 +5419,45 @@ async function executeSetupWorldHomepage(input, env) {
     }
     const apexFirst = await attachFirst(apex)
     const wwwFirst = await attachFirst(www)
-    // Publish THROUGH a host that already routes, exactly as the inline-html path does — writing to
-    // https://<apex>/__html/publish fails with 530 for the minute (or the eternity) that the apex is
-    // not yet bound to the proxy. The apex is still the KEY being written; only the door differs.
-    const publishVia = (input.proxy_url || `https://me.${domain}/__html/publish`).trim()
+    // Publish through a door that ANSWERS. me.<domain> is the designed door because it routes before
+    // the apex exists — but on alivenesslab.net me. answered 530 for over an hour while the apex
+    // served fine, so a hard-coded door is a guess dressed as a design. Probe the candidates, use the
+    // first that responds, and retry: a custom domain attached seconds ago answers 530 for about a
+    // minute, which is a wait, not a failure (2026-09-24: an hour was spent on that one minute).
+    const doors = [input.proxy_url, `https://me.${domain}/__html/publish`, `https://${apex}/__html/publish`]
+      .filter(Boolean).map(d => String(d).trim())
+    const doorAnswers = async (url) => {
+      try {
+        const r = await fetch(url.replace('/__html/publish', '/__html/check') + `?hostname=${encodeURIComponent(apex)}`, { method: 'GET' })
+        return r.status < 500
+      } catch { return false }
+    }
+    let publishVia = null
+    const doorLog = []
+    for (let attempt = 0; attempt < 4 && !publishVia; attempt += 1) {
+      for (const door of doors) {
+        if (await doorAnswers(door)) { publishVia = door; break }
+        if (attempt === 0) doorLog.push(`${door} did not answer`)
+      }
+      if (!publishVia && attempt < 3) await new Promise(r => setTimeout(r, 15000))
+    }
+    if (!publishVia) {
+      return {
+        success: false,
+        step: 'publish-node',
+        error: `No publish endpoint on ${domain} answered after ~45s.`,
+        routes: { apex: apexFirst, www: wwwFirst },
+        doors_tried: doorLog,
+        message: [
+          `${apex}: NOT published — no door into the brand proxy answered after ~45 seconds.`,
+          'This is ROUTING, not credentials. Do NOT replace the Cloudflare token.',
+          ...doorLog.map(d => `  ${d}`),
+          `  ${apexFirst.ok ? 'OK  ' : 'FAIL'} ${apex} — ${apexFirst.note || apexFirst.error}`,
+          `  ${wwwFirst.ok ? 'OK  ' : 'FAIL'} ${www} — ${wwwFirst.note || wwwFirst.error}`,
+          `Check each hostname yourself: curl -o /dev/null -w "%{http_code}" https://me.${domain}/ — a Worker DNS record can exist while nothing serves it, and that answers 530 indefinitely.`,
+        ].join('\n'),
+      }
+    }
     const published = await executePublishHtmlNode({ ...input, graphId, nodeId, host: apex, proxy_url: publishVia, overwrite: true }, env)
     if (published.success === false) {
       // A 5xx/404 from the publish endpoint is a ROUTING fact, not a credential one. The token name

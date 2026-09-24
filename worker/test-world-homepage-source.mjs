@@ -85,21 +85,45 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('inline html is not turned into a question', r.needs_choice !== true, JSON.stringify(r).slice(0, 160))
 }
 
-// 5. A 530 from the publish endpoint must be named as routing, never as a credential problem —
-// the agent replaced credentials and re-ran four repair tools over one on 2026-09-24.
+// 5. The door is chosen by what ANSWERS. On alivenesslab.net me.<domain> answered 530 for over an
+// hour while the apex served fine, so publishing through a hard-coded me.<domain> would have failed
+// the very run that had just succeeded.
 {
   const { env, restore } = makeEnv()
   const realFetch = globalThis.fetch
-  globalThis.fetch = async (url) => String(url).includes('__html/publish')
-    ? new Response('error code: 530', { status: 530 })
-    : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const asked = []
+  globalThis.fetch = async (url, init) => {
+    const u = String(url)
+    if (u.includes('__html/check')) {
+      asked.push(u)
+      return u.includes('me.') ? new Response('error code: 530', { status: 530 }) : new Response(JSON.stringify({ exists: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    if (u.includes('__html/publish')) return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
   const r = await executeTool('setup_world_homepage', { ...CALLER, domain: 'alivenesslab.net', graphId: 'g-123', nodeId: 'home-1' }, env)
   globalThis.fetch = realFetch
   restore()
-  check('a 530 is reported as a failure', r.success === false, JSON.stringify(r).slice(0, 160))
-  check('and it is called a routing failure', /ROUTING failure/.test(r.message || ''), r.message)
+  check('a dead me. door does not fail the publish', r.success !== false, JSON.stringify(r).slice(0, 200))
+  check('me. was tried first', asked.some(u => u.includes('me.alivenesslab.net')), JSON.stringify(asked))
+  check('and the apex was used when me. did not answer', asked.some(u => u.includes('//alivenesslab.net')), JSON.stringify(asked))
+}
+
+// 6. When NO door answers, it is reported as routing, never as a credential problem — the agent
+// replaced credentials and ran four repair tools over one 530 on 2026-09-24.
+{
+  const { env, restore } = makeEnv()
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => String(url).includes('__html/')
+    ? new Response('error code: 530', { status: 530 })
+    : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const r = await executeTool('setup_world_homepage', { ...CALLER, domain: 'alivenesslab.net', graphId: 'g-123', nodeId: 'home-1', proxy_url: 'https://x.invalid/__html/publish' }, env)
+  globalThis.fetch = realFetch
+  restore()
+  check('no door answering is a failure', r.success === false, JSON.stringify(r).slice(0, 160))
+  check('and it is called ROUTING', /ROUTING/.test(r.message || ''), r.message)
   check('and it says NOT to replace the token', /Do NOT replace the Cloudflare token/.test(r.message || ''), r.message)
-  check('and it names the shadowing A record', /shadows the Workers custom domain/.test(r.message || ''), r.message)
+  check('and it hands over a curl to check a host', /curl -o \/dev\/null/.test(r.message || ''), r.message)
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })
