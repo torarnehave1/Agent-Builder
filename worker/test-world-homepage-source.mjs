@@ -38,7 +38,9 @@ function makeEnv() {
     async run() { return { success: true } },
   } } } } }
   const KG_WORKER = { async fetch() { return new Response(JSON.stringify(GRAPH), { status: 200, headers: { 'Content-Type': 'application/json' } }) } }
-  const WORLD_TEMPLATES = { async get() { return null } }
+  // A publish secret exists (anything not a template: key); templates do not, so option C still
+  // reports "not found" rather than silently succeeding.
+  const WORLD_TEMPLATES = { async get(key) { return String(key).startsWith('template:') ? null : 'publish-secret-value' } }
   const realFetch = globalThis.fetch
   globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
   return { env: { DB, KG_WORKER, WORLD_TEMPLATES }, restore: () => { globalThis.fetch = realFetch } }
@@ -81,6 +83,23 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   const r = await executeTool('setup_world_homepage', { ...CALLER, domain: 'alivenesslab.net', html: '<html><body>Hei</body></html>' }, env)
   restore()
   check('inline html is not turned into a question', r.needs_choice !== true, JSON.stringify(r).slice(0, 160))
+}
+
+// 5. A 530 from the publish endpoint must be named as routing, never as a credential problem —
+// the agent replaced credentials and re-ran four repair tools over one on 2026-09-24.
+{
+  const { env, restore } = makeEnv()
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => String(url).includes('__html/publish')
+    ? new Response('error code: 530', { status: 530 })
+    : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const r = await executeTool('setup_world_homepage', { ...CALLER, domain: 'alivenesslab.net', graphId: 'g-123', nodeId: 'home-1' }, env)
+  globalThis.fetch = realFetch
+  restore()
+  check('a 530 is reported as a failure', r.success === false, JSON.stringify(r).slice(0, 160))
+  check('and it is called a routing failure', /ROUTING failure/.test(r.message || ''), r.message)
+  check('and it says NOT to replace the token', /Do NOT replace the Cloudflare token/.test(r.message || ''), r.message)
+  check('and it names the shadowing A record', /shadows the Workers custom domain/.test(r.message || ''), r.message)
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

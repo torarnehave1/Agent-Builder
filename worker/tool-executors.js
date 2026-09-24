@@ -5419,9 +5419,33 @@ async function executeSetupWorldHomepage(input, env) {
     }
     const apexFirst = await attachFirst(apex)
     const wwwFirst = await attachFirst(www)
-    const published = await executePublishHtmlNode({ ...input, graphId, nodeId, host: apex, overwrite: true }, env)
+    // Publish THROUGH a host that already routes, exactly as the inline-html path does — writing to
+    // https://<apex>/__html/publish fails with 530 for the minute (or the eternity) that the apex is
+    // not yet bound to the proxy. The apex is still the KEY being written; only the door differs.
+    const publishVia = (input.proxy_url || `https://me.${domain}/__html/publish`).trim()
+    const published = await executePublishHtmlNode({ ...input, graphId, nodeId, host: apex, proxy_url: publishVia, overwrite: true }, env)
     if (published.success === false) {
-      return { success: false, step: 'publish-node', error: published.error, routes: { apex: apexFirst, www: wwwFirst }, detail: published }
+      // A 5xx/404 from the publish endpoint is a ROUTING fact, not a credential one. The token name
+      // is appended to every World error, and on 2026-09-24 that made the agent blame the token for a
+      // 530 and run four pointless repair tools. Say what 530 actually means.
+      const routingFailure = /HTTP (5\d\d|404)|530|1016/.test(String(published.error || ''))
+      return {
+        success: false,
+        step: 'publish-node',
+        error: published.error,
+        routes: { apex: apexFirst, www: wwwFirst },
+        detail: published,
+        message: routingFailure
+          ? [
+            `${apex}: the page was NOT published — ${publishVia} did not answer (${published.error}).`,
+            'This is a ROUTING failure, not a credential one: no hostname on this domain reaches the brand proxy yet. Do NOT replace the Cloudflare token.',
+            `  ${apexFirst.ok ? 'OK  ' : 'FAIL'} ${apex} — ${apexFirst.note || apexFirst.error}`,
+            `  ${wwwFirst.ok ? 'OK  ' : 'FAIL'} ${www} — ${wwwFirst.note || wwwFirst.error}`,
+            `Check the zone's DNS: a freshly added zone often carries A/AAAA records pointing at Cloudflare's OWN proxy IPs, and such a record shadows the Workers custom domain and answers 530 forever. Delete those records for ${apex}, www and me, then re-run this.`,
+            'A custom domain attached seconds ago also needs about a minute for DNS and certificate — if the routes above say "attached", wait and re-run before changing anything.',
+          ].join('\n')
+          : `${apex}: the page was NOT published — ${published.error}`,
+      }
     }
     return {
       success: true,
