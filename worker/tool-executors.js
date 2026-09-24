@@ -4838,15 +4838,32 @@ async function executePreflightWorld(input, env) {
     if (!cfToken) {
       add('credentials', 'fail', `No Cloudflare token stored for ${founderEmail}.`, `Create a token in the World's account, then store it in Settings -> World Cloudflare credentials (NOT in the chat — a token typed into a prompt is logged by the model provider and must be rolled). setup_world then finds it.`)
     } else {
+      // /user/tokens/verify ONLY recognizes USER-owned tokens. An ACCOUNT-owned token — which is
+      // what a World account issues, and what alivenesslab.net's working token is — fails it with
+      // "Invalid API Token" while being perfectly valid. set_world_credentials has always handled
+      // this; the pre-flight did not, and on 2026-09-24 it reported a token REJECTED minutes after
+      // setup_world had used that same token to create a KV namespace and deploy a proxy. Try the
+      // account-scoped verify before believing the rejection.
+      const verifyAt = async (url) => {
+        try {
+          const r = await fetch(url, { headers: { Authorization: `Bearer ${cfToken}` } })
+          const j = await r.json().catch(() => ({}))
+          return { reached: true, active: Boolean(j?.success) && j?.result?.status === 'active' }
+        } catch { return { reached: false, active: false } }
+      }
       let live = null
-      try {
-        const r = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', { headers: { Authorization: `Bearer ${cfToken}` } })
-        const j = await r.json().catch(() => ({}))
-        live = r.ok && j.success !== false
-      } catch { live = null }
-      if (live === false) add('credentials', 'fail', `The stored token for ${founderEmail} is REJECTED by Cloudflare (revoked, rolled or mistyped).`, 'Roll or recreate it, then store the new value in Settings -> World Cloudflare credentials (not in the chat). A mail sender password is separate: set_email_password with forUserEmail set to the FOUNDER.')
+      let verifiedVia = 'user'
+      const probeAccount = rowAccount || wfAccount
+      const userProbe = await verifyAt('https://api.cloudflare.com/client/v4/user/tokens/verify')
+      if (userProbe.reached && userProbe.active) live = true
+      else if (probeAccount) {
+        const acctProbe = await verifyAt(`https://api.cloudflare.com/client/v4/accounts/${probeAccount}/tokens/verify`)
+        if (acctProbe.reached) { live = acctProbe.active; verifiedVia = 'account' }
+        else live = userProbe.reached ? false : null
+      } else live = userProbe.reached ? false : null
+      if (live === false) add('credentials', 'fail', `The stored token for ${founderEmail} is REJECTED by Cloudflare (revoked, rolled or mistyped) — checked as a user token and${probeAccount ? ` as an account token on ${probeAccount}` : ', with no account id to check an account token against'}.`, 'Roll or recreate it, then store the new value in Settings -> World Cloudflare credentials (not in the chat). A mail sender password is separate: set_email_password with forUserEmail set to the FOUNDER.')
       else if (live === null) add('credentials', 'warn', `Could not reach Cloudflare to verify the stored token for ${founderEmail}.`)
-      else add('credentials', 'pass', `token stored for ${founderEmail} and accepted by Cloudflare.`)
+      else add('credentials', 'pass', `token stored for ${founderEmail} and accepted by Cloudflare (${verifiedVia}-owned token).`)
       if (rowAccount && wfAccount && rowAccount !== wfAccount) add('credentials-account', 'fail', `The founder profile points at ${rowAccount} while the registry says ${wfAccount}.`, 'Run setup_world with the correct cf_account_id.')
       cfAccount = cfAccount || rowAccount
     }

@@ -14,7 +14,9 @@ let failures = 0
 const check = (name, cond, detail) => { if (cond) console.log(`ok    ${name}`); else { failures++; console.error(`FAIL  ${name}\n      ${detail}`) } }
 const find = (r, name) => (r.checks || []).find(c => c.check === name)
 
-function makeEnv({ world = null, domainRow = null, config = null } = {}) {
+// tokenOwner: 'user' (verifies at /user/tokens/verify), 'account' (a World account's own token —
+// REJECTED by the user endpoint, accepted by the account one), or 'none' (genuinely dead).
+function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = 'user' } = {}) {
   const writes = []
   const DB = { prepare(sql) { return { bind(...v) { return {
     async first() {
@@ -27,9 +29,15 @@ function makeEnv({ world = null, domainRow = null, config = null } = {}) {
     async all() { return { results: [] } },
   } } } } }
   const realFetch = globalThis.fetch
-  globalThis.fetch = async (url) => String(url).includes('/user/tokens/verify')
-    ? new Response(JSON.stringify({ success: true }), { status: 200, headers: { 'Content-Type': 'application/json' } })
-    : new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  const active = { success: true, result: { status: 'active' } }
+  const rejected = { success: false, errors: [{ code: 1000, message: 'Invalid API Token' }] }
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes('/user/tokens/verify')) return json(tokenOwner === 'user' ? active : rejected)
+    if (u.includes('/tokens/verify')) return json(tokenOwner === 'account' ? active : rejected)
+    return json({})
+  }
   return { env: { DB }, writes, restore: () => { globalThis.fetch = realFetch } }
 }
 const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'owner@example.com' } }
@@ -80,7 +88,37 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
     JSON.stringify({ firstFail: firstFail?.check, guide: r.guide?.node_id }))
 }
 
-// 3. domain is required.
+// 3. An ACCOUNT-owned token — rejected by /user/tokens/verify, valid everywhere that matters.
+// On 2026-09-24 the pre-flight called such a token REJECTED minutes after setup_world had used it
+// to create a KV namespace and deploy a proxy.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    config: { cf_account_id: '077b2127436f8d047c000ecad69e4017', cf_api_token: 'cfat_account_owned', cf_kv_namespace_id: 'kv456' },
+    tokenOwner: 'account',
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  check('an account-owned token is NOT called rejected', find(r, 'credentials')?.state === 'pass', JSON.stringify(find(r, 'credentials')))
+  check('and the answer says which kind of token it is', /account-owned/.test(find(r, 'credentials')?.detail || ''), find(r, 'credentials')?.detail)
+}
+
+// 4. A genuinely dead token still fails, and names both checks.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'post@nibi.no', hosting_model: 'own_account', cf_account_id: 'e458403763ce460e42d1c87896cfc7e9' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: 'e458403763ce460e42d1c87896cfc7e9' },
+    config: { cf_account_id: 'e458403763ce460e42d1c87896cfc7e9', cf_api_token: 'cfat_dead', cf_kv_namespace_id: 'kv789' },
+    tokenOwner: 'none',
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'nibi.no' }, env)
+  restore()
+  check('a dead token is still a failure', find(r, 'credentials')?.state === 'fail', JSON.stringify(find(r, 'credentials')))
+  check('and it says both ways were tried', /as an account token/.test(find(r, 'credentials')?.detail || ''), find(r, 'credentials')?.detail)
+}
+
+// 5. domain is required.
 {
   const { env, restore } = makeEnv({})
   const r = await executeTool('preflight_world', { ...CALLER }, env)
