@@ -17,7 +17,8 @@ const find = (r, name) => (r.checks || []).find(c => c.check === name)
 // tokenOwner: 'user' (verifies at /user/tokens/verify), 'account' (a World account's own token —
 // REJECTED by the user endpoint, accepted by the account one), or 'none' (genuinely dead).
 // zone: 'active' (the World account holds it), 'pending', 'absent', or null (endpoint unusable).
-function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = 'user', zone = null, proxy = false, publishSecret = null } = {}) {
+// hosts: { '<hostname>': { status, key } } — what the hostname answers and whether html:<host> exists.
+function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = 'user', zone = null, proxy = false, publishSecret = null, hosts = null } = {}) {
   const writes = []
   const DB = { prepare(sql) { return { bind(...v) { return {
     async first() {
@@ -38,6 +39,14 @@ function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = '
     if (u.includes('/user/tokens/verify')) return json(tokenOwner === 'user' ? active : rejected)
     if (u.includes('/tokens/verify')) return json(tokenOwner === 'account' ? active : rejected)
     // A deployed brand proxy, so a zone assertion is not masked by an unrelated failure.
+    if (hosts && u.includes('/workers/domains')) return json({ success: true, result: Object.keys(hosts).map(h => ({ hostname: h, service: 'alivenesslab-brand-proxy' })) })
+    if (hosts && u.includes('/storage/kv/namespaces/')) {
+      return json({ success: true, result: Object.entries(hosts).filter(([, v]) => v.key).map(([h]) => ({ name: `html:${h}` })) })
+    }
+    if (hosts) {
+      const hit = Object.keys(hosts).find(h => u === `https://${h}/`)
+      if (hit) return new Response('page', { status: hosts[hit].status })
+    }
     if (proxy && u.includes('/workers/domains')) return json({ success: true, result: [] })
     if (proxy && /\/workers\/scripts\/[^/]+\/settings/.test(u)) return json({ success: true, result: { bindings: [] } })
     if (u.includes('/zones?name=')) {
@@ -177,7 +186,48 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('and it names the certificate trap', /1016/.test(find(r, 'zone')?.fix || ''), find(r, 'zone')?.fix)
 }
 
-// 8. domain is required.
+// 8. The afternoon of 2026-09-24 in one check: hostnames answering 530 with no page published.
+// Every tool reported success; the cause was a missing KV key, not DNS, tokens or the worker.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: 'acct1' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: 'acct1' },
+    config: { cf_account_id: 'acct1', cf_api_token: 'tok', cf_kv_namespace_id: 'kv1' },
+    tokenOwner: 'account', zone: 'active', publishSecret: 'alivenesslab.net',
+    hosts: {
+      'alivenesslab.net': { status: 200, key: true },
+      'www.alivenesslab.net': { status: 200, key: false },
+      'me.alivenesslab.net': { status: 530, key: false },
+      'challenge.alivenesslab.net': { status: 530, key: false },
+    },
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  const hostCheck = find(r, 'hosts')
+  check('a 530 with no page is a warning, not a failure', hostCheck?.state === 'warn', JSON.stringify(hostCheck))
+  check('it reports the status code per hostname', /me\.alivenesslab\.net 530/.test(hostCheck?.detail || ''), hostCheck?.detail)
+  check('it says the page was never published', /NO page published/.test(hostCheck?.detail || ''), hostCheck?.detail)
+  check('it tells you NOT to touch DNS or tokens', /Do NOT change DNS/.test(hostCheck?.fix || ''), hostCheck?.fix)
+  check('www is not called unpublished — it falls back to the apex key', !/www\.alivenesslab\.net 200 \(NO page/.test(hostCheck?.detail || ''), hostCheck?.detail)
+}
+
+// 9. A host that HAS a page and still fails is the opposite verdict: real broken routing.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: 'acct1' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: 'acct1' },
+    config: { cf_account_id: 'acct1', cf_api_token: 'tok', cf_kv_namespace_id: 'kv1' },
+    tokenOwner: 'account', zone: 'active', publishSecret: 'alivenesslab.net',
+    hosts: { 'alivenesslab.net': { status: 530, key: true } },
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  const hostCheck = find(r, 'hosts')
+  check('a published page that still 530s is a failure', hostCheck?.state === 'fail', JSON.stringify(hostCheck))
+  check('and it is named as broken routing', /broken routing/.test(hostCheck?.detail || ''), hostCheck?.detail)
+}
+
+// 10. domain is required.
 {
   const { env, restore } = makeEnv({})
   const r = await executeTool('preflight_world', { ...CALLER }, env)

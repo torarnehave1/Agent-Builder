@@ -4844,6 +4844,7 @@ async function executePreflightWorld(input, env) {
   // ---- credentials: stored AND still accepted by Cloudflare -------------------------------------
   let cfToken = null
   let cfAccount = wfAccount
+  let kvNamespace = null
   if (founderEmail) {
     const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token, cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first()
     cfToken = String(row?.cf_api_token || '').trim() || null
@@ -4880,6 +4881,7 @@ async function executePreflightWorld(input, env) {
       if (rowAccount && wfAccount && rowAccount !== wfAccount) add('credentials-account', 'fail', `The founder profile points at ${rowAccount} while the registry says ${wfAccount}.`, 'Run setup_world with the correct cf_account_id.')
       cfAccount = cfAccount || rowAccount
     }
+    kvNamespace = String(row?.cf_kv_namespace_id || '').trim() || null
     add('page-store', row?.cf_kv_namespace_id ? 'pass' : 'fail',
       row?.cf_kv_namespace_id ? `HTML_PAGES ${row.cf_kv_namespace_id}` : 'No HTML_PAGES namespace provisioned for this World.',
       row?.cf_kv_namespace_id ? null : 'Run setup_world; it creates the namespace and records it.')
@@ -4908,6 +4910,55 @@ async function executePreflightWorld(input, env) {
     else add('zone', 'pass', `${domain} is an active zone in ${cfAccount} (${zoneState.id}).`)
   } else {
     add('zone', 'skip', `hosting_model is ${hosting || 'unset'}, so the zone is not expected in a World account.`)
+  }
+
+  // ---- do the hostnames actually ANSWER, and does each have a page? -----------------------------
+  // Nothing in this system asked the simplest question. On 2026-09-24 four hostnames answered 530
+  // while every tool reported success, and an hour went into DNS, tokens and worker deployments —
+  // all of which were correct. The cause was a MISSING KV KEY: the proxy finds no html:<host>, falls
+  // through to an origin that does not exist, and Cloudflare answers 1016 Origin DNS error. A missing
+  // page and broken routing are indistinguishable from outside, so report both facts together.
+  if (cfAccount && cfToken) {
+    let published = null
+    if (kvNamespace) {
+      const keys = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces/${kvNamespace}/keys?prefix=html%3A&limit=1000`, cfToken)
+      if (keys.ok && Array.isArray(keys.json?.result)) {
+        published = new Set(keys.json.result.map(k => String(k.name || '').replace(/^html:/, '').toLowerCase()))
+      }
+    }
+    const doms = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken)
+    const hosts = doms.ok && Array.isArray(doms.json?.result)
+      ? doms.json.result.map(d => String(d.hostname || '').toLowerCase()).filter(h => h === domain || h.endsWith(`.${domain}`))
+      : []
+    if (!hosts.length) {
+      add('hosts', 'skip', doms.ok ? `no hostname of ${domain} is attached to a Worker in ${cfAccount}.` : `could not list Workers custom domains (${doms.status}).`)
+    } else {
+      const probes = await Promise.all(hosts.map(async (host) => {
+        let status = null
+        try {
+          const r = await fetch(`https://${host}/`, { method: 'GET', redirect: 'manual' })
+          status = r.status
+        } catch { status = null }
+        // www falls back to the apex key, exactly as the proxy does when serving.
+        const hasKey = published === null ? null
+          : published.has(host) || (host.startsWith('www.') && published.has(host.replace(/^www\./, '')))
+        return { host, status, hasKey }
+      }))
+      const dead = probes.filter(p => p.status === null || p.status >= 500)
+      const unexplained = dead.filter(p => p.hasKey === true)
+      const detail = probes.map(p => `${p.host} ${p.status === null ? 'unreachable' : p.status}${p.hasKey === null ? '' : p.hasKey ? ' (page published)' : ' (NO page published)'}`).join('; ')
+      if (unexplained.length) {
+        add('hosts', 'fail', `${detail}. ${unexplained.map(p => p.host).join(', ')} has a published page and still fails — that is broken routing, not a missing page.`,
+          'Re-attach the hostname to the brand proxy (create_subdomain), and check the Worker is deployed in this account.')
+      } else if (dead.length) {
+        add('hosts', 'warn', `${detail}. Every failing hostname simply has NO published page: the proxy finds no html:<host>, falls through to an origin that does not exist, and Cloudflare answers 530 Origin DNS error. Nothing is broken — those pages were never published.`,
+          `Publish what each one should serve: publish_world_page for the console at me.${domain}, publish_html_node for any other host. Do NOT change DNS, tokens or the Worker.`)
+      } else {
+        add('hosts', 'pass', detail)
+      }
+    }
+  } else {
+    add('hosts', 'skip', 'no account/token to probe the hostnames with.')
   }
 
   // ---- publish secret: publish_html_node cannot write into the proxy without it ------------------
