@@ -4908,6 +4908,10 @@ async function executePreflightWorld(input, env) {
   const fails = checks.filter(c => c.state === 'fail')
   const warns = checks.filter(c => c.state === 'warn')
   const verdict = fails.length ? 'BLOCKED' : warns.length ? 'PROCEED WITH CARE' : 'READY'
+  const nextAction = fails.length
+    ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.'
+    : `The World's infrastructure is ready. If the ${domain} zone is not yet in ${cfAccount || 'the World account'}, move it; otherwise attach hosts with create_subdomain and publish pages with publish_html_node.`
+  const guide = fails.length ? fails[0].guide || worldSetupGuide() : worldSetupGuide('step-08-zone-move')
   return {
     success: true,
     domain,
@@ -4916,9 +4920,17 @@ async function executePreflightWorld(input, env) {
     cf_account_id: cfAccount || null,
     hosting_model: hosting || null,
     checks,
-    next: fails.length ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.' : 'Nothing blocking — setup_world can run, or continue with the zone move and publishing.',
-    guide: fails.length ? fails[0].guide || worldSetupGuide() : worldSetupGuide('step-08-zone-move'),
-    message: `${domain}: ${verdict}. ${checks.filter(c => c.state === 'pass').length} pass, ${warns.length} warn, ${fails.length} fail.${fails.length ? ' First thing to fix: ' + (fails[0].fix || fails[0].detail) : ''}\nGuide: ${fails.length ? (fails[0].guide || worldSetupGuide()).step : WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
+    next: nextAction,
+    guide: guide,
+    // The MESSAGE is the report. The agent may narrate nothing at all — Grok printed an empty reply
+    // to a READY verdict on 2026-09-24 — and this line is what the chat UI renders either way, so it
+    // carries every check, the next action and the guide link rather than a score.
+    message: [
+      `${domain}: ${verdict} — ${checks.filter(c => c.state === 'pass').length} pass, ${warns.length} warn, ${fails.length} fail.`,
+      ...checks.map(c => `  ${c.state === 'pass' ? 'OK  ' : c.state === 'warn' ? 'WARN' : c.state === 'skip' ? 'SKIP' : 'FAIL'} ${c.check} — ${c.detail}`),
+      fails.length ? `First to fix: ${fails[0].fix || fails[0].detail}` : `Next: ${nextAction}`,
+      `Guide: ${guide.step} — ${guide.url}`,
+    ].join('\n'),
   }
 }
 
@@ -5036,7 +5048,15 @@ async function executeSetupWorld(input, env) {
     steps,
     next: `The World's infrastructure is ready. Still human steps, in this order: (1) move the ${domain} zone into account ${account} if it is not there yet, (2) attach each host to the proxy with create_subdomain, (3) publish the pages with publish_html_node, (4) onboard ${domain} for sending in that account and register the sender. Run check_world_publish for ${domain} afterwards.`,
     guide: worldSetupGuide('step-08-zone-move'),
-    message: `${domain} provisioned: ${done} step(s) done, ${skipped} already in place. Founder ${founderEmail}, Cloudflare account ${account}. Every step was verified by reading the system back, not from a tool summary.\nNext in the guide: ${WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
+    // Same reason as preflight_world: this line IS the report, whatever the model chooses to say.
+    message: [
+      `${domain} provisioned — ${done} step(s) done, ${skipped} already in place.`,
+      `Founder ${founderEmail}, Cloudflare account ${account}.`,
+      ...steps.map(st => `  ${st.status === 'done' ? 'DID ' : st.status === 'skipped' ? 'HAD ' : 'STOP'} ${st.step} — ${st.detail}`),
+      'Every step was verified by reading the system back, not from a tool summary.',
+      `Next: if the ${domain} zone is not already in ${account}, move it; then create_subdomain for each host, publish_html_node for each page, and onboard ${domain} for sending. Run preflight_world for ${domain} to confirm.`,
+      `Guide: ${WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
+    ].join('\n'),
   }
 }
 

@@ -64,6 +64,10 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('the missing token points at the token step', find(r, 'credentials')?.guide?.node_id === 'step-02-token', JSON.stringify(find(r, 'credentials')?.guide))
   check('the registry failure points at setup_world', find(r, 'registry')?.guide?.node_id === 'step-03-setup-world', JSON.stringify(find(r, 'registry')?.guide))
   check('the message carries the guide URL', /gnew-viewer\?graphId=b7f3a1d0/.test(r.message || ''), r.message)
+  // The message IS the report: the model may narrate nothing (Grok returned an empty reply to a
+  // READY verdict on 2026-09-24), and this line is what the chat renders regardless.
+  check('the message lists every check, not just a score', (r.message || '').split('\n').length >= (r.checks || []).length + 2, r.message)
+  check('the message names each failing check', /FAIL registry/.test(r.message || ''), r.message)
 }
 
 // 2. A healthy own_account World.
@@ -80,6 +84,7 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('a provisioned page store passes', find(r, 'page-store')?.state === 'pass', JSON.stringify(find(r, 'page-store')))
   check('nibi.no is not flagged as a platform zone', find(r, 'platform-zone-lists')?.state === 'pass', JSON.stringify(find(r, 'platform-zone-lists')))
   check('a passing check is not cluttered with a guide', !find(r, 'registry')?.guide, JSON.stringify(find(r, 'registry')))
+  check('passing checks are reported too', /OK   registry/.test(r.message || ''), r.message)
   // With no failures the reader is sent to the zone move; with failures, to the step that explains
   // the FIRST one. This stub World has no proxy, so it is the second case.
   const firstFail = (r.checks || []).find(c => c.state === 'fail')
