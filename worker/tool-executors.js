@@ -5358,11 +5358,91 @@ async function executeSetupWorldHomepage(input, env) {
   const apex = domain
   const www = `www.${domain}`
 
-  // Resolve the homepage HTML: inline `html`, else a WORLD_TEMPLATES key.
+  // Where does the page come from? Three sources, and when NONE is given the tool ASKS instead of
+  // failing: the architect had a homepage ready in a graph and this tool could not see it, because
+  // it only ever read inline html or a KV key (2026-09-24). The Graph Context selector reaches every
+  // tool as contextGraphId, so the active graph's html-nodes can be offered by name.
+  const graphId = String(input.graphId || '').trim() || String(input.contextGraphId || '').trim()
+  const nodeId = String(input.nodeId || '').trim()
+  const templateKey = String(input.template_key || '').trim()
   let html = String(input.html || '')
+  const source = nodeId ? 'node' : html ? 'html' : templateKey ? 'template' : null
+
+  if (!source) {
+    // Offer what is actually there. An empty list is an answer too — it means this graph holds no
+    // page, and inline html is the only way forward.
+    let nodes = []
+    let graphTitle = null
+    if (graphId && env.KG_WORKER) {
+      try {
+        const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+        const data = await res.json().catch(() => null)
+        if (res.ok && data) {
+          graphTitle = data?.metadata?.title || null
+          nodes = (data.nodes || []).filter(n => String(n.type || '') === 'html-node')
+            .map(n => ({ nodeId: n.id, label: n.label || '(no label)', bytes: String(n.info || '').length }))
+        }
+      } catch { /* an unreadable graph is reported as no candidates, never as a failure */ }
+    }
+    return {
+      success: true,
+      complete: false,
+      needs_choice: true,
+      domain,
+      graph_id: graphId || null,
+      graph_title: graphTitle,
+      html_nodes: nodes,
+      question: `Which page should serve at ${apex} and www.${apex}?`,
+      message: [
+        `${apex}: nothing published yet — choose the source before I write anything.`,
+        graphId
+          ? (nodes.length
+            ? `A · an html-node from the active graph${graphTitle ? ` "${graphTitle}"` : ''} (${graphId}) — the node stays the source, and the page is built with the auth bridge and version pill:`
+            : `A · an html-node from the active graph${graphTitle ? ` "${graphTitle}"` : ''} (${graphId}) — but it holds no html-node.`)
+          : 'A · an html-node from a graph — no Graph Context is selected, so pass graphId and nodeId.',
+        ...nodes.map(n => `     nodeId ${n.nodeId} — ${n.label} (${n.bytes} bytes)`),
+        `B · a simple HTML string written straight to the apex — pass html. Fast, but then the KV snapshot is the only copy.`,
+        `C · a stored template — pass template_key.`,
+        `Re-run setup_world_homepage for ${domain} with your choice.`,
+      ].join('\n'),
+    }
+  }
+
+  // A node is published through the NORMAL publish path, not written raw: that path injects the auth
+  // bridge and the version pill and reads the bytes back. Attach the hostnames first so the host it
+  // publishes to actually routes.
+  if (source === 'node') {
+    if (!graphId) return { success: false, error: 'nodeId was given without a graphId, and no Graph Context is selected. Pass graphId.' }
+    const attachFirst = async (host) => {
+      const r = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, host)
+      return r.ok ? { ok: true, host, note: r.alreadyAttached ? `${host} already routed.` : `${host} attached.` } : { ok: false, host, error: `${r.status}: ${r.detail}`, note: r.note }
+    }
+    const apexFirst = await attachFirst(apex)
+    const wwwFirst = await attachFirst(www)
+    const published = await executePublishHtmlNode({ ...input, graphId, nodeId, host: apex, overwrite: true }, env)
+    if (published.success === false) {
+      return { success: false, step: 'publish-node', error: published.error, routes: { apex: apexFirst, www: wwwFirst }, detail: published }
+    }
+    return {
+      success: true,
+      complete: true,
+      domain,
+      source: 'node',
+      graph_id: graphId,
+      node_id: nodeId,
+      routes: { apex: apexFirst, www: wwwFirst },
+      verified: published.verified,
+      message: [
+        `${apex} now serves node ${nodeId} from graph ${graphId}${published.verified ? ' (bytes read back from the host)' : ' — NOT verified, see below'}.`,
+        `  ${apexFirst.ok ? 'OK  ' : 'FAIL'} ${apex} — ${apexFirst.note || apexFirst.error}`,
+        `  ${wwwFirst.ok ? 'OK  ' : 'FAIL'} ${www} — ${wwwFirst.note || wwwFirst.error}`,
+        'The graph node stays the source: edit it and re-run this, or publish_html_node, to update the live page.',
+        published.verified ? 'A newly attached custom domain can take about a minute for DNS and certificate.' : `Publish reported verified:false — ${published.message || 'the bytes landed in a store that does not serve this host.'}`,
+      ].join('\n'),
+    }
+  }
+
   if (!html) {
-    const templateKey = String(input.template_key || '').trim()
-    if (!templateKey) return { success: false, error: 'Provide either html (inline) or template_key.' }
     if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
     html = await env.WORLD_TEMPLATES.get(templateKey)
     if (!html) return { success: false, error: `Template "${templateKey}" not found in WORLD_TEMPLATES.` }

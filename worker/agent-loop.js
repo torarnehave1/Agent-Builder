@@ -1322,7 +1322,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         }
 
         try {
-          const result = await executeTool(toolName, { ...input, userId, authContext }, env, operationMap, onProgress)
+          const result = await executeTool(toolName, { ...input, userId, authContext, contextGraphId: options.graphId || null }, env, operationMap, onProgress)
           // Capture a freshly-created graph id so subsequent writes this turn target it, not the context graph.
           if (toolName === 'create_graph' && result && result.success !== false && result.graphId) {
             createdGraphId = result.graphId
@@ -1958,7 +1958,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             writer.write(encoder.encode(`event: tool_progress\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, message: msg })}\n\n`))
           }
           try {
-            const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap, onProgress)
+            const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext, contextGraphId: options.graphId || null }, env, operationMap, onProgress)
             if (result?.graphId) {
               inferredGraphId = result.graphId
             }
@@ -2423,7 +2423,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
           toolUse.input.graphId = inferredGraphId
         }
         try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext, contextGraphId: options.graphId || null }, env, operationMap)
           if (result?.graphId) {
             inferredGraphId = result.graphId
           }
@@ -2442,7 +2442,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
       const parallelResults = await Promise.all(parallelTools.map(async (toolUse) => {
         const toolEvent = await wal.begin('tool_call', toolUse.name, { turn, input: toolUse.input })
         try {
-          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext }, env, operationMap)
+          const result = await executeTool(toolUse.name, { ...toolUse.input, userId, authContext, contextGraphId: options.graphId || null }, env, operationMap)
           const toolFailed = !!(result && result.success === false)
           toolEvent.settle(toolFailed ? 'error' : 'ok', result?.message || result?.summary || result?.error || `${toolUse.name} ${toolFailed ? 'failed' : 'completed'}`)
           executionLog.push({ turn, type: 'tool_result', tool: toolUse.name, success: !toolFailed, result, timestamp: new Date().toISOString() })
