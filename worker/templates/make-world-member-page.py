@@ -105,9 +105,9 @@ rep('</body>\n</html>',
     '})();\n'
     '</script>\n'
     '</body>\n</html>')
-rep('.settings-button { width:38px; height:38px;',
-    '.logout-button { width:auto; height:38px; padding:0 14px; font-size:13px; font-weight:600; white-space:nowrap; flex:none; }\n'
-    '    .settings-button { width:38px; height:38px;')
+rep('    .settings-button { width:38px; height:38px; padding:0; display:grid; place-items:center; border:1px solid var(--line); background:white; color:var(--green); font-size:21px; }',
+    '    .settings-button { width:38px; height:38px; padding:0; display:grid; place-items:center; border:1px solid var(--line); background:white; color:var(--green); font-size:21px; }\n'
+    '    .logout-button { width:auto; height:38px; padding:0 14px; font-size:13px; font-weight:600; white-space:nowrap; flex:none; }')
 
 # ---- hide what this World does not have ------------------------------------
 rep("  element('settings').addEventListener('click', openSettings)\n",
