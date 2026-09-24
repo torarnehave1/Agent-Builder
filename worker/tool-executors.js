@@ -4918,6 +4918,7 @@ async function executePreflightWorld(input, env) {
   // all of which were correct. The cause was a MISSING KV KEY: the proxy finds no html:<host>, falls
   // through to an origin that does not exist, and Cloudflare answers 1016 Origin DNS error. A missing
   // page and broken routing are indistinguishable from outside, so report both facts together.
+  let unpublished = []
   if (cfAccount && cfToken) {
     let published = null
     if (kvNamespace) {
@@ -4978,8 +4979,14 @@ async function executePreflightWorld(input, env) {
         add('hosts', 'fail', `${detail}. ${unexplained.map(p => p.host).join(', ')} has a published page and still fails — that is broken routing, not a missing page.`,
           'Re-attach the hostname to the brand proxy (create_subdomain), and check the Worker is deployed in this account.')
       } else if (dead.length) {
-        add('hosts', 'warn', `${detail}. Every failing hostname simply has NO published page: the proxy finds no html:<host>, falls through to an origin that does not exist, and Cloudflare answers 530 Origin DNS error. Nothing is broken — those pages were never published.`,
-          `Publish what each one should serve: publish_world_page for the console at me.${domain}, publish_html_node for any other host. Do NOT change DNS, tokens or the Worker.`)
+        // Report the codes OBSERVED. The mechanism is the same — no html:<host>, so the proxy falls
+        // through to an origin that cannot serve the request — but Cloudflare dresses it differently
+        // each time (530 origin DNS on alivenesslab.net, 522 connection timed out on vegr.ai), and
+        // asserting one of them as "the" error is the same over-claiming that cost today's afternoon.
+        const codes = [...new Set(dead.map(p => p.status === null ? 'unreachable' : String(p.status)))].join('/')
+        add('hosts', 'warn', `${detail}. Every failing hostname has NO published page: the proxy finds no html:<host>, falls through to an origin that cannot serve it, and Cloudflare reports that as ${codes}. Nothing is broken — those pages were never published.`,
+          `Publish what each one should serve: publish_world_page for the console at me.${domain}, publish_html_node for any other host. Do NOT change DNS, tokens or the Worker. (After deploy_world_proxy picks up the current brand-proxy script, these answer an explicit 404 naming the missing key instead of a Cloudflare error.)`)
+        unpublished = dead.map(p => p.host)
       } else {
         add('hosts', 'pass', detail)
       }
@@ -5016,9 +5023,13 @@ async function executePreflightWorld(input, env) {
   const zoneHeld = zoneState && zoneState.status === 'active'
   const nextAction = fails.length
     ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.'
-    : zoneHeld
-      ? `The World is ready. Attach each host with create_subdomain, then publish its page with publish_html_node.`
-      : `The World's infrastructure is ready, but ${cfAccount || 'the World account'} does not hold an active ${domain} zone yet — move or add it before attaching hosts.`
+    : !zoneHeld
+      ? `The World's infrastructure is ready, but ${cfAccount || 'the World account'} does not hold an active ${domain} zone yet — move or add it before attaching hosts.`
+      : unpublished.length
+        // The hosts are attached; telling the reader to attach them is advice to redo finished work,
+        // which is what "attach each host with create_subdomain" did to a World serving six pages.
+        ? `The World is serving. ${unpublished.length} attached hostname(s) have no page yet: ${unpublished.join(', ')}. Publish each one — publish_world_page for the console, publish_html_node for the rest.`
+        : `The World is ready and every attached hostname serves a page.`
   const guide = fails.length
     ? fails[0].guide || worldSetupGuide()
     : worldSetupGuide(zoneHeld ? 'step-09-hosts-and-pages' : 'step-08-zone-move')

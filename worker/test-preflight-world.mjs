@@ -162,7 +162,9 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   restore()
   check('an owned zone passes its check', find(r, 'zone')?.state === 'pass', JSON.stringify(find(r, 'zone')))
   check('and the guide points at hosts and pages, NOT the zone move', r.guide?.node_id === 'step-09-hosts-and-pages', JSON.stringify(r.guide))
-  check('and next says there is nothing to move', /Attach each host/.test(r.next || ''), r.next)
+  // The point is that a held zone is never told to move — not the exact wording of what comes next.
+  check('and next never tells you to move a zone you hold', !/move or add the/i.test(r.next || ''), r.next)
+  check('and it points at what remains', /ready/i.test(r.next || ''), r.next)
 }
 
 // 6. The zone is somewhere else: a caution with the move named, not a pass.
