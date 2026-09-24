@@ -276,7 +276,9 @@ const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
 export const SEQUENTIAL_TOOLS = new Set([
   'create_graph', 'create_node', 'create_html_node', 'add_edge', 'remove_edge',
   'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
-  'setup_world',
+  // setup_world_homepage publishes an html-node through the normal publish path when given one,
+  // which writes the node's host references — so it races with other node writes if run in parallel.
+  'setup_world', 'setup_world_homepage',
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',
