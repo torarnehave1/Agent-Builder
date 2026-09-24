@@ -95,7 +95,6 @@ rep('</body>\n</html>',
     "    b.title = 'Logg ut'; b.textContent = 'Logg ut';\n"
     "    b.addEventListener('click', function () {\n"
     "      try { localStorage.removeItem('vegvisr_user'); localStorage.removeItem('user'); localStorage.removeItem('userStore') } catch (e) {}\n"
-    "      try { window.dispatchEvent(new Event('vegvisr-auth-changed')) } catch (e) {}\n"
     '      location.reload();\n'
     '    });\n'
     '    account.appendChild(b);\n'
