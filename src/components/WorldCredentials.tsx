@@ -1,9 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const AGENT_API = 'https://agent.vegvisr.org';
 
 interface Props {
   resolvedTheme?: 'light' | 'dark';
+}
+
+interface WorldRow {
+  domain: string;
+  founder_email: string | null;
+  hosting_model: string | null;
+  cf_account_id: string | null;
+  token_stored: boolean;
 }
 
 interface CredentialState {
@@ -35,6 +43,7 @@ function getAuthToken(): string {
 // never in a tool call, and is dropped from component state the moment it is saved. Nothing here
 // ever displays a stored token: the worker returns only the last six characters.
 export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
+  const [worlds, setWorlds] = useState<WorldRow[]>([]);
   const [domain, setDomain] = useState('');
   const [accountId, setAccountId] = useState('');
   const [token, setToken] = useState('');
@@ -43,6 +52,21 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState('');
   const isLight = resolvedTheme === 'light';
+
+  useEffect(() => {
+    fetch(`${AGENT_API}/world-credentials?list=1`, { headers: { 'X-API-Token': getAuthToken() } })
+      .then((r) => r.json())
+      .then((d) => setWorlds(Array.isArray(d.worlds) ? d.worlds : []))
+      .catch(() => setError('Could not load the World registry.'));
+  }, []);
+
+  const pick = (d: string) => {
+    setDomain(d);
+    const row = worlds.find((w) => w.domain === d);
+    setAccountId(row?.cf_account_id || '');
+    setState(null);
+    if (d) check(d);
+  };
 
   const check = async (forDomain?: string) => {
     const d = (forDomain ?? domain).trim().toLowerCase();
@@ -118,14 +142,17 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
 
       <div className="flex flex-col gap-3">
         <div>
-          <label className={labelClass}>World domain</label>
-          <input
-            className={field}
-            value={domain}
-            placeholder="alivenesslab.org"
-            onChange={(e) => setDomain(e.target.value)}
-            onBlur={() => check()}
-          />
+          <label className={labelClass}>World</label>
+          <select className={field} value={domain} onChange={(e) => pick(e.target.value)}>
+            <option value="">— choose a World —</option>
+            {worlds.map((w) => (
+              <option key={w.domain} value={w.domain}>
+                {w.domain}
+                {w.hosting_model === 'own_account' ? ' · own account' : ''}
+                {w.token_stored ? ' · token stored' : ' · no token'}
+              </option>
+            ))}
+          </select>
         </div>
 
         {state && (
@@ -153,7 +180,7 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
           <input
             className={field}
             value={accountId}
-            placeholder="077b2127436f8d047c000ecad69e4017"
+            placeholder="from the World's Cloudflare account"
             onChange={(e) => setAccountId(e.target.value)}
           />
         </div>
@@ -166,11 +193,16 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
             value={token}
             autoComplete="off"
             spellCheck={false}
-            placeholder="pasted once, stored server-side, never displayed"
+            placeholder="paste the token here"
             onChange={(e) => setToken(e.target.value)}
           />
         </div>
 
+        {(!domain || !token.trim()) && (
+          <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+            {!domain ? 'Choose a World first.' : 'Paste the API token to enable Store.'}
+          </p>
+        )}
         <div className="flex items-center gap-2">
           <button
             type="button"

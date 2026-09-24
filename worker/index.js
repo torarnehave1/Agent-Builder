@@ -357,6 +357,24 @@ export default {
           return new Response(JSON.stringify({ error: 'Superadmin role required to read or set World credentials.' }), { status: 403, headers: corsHeaders })
         }
 
+        // GET ?list=1 → the Worlds this operator can pick from. Typing a domain by hand is how a
+        // token lands on the wrong World; the picker means the domain always comes from the registry.
+        if (request.method === 'GET' && url.searchParams.get('list')) {
+          const rows = await env.DB.prepare(
+            `SELECT w.domain, w.founder_email, w.hosting_model, w.cf_account_id,
+                    CASE WHEN c.cf_api_token IS NOT NULL AND c.cf_api_token != '' THEN 1 ELSE 0 END AS token_stored
+             FROM world_founders w LEFT JOIN config c ON c.email = w.founder_email
+             GROUP BY w.domain ORDER BY w.domain`
+          ).all()
+          return new Response(JSON.stringify({ worlds: (rows?.results || []).map(r => ({
+            domain: r.domain,
+            founder_email: r.founder_email,
+            hosting_model: r.hosting_model,
+            cf_account_id: r.cf_account_id,
+            token_stored: Boolean(r.token_stored),
+          })) }), { headers: corsHeaders })
+        }
+
         const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {}
         const domain = String((request.method === 'POST' ? body.domain : url.searchParams.get('domain')) || '').trim().toLowerCase()
         if (!domain) {
