@@ -4732,6 +4732,130 @@ async function executeAdminRegisterUser(input, env) {
 // Idempotent by design: every step first asks "is this already true?" and skips when it is, so the
 // tool can be run again after a human step without redoing or breaking what exists.
 // ---------------------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------------------
+// preflight_world — READ-ONLY. Answers "what is actually true about this World?" before anyone
+// touches it. Every finding here is one that cost a real evening:
+//   * a domain hard-coded in the platform zone lists while it lives in its own account — broke
+//     create_subdomain and sent publishes into the wrong KV, twice (vegr.ai, and queued for
+//     alivenesslab.org)
+//   * world_founders and domains disagreeing — own_account with no account id, so every
+//     account-resolving tool read the wrong one
+//   * a stored token Cloudflare no longer accepts, reported as "SET" by anything that only
+//     checked for a non-empty string
+//   * pages published in the PLATFORM store for a domain the platform no longer serves
+// It writes nothing. Run it before setup_world, before a zone move, and whenever something is odd.
+// ---------------------------------------------------------------------------------------------
+async function executePreflightWorld(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'inspect a World')
+  if (!gate.ok) return { success: false, error: gate.error }
+  const domain = String(input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { success: false, error: "domain is required, e.g. 'alivenesslab.org'." }
+
+  const checks = []
+  const add = (name, state, detail, fix = null) => checks.push({ check: name, state, detail, ...(fix ? { fix } : {}) })
+
+  // ---- registry: the two rows must agree, and an own_account World must name its account -------
+  const wf = await env.DB.prepare('SELECT founder_email, account_holder_email, hosting_model, cf_account_id, status, main_chat_group_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+  const dom = await env.DB.prepare('SELECT hosting_model, cf_account_id, kind, status FROM domains WHERE domain = ?').bind(domain).first()
+  const hosting = String(wf?.hosting_model || '').toLowerCase()
+  const wfAccount = String(wf?.cf_account_id || '').trim()
+  const domAccount = String(dom?.cf_account_id || '').trim()
+  const founderEmail = String(wf?.founder_email || '').toLowerCase()
+
+  if (!wf) add('registry', 'fail', `No world_founders row for ${domain}.`, `Run setup_world for ${domain} with founder_email and cf_account_id.`)
+  else if (hosting === 'own_account' && !wfAccount) add('registry', 'fail', `${domain} is own_account but world_founders.cf_account_id is NULL — half-registered.`, `Run setup_world for ${domain} with cf_account_id; every account-resolving tool reads the wrong account until then.`)
+  else if (wfAccount && domAccount && wfAccount !== domAccount) add('registry', 'fail', `world_founders says ${wfAccount}, domains says ${domAccount}.`, 'Run setup_world; it re-registers and verifies both rows.')
+  else if (hosting === 'own_account' && String(dom?.hosting_model || '').toLowerCase() !== 'own_account') add('registry', 'fail', `world_founders says own_account, domains still says ${dom?.hosting_model || 'nothing'}.`, 'Run setup_world; it writes and verifies both rows.')
+  else add('registry', 'pass', `${hosting || 'unregistered'}${wfAccount ? ` on ${wfAccount}` : ''}, founder ${founderEmail || 'unknown'}, both rows agree.`)
+
+  // ---- the trap that cost the most: a hard-coded platform zone for an own-account World --------
+  const listed = []
+  if (SHARED_BRAND_ZONES.includes(domain)) listed.push('SHARED_BRAND_ZONES')
+  if (PLATFORM_SUBDOMAIN_ZONES.includes(domain)) listed.push('PLATFORM_SUBDOMAIN_ZONES')
+  if (hosting === 'own_account' && listed.length) {
+    add('platform-zone-lists', 'fail', `${domain} is own_account but hard-coded in ${listed.join(' and ')}.`, 'Remove it from those lists in tool-executors.js and deploy; otherwise create_subdomain uses the platform token on a foreign zone and publish writes into the wrong KV while reporting success.')
+  } else if (listed.length) {
+    add('platform-zone-lists', 'pass', `listed as a platform zone in ${listed.join(' and ')}, consistent with hosting_model ${hosting || 'unset'}.`)
+  } else {
+    add('platform-zone-lists', 'pass', 'not hard-coded as a platform zone.')
+  }
+
+  // ---- credentials: stored AND still accepted by Cloudflare -------------------------------------
+  let cfToken = null
+  let cfAccount = wfAccount
+  if (founderEmail) {
+    const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token, cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first()
+    cfToken = String(row?.cf_api_token || '').trim() || null
+    const rowAccount = String(row?.cf_account_id || '').trim()
+    if (!cfToken) {
+      add('credentials', 'fail', `No Cloudflare token stored for ${founderEmail}.`, `Create a token in the World's account and run setup_world with cf_api_token.`)
+    } else {
+      let live = null
+      try {
+        const r = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', { headers: { Authorization: `Bearer ${cfToken}` } })
+        const j = await r.json().catch(() => ({}))
+        live = r.ok && j.success !== false
+      } catch { live = null }
+      if (live === false) add('credentials', 'fail', `The stored token for ${founderEmail} is REJECTED by Cloudflare (revoked, rolled or mistyped).`, 'Roll or recreate it, then set_world_credentials and set_email_password with the new value.')
+      else if (live === null) add('credentials', 'warn', `Could not reach Cloudflare to verify the stored token for ${founderEmail}.`)
+      else add('credentials', 'pass', `token stored for ${founderEmail} and accepted by Cloudflare.`)
+      if (rowAccount && wfAccount && rowAccount !== wfAccount) add('credentials-account', 'fail', `The founder profile points at ${rowAccount} while the registry says ${wfAccount}.`, 'Run setup_world with the correct cf_account_id.')
+      cfAccount = cfAccount || rowAccount
+    }
+    add('page-store', row?.cf_kv_namespace_id ? 'pass' : 'fail',
+      row?.cf_kv_namespace_id ? `HTML_PAGES ${row.cf_kv_namespace_id}` : 'No HTML_PAGES namespace provisioned for this World.',
+      row?.cf_kv_namespace_id ? null : 'Run setup_world; it creates the namespace and records it.')
+  } else {
+    add('credentials', 'fail', 'No founder email known, so no credentials can be resolved.')
+  }
+
+  // ---- the proxy that would serve this World's hosts -------------------------------------------
+  if (cfAccount && cfToken) {
+    const stem = domain.split('.')[0]
+    const probe = await inspectBrandProxy(cfAccount, cfToken, `me.${domain}`, `${stem}-brand-proxy`)
+    if (probe.denied) add('proxy', 'warn', `Could not check the brand proxy: the stored token was refused (${probe.deniedStatus}) on ${probe.deniedCall}. This is a permissions refusal, NOT a missing proxy.`)
+    else if (probe.exists) add('proxy', 'pass', `${probe.name} exists in ${cfAccount}.`)
+    else add('proxy', 'fail', `No brand proxy in ${cfAccount} (looked for ${probe.name}).`, 'Run setup_world; it deploys the proxy.')
+  } else {
+    add('proxy', 'skip', 'no account/token to check with.')
+  }
+
+  // ---- publish secret: publish_html_node cannot write into the proxy without it ------------------
+  const secret = await getWorldPublishSecret(env, domain).catch(() => null)
+  add('publish-secret', secret?.secret ? 'pass' : 'fail',
+    secret?.secret ? `stored (scope ${secret.scope}, key ${secret.key})` : 'No publish secret for this World.',
+    secret?.secret ? null : 'Run setup_world; it sets the secret on the proxy and stores it.')
+
+  // ---- pages sitting in the PLATFORM store for a domain the platform may not serve --------------
+  if (env.BRAND_WORKER) {
+    try {
+      const r = await env.BRAND_WORKER.fetch('https://brand-worker/__html/list', { method: 'GET' })
+      if (r.ok) {
+        const j = await r.json().catch(() => ({}))
+        const keys = (j.keys || j.result || []).map(k => (typeof k === 'string' ? k : k.name)).filter(k => k && k.includes(domain))
+        if (keys.length && hosting === 'own_account') add('platform-pages', 'warn', `${keys.length} page(s) for ${domain} are still in the PLATFORM page store: ${keys.join(', ')}.`, 'They serve only while the zone is in the platform account. Copy them into the World\'s own store before moving the zone.')
+        else if (keys.length) add('platform-pages', 'pass', `${keys.length} page(s) in the platform store, consistent with a central World.`)
+        else add('platform-pages', 'pass', 'no pages for this domain in the platform store.')
+      }
+    } catch { /* listing is a nicety, not a gate */ }
+  }
+
+  const fails = checks.filter(c => c.state === 'fail')
+  const warns = checks.filter(c => c.state === 'warn')
+  const verdict = fails.length ? 'BLOCKED' : warns.length ? 'PROCEED WITH CARE' : 'READY'
+  return {
+    success: true,
+    domain,
+    verdict,
+    founder_email: founderEmail || null,
+    cf_account_id: cfAccount || null,
+    hosting_model: hosting || null,
+    checks,
+    next: fails.length ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.' : 'Nothing blocking — setup_world can run, or continue with the zone move and publishing.',
+    message: `${domain}: ${verdict}. ${checks.filter(c => c.state === 'pass').length} pass, ${warns.length} warn, ${fails.length} fail.${fails.length ? ' First thing to fix: ' + (fails[0].fix || fails[0].detail) : ''}`,
+  }
+}
+
 async function executeSetupWorld(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'set up a World')
   if (!gate.ok) return { success: false, error: gate.error }
@@ -15537,6 +15661,9 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAnalyzeTranscription(toolInput, env, progress)
     case 'admin_register_user':
       return await executeAdminRegisterUser(toolInput, env)
+    case 'preflight_world':
+      return await executePreflightWorld(toolInput, env)
+
     case 'setup_world':
       return await executeSetupWorld(toolInput, env)
 

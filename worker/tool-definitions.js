@@ -3304,6 +3304,17 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'preflight_world',
+    description: "READ-ONLY health check for a World — run it BEFORE setup_world, before a zone move, and whenever something behaves oddly. Answers what is actually TRUE about the World rather than what is assumed: do world_founders and domains agree (a half-registered own_account World with no account id makes every account-resolving tool read the wrong account); is the domain hard-coded in the platform zone lists while living in its own account (this broke create_subdomain and sent publishes into the wrong KV while reporting success); is the stored Cloudflare token still ACCEPTED by Cloudflare (a revoked token still looks 'SET' to anything that only checks for a non-empty string); does the World have its page store, its brand proxy and its publish secret; and are pages still sitting in the PLATFORM store for a domain the platform no longer serves. Writes nothing. Returns a verdict (READY / PROCEED WITH CARE / BLOCKED), a per-check list with a fix for each failure, and the first thing to do. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      required: ['domain'],
+      properties: {
+        domain: { type: 'string', description: "The World domain to inspect, e.g. 'alivenesslab.org'." },
+      },
+    },
+  },
+  {
     name: 'setup_world',
     description: "Provision a World in ONE call instead of six prompts. Runs the whole sequence server-side in a fixed order — store credentials, register the World as own_account, create its HTML_PAGES KV, deploy its brand proxy, set its publish secret — and VERIFIES each step by reading the system back (D1 rows, stored ids), never from a tool's own summary. Idempotent: every step checks whether it is already true and is skipped if so, so it is safe to run again after a human step. When something genuinely needs a person (no API token stored yet, no account id known), it stops with ONE instruction and reports which steps were finished; run it again afterwards. Use this INSTEAD of calling set_world_credentials / register_world_founder / provision_world_kv / deploy_world_proxy / set_world_publish_secret one at a time. It does NOT move the zone, attach hosts, publish pages or set up mail — those stay human or separate, and are named in the result. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {

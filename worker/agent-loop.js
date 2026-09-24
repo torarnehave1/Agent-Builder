@@ -195,7 +195,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'read_html_section', 'read_html_head', 'list_html_anchors', 'list_html_text',
   'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
   'edit_html_node', 'translate_html_node',
-  'setup_world',
+  'setup_world', 'preflight_world',
   // publish's prerequisite must ride along — a loop with publish but no create_subdomain
   // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
   'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',
