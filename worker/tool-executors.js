@@ -4926,12 +4926,39 @@ async function executePreflightWorld(input, env) {
         published = new Set(keys.json.result.map(k => String(k.name || '').replace(/^html:/, '').toLowerCase()))
       }
     }
-    const doms = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken)
-    const hosts = doms.ok && Array.isArray(doms.json?.result)
-      ? doms.json.result.map(d => String(d.hostname || '').toLowerCase()).filter(h => h === domain || h.endsWith(`.${domain}`))
-      : []
+    // A hostname reaches a Worker by EITHER of two mechanisms, and listing only one lies about the
+    // other: a Workers custom domain (DNS record of type "worker"), or a proxied AAAA placeholder at
+    // 100:: bound by a Worker route. vegr.ai uses the placeholder form for seven of its eight hosts
+    // and a custom domain for exactly one; alivenesslab.net uses custom domains for all four. Reading
+    // the zone's DNS records covers both, which /accounts/<id>/workers/domains does not.
+    const hostSet = new Set()
+    let listedVia = null
+    if (zoneState && zoneState.id) {
+      const recs = await cfApi(`/zones/${zoneState.id}/dns_records?per_page=500`, cfToken)
+      if (recs.ok && Array.isArray(recs.json?.result)) {
+        listedVia = 'zone DNS records'
+        for (const rec of recs.json.result) {
+          const type = String(rec.type || '').toLowerCase()
+          const name = String(rec.name || '').toLowerCase()
+          const isWorkerDomain = type === 'worker'
+          const isWorkerPlaceholder = (type === 'aaaa' && String(rec.content || '').trim() === '100::' && rec.proxied)
+          if (isWorkerDomain || isWorkerPlaceholder) hostSet.add(name)
+        }
+      }
+    }
+    if (!hostSet.size) {
+      const doms = await cfApi(`/accounts/${cfAccount}/workers/domains`, cfToken)
+      if (doms.ok && Array.isArray(doms.json?.result)) {
+        listedVia = listedVia || 'Workers custom domains'
+        for (const d of doms.json.result) {
+          const h = String(d.hostname || '').toLowerCase()
+          if (h === domain || h.endsWith(`.${domain}`)) hostSet.add(h)
+        }
+      }
+    }
+    const hosts = [...hostSet]
     if (!hosts.length) {
-      add('hosts', 'skip', doms.ok ? `no hostname of ${domain} is attached to a Worker in ${cfAccount}.` : `could not list Workers custom domains (${doms.status}).`)
+      add('hosts', 'skip', `no hostname of ${domain} appears to be served by a Worker (checked ${listedVia || 'both the zone records and the account custom domains'}).`)
     } else {
       const probes = await Promise.all(hosts.map(async (host) => {
         let status = null

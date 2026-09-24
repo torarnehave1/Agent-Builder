@@ -39,6 +39,13 @@ function makeEnv({ world = null, domainRow = null, config = null, tokenOwner = '
     if (u.includes('/user/tokens/verify')) return json(tokenOwner === 'user' ? active : rejected)
     if (u.includes('/tokens/verify')) return json(tokenOwner === 'account' ? active : rejected)
     // A deployed brand proxy, so a zone assertion is not masked by an unrelated failure.
+    if (hosts && u.includes('/dns_records')) {
+      return json({ success: true, result: Object.entries(hosts).map(([h, v]) => (
+        v.via === 'placeholder'
+          ? { name: h, type: 'AAAA', content: '100::', proxied: true }
+          : { name: h, type: 'worker', content: 'brand-proxy', proxied: true }
+      )) })
+    }
     if (hosts && u.includes('/workers/domains')) return json({ success: true, result: Object.keys(hosts).map(h => ({ hostname: h, service: 'alivenesslab-brand-proxy' })) })
     if (hosts && u.includes('/storage/kv/namespaces/')) {
       return json({ success: true, result: Object.entries(hosts).filter(([, v]) => v.key).map(([h]) => ({ name: `html:${h}` })) })
@@ -227,7 +234,31 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('and it is named as broken routing', /broken routing/.test(hostCheck?.detail || ''), hostCheck?.detail)
 }
 
-// 10. domain is required.
+// 10. vegr.ai's shape: seven hosts on proxied AAAA 100:: placeholders bound by Worker ROUTES, and
+// exactly one real custom domain. Listing only /workers/domains would have seen one host of eight
+// and called the rest unserved.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'post@vegr.ai', hosting_model: 'own_account', cf_account_id: 'acct2' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: 'acct2' },
+    config: { cf_account_id: 'acct2', cf_api_token: 'tok', cf_kv_namespace_id: 'kv2' },
+    tokenOwner: 'account', zone: 'active', publishSecret: 'vegr.ai',
+    hosts: {
+      'vegr.ai': { status: 200, key: true, via: 'placeholder' },
+      'me.vegr.ai': { status: 200, key: true, via: 'placeholder' },
+      'minside.vegr.ai': { status: 200, key: true, via: 'placeholder' },
+      'challenge.vegr.ai': { status: 404, key: false, via: 'custom-domain' },
+    },
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'vegr.ai' }, env)
+  restore()
+  const hostCheck = find(r, 'hosts')
+  check('placeholder-routed hosts are seen, not just custom domains', /me\.vegr\.ai/.test(hostCheck?.detail || '') && /minside\.vegr\.ai/.test(hostCheck?.detail || ''), hostCheck?.detail)
+  check('the custom-domain host is seen too', /challenge\.vegr\.ai/.test(hostCheck?.detail || ''), hostCheck?.detail)
+  check('a 404 is not treated as a dead host', hostCheck?.state === 'pass', JSON.stringify(hostCheck))
+}
+
+// 11. domain is required.
 {
   const { env, restore } = makeEnv({})
   const r = await executeTool('preflight_world', { ...CALLER }, env)
