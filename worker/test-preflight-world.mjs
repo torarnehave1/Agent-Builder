@@ -49,6 +49,13 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('no page store is a failure', find(r, 'page-store')?.state === 'fail', JSON.stringify(find(r, 'page-store')))
   check('it says what to do first', Boolean(r.next), r.next)
   check('it writes nothing', writes.length === 0, JSON.stringify(writes))
+  // The answer must point at the setup graph, at the STEP that explains this failure — not at the
+  // top of a runbook the reader then has to search.
+  check('the result points at the setup guide', r.guide?.graph_id === 'b7f3a1d0-9c52-4e18-a6b4-3f5d8e2c7a91', JSON.stringify(r.guide))
+  check('the guide names a step', Boolean(r.guide?.step && r.guide?.node_id), JSON.stringify(r.guide))
+  check('the missing token points at the token step', find(r, 'credentials')?.guide?.node_id === 'step-02-token', JSON.stringify(find(r, 'credentials')?.guide))
+  check('the registry failure points at setup_world', find(r, 'registry')?.guide?.node_id === 'step-03-setup-world', JSON.stringify(find(r, 'registry')?.guide))
+  check('the message carries the guide URL', /gnew-viewer\?graphId=b7f3a1d0/.test(r.message || ''), r.message)
 }
 
 // 2. A healthy own_account World.
@@ -64,6 +71,13 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('a live token passes', find(r, 'credentials')?.state === 'pass', JSON.stringify(find(r, 'credentials')))
   check('a provisioned page store passes', find(r, 'page-store')?.state === 'pass', JSON.stringify(find(r, 'page-store')))
   check('nibi.no is not flagged as a platform zone', find(r, 'platform-zone-lists')?.state === 'pass', JSON.stringify(find(r, 'platform-zone-lists')))
+  check('a passing check is not cluttered with a guide', !find(r, 'registry')?.guide, JSON.stringify(find(r, 'registry')))
+  // With no failures the reader is sent to the zone move; with failures, to the step that explains
+  // the FIRST one. This stub World has no proxy, so it is the second case.
+  const firstFail = (r.checks || []).find(c => c.state === 'fail')
+  check('the guide follows the first failure, or the zone move when there is none',
+    r.guide?.node_id === (firstFail ? firstFail.guide.node_id : 'step-08-zone-move'),
+    JSON.stringify({ firstFail: firstFail?.check, guide: r.guide?.node_id }))
 }
 
 // 3. domain is required.

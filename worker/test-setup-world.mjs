@@ -49,6 +49,9 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('it says to run setup_world again', /setup_world/.test(r.message || ''), r.message)
   check('nothing was written while stopped', state.calls.length === 0, JSON.stringify(state.calls))
   check('the step list shows the pause, not a failure', r.steps?.some(s => s.step === 'credentials' && s.status === 'needs-you'), JSON.stringify(r.steps))
+  // A pause must hand over the step of the setup guide that explains the human action.
+  check('the pause points at the token step of the setup guide', r.guide?.node_id === 'step-02-token' && r.guide?.graph_id === 'b7f3a1d0-9c52-4e18-a6b4-3f5d8e2c7a91', JSON.stringify(r.guide))
+  check('the guide reaches the user in the message', /gnew-viewer\?graphId=b7f3a1d0/.test(r.message || ''), r.message)
 }
 
 // 2. Rows disagree and no account id is known anywhere: STOP, write nothing.
@@ -61,6 +64,7 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   const r = await executeTool('setup_world', { ...CALLER, domain: DOMAIN }, env)
   check('credentials already stored are skipped, not re-stored', r.steps?.some(s => s.step === 'credentials' && s.status === 'skipped'), JSON.stringify(r.steps))
   check('stops when no account id is known', r.complete === false && /account id/i.test(r.next || ''), JSON.stringify(r).slice(0, 220))
+  check('a missing account id points at the account step', r.guide?.node_id === 'step-01-account', JSON.stringify(r.guide))
   check('half-written registry is not "fixed" blindly', state.calls.length === 0, JSON.stringify(state.calls))
 }
 

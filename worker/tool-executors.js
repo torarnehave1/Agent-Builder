@@ -4745,14 +4745,62 @@ async function executeAdminRegisterUser(input, env) {
 //   * pages published in the PLATFORM store for a domain the platform no longer serves
 // It writes nothing. Run it before setup_world, before a zone move, and whenever something is odd.
 // ---------------------------------------------------------------------------------------------
+// The setup guide is DATA, not prose in this file. Graph b7f3a1d0 holds one node per step — the
+// exact prompt to run, the arguments it needs, the four things only a human can do, the traps that
+// each cost an evening — so the guide can be corrected by editing the graph, not by a deploy
+// (Lesson 25: capability belongs in graphs, not code). Every failing check below names the step that
+// explains it, so an answer is never "it is broken" without "and here is what to do about it".
+const WORLD_SETUP_GUIDE_GRAPH = 'b7f3a1d0-9c52-4e18-a6b4-3f5d8e2c7a91'
+const WORLD_SETUP_GUIDE_STEPS = {
+  'step-00-index': '0 · Hvordan bruke denne guiden',
+  'step-01-account': '1 · Opprett World-kontoen i Cloudflare',
+  'step-02-token': '2 · Lag API-token i World-kontoen',
+  'step-03-setup-world': '3 · Kjør setup_world',
+  'step-04-code-check': '4 · Sjekk at domenet ikke er hardkodet som plattform-sone',
+  'step-05-pages-inventory': '5 · Finn ut hva som blir mørkt ved flytting',
+  'step-06-mailbox': '6 · Postkasse og mottak',
+  'step-07-sending': '7 · Gi verdenen rett til å sende',
+  'step-08-zone-move': '8 · Flytt sonen til World-kontoen',
+  'step-09-hosts-and-pages': '9 · Koble vertsnavn og publiser sidene',
+  'step-10-verify': '10 · Verifiser hele kjeden',
+}
+
+function worldSetupGuide(step = 'step-00-index') {
+  const node = WORLD_SETUP_GUIDE_STEPS[step] ? step : 'step-00-index'
+  return {
+    graph_id: WORLD_SETUP_GUIDE_GRAPH,
+    node_id: node,
+    step: WORLD_SETUP_GUIDE_STEPS[node],
+    url: `https://www.vegvisr.org/gnew-viewer?graphId=${WORLD_SETUP_GUIDE_GRAPH}`,
+  }
+}
+
 async function executePreflightWorld(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'inspect a World')
   if (!gate.ok) return { success: false, error: gate.error }
   const domain = String(input.domain || '').trim().toLowerCase()
   if (!domain || !domain.includes('.')) return { success: false, error: "domain is required, e.g. 'alivenesslab.org'." }
 
+  // Each check knows which step of the setup guide explains it, so a failure carries its own
+  // instructions instead of sending the reader back to the top of a runbook.
+  const stepFor = {
+    registry: 'step-03-setup-world',
+    'platform-zone-lists': 'step-04-code-check',
+    credentials: 'step-02-token',
+    'credentials-account': 'step-03-setup-world',
+    'page-store': 'step-03-setup-world',
+    proxy: 'step-03-setup-world',
+    'publish-secret': 'step-03-setup-world',
+    'platform-pages': 'step-05-pages-inventory',
+  }
   const checks = []
-  const add = (name, state, detail, fix = null) => checks.push({ check: name, state, detail, ...(fix ? { fix } : {}) })
+  const add = (name, state, detail, fix = null) => checks.push({
+    check: name,
+    state,
+    detail,
+    ...(fix ? { fix } : {}),
+    ...(state === 'fail' || state === 'warn' ? { guide: worldSetupGuide(stepFor[name]) } : {}),
+  })
 
   // ---- registry: the two rows must agree, and an own_account World must name its account -------
   const wf = await env.DB.prepare('SELECT founder_email, account_holder_email, hosting_model, cf_account_id, status, main_chat_group_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
@@ -4852,7 +4900,8 @@ async function executePreflightWorld(input, env) {
     hosting_model: hosting || null,
     checks,
     next: fails.length ? fails.map(f => f.fix).filter(Boolean)[0] || 'Resolve the failures above.' : 'Nothing blocking — setup_world can run, or continue with the zone move and publishing.',
-    message: `${domain}: ${verdict}. ${checks.filter(c => c.state === 'pass').length} pass, ${warns.length} warn, ${fails.length} fail.${fails.length ? ' First thing to fix: ' + (fails[0].fix || fails[0].detail) : ''}`,
+    guide: fails.length ? fails[0].guide || worldSetupGuide() : worldSetupGuide('step-08-zone-move'),
+    message: `${domain}: ${verdict}. ${checks.filter(c => c.state === 'pass').length} pass, ${warns.length} warn, ${fails.length} fail.${fails.length ? ' First thing to fix: ' + (fails[0].fix || fails[0].detail) : ''}\nGuide: ${fails.length ? (fails[0].guide || worldSetupGuide()).step : WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
   }
 }
 
@@ -4873,14 +4922,18 @@ async function executeSetupWorld(input, env) {
   }
   // A human step is not a failure — it is a pause with one instruction.
   const stopHere = (name, instruction, extra = {}) => {
-    record(name, 'needs-you', instruction, extra)
+    // The four human steps each have a node in the setup guide; name the right one rather than
+    // handing back a paragraph and hoping it is enough.
+    const guide = worldSetupGuide({ credentials: 'step-02-token', registry: 'step-01-account' }[name])
+    record(name, 'needs-you', instruction, { ...extra, guide })
     return {
       success: true,
       complete: false,
       domain,
       steps,
       next: instruction,
-      message: `${domain}: ${steps.filter(s => s.status === 'done').length} step(s) done, then stopped — ${instruction} Run setup_world for ${domain} again afterwards; finished steps are skipped.`,
+      guide,
+      message: `${domain}: ${steps.filter(s => s.status === 'done').length} step(s) done, then stopped — ${instruction} Run setup_world for ${domain} again afterwards; finished steps are skipped.\nGuide: ${guide.step} — ${guide.url}`,
     }
   }
 
@@ -4965,7 +5018,8 @@ async function executeSetupWorld(input, env) {
     cf_account_id: account,
     steps,
     next: `The World's infrastructure is ready. Still human steps, in this order: (1) move the ${domain} zone into account ${account} if it is not there yet, (2) attach each host to the proxy with create_subdomain, (3) publish the pages with publish_html_node, (4) onboard ${domain} for sending in that account and register the sender. Run check_world_publish for ${domain} afterwards.`,
-    message: `${domain} provisioned: ${done} step(s) done, ${skipped} already in place. Founder ${founderEmail}, Cloudflare account ${account}. Every step was verified by reading the system back, not from a tool summary.`,
+    guide: worldSetupGuide('step-08-zone-move'),
+    message: `${domain} provisioned: ${done} step(s) done, ${skipped} already in place. Founder ${founderEmail}, Cloudflare account ${account}. Every step was verified by reading the system back, not from a tool summary.\nNext in the guide: ${WORLD_SETUP_GUIDE_STEPS['step-08-zone-move']} — ${worldSetupGuide().url}`,
   }
 }
 
