@@ -4745,9 +4745,29 @@ async function executeRegisterWorldFounder(input, env) {
   const stem = domain.split('.')[0]
   const worldName = (input.world_name || '').trim() || (stem.charAt(0).toUpperCase() + stem.slice(1))
   const metaTag = (input.meta_area_tag || '').trim() || ('#' + stem.toUpperCase())
-  const cfAccount = (input.cf_account_id || '').trim() || null
+  let cfAccount = (input.cf_account_id || '').trim() || null
   const hostingModel = (input.hosting_model || 'own_account').trim()
   const holder = (input.account_holder_email || '').trim().toLowerCase() || founderEmail
+
+  // An own_account World without an account id is a HALF-REGISTERED World: world_founders says
+  // own_account while domains still points at the platform, every account-resolving tool then reads
+  // the wrong one, and this tool used to answer "completed". The agent dropped this argument on
+  // vegr.ai (twice) and on alivenesslab.org (2026-09-23/24), so do not rely on it being passed:
+  // fall back to the account already stored for the founder or the holder, and refuse if neither
+  // has one rather than writing rows that disagree.
+  if (hostingModel.toLowerCase() === 'own_account' && !cfAccount) {
+    for (const candidate of [founderEmail, holder]) {
+      if (cfAccount || !candidate) continue
+      const row = await env.DB.prepare('SELECT cf_account_id FROM config WHERE email = ?').bind(candidate).first()
+      if (row && String(row.cf_account_id || '').trim()) cfAccount = String(row.cf_account_id).trim()
+    }
+    if (!cfAccount) {
+      return {
+        success: false,
+        error: `cf_account_id is required to register ${domain} as an own_account World, and none is stored for ${founderEmail}${holder !== founderEmail ? ` or ${holder}` : ''}. Pass the World's Cloudflare account id in this call (or run set_world_credentials for the domain first). Nothing was written — a World registered as own_account WITHOUT an account id leaves world_founders and domains disagreeing, and every tool that resolves the account then picks the wrong one.`,
+      }
+    }
+  }
 
   // Replacing a founder. Registering a second email on a domain only ADDS a row, and every
   // domain-keyed resolver picks the oldest row, so the placeholder founder kept winning (nibi.no,
