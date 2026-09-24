@@ -2584,7 +2584,7 @@ async function probeDeadBackendUrls(html) {
 // hint). Treating every host as shared is what silently wrote charlie.iamazing.page's page into the
 // Vegvisr account's KV while the founder's proxy — the one actually serving the host — never saw it
 // (2026-09-05). The classification only PICKS a path; readPublishedKey below is what proves it.
-const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'alivenesslab.org', 'movemetime.com']
+const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'movemetime.com']
 const isSharedBrandHost = (host) => SHARED_BRAND_ZONES.some((z) => host === z || host.endsWith(`.${z}`))
 
 // A STATIC list cannot answer "who serves this host" — a domain moves. vegr.ai was on this list and
@@ -2980,7 +2980,7 @@ async function resolveSuperadminCaller(input, env, action) {
 // with the platform token. A World whose zone lives in its own account must NOT be listed here, or it
 // never reaches the own-account branch below and fails with "Authentication error (code 10000)".
 // vegr.ai moved to the founder's own account on 2026-09-23 and was removed from this list.
-const PLATFORM_SUBDOMAIN_ZONES = ['norsegong.com', 'xyzvibe.com', 'vegvisr.org', 'slowyou.training', 'alivenesslab.org']
+const PLATFORM_SUBDOMAIN_ZONES = ['norsegong.com', 'xyzvibe.com', 'vegvisr.org', 'slowyou.training']
 
 async function executeCreateSubdomain(input, env) {
   const gate = await resolveSuperadminCaller(input, env, 'create a subdomain')
