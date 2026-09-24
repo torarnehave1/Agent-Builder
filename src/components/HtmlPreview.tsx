@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { formatHtmlForReading } from '../lib/format-html';
 
 // --- Direct anchor-section editing (no agent, no LLM) -------------------------
 // Editable regions are delimited by comment markers <!-- edit:<id>:start/end -->.
@@ -378,16 +379,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   // navigation: count the matches, step through them, and put the caret on each one.
   const codeAreaRef = useRef<HTMLTextAreaElement>(null);
   const [codeSearch, setCodeSearch] = useState('');
+  const [codePretty, setCodePretty] = useState(false);
+  const codeDisplay = useMemo(
+    () => (codePretty ? formatHtmlForReading(codeValue) : codeValue),
+    [codePretty, codeValue]
+  );
   const [codeMatchIdx, setCodeMatchIdx] = useState(0);
   const codeMatches = useMemo(() => {
     const needle = codeSearch.toLowerCase();
     if (needle.length < 2) return [] as number[];
-    const hay = codeValue.toLowerCase();
+    const hay = codeDisplay.toLowerCase();
     const out: number[] = [];
     let at = hay.indexOf(needle);
     while (at !== -1 && out.length < 5000) { out.push(at); at = hay.indexOf(needle, at + needle.length); }
     return out;
-  }, [codeSearch, codeValue]);
+  }, [codeSearch, codeDisplay]);
   const goToMatch = useCallback((which: number) => {
     if (!codeMatches.length) return;
     const wrapped = (which + codeMatches.length) % codeMatches.length;
@@ -399,9 +405,9 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     area.setSelectionRange(start, start + codeSearch.length);
     // The source is one long minified line, so line-height maths does not apply; scroll by how far
     // into the text the match sits, then let the caret do the fine positioning.
-    const ratio = codeValue.length ? start / codeValue.length : 0;
+    const ratio = codeDisplay.length ? start / codeDisplay.length : 0;
     area.scrollTop = Math.max(0, ratio * (area.scrollHeight - area.clientHeight) - area.clientHeight / 3);
-  }, [codeMatches, codeSearch, codeValue]);
+  }, [codeMatches, codeSearch, codeDisplay]);
   const [codeSaving, setCodeSaving] = useState(false);
   const [codeMsg, setCodeMsg] = useState('');
   // A SNAPSHOT of the buffer rendered in the iframe without saving, so a pasted page can be
@@ -1517,6 +1523,14 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             </button>
             <button
               type="button"
+              onClick={() => setCodePretty(v => !v)}
+              className={`text-[10px] px-2 py-0.5 rounded transition-colors ${codePretty ? 'bg-violet-500/40 text-violet-100' : 'bg-violet-500/15 text-violet-300 hover:bg-violet-500/30'}`}
+              title="Vis kilden med innrykk og linjeskift. Kun visning — lagring skriver alltid de opprinnelige bytene."
+            >
+              {codePretty ? 'Vis original' : 'Formater for lesing'}
+            </button>
+            <button
+              type="button"
               onClick={copyCode}
               className="text-[10px] px-2 py-0.5 rounded text-white/50 hover:text-white hover:bg-white/10 transition-colors"
               title="Kopier hele kilden til utklippstavlen"
@@ -1565,10 +1579,16 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
               ↓
             </button>
           </div>
+          {codePretty && (
+            <span className="text-[10px] text-violet-300/70">
+              Formatert for lesing — skrivebeskyttet. Søket gjelder denne visningen; «Lagre hele siden» skriver alltid originalen.
+            </span>
+          )}
           <textarea
             ref={codeAreaRef}
-            value={codeValue}
-            onChange={e => { setCodeValue(e.target.value); if (codeMsg) setCodeMsg(''); }}
+            value={codeDisplay}
+            readOnly={codePretty}
+            onChange={e => { if (codePretty) return; setCodeValue(e.target.value); if (codeMsg) setCodeMsg(''); }}
             onKeyDown={e => {
               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveCode(); }
               // Cmd/Ctrl+F inside the source goes to THIS search, not the browser's — the browser
