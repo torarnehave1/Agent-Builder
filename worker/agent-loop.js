@@ -195,6 +195,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'read_html_section', 'read_html_head', 'list_html_anchors', 'list_html_text',
   'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
   'edit_html_node', 'translate_html_node',
+  'setup_world',
   // publish's prerequisite must ride along — a loop with publish but no create_subdomain
   // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
   'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',
@@ -275,6 +276,7 @@ const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
 export const SEQUENTIAL_TOOLS = new Set([
   'create_graph', 'create_node', 'create_html_node', 'add_edge', 'remove_edge',
   'patch_node', 'patch_graph_metadata', 'edit_html_node', 'save_form_data',
+  'setup_world',
   // Deterministic html-node edit/structure tools (node-content mutations).
   'replace_html_section', 'append_to_section', 'insert_html_at', 'insert_in_element',
   'move_html_element', 'remove_html_element', 'apply_layout', 'fill_slot_with_component', 'bind_node_text',

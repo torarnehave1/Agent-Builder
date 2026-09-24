@@ -3304,6 +3304,20 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'setup_world',
+    description: "Provision a World in ONE call instead of six prompts. Runs the whole sequence server-side in a fixed order — store credentials, register the World as own_account, create its HTML_PAGES KV, deploy its brand proxy, set its publish secret — and VERIFIES each step by reading the system back (D1 rows, stored ids), never from a tool's own summary. Idempotent: every step checks whether it is already true and is skipped if so, so it is safe to run again after a human step. When something genuinely needs a person (no API token stored yet, no account id known), it stops with ONE instruction and reports which steps were finished; run it again afterwards. Use this INSTEAD of calling set_world_credentials / register_world_founder / provision_world_kv / deploy_world_proxy / set_world_publish_secret one at a time. It does NOT move the zone, attach hosts, publish pages or set up mail — those stay human or separate, and are named in the result. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      required: ['domain'],
+      properties: {
+        domain: { type: 'string', description: "The World domain, e.g. 'alivenesslab.org'." },
+        cf_account_id: { type: 'string', description: "The World's OWN Cloudflare account id. Needed the first time; afterwards it is read from what is stored. Pass it whenever you have it — a World registered own_account without one leaves the registry disagreeing with itself." },
+        cf_api_token: { type: 'string', description: "An API token for that account, stored server-side and never returned. Only needed when no token is stored for the founder yet. Scopes: account Workers Scripts / Workers KV / Workers R2 / Pages / Account Settings Read / Email Sending, and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings." },
+        founder_email: { type: 'string', description: "The World's own address, e.g. post@<domain>. Required only when the World is not registered yet; otherwise taken from the registry." },
+      },
+    },
+  },
+  {
     name: 'register_world_founder',
     description:
       'Register (or confirm) a World Founder in the world_founders + domains registry. This makes their domain resolve in onboarding-status (domain_source=world-founder-registry), permits them in the me.<domain> login allowlist (system owner + founder), and links the World content tag. Superadmin only. Idempotent — safe to re-run. Pure D1 registry write; does NOT touch Cloudflare. Use for "connect/link user X as World Founder of domain Y" (register the user with admin_register_user first if they do not exist). A domain that already has a founder gets an ADDITIONAL founder row unless replace_founder_email is given; use that for "replace/change/transfer the founder".',

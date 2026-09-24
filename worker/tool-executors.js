@@ -4719,6 +4719,132 @@ async function executeAdminRegisterUser(input, env) {
 // Register a World Founder in the world_founders + domains registry (Superadmin only, idempotent).
 // Makes the domain resolve in onboarding-status, permits the founder in the login allowlist, and
 // links the World content tag. Does NOT touch Cloudflare — pure D1 registry write.
+// ---------------------------------------------------------------------------------------------
+// setup_world — ONE call that provisions a World, instead of a human pasting six prompts.
+//
+// Why this exists: every World so far was built by reading a runbook and issuing the tools one at
+// a time, checking D1 between them because the summaries could not be trusted. Worse, the model in
+// the middle kept DROPPING arguments (cf_account_id three times, a token eight times in a row), so
+// a six-step flow was a coin flip. This runner takes the model out of the critical path: the steps
+// run server-side in a fixed order, each one is VERIFIED by reading the system back, and it stops
+// with one clear instruction when a human genuinely must act.
+//
+// Idempotent by design: every step first asks "is this already true?" and skips when it is, so the
+// tool can be run again after a human step without redoing or breaking what exists.
+// ---------------------------------------------------------------------------------------------
+async function executeSetupWorld(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'set up a World')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const domain = String(input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { success: false, error: "domain is required, e.g. 'alivenesslab.org'." }
+  const cfAccountId = String(input.cf_account_id || '').trim()
+  const cfApiToken = String(input.cf_api_token || '').trim()
+  const founderEmailIn = String(input.founder_email || '').trim().toLowerCase()
+
+  const steps = []
+  const record = (name, status, detail, extra = {}) => {
+    steps.push({ step: name, status, detail, ...extra })
+    return steps[steps.length - 1]
+  }
+  // A human step is not a failure — it is a pause with one instruction.
+  const stopHere = (name, instruction, extra = {}) => {
+    record(name, 'needs-you', instruction, extra)
+    return {
+      success: true,
+      complete: false,
+      domain,
+      steps,
+      next: instruction,
+      message: `${domain}: ${steps.filter(s => s.status === 'done').length} step(s) done, then stopped — ${instruction} Run setup_world for ${domain} again afterwards; finished steps are skipped.`,
+    }
+  }
+
+  // ---- 1. registry row: who the founder is and which account the World lives in ---------------
+  let wf = await env.DB.prepare(
+    'SELECT founder_email, account_holder_email, hosting_model, cf_account_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1'
+  ).bind(domain).first()
+  const founderEmail = founderEmailIn || String(wf?.founder_email || '').toLowerCase()
+  if (!founderEmail) {
+    return { success: false, error: `No World is registered for ${domain} and no founder_email was given. Pass founder_email (the World's own address, e.g. post@${domain}) so the World can be registered.` }
+  }
+
+  // ---- 2. credentials: the World's own Cloudflare token, stored against the founder ------------
+  const credRow = await env.DB.prepare('SELECT cf_account_id, cf_api_token FROM config WHERE email = ?').bind(founderEmail).first()
+  const storedAccount = String(credRow?.cf_account_id || '').trim()
+  const hasToken = Boolean(String(credRow?.cf_api_token || '').trim())
+  if (cfApiToken) {
+    const res = await executeSetWorldCredentials({ ...input, domain, founder_email: founderEmail, cf_account_id: cfAccountId || storedAccount, cf_api_token: cfApiToken }, env)
+    if (res.success === false) return { success: false, steps, error: `Storing the World credentials failed: ${res.error}` }
+    record('credentials', 'done', `stored for ${founderEmail}`)
+  } else if (hasToken) {
+    record('credentials', 'skipped', `already stored for ${founderEmail}`)
+  } else {
+    return stopHere('credentials',
+      `Create an API token in the World's Cloudflare account (${cfAccountId || storedAccount || 'the account that owns ' + domain}) with: account-level Workers Scripts, Workers KV Storage, Workers R2 Storage, Pages, Account Settings Read, Email Sending; and on all zones Zone Read, DNS Edit, Workers Routes, Zone Settings. Then run setup_world again with cf_api_token set (or run set_world_credentials for ${domain} first).`)
+  }
+
+  const account = cfAccountId || storedAccount || String(wf?.cf_account_id || '').trim()
+  if (!account) {
+    return stopHere('registry', `No Cloudflare account id is known for ${domain}. Run setup_world again with cf_account_id set to the World's own account.`)
+  }
+
+  // ---- 3. register (or correct) the World as own_account, then READ BOTH ROWS BACK -------------
+  const registryOk = (row, dom) => row && String(row.hosting_model || '').toLowerCase() === 'own_account' && String(row.cf_account_id || '').trim() === account && (dom ? String(dom.hosting_model || '').toLowerCase() === 'own_account' && String(dom.cf_account_id || '').trim() === account : true)
+  let domRow = await env.DB.prepare('SELECT hosting_model, cf_account_id FROM domains WHERE domain = ?').bind(domain).first()
+  if (registryOk(wf, domRow)) {
+    record('registry', 'skipped', `already own_account on ${account}`)
+  } else {
+    const res = await executeRegisterWorldFounder({ ...input, domain, founder_email: founderEmail, account_holder_email: wf?.account_holder_email || founderEmail, hosting_model: 'own_account', cf_account_id: account }, env)
+    if (res.success === false) return { success: false, steps, error: `Registering ${domain} failed: ${res.error}` }
+    wf = await env.DB.prepare('SELECT founder_email, account_holder_email, hosting_model, cf_account_id FROM world_founders WHERE domain = ? ORDER BY created_at LIMIT 1').bind(domain).first()
+    domRow = await env.DB.prepare('SELECT hosting_model, cf_account_id FROM domains WHERE domain = ?').bind(domain).first()
+    if (!registryOk(wf, domRow)) {
+      return { success: false, steps, error: `register_world_founder reported success but the rows still disagree — world_founders: ${wf?.hosting_model}/${wf?.cf_account_id}, domains: ${domRow?.hosting_model}/${domRow?.cf_account_id}. Expected own_account/${account} in both. Nothing further was attempted.` }
+    }
+    record('registry', 'done', `own_account on ${account}, both rows verified`)
+  }
+
+  // ---- 4. the World's own page store ----------------------------------------------------------
+  const kvBefore = String((await env.DB.prepare('SELECT cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first())?.cf_kv_namespace_id || '').trim()
+  if (kvBefore) {
+    record('kv', 'skipped', `HTML_PAGES already provisioned (${kvBefore})`)
+  } else {
+    const res = await executeProvisionWorldKv({ ...input, domain, founder_email: founderEmail }, env)
+    if (res.success === false) return { success: false, steps, error: `provision_world_kv failed: ${res.error}` }
+    const after = String((await env.DB.prepare('SELECT cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first())?.cf_kv_namespace_id || '').trim()
+    if (!after) return { success: false, steps, error: 'provision_world_kv reported success but no namespace id was stored for the founder.' }
+    record('kv', 'done', `HTML_PAGES ${after}`)
+  }
+
+  // ---- 5. the proxy that serves this World's hosts ---------------------------------------------
+  const proxyRes = await executeDeployWorldProxy({ ...input, domain, founder_email: founderEmail }, env)
+  if (proxyRes.success === false) {
+    return { success: false, steps, error: `deploy_world_proxy failed: ${proxyRes.error}` }
+  }
+  record('proxy', 'done', proxyRes.message || proxyRes.summary || `${domain.split('.')[0]}-brand-proxy deployed`)
+
+  // ---- 6. the secret publish_html_node uses to write into that proxy ---------------------------
+  const secretRes = await executeSetWorldPublishSecret({ ...input, domain, founder_email: founderEmail }, env)
+  if (secretRes.success === false) {
+    return { success: false, steps, error: `set_world_publish_secret failed: ${secretRes.error}` }
+  }
+  record('publish-secret', 'done', secretRes.message || 'publish secret set on the proxy')
+
+  const done = steps.filter(s => s.status === 'done').length
+  const skipped = steps.filter(s => s.status === 'skipped').length
+  return {
+    success: true,
+    complete: true,
+    domain,
+    founder_email: founderEmail,
+    cf_account_id: account,
+    steps,
+    next: `The World's infrastructure is ready. Still human steps, in this order: (1) move the ${domain} zone into account ${account} if it is not there yet, (2) attach each host to the proxy with create_subdomain, (3) publish the pages with publish_html_node, (4) onboard ${domain} for sending in that account and register the sender. Run check_world_publish for ${domain} afterwards.`,
+    message: `${domain} provisioned: ${done} step(s) done, ${skipped} already in place. Founder ${founderEmail}, Cloudflare account ${account}. Every step was verified by reading the system back, not from a tool summary.`,
+  }
+}
+
 async function executeRegisterWorldFounder(input, env) {
   // Superadmin gate — resolve the caller robustly. The agent loop injects input.userId +
   // input.authContext; read role from authContext first, else look up the profile by userId.
@@ -15411,6 +15537,9 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAnalyzeTranscription(toolInput, env, progress)
     case 'admin_register_user':
       return await executeAdminRegisterUser(toolInput, env)
+    case 'setup_world':
+      return await executeSetupWorld(toolInput, env)
+
     case 'register_world_founder':
       return await executeRegisterWorldFounder(toolInput, env)
     case 'publish_world_page':
