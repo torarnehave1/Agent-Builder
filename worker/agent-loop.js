@@ -196,6 +196,10 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'replace_html_section', 'append_to_section', 'insert_in_element', 'insert_html_at',
   'edit_html_node', 'translate_html_node',
   'setup_world', 'preflight_world',
+  // A contact form with no route posts into a default group while telling the sender "thank
+  // you" — and without this tool on the Grok path, the model reached for set_email_password
+  // instead and overwrote another World's sender (2026-09-25).
+  'set_contact_route',
   // publish's prerequisite must ride along — a loop with publish but no create_subdomain
   // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
   'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',

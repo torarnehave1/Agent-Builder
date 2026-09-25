@@ -7558,6 +7558,17 @@ async function executeSetEmailPassword(input, env) {
 
   const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
   if (!appPassword) throw new Error('appPassword is required')
+  // A model asked for a tool it did not have reached for this one instead and filled both secret
+  // fields with plausible-looking nonsense — the literal string "app password" and an account id of
+  // 3f3c8e2c5f0e0e0e0e0e0e0e0e0e0e0e — overwriting another World's sender twice (universi.no,
+  // 2026-09-25). A credential writer must refuse what is obviously not a credential.
+  const PLACEHOLDER_SECRETS = [
+    'app password', 'apppassword', 'app-password', 'your app password', 'the app password',
+    'password', 'secret', 'xxxx', 'placeholder', 'changeme', 'test', 'string',
+  ]
+  if (PLACEHOLDER_SECRETS.includes(appPassword.toLowerCase())) {
+    return { success: false, error: `appPassword is the placeholder "${appPassword}", not a credential. NEVER invent or guess a password. Ask the user to store it in Settings -> World Cloudflare credentials, or to paste the real value; nothing was written.` }
+  }
 
   // Optional: convert the existing sender to a different backend at the same time
   // (e.g. upgrade an "smtp" sender to "cf-email-service"). Both fields are optional;
@@ -7567,6 +7578,12 @@ async function executeSetEmailPassword(input, env) {
     throw new Error(`accountType must be "smtp", "gmail", or "cf-email-service" (got "${newAccountType}")`)
   }
   const newCfAccountId = typeof input.cfAccountId === 'string' ? input.cfAccountId.trim() : ''
+  // A Cloudflare account id is exactly 32 hex characters. The fabricated one that reached this tool
+  // passed every check because nothing checked its SHAPE, and it then pointed a working World's
+  // sender at an account that does not exist.
+  if (newCfAccountId && !/^[0-9a-f]{32}$/i.test(newCfAccountId)) {
+    return { success: false, error: `cfAccountId "${newCfAccountId}" is not a Cloudflare account id (32 hex characters). Do not guess it — read it from the World's registry row or from Manage Account in Cloudflare; nothing was written.` }
+  }
 
   // Optional operator override: set the password on ANOTHER user's existing sender (Superadmin only).
   let targetEmail = profile.email
