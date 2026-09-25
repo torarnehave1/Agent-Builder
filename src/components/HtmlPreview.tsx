@@ -793,7 +793,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         });
       }
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) { setVisualMsg(data?.error || `Lagring feilet (${res.status})`); setVisualSaving(false); return; }
+      if (!res.ok || !data?.ok) { setVisualMsg([data?.error, data?.details].filter(Boolean).join(' — ') || `Lagring feilet (${res.status})`); setVisualSaving(false); return; }
       onHtmlChange?.(newHtml); // re-renders the iframe from clean bytes; handleIframeLoad re-arms edit mode + recaptures baseline
       setVisualMsg(`Lagret · v${data.newVersion}`);
     } catch (e) {
@@ -927,7 +927,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         });
       }
       const data = await res.json().catch(() => null);
-      if (!res.ok || !data?.ok) { setSrMsg(data?.error || `Lagring feilet (${res.status})`); setSrSaving(false); return; }
+      if (!res.ok || !data?.ok) { setSrMsg([data?.error, data?.details].filter(Boolean).join(' — ') || `Lagring feilet (${res.status})`); setSrSaving(false); return; }
       onHtmlChange?.(newHtml); // refresh preview from new bytes — deterministic, no agent
       setSrMsg(`Erstattet ${n} · v${data.newVersion}`);
     } catch (e) {
@@ -965,7 +965,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       res = await put(Number(latest?.metadata?.version || 0));
     }
     const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.ok) return { ok: false, error: String(data?.error || `Lagring feilet (${res.status})`) };
+    if (!res.ok || !data?.ok) return { ok: false, error: String([data?.error, data?.details].filter(Boolean).join(' — ') || `Lagring feilet (${res.status})`) };
     return { ok: true, version: Number(data.newVersion) };
   };
 
