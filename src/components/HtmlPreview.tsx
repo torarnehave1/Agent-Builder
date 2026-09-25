@@ -392,7 +392,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       setCodeMsg(`${file.name} er ${(file.size / 1e6).toFixed(1)} MB — grensen er 16 MB.`);
       return;
     }
-    if (codeDirty && !window.confirm('Feltet har ulagrede endringer. Erstatte dem med filen?')) return;
+    const unsaved = codeValue !== (versionHtml || html || '');
+    if (unsaved && !window.confirm('Feltet har ulagrede endringer. Erstatte dem med filen?')) return;
     try {
       const text = await file.text();
       if (!text.includes('<')) {
@@ -405,7 +406,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     } catch {
       setCodeMsg(`Kunne ikke lese ${file.name}.`);
     }
-  }, [codeDirty]);
+  }, [codeValue, versionHtml, html]);
   const codeDisplay = useMemo(
     () => (codePretty ? formatHtmlForReading(codeValue) : codeValue),
     [codePretty, codeValue]
