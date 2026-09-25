@@ -380,6 +380,32 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const codeAreaRef = useRef<HTMLTextAreaElement>(null);
   const [codeSearch, setCodeSearch] = useState('');
   const [codePretty, setCodePretty] = useState(false);
+  const codeFileRef = useRef<HTMLInputElement>(null);
+  const [codeDropping, setCodeDropping] = useState(false);
+  // Load a .html file straight into the editor. It does NOT save — the bytes land in the field and
+  // the normal "Lagre hele siden" writes them, so an upload can still be looked at, searched and
+  // abandoned before it touches the node.
+  const loadHtmlFile = useCallback(async (file: File | null | undefined) => {
+    if (!file) return;
+    const MAX = 16 * 1024 * 1024;
+    if (file.size > MAX) {
+      setCodeMsg(`${file.name} er ${(file.size / 1e6).toFixed(1)} MB — grensen er 16 MB.`);
+      return;
+    }
+    if (codeDirty && !window.confirm('Feltet har ulagrede endringer. Erstatte dem med filen?')) return;
+    try {
+      const text = await file.text();
+      if (!text.includes('<')) {
+        setCodeMsg(`${file.name} ser ikke ut som HTML — ingen tagger funnet. Ingenting ble lastet inn.`);
+        return;
+      }
+      setCodePretty(false);
+      setCodeValue(text);
+      setCodeMsg(`Lastet inn ${file.name} — ${text.length.toLocaleString('nb-NO')} tegn. Ikke lagret ennå.`);
+    } catch {
+      setCodeMsg(`Kunne ikke lese ${file.name}.`);
+    }
+  }, [codeDirty]);
   const codeDisplay = useMemo(
     () => (codePretty ? formatHtmlForReading(codeValue) : codeValue),
     [codePretty, codeValue]
@@ -1521,6 +1547,21 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             >
               Hent på nytt
             </button>
+            <input
+              ref={codeFileRef}
+              type="file"
+              accept=".html,.htm,text/html"
+              className="hidden"
+              onChange={e => { loadHtmlFile(e.target.files?.[0]); e.target.value = ''; }}
+            />
+            <button
+              type="button"
+              onClick={() => codeFileRef.current?.click()}
+              className="text-[10px] px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 hover:bg-amber-500/30 transition-colors"
+              title="Les en .html-fil inn i feltet. Den lagres ikke før du trykker «Lagre hele siden»."
+            >
+              Last opp HTML
+            </button>
             <button
               type="button"
               onClick={() => setCodePretty(v => !v)}
@@ -1588,6 +1629,14 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             ref={codeAreaRef}
             value={codeDisplay}
             readOnly={codePretty}
+            onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setCodeDropping(true); } }}
+            onDragLeave={() => setCodeDropping(false)}
+            onDrop={e => {
+              if (!e.dataTransfer.files?.length) return;
+              e.preventDefault();
+              setCodeDropping(false);
+              loadHtmlFile(e.dataTransfer.files[0]);
+            }}
             onChange={e => { if (codePretty) return; setCodeValue(e.target.value); if (codeMsg) setCodeMsg(''); }}
             onKeyDown={e => {
               if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveCode(); }
@@ -1603,8 +1652,8 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
             }}
             spellCheck={false}
             wrap="soft"
-            className="w-full h-[38vh] min-h-[160px] bg-slate-950 text-white/85 border border-white/10 rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y"
-            placeholder="Hele HTML-kilden for denne noden — rediger, eller lim inn en helt ny side…"
+            className={`w-full h-[38vh] min-h-[160px] bg-slate-950 text-white/85 border rounded px-2 py-1.5 font-mono text-[11px] leading-snug resize-y transition-colors ${codeDropping ? 'border-amber-400 bg-amber-950/20' : 'border-white/10'}`}
+            placeholder="Hele HTML-kilden for denne noden — rediger, lim inn en ny side, eller slipp en .html-fil her…"
           />
         </div>
       )}
