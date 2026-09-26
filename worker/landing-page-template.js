@@ -16,7 +16,7 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <meta name="template-version" content="1.7.0" />
+  <meta name="template-version" content="1.7.1" />
   <meta name="default-theme" content="{{DEFAULT_THEME}}" />
   <meta name="template-id" content="landing-page" />
   <title>{{TITLE}}</title>
@@ -25,6 +25,9 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
        from our own origin, and it loads marked itself. One line replaces this page\u2019s copy of
        the renderer, so a fix reaches every page without a republish. -->
   <script src="https://api.vegvisr.org/components/vegvisr-fulltext.js" defer><\/script>
+  <!-- Auth + graph-save bridge: window.vegvisrPatchNode is the only save path that is
+       actually authenticated once this page is published (see saveSectionContent below). -->
+  <script src="https://api.vegvisr.org/components/vegvisr-auth.js" defer><\/script>
   <!-- Mermaid for diagrams -->
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"><\/script>
 
@@ -869,7 +872,8 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
   <nav id="landingNav" class="landing-nav">
     <div id="navLinks" class="nav-links"></div>
     <div class="nav-auth">
-      <button type="button" id="btnLogin" class="nav-login-btn">Login</button>
+      <vegvisr-auth></vegvisr-auth>
+      <button type="button" id="btnLogin" class="nav-login-btn hidden">Login</button>
       <button type="button" id="btnLogout" class="nav-logout-btn hidden">Logout</button>
     </div>
   </nav>
@@ -1536,49 +1540,17 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
       statusEl.className = 'section-edit-status';
 
       try {
-        var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
-        if (!versionRes.ok) throw new Error('Could not fetch current graph version');
-        var versionData = await versionRes.json();
-        var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-
-        var patchRes = await fetch(KG_API + '/patchNode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-          body: JSON.stringify({
-            graphId: GRAPH_ID,
-            nodeId: node.id,
-            fields: { info: newContent },
-            expectedVersion: expectedVersion
-          })
-        });
-        if (patchRes.status === 409) {
-          versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
-          if (!versionRes.ok) throw new Error('Could not refresh graph version');
-          versionData = await versionRes.json();
-          expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-          patchRes = await fetch(KG_API + '/patchNode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-            body: JSON.stringify({
-              graphId: GRAPH_ID,
-              nodeId: node.id,
-              fields: { info: newContent },
-              expectedVersion: expectedVersion
-            })
-          });
+        // window.vegvisrPatchNode (injected by vegvisr-auth.js) is the only save path that
+        // is actually authenticated once this page is published — a raw fetch to /patchNode
+        // with a hardcoded role header is REJECTED server-side (2026-09-26 fix). It resolves
+        // a real logged-in identity and retries once on a version conflict internally.
+        if (typeof window.vegvisrPatchNode !== 'function') {
+          throw new Error('Ikke innlogget i Vegvisr — logg inn for å lagre.');
         }
-        if (patchRes.ok) {
-          statusEl.textContent = 'Saved!';
-          statusEl.className = 'section-edit-status saved';
-          setTimeout(function() { onSuccess(); }, 800);
-        } else {
-          var errText = '';
-          try { var errData = await patchRes.json(); errText = errData.error || errData.message || ''; } catch(e) {}
-          statusEl.textContent = 'Save failed: ' + (errText || patchRes.status);
-          statusEl.className = 'section-edit-status error';
-          saveBtn.disabled = false;
-          cancelBtn.disabled = false;
-        }
+        await window.vegvisrPatchNode(node.id, { info: newContent }, GRAPH_ID);
+        statusEl.textContent = 'Saved!';
+        statusEl.className = 'section-edit-status saved';
+        setTimeout(function() { onSuccess(); }, 800);
       } catch (err) {
         statusEl.textContent = 'Error: ' + err.message;
         statusEl.className = 'section-edit-status error';
@@ -1652,34 +1624,16 @@ export const LANDING_PAGE_TEMPLATE = `<!DOCTYPE html>
           replaced = replaced.replace(/<style data-vegvisr-theme="[^"]*">:root\\s*\\{[^}]*\\}<\\/style>/g, '');
           replaced = replaced.replace('</head>', themeStyle + '\\n</head>');
 
-          var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
-          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
-          var versionData = await versionRes.json();
-          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-
-          var patchRes = await fetch(KG_API + '/patchNode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
-          });
-          if (patchRes.status === 409) {
-            versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
-            if (!versionRes.ok) throw new Error('Could not refresh graph version');
-            versionData = await versionRes.json();
-            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-            patchRes = await fetch(KG_API + '/patchNode', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-              body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
-            });
+          // window.vegvisrPatchNode (injected by vegvisr-auth.js) is the only save path that
+          // is actually authenticated once this page is published — a raw fetch to
+          // /patchNode with a hardcoded role header is REJECTED server-side (2026-09-26 fix).
+          if (typeof window.vegvisrPatchNode !== 'function') {
+            throw new Error('Ikke innlogget i Vegvisr — logg inn for å lagre.');
           }
-          if (patchRes.ok) {
-            showToast('Theme saved!', true);
-            if (window.parent && window.parent !== window) {
-              window.parent.postMessage({ type: 'RELOAD_GRAPH' }, '*');
-            }
-          } else {
-            showToast('Save failed: ' + patchRes.status, false);
+          await window.vegvisrPatchNode(targetNode.id, { info: replaced }, graphId);
+          showToast('Theme saved!', true);
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'RELOAD_GRAPH' }, '*');
           }
         } catch (e) {
           showToast('Error: ' + e.message, false);

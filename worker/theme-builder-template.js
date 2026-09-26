@@ -16,12 +16,13 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="template-version" content="1.2.1" />
+  <meta name="template-version" content="1.2.2" />
   <meta name="template-id" content="theme-builder" />
   <title>{{TITLE}}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <script src="https://api.vegvisr.org/components/vegvisr-auth.js" defer><\/script>
 
   <style>
     :root {
@@ -311,6 +312,7 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
         <span class="header-badge">theme</span>
       </div>
       <div class="header-right">
+        <vegvisr-auth></vegvisr-auth>
         <button class="btn btn-accent" id="btnToggleView">View tokens</button>
         <button class="btn btn-create" id="btnNewTheme">+ New</button>
       </div>
@@ -589,35 +591,16 @@ export const THEME_BUILDER_TEMPLATE = `<!DOCTYPE html>
     }
 
     async function patchNodeWithRetry(nodeId, fields) {
-      var expectedVersion = currentGraphVersion;
-
-      for (var attempt = 0; attempt < 2; attempt++) {
-        var res = await fetch(KG_API + '/patchNode', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-          body: JSON.stringify({
-            graphId: GRAPH_ID,
-            nodeId: nodeId,
-            fields: fields,
-            expectedVersion: expectedVersion
-          })
-        });
-
-        var data = {};
-        try { data = await res.json(); } catch (e) {}
-        if (res.ok) {
-          currentGraphVersion = Number(data.newVersion || (expectedVersion + 1));
-          return data;
-        }
-
-        var isConflict = res.status === 409 || String(data.error || '').toLowerCase().includes('version mismatch');
-        if (!isConflict || attempt === 1) {
-          throw new Error(data.error || ('Save failed: ' + res.status));
-        }
-
-        await loadGraph();
-        expectedVersion = currentGraphVersion;
+      // window.vegvisrPatchNode (from the injected vegvisr-auth.js) is the only save path
+      // that is actually authenticated once this page is published — it resolves a real
+      // logged-in identity and retries once on a version conflict internally. A raw fetch
+      // to /patchNode with a hardcoded role header is REJECTED server-side (2026-09-26 fix).
+      if (typeof window.vegvisrPatchNode !== 'function') {
+        throw new Error('Ikke i en autentisert Vegvisr-kontekst — logg inn for å lagre.');
       }
+      var data = await window.vegvisrPatchNode(nodeId, fields, GRAPH_ID);
+      currentGraphVersion = Number(data.newVersion || (currentGraphVersion + 1));
+      return data;
     }
 
     // ---- Load graph ----

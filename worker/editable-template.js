@@ -16,12 +16,17 @@ export const EDITABLE_HTML_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <meta name="template-version" content="1.2.1" />
+  <meta name="template-version" content="1.2.2" />
   <meta name="template-id" content="editable-page" />
   <title>{{TITLE}}</title>
 
   <!-- Marked for Markdown rendering -->
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
+  <!-- window.vegvisrPatchNode is the only save path that is actually authenticated once
+       this page is published (see the theme-save flow below). This page's own magic-link
+       login already writes a compatible identity to localStorage['userStore'], which
+       vegvisr-auth.js reads as a legacy store — no changes to the login flow needed. -->
+  <script src="https://api.vegvisr.org/components/vegvisr-auth.js" defer><\/script>
 
   <style>
 /* Theme variables — overridden by injected <style data-vegvisr-theme> */
@@ -3937,43 +3942,20 @@ export const EDITABLE_HTML_TEMPLATE = `<!DOCTYPE html>
         if (headerImageEditor) headerImageEditor.classList.add('hidden');
         if (btnEditHeaderImage) btnEditHeaderImage.classList.remove('hidden');
 
-        // Persist the change — patch the markdown-image node's path field
+        // Persist the change — patch the markdown-image node's path field.
+        // window.vegvisrPatchNode (injected by vegvisr-auth.js) is the only save path that
+        // is actually authenticated once this page is published — this call previously sent
+        // no auth headers at all and always 401'd, failing silently via console.warn.
         try {
           if (!headerImageNode || !GRAPH_ID) {
             console.warn('No header image node found or no graph ID; cannot persist.');
             return;
           }
-          var versionRes = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
-          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
-          var versionData = await versionRes.json();
-          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-
-          var patchRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              graphId: GRAPH_ID,
-              nodeId: headerImageNode.id,
-              fields: { path: newUrl },
-              expectedVersion: expectedVersion
-            })
-          });
-          if (patchRes.status === 409) {
-            versionRes = await fetch('https://knowledge.vegvisr.org/getknowgraph?id=' + encodeURIComponent(GRAPH_ID));
-            if (!versionRes.ok) throw new Error('Could not refresh graph version');
-            versionData = await versionRes.json();
-            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-            patchRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                graphId: GRAPH_ID,
-                nodeId: headerImageNode.id,
-                fields: { path: newUrl },
-                expectedVersion: expectedVersion
-              })
-            });
+          if (typeof window.vegvisrPatchNode !== 'function') {
+            console.warn('Ikke innlogget i Vegvisr — kan ikke lagre header-bildet.');
+            return;
           }
+          await window.vegvisrPatchNode(headerImageNode.id, { path: newUrl }, GRAPH_ID);
           // Update local reference
           headerImageNode.path = newUrl;
         } catch (err) {
@@ -4457,49 +4439,32 @@ export const EDITABLE_HTML_TEMPLATE = `<!DOCTYPE html>
           // Inject new theme tag before </head>
           replaced = replaced.replace('</head>', themeStyle + '\\n</head>');
 
-          // Patch the node
-          var versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
-          if (!versionRes.ok) throw new Error('Could not fetch current graph version');
-          var versionData = await versionRes.json();
-          var expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-
-          var patchRes = await fetch(KG_API + '/patchNode', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-            body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
-          });
-          if (patchRes.status === 409) {
-            versionRes = await fetch(KG_API + '/getknowgraph?id=' + encodeURIComponent(graphId));
-            if (!versionRes.ok) throw new Error('Could not refresh graph version');
-            versionData = await versionRes.json();
-            expectedVersion = Number((versionData.metadata && versionData.metadata.version) || 0);
-            patchRes = await fetch(KG_API + '/patchNode', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
-              body: JSON.stringify({ graphId: graphId, nodeId: targetNode.id, fields: { info: replaced }, expectedVersion: expectedVersion })
-            });
+          // Patch the node. window.vegvisrPatchNode (injected by vegvisr-auth.js) is the
+          // only save path that is actually authenticated once this page is published — a
+          // raw fetch to /patchNode with a hardcoded role header is REJECTED server-side
+          // (2026-09-26 fix). It resolves a real logged-in identity and retries once on a
+          // version conflict internally.
+          if (typeof window.vegvisrPatchNode !== 'function') {
+            throw new Error('Ikke innlogget i Vegvisr — logg inn for å lagre.');
           }
-          if (patchRes.ok) {
-            showToast('Theme saved!', true);
-            // Tell parent (GNewViewer) to reload graph so Vue picks up the new HTML
-            if (window.parent && window.parent !== window) {
-              window.parent.postMessage({ type: 'RELOAD_GRAPH' }, '*');
-            }
-            // If on a published domain (not in iframe), also re-publish the updated HTML to KV
-            var isPublished = (window.parent === window) && window.location.hostname;
-            if (isPublished) {
-              var host = window.location.hostname;
-              try {
-                var pubRes = await fetch('https://test.slowyou.training/__html/publish', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ hostname: host, html: replaced, overwrite: true, graphId: graphId, nodeId: targetNode.id })
-                });
-                if (pubRes.ok) showToast('Published to ' + host, true);
-              } catch (e2) { /* publish is best-effort */ }
-            }
-          } else {
-            showToast('Save failed: ' + patchRes.status, false);
+          await window.vegvisrPatchNode(targetNode.id, { info: replaced }, graphId);
+          showToast('Theme saved!', true);
+          // Tell parent (GNewViewer) to reload graph so Vue picks up the new HTML
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'RELOAD_GRAPH' }, '*');
+          }
+          // If on a published domain (not in iframe), also re-publish the updated HTML to KV
+          var isPublished = (window.parent === window) && window.location.hostname;
+          if (isPublished) {
+            var host = window.location.hostname;
+            try {
+              var pubRes = await fetch('https://test.slowyou.training/__html/publish', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hostname: host, html: replaced, overwrite: true, graphId: graphId, nodeId: targetNode.id })
+              });
+              if (pubRes.ok) showToast('Published to ' + host, true);
+            } catch (e2) { /* publish is best-effort */ }
           }
         } catch (e) {
           showToast('Error: ' + e.message, false);
