@@ -12,6 +12,7 @@ import { EDITABLE_HTML_TEMPLATE } from './editable-template.js'
 import { THEME_BUILDER_TEMPLATE } from './theme-builder-template.js'
 import { LANDING_PAGE_TEMPLATE } from './landing-page-template.js'
 import { AGENT_CHAT_TEMPLATE } from './agent-chat-template.js'
+import { CHECKLIST_TEMPLATE } from './checklist-template.js'
 
 const TEMPLATES = {
   'editable-page': {
@@ -55,6 +56,16 @@ const TEMPLATES = {
     placeholders: {
       '{{TITLE}}': 'Chat title',
       '{{GRAPH_ID_DEFAULT}}': 'Default graph context',
+    },
+  },
+  'checklist': {
+    id: 'checklist',
+    template: CHECKLIST_TEMPLATE,
+    description: 'Task/checklist app. Renders every "- [ ] text" / "- [x] text" line found across the graph\'s nodes as a checkbox grouped by node, and saves toggles back via window.vegvisrPatchNode (the only endpoint-safe, authenticated save path — never hand-roll a fetch to /patchNode). Includes <vegvisr-auth> for login.',
+    placeholders: {
+      '{{TITLE}}': 'Page title shown in the header',
+      '{{DESCRIPTION}}': 'Subtitle shown under the title',
+      '{{GRAPH_ID_DEFAULT}}': 'Fallback graph ID',
     },
   },
 }
