@@ -20,7 +20,7 @@ export const CHECKLIST_TEMPLATE = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <meta name="template-version" content="1.0.0" />
+  <meta name="template-version" content="1.0.1" />
   <meta name="template-id" content="checklist" />
   <title>{{TITLE}}</title>
 
@@ -185,7 +185,10 @@ export const CHECKLIST_TEMPLATE = `<!DOCTYPE html>
       if (typeof window.vegvisrPatchNode !== 'function') {
         throw new Error('Ikke i en autentisert Vegvisr-kontekst — åpne siden i builderen eller pålogget for å lagre.');
       }
-      return await window.vegvisrPatchNode(nodeId, { info: newInfo });
+      // Pass GRAPH_ID explicitly — window.__VEGVISR_GRAPH_ID (vegvisrPatchNode's own
+      // fallback) is only set on a direct publish, not when this node is rendered
+      // embedded inside another viewer (e.g. gnew-viewer's node list).
+      return await window.vegvisrPatchNode(nodeId, { info: newInfo }, GRAPH_ID);
     }
 
     function renderTasks() {
