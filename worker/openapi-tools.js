@@ -26,9 +26,13 @@
  *     doesn't take the agent's tool surface to zero).
  *
  * Auth:
- *   - This module currently sends `x-user-role: Superadmin` for every dispatched
- *     call (legacy KG convention). Per-worker auth strategies (`x-api-token`, `none`,
- *     etc.) are a follow-up — see Phase 3 of the plan.
+ *   - Default dispatch sends `X-API-Token: env.KG_SERVICE_TOKEN` — a real, scoped
+ *     token (scopes: ["all"]) minted in the `api_tokens` table specifically for this
+ *     module's service-to-service calls, verified server-side like any other API
+ *     token. Falls back to the legacy bare `x-user-role: Superadmin` header only if
+ *     the secret is unset (degrades to the old, largely non-functional behavior
+ *     rather than throwing). Per-worker auth strategies (`x-api-token` with a
+ *     per-request user token, `none`, etc.) remain available via `metadata.auth`.
  */
 
 // Cache the parsed spec + tools in module scope (persists across requests in the same isolate)
@@ -248,8 +252,9 @@ function extractFromSpec(spec, workerCtx) {
  *   - metadata.name         used for the URL host (defaults to node.label)
  *   - metadata.tool_prefix  optional prefix prepended to every operationId-derived
  *                           tool name (e.g. "kg_"). Empty by default.
- *   - metadata.auth         optional auth strategy. Currently unused — all calls
- *                           still send `x-user-role: Superadmin` (Phase 3 work).
+ *   - metadata.auth         optional auth strategy. Defaults to
+ *                           'service-binding-superadmin', which sends
+ *                           X-API-Token: env.KG_SERVICE_TOKEN.
  *   - metadata.tool_blocklist  optional array of fully-qualified tool names
  *                              (after prefix) to skip — used to avoid duplication
  *                              with hardcoded TOOL_DEFINITIONS.
@@ -493,12 +498,23 @@ export async function executeOpenAPITool(toolName, input, env, operationMap) {
     if (qs) url += '?' + qs
   }
 
-  // Auth — Phase 1 keeps the legacy Superadmin header for every worker. Per-worker
-  // auth strategies (x-api-token, none, etc.) are a follow-up; see plan Phase 3.
+  // Auth — the default mode sends a real, scoped API token (env.KG_SERVICE_TOKEN,
+  // verified against the api_tokens table) instead of a bare x-user-role header.
+  // That header alone used to grant full access with zero verification (2026-09-26
+  // finding: any request with x-user-role: Superadmin and no token succeeded) — the
+  // server-side fix that closed it also rejects this module's OWN calls unless they
+  // carry a real token, so the fix has to ship here too, not just client-side.
   const headers = { 'Content-Type': 'application/json' }
   const auth = meta.auth || 'service-binding-superadmin'
   if (auth === 'service-binding-superadmin') {
-    headers['x-user-role'] = 'Superadmin'
+    if (env.KG_SERVICE_TOKEN) {
+      headers['X-API-Token'] = env.KG_SERVICE_TOKEN
+    } else {
+      // No service token configured — fall back to the legacy header so a missing
+      // secret degrades to the old (now largely non-functional) behavior instead of
+      // throwing, and the failure surfaces as an auth error from the KG worker.
+      headers['x-user-role'] = 'Superadmin'
+    }
   } else if (auth === 'x-api-token') {
     let token = input.authToken || (input.authContext && input.authContext.authToken) || ''
     // Robustness fallback: if no token rode in on the request (e.g. the chat
