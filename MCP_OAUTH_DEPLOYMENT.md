@@ -219,7 +219,8 @@ the scopes for approval. If the browser already carries a `vegvisr_token` sessio
 vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
-`search_graphs`, `list_my_graphs`, `post_chat_message`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`search_graphs`, `list_my_graphs`, `post_chat_message`, `list_chat_groups`, plus `search` and
+`fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
 
