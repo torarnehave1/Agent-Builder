@@ -280,8 +280,13 @@ normal API; a copy of the content here would only be a second place for it to le
    Each MCP client posts as ITS OWN bot, resolved from the host of its client id via
    `MCP_CHAT_BOT_MAP` — `chatgpt.com` → `@chatgpt`, `claude.ai` → `@claude`. The mapping only
    applies when the client id is an https URL, i.e. a Client ID Metadata Document the provider
-   fetched, so the host is verified. A client registered through `/register` has an opaque id
-   and a self-chosen name, so it cannot claim a named assistant's bot: it falls back to
+   fetched, so the host is verified. A client registered through `/register` has an opaque id,
+   and is identified instead by its registered **redirect URIs** — the authorization code is
+   delivered there, so claiming `grok.com` sends the code to grok.com rather than to the
+   claimer, which makes borrowing a host useless. Every redirect must agree on one https host,
+   or the client is unmapped: one redirect at `grok.com` and another at the attacker's address
+   would otherwise read as Grok while the codes went elsewhere. The self-asserted `clientName`
+   is never used. Anything unidentifiable falls back to
    `MCP_CHAT_BOT_FALLBACK_USERNAME` (`@ai-assistant`). The attribution line names the bot from
    the database row, never anything the client sent. Never whichever bot happens to be in the
    group. That makes a group's bot list the access
