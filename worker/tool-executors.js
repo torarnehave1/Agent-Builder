@@ -15968,7 +15968,7 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       // Hybrid: hardcoded reference + live graphTemplates from D1
       const result = { reference: NODE_TYPES_REFERENCE }
       try {
-        const kgResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/getTemplates', {
+        const kgResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/getTemplates', {
           headers: { 'x-user-role': 'Superadmin' }
         })
         if (kgResp.ok) {

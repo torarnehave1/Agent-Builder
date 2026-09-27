@@ -1039,7 +1039,7 @@ export default {
 
         // 1. Search graphs for youtube-video nodes.
         const searchRes = await env.KG_WORKER.fetch(
-          'https://knowledge.vegvisr.org/searchGraphs?q=youtube&nodeType=youtube-video&limit=20',
+          'https://knowledge-graph-worker/searchGraphs?q=youtube&nodeType=youtube-video&limit=20',
         )
         if (!searchRes.ok) {
           return new Response(JSON.stringify({ error: 'searchGraphs failed', status: searchRes.status }), { status: 502, headers: corsHeaders })
@@ -1053,7 +1053,7 @@ export default {
         // 2. Harvest real youtube-video nodes from those graphs (parallel fetch).
         const fetched = await Promise.all(graphIds.slice(0, 8).map(async (gid) => {
           try {
-            const r = await env.KG_WORKER.fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gid)}`)
+            const r = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(gid)}`)
             if (!r.ok) return []
             const g = await r.json()
             return (g.nodes || [])
@@ -1176,7 +1176,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1347,7 +1347,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1511,7 +1511,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1596,7 +1596,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1679,7 +1679,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1811,7 +1811,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
@@ -1895,7 +1895,7 @@ export default {
           },
         }
 
-        const saveResp = await env.KG_WORKER.fetch('https://knowledge.vegvisr.org/saveGraphWithHistory', {
+        const saveResp = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
           body: JSON.stringify({ id: graphId, graphData, override: true }),
