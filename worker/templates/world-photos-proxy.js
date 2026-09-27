@@ -443,8 +443,9 @@ async function handleAlbumRoute(request, env, url, path, method) {
   if (!name) return json({ error: 'album name is required' }, 400)
 
   if (!isAction && method === 'GET') {
-    const record = await readAlbum(env, name)
+    let record = await readAlbum(env, name)
     if (!record) return json({ error: 'not found', album: name }, 404)
+    record = await pruneMissingImages(env, name, record)
     // A published album is readable without a credential — that is what publishing means. Anything
     // else needs one.
     if (!record.isShared) {
@@ -576,6 +577,34 @@ function summarize(name, record) {
 function withUrls(env, record) {
   const base = env.DELIVERY_BASE || ''
   return { ...record, urls: (record.images || []).map((k) => `${base}/photos/${k}`) }
+}
+
+// A delete removes the key from every album that lists it, but KV list() is eventually consistent:
+// an album written seconds earlier can be invisible to that scan, and the key survives in a record
+// whose object is already gone. Measured on the live canary 2026-09-27 — an album 20 seconds old
+// was missed, and the album view then showed a photo that 404s.
+//
+// This FILTERS the response and deliberately does NOT rewrite the record. An album may reference a
+// key that is not in the bucket yet for perfectly good reasons — a migration writes the album
+// record and copies the objects as separate steps — and a read path that deletes references would
+// eat that state. The stored record is cleaned by the next add, remove or delete scan; a viewer
+// simply never sees a photo that is not there.
+
+async function pruneMissingImages(env, name, record) {
+  const images = Array.isArray(record.images) ? record.images : []
+  if (!images.length || !env.PHOTOS_BUCKET) return record
+  const present = new Set()
+  let cursor
+  do {
+    const listed = await env.PHOTOS_BUCKET.list({ cursor })
+    for (const obj of listed.objects) present.add(obj.key)
+    cursor = listed.truncated ? listed.cursor : undefined
+  } while (cursor)
+  const kept = images.filter((key) => present.has(key))
+  if (kept.length === images.length) return record
+  // Response only. `images` is what the viewer gets; `storedImages` keeps the record honest about
+  // what is still written, so a caller repairing state can tell the difference.
+  return { ...record, images: kept, storedImages: images, missingImages: images.filter((k) => !present.has(k)) }
 }
 
 async function readAlbum(env, name) {

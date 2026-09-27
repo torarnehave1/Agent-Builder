@@ -232,8 +232,31 @@ test('album round-trip keeps every field an upload used to destroy', async () =>
   assert.deepEqual(album.auditLog.map((e) => e.action), ['create_album', 'add_images'])
 })
 
+test('an album read hides keys whose object is gone, without rewriting the record', async () => {
+  const env = makeEnv()
+  await uploadPng(env, 'keep.png')
+  await call(env, '/albums/Stale', {
+    method: 'POST',
+    headers: withSecret(),
+    body: JSON.stringify({ images: ['keep.png', 'vanished.png'] }),
+  })
+
+  const read = await (await call(env, '/albums/Stale', { headers: withSecret() })).json()
+  assert.deepEqual(read.images, ['keep.png'], 'a viewer never sees a photo that is not there')
+  assert.deepEqual(read.missingImages, ['vanished.png'])
+  assert.deepEqual(read.storedImages, ['keep.png', 'vanished.png'])
+
+  // The stored record is untouched: a migration that writes an album before copying its objects
+  // must not have its state eaten by someone opening the album.
+  const stored = JSON.parse(env.PHOTO_ALBUMS._store.get('album:Stale'))
+  assert.deepEqual(stored.images, ['keep.png', 'vanished.png'])
+  assert.ok(!stored.auditLog.some((e) => e.action === 'prune_missing'), 'no write on read')
+})
+
 test('add and remove images', async () => {
   const env = makeEnv()
+  await uploadPng(env, 'x.png')
+  await uploadPng(env, 'y.png')
   await call(env, '/albums/Trip', { method: 'POST', headers: withSecret(), body: JSON.stringify({ images: ['x.png'] }) })
   await call(env, '/albums/Trip/add', { method: 'POST', headers: withSecret(), body: JSON.stringify({ images: ['y.png', 'x.png'] }) })
   let album = await (await call(env, '/albums/Trip', { headers: withSecret() })).json()
