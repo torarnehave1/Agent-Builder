@@ -219,7 +219,7 @@ the scopes for approval. If the browser already carries a `vegvisr_token` sessio
 vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
-`search_graphs`, `list_my_graphs`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`search_graphs`, `list_my_graphs`, `post_chat_message`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
 
@@ -269,6 +269,12 @@ normal API; a copy of the content here would only be a second place for it to le
 3. **`graph:publish` is grantable but has no tool.** `graphService.publishGraph()` exists and is
    tested; no MCP tool calls it yet.
 4. **No delete.** Deliberate for v1. `graph:delete` is not offered in the consent screen.
+4b. **`post_chat_message` needs `chat:write`, which is never advertised.** It is the only tool
+   whose effect reaches other people, so an ordinary connection cannot obtain the scope: a
+   client asking for it is granted `graph:read graph:write` and nothing more. Granting it needs
+   a deliberate step-up that this version does not expose. The tool additionally refuses to post
+   to a group the CALLER is not a member of — group-chat-worker's `/bot-message` only checks the
+   BOT's membership — and appends a non-suppressible line saying an AI assistant wrote it.
 5. **Rate limiting is not enforced on `/mcp`.** `api_tokens.rate_limit` has never been enforced
    anywhere in this worker, and that is unchanged. The OTP path is throttled; tool calls are not.
 6. **`checkAccess` fails closed on 379 legacy graphs.** Their `created_by` names an app
