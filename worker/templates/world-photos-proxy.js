@@ -13,6 +13,11 @@
 // listing, delete, trash and album records, so the Photos app can run its real flow against a
 // founder's own storage instead of the shared bucket.
 //
+// Resizing is a 302 to /cdn-cgi/image/, not an in-process fetch. The first cut tried the latter and
+// the canary proved it does not work: a Worker subrequest to its own hostname bypasses the edge's
+// image-resizing interception, so the resize silently did not happen and the fallback served the
+// full original. See handleDeliver.
+//
 // EVERY v1 ROUTE IS BYTE-COMPATIBLE: GET /photos/<key> with no query returns exactly what it
 // returned before, POST /photos/upload takes the same form fields and X-Upload-Secret, and
 // /__photos/check keeps its three original fields and only gains new ones.
@@ -154,21 +159,16 @@ async function handleCheck(request, env) {
   } else {
     out.albums_ok = false
   }
-  // Whether Cloudflare Image Transformations is actually enabled on this zone. The probe asks the
-  // edge to resize this worker's own check route; a zone without transformations returns the
-  // untouched response instead of a resizer error.
+  // Whether Image Transformations is enabled on this zone CANNOT be answered from in here. A
+  // subrequest from this worker to its own hostname is not intercepted by the edge resizer, so a
+  // probe made here reports a failure whether or not the zone is configured — it did exactly that
+  // on the canary. Hand the caller the URL to probe from outside instead of guessing.
   out.transform_ok = null
-  if (env.DELIVERY_BASE) {
-    try {
-      const probe = await fetch(`${env.DELIVERY_BASE}/cdn-cgi/image/width=1/photos/__transform_probe__`, {
-        method: 'GET',
-      })
-      const body = await probe.text()
-      out.transform_ok = /ERROR \d{4}/.test(body) || probe.headers.has('cf-resized')
-    } catch {
-      out.transform_ok = false
-    }
-  }
+  out.transform_probe = env.DELIVERY_BASE
+    ? `${env.DELIVERY_BASE.replace(/\/+$/, '')}/cdn-cgi/image/width=1/photos/__transform_probe__`
+    : null
+  out.transform_note =
+    'Fetch transform_probe from outside the worker: an "ERROR 9xxx" body means the resizer is active on this zone; a JSON 404 from this worker means it is not.'
   return json(out)
 }
 
@@ -208,22 +208,26 @@ async function handleDeliver(request, env, url, key) {
   // bytes as PNG and 3 849 bytes as AVIF on a real founder bucket. Add it unless asked otherwise.
   if (!opts.some((o) => o.startsWith('format='))) opts.push('format=auto')
 
-  const base = env.DELIVERY_BASE || url.origin
-  const transformUrl = `${base.replace(/\/+$/, '')}/cdn-cgi/image/${opts.join(',')}/photos/${encodeURIComponent(key)}`
-  try {
-    const resized = await fetch(transformUrl, { headers: { Accept: request.headers.get('Accept') || '*/*' } })
-    // The edge intercepts /cdn-cgi/image/ before the worker, so this cannot recurse. If the zone
-    // has no transformations enabled, or the subrequest is refused, fall back to the original
-    // rather than failing the image: a large picture beats a broken one.
-    if (resized.ok) {
-      const headers = new Headers(resized.headers)
-      headers.set('cache-control', 'public, max-age=31536000, immutable')
-      return new Response(request.method === 'HEAD' ? null : resized.body, { status: 200, headers })
-    }
-  } catch {
-    // fall through
-  }
-  return await serveObject(request, env, key)
+  // Redirect rather than resize in-process. Measured on the live canary 2026-09-27: requested from
+  // OUTSIDE, /cdn-cgi/image/width=200/photos/<key> returns 16 349 bytes at 200x104; fetched by this
+  // worker as a subrequest to its own hostname, the same URL is NOT intercepted by the edge and the
+  // resize silently does not happen. A Worker cannot reach its own zone's image-resizing layer that
+  // way, so the client has to make the request the edge will intercept.
+  //
+  // The proxy still owns the ?w= grammar — no caller composes a /cdn-cgi/image/ URL itself, which is
+  // the whole reason that option was rejected. 302 and a one-hour cache, deliberately not 301: if a
+  // later revision resizes in-process after all, a permanent redirect would sit in browser caches
+  // long after the code changed.
+  const base = (env.DELIVERY_BASE || url.origin).replace(/\/+$/, '')
+  const target = `${base}/cdn-cgi/image/${opts.join(',')}/photos/${encodeURIComponent(key)}`
+  return new Response(null, {
+    status: 302,
+    headers: {
+      location: target,
+      'cache-control': 'public, max-age=3600',
+      'access-control-allow-origin': '*',
+    },
+  })
 }
 
 async function serveObject(request, env, key) {

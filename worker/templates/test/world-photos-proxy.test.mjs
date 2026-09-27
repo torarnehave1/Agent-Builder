@@ -1,10 +1,11 @@
 // Local tests for the world-photos-proxy template. No network, no Cloudflare account: the R2 and KV
-// bindings are in-memory fakes, and the one outbound call the worker makes (the /cdn-cgi/image
-// subrequest) is stubbed. Run with:  node --test worker/templates/test/
+// bindings are in-memory fakes. Run with:
+//   node --test worker/templates/test/world-photos-proxy.test.mjs
 //
-// What this cannot prove: that Cloudflare's edge intercepts /cdn-cgi/image/ on a founder's zone
-// before the request reaches the worker. That was measured separately against a real deployment
-// (cdn.stineoksvolddesign.no, 2026-09-27) and is why the transform path has a fallback.
+// What this cannot prove: how Cloudflare's edge treats /cdn-cgi/image/. That was measured against
+// the live canary on 2026-09-27 — intercepted when the request comes from OUTSIDE, NOT intercepted
+// for a subrequest the worker makes to its own hostname — which is why resizing is a redirect and
+// not an in-process fetch.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -114,9 +115,8 @@ async function signToken(payload, secret = SECRET) {
 const future = () => Math.floor(Date.now() / 1000) + 600
 const past = () => Math.floor(Date.now() / 1000) - 10
 
-test('check reports bindings and a KV round-trip', async () => {
+test('check reports bindings, a KV round-trip, and refuses to guess about transforms', async () => {
   const env = makeEnv()
-  globalThis.fetch = async () => new Response('ERROR 9404: Could not fetch the image', { status: 404 })
   const res = await call(env, '/__photos/check')
   const body = await res.json()
   assert.equal(body.ok, true)
@@ -124,7 +124,8 @@ test('check reports bindings and a KV round-trip', async () => {
   assert.equal(body.albums_bound, true)
   assert.equal(body.albums_ok, true)
   assert.equal(body.delivery_base, 'https://cdn.example.test')
-  assert.equal(body.transform_ok, true, 'a resizer error proves transformations are on')
+  assert.equal(body.transform_ok, null, 'the worker cannot answer this about its own zone')
+  assert.equal(body.transform_probe, 'https://cdn.example.test/cdn-cgi/image/width=1/photos/__transform_probe__')
 })
 
 test('v1 compatibility: upload with the fixed secret, then fetch the original bytes', async () => {
@@ -166,46 +167,35 @@ test('bearer tokens: valid scope passes, wrong scope, expiry and bad signature d
   assert.equal((await mk('not.a.token')).status, 401)
 })
 
-test('transform: params go to /cdn-cgi/image on the same host, and format=auto is added', async () => {
+test('transform: params redirect to /cdn-cgi/image on the same host, and format=auto is added', async () => {
   const env = makeEnv()
   await uploadPng(env, 'b.png')
-  let requested = null
-  globalThis.fetch = async (input) => {
-    requested = String(input)
-    return new Response(new Uint8Array([9, 9]), { status: 200, headers: { 'content-type': 'image/avif' } })
-  }
   const res = await call(env, '/photos/b.png?w=200&q=80')
-  assert.equal(res.status, 200)
-  assert.match(requested, /^https:\/\/cdn\.example\.test\/cdn-cgi\/image\//)
-  assert.match(requested, /width=200/)
-  assert.match(requested, /quality=80/)
-  assert.match(requested, /format=auto/, 'format=auto is added unless asked otherwise')
-  assert.match(requested, /\/photos\/b\.png$/)
-  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), new Uint8Array([9, 9]))
+  assert.equal(res.status, 302, 'the client must make the request the edge will intercept')
+  const target = res.headers.get('location')
+  assert.match(target, /^https:\/\/cdn\.example\.test\/cdn-cgi\/image\//)
+  assert.match(target, /width=200/)
+  assert.match(target, /quality=80/)
+  assert.match(target, /format=auto/, 'format=auto is added unless asked otherwise')
+  assert.match(target, /\/photos\/b\.png$/)
+  assert.equal(res.headers.get('cache-control'), 'public, max-age=3600', 'not permanent — the mechanism may change')
 })
 
-test('transform falls back to the original when the resize subrequest fails', async () => {
+test('no transform params still serves the bytes in-process, never a redirect', async () => {
   const env = makeEnv()
   await uploadPng(env, 'c.png')
-  globalThis.fetch = async () => {
-    throw new Error('transformations not enabled on this zone')
-  }
-  const res = await call(env, '/photos/c.png?w=200')
+  const res = await call(env, '/photos/c.png')
   assert.equal(res.status, 200)
-  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), new Uint8Array([1, 2, 3, 4]), 'original bytes, not an error')
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), new Uint8Array([1, 2, 3, 4]))
 })
 
 test('a junk transform parameter is dropped rather than forwarded', async () => {
   const env = makeEnv()
   await uploadPng(env, 'd.png')
-  let requested = null
-  globalThis.fetch = async (input) => {
-    requested = String(input)
-    return new Response(new Uint8Array([7]), { status: 200 })
-  }
-  await call(env, '/photos/d.png?w=' + encodeURIComponent('200/../../evil') + '&h=100')
-  assert.ok(!requested.includes('evil'), 'value outside the option grammar is dropped')
-  assert.match(requested, /height=100/)
+  const res = await call(env, '/photos/d.png?w=' + encodeURIComponent('200/../../evil') + '&h=100')
+  const target = res.headers.get('location')
+  assert.ok(!target.includes('evil'), 'value outside the option grammar is dropped')
+  assert.match(target, /height=100/)
 })
 
 test('album round-trip keeps every field an upload used to destroy', async () => {
