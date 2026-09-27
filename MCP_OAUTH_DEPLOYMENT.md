@@ -3,9 +3,17 @@
 `https://knowledge.vegvisr.org/mcp` — a stateless Streamable HTTP MCP server, protected by an
 OAuth 2.1 authorization server in the same worker.
 
-**Status: not deployed.** The `OAUTH_KV` namespace exists and its id is in `wrangler.toml`, and
-the D1 migration was applied to production on 2026-09-27. `wrangler deploy` has not been run, so
-the live worker is still the pre-MCP build.
+**Status: LIVE since 2026-09-27**, version `6429904a-245e-43d0-a5f1-8aa3e8bb8105`.
+
+What is verified on the live host, not just locally: all eleven REST routes probed still answer,
+OAuth discovery and RFC 9728 metadata are served, the Bearer challenge points at that metadata,
+PKCE is enforced with S256 only, an unregistered redirect_uri is refused, the login page renders,
+and the three auth bypasses measured at the start of this work are closed — nine rejection probes,
+after which the target graph was re-read and still stood at version 21 with 17 nodes, so nothing
+got through.
+
+Still NOT verified end to end: the SMS leg and the code-for-token exchange. That needs a phone on
+an account. Until someone completes it, no MCP client has ever held a working token here.
 
 > `*.md` and `*.sql` are gitignored in this repo by convention (`.gitignore:79` and `:57`), so
 > this file and `database/mcp-oauth-tables.sql` are tracked as force-added exceptions — a deploy
@@ -115,7 +123,9 @@ No new secrets. The layer reuses what is already configured:
 
 All OAuth token material is hashed in KV by the provider. There is nothing to rotate by hand.
 
-### 4. Deploy
+### 4. Deploy — DONE
+
+Deployed 2026-09-27, version `6429904a-245e-43d0-a5f1-8aa3e8bb8105`. To redeploy:
 
 ```bash
 cd /Volumes/T7/vegvisr-frontend/dev-worker && wrangler deploy
