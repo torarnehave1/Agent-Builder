@@ -214,8 +214,14 @@ WWW-Authenticate: Bearer realm="OAuth",
 and it follows that to the metadata, registers itself (CIMD, or `/register`), and opens
 `/authorize`. Ask only for `graph:read graph:write` in a first connection.
 
-The sign-in window asks for an e-mail address, mails a single-use link, then asks for the SMS
-code sent to the number registered on that account, then shows the scopes for approval.
+The sign-in window asks for the mobile number registered on the account, sends a code, and shows
+the scopes for approval. If the browser already carries a `vegvisr_token` session cookie from
+vegvisr.org, the code step is skipped and only the consent screen appears.
+
+**Tools:** `create_graph`, `get_graph`, `add_node`, `get_graph_links`, `search_graphs`,
+`list_my_graphs`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
+through the same graphService calls.
 
 ---
 
@@ -257,8 +263,9 @@ normal API; a copy of the content here would only be a second place for it to le
 1. **The SMS leg and the token exchange are not verified end to end.** Everything up to the code
    form is verified in the Workers runtime, and the OTP logic has 21 unit assertions, but no test
    has taken a real code through `/token` to a real `/mcp` call. That needs a phone.
-2. **A user with no phone number cannot connect.** 13 of 46 users in `config` have one. The rest
-   must register a number in their profile first.
+2. **A user with no phone number cannot connect** unless they arrive with a vegvisr.org session
+   cookie. 13 of 46 users in `config` have a number on record; the rest must either be signed in
+   at vegvisr.org in the same browser, or add a number to their profile.
 3. **`graph:publish` is grantable but has no tool.** `graphService.publishGraph()` exists and is
    tested; no MCP tool calls it yet.
 4. **No delete.** Deliberate for v1. `graph:delete` is not offered in the consent screen.
