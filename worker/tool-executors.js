@@ -17405,4 +17405,4 @@ async function executeCheckPagesDeploymentStatus(input, env) {
   }
 }
 
-export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText }
+export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, signPublishToken }

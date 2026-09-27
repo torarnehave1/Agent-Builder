@@ -154,17 +154,29 @@ test('upload rejects a wrong secret and a missing one', async () => {
   assert.equal(res.status, 401)
 })
 
+const HOST = 'cdn.example.test'
+
 test('bearer tokens: valid scope passes, wrong scope, expiry and bad signature do not', async () => {
   const env = makeEnv()
   const mk = async (token) =>
     call(env, '/photos/list', { headers: { Authorization: `Bearer ${token}` } })
 
-  assert.equal((await mk(await signToken({ scope: ['read'], exp: future() }))).status, 200)
-  assert.equal((await mk(await signToken({ scope: ['upload'], exp: future() }))).status, 401, 'wrong scope')
-  assert.equal((await mk(await signToken({ scope: ['read'], exp: past() }))).status, 401, 'expired')
-  assert.equal((await mk(await signToken({ scope: ['read'] }))).status, 401, 'no exp')
-  assert.equal((await mk(await signToken({ scope: ['read'], exp: future() }, 'other-secret'))).status, 401, 'bad signature')
+  assert.equal((await mk(await signToken({ scope: ['read'], hostname: HOST, exp: future() }))).status, 200)
+  assert.equal((await mk(await signToken({ scope: ['upload'], hostname: HOST, exp: future() }))).status, 401, 'wrong scope')
+  assert.equal((await mk(await signToken({ scope: ['read'], hostname: HOST, exp: past() }))).status, 401, 'expired')
+  assert.equal((await mk(await signToken({ scope: ['read'], hostname: HOST }))).status, 401, 'no exp')
+  assert.equal((await mk(await signToken({ scope: ['read'], hostname: HOST, exp: future() }, 'other-secret'))).status, 401, 'bad signature')
   assert.equal((await mk('not.a.token')).status, 401)
+})
+
+test('a token minted for another World does not open this one', async () => {
+  const env = makeEnv()
+  // Same secret, same scope, unexpired — only the hostname claim differs. Every proxy is stamped
+  // with the same upload secret, so this is the only thing standing between the Worlds.
+  const foreign = await signToken({ scope: ['read'], hostname: 'cdn.someone-else.test', exp: future() })
+  assert.equal((await call(env, '/photos/list', { headers: { Authorization: `Bearer ${foreign}` } })).status, 401)
+  const missing = await signToken({ scope: ['read'], exp: future() })
+  assert.equal((await call(env, '/photos/list', { headers: { Authorization: `Bearer ${missing}` } })).status, 401, 'no hostname claim at all')
 })
 
 test('transform: params redirect to /cdn-cgi/image on the same host, and format=auto is added', async () => {

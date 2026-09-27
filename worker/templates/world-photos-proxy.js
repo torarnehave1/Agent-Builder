@@ -33,6 +33,10 @@
 //   2. Authorization: Bearer <HS256 JWT>          signed with the same secret, {scope, exp, hostname}
 // (2) is the D5-C path for photos-worker: short-lived, scoped, and nothing standing leaves
 // agent-worker. It is the same token shape agent-worker's signPublishToken already produces.
+//
+// A bearer token must carry a `hostname` claim matching this proxy's own DELIVERY_BASE. Every
+// World's proxy holds the same upload secret, so a valid signature proves only that agent-worker
+// signed it — the hostname claim is what binds a token to ONE founder's storage.
 
 const ALBUM_PREFIX = 'album:'
 const IMAGE_META_PREFIX = 'image-meta:'
@@ -93,9 +97,26 @@ async function authorize(request, env, scope) {
   const bearer = (request.headers.get('Authorization') || '').replace(/^Bearer\s+/i, '')
   if (bearer) {
     const claims = await verifyToken(bearer, secret)
-    if (claims && (!scope || (Array.isArray(claims.scope) && claims.scope.includes(scope)))) return null
+    if (claims && hostnameMatches(claims, env) && (!scope || (Array.isArray(claims.scope) && claims.scope.includes(scope)))) {
+      return null
+    }
   }
   return json({ error: 'unauthorized' }, 401)
+}
+
+// Every World's proxy is stamped with the SAME upload secret, so a signature alone proves only that
+// agent-worker minted the token — not that it was minted for THIS founder. Without this check a
+// token issued for one World would open every other World's storage. The claim is compared against
+// this proxy's own DELIVERY_BASE, which provisioning set to https://cdn.<that founder's domain>.
+function hostnameMatches(claims, env) {
+  if (!env.DELIVERY_BASE) return false
+  let expected
+  try {
+    expected = new URL(env.DELIVERY_BASE).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  return String(claims.hostname || '').trim().toLowerCase() === expected
 }
 
 // HS256 JWT, the shape agent-worker's signPublishToken produces. Returns the payload or null.

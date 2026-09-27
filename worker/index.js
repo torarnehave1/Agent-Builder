@@ -13,7 +13,7 @@
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode } from './tool-executors.js'
+import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode, signPublishToken } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { runAutomation, runSingleStep } from './automation-runner.js'
 import { buildAutomationSpec } from './automation-builder.js'
@@ -1991,6 +1991,55 @@ export default {
           mail: mailError ? null : { sentTo: email, from: mail.from || null, whiteLabel: !!mail.whiteLabel, expiresAt: mail.expiresAt || null },
           error: mailError,
         }), { status: mailError ? 502 : 200, headers: corsHeaders })
+      }
+
+      // POST /world-photos/token — mint a short-lived, scoped credential for ONE founder's photos
+      // proxy. Every World's proxy is stamped with this worker's HTML_PUBLISH_SECRET, and that
+      // secret must not leave here: photos-worker needs to write into a founder's own storage, so
+      // it asks for a token per request instead of holding the key. The caller proves who they are
+      // with their own emailVerificationToken; what comes back is bound to that founder's cdn host
+      // by a `hostname` claim the proxy checks, and expires in five minutes.
+      if (pathname === '/world-photos/token' && request.method === 'POST') {
+        const caller = await resolveAuthorizedCaller(request, env).catch(() => null)
+        if (!caller?.authenticated || !caller.email) {
+          return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: corsHeaders })
+        }
+        const secret = env.HTML_PUBLISH_SECRET
+        if (!secret) {
+          return new Response(JSON.stringify({ error: 'agent-worker has no HTML_PUBLISH_SECRET' }), { status: 500, headers: corsHeaders })
+        }
+        const row = await env.DB.prepare(
+          'SELECT photos_delivery_base, photos_bucket_name, photos_status FROM config WHERE email = ?'
+        ).bind(caller.email).first()
+        if (!row?.photos_delivery_base) {
+          // Not an error the caller can fix by retrying — this founder simply has no own storage,
+          // and photos-worker should fall back to the shared bucket.
+          return new Response(JSON.stringify({ error: 'no photo storage provisioned', email: caller.email }), { status: 404, headers: corsHeaders })
+        }
+        let hostname
+        try {
+          hostname = new URL(row.photos_delivery_base).hostname.toLowerCase()
+        } catch {
+          return new Response(JSON.stringify({ error: `photos_delivery_base is not a URL: ${row.photos_delivery_base}` }), { status: 500, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const ALLOWED_SCOPES = ['read', 'upload', 'delete', 'album']
+        const requested = Array.isArray(body?.scope) ? body.scope : []
+        const scope = requested.filter((s) => ALLOWED_SCOPES.includes(s))
+        if (!scope.length) scope.push('read')
+        const exp = Math.floor(Date.now() / 1000) + 300
+        const token = await signPublishToken(
+          { uid: caller.userId || caller.email, appId: 'world-photos', hostname, scope, exp },
+          secret
+        )
+        return new Response(JSON.stringify({
+          token,
+          exp,
+          scope,
+          deliveryBase: row.photos_delivery_base,
+          bucket: row.photos_bucket_name || null,
+          status: row.photos_status || null,
+        }), { headers: corsHeaders })
       }
 
       if (pathname === '/execute' && request.method === 'POST') {
