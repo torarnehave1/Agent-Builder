@@ -6,9 +6,9 @@ OAuth 2.1 authorization server in the same worker.
 **Status: not deployed.** The `OAUTH_KV` id in `wrangler.toml` is a placeholder and the D1
 migration has not been applied to production.
 
-> This file is versioned in the **Agent-Builder** repo, because `*.md` is gitignored in
-> vegvisr-frontend and no `.md` under `dev-worker/` is tracked. A copy sits next to the code on
-> disk for convenience; the committed one is the Agent-Builder copy.
+> `*.md` and `*.sql` are gitignored in this repo by convention (`.gitignore:79` and `:57`), so
+> this file and `database/mcp-oauth-tables.sql` are tracked as force-added exceptions — a deploy
+> cannot be reproduced from a file that exists on one machine. **This repository is public.**
 
 ---
 
@@ -53,9 +53,8 @@ It adds one `api_scopes` row (`graph:publish`) and creates `mcp_audit_log` with 
 Both statements are idempotent (`INSERT OR IGNORE`, `CREATE TABLE IF NOT EXISTS`), so re-running
 it is safe.
 
-> **`*.sql` is gitignored in vegvisr-frontend by convention**, so that file lives only on the
-> machine it was written on. The full contents are reproduced below so the migration is not lost;
-> if it should be versioned like the other 18 tracked `database/` files, it needs `git add -f`.
+> `*.sql` is gitignored here by convention, so this migration is tracked as a force-added
+> exception alongside the other 18 `database/*.sql` files. Reproduced below for reference.
 
 <details>
 <summary><code>database/mcp-oauth-tables.sql</code> in full</summary>
