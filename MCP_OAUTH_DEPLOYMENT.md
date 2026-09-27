@@ -3,8 +3,9 @@
 `https://knowledge.vegvisr.org/mcp` — a stateless Streamable HTTP MCP server, protected by an
 OAuth 2.1 authorization server in the same worker.
 
-**Status: not deployed.** The `OAUTH_KV` namespace exists and its id is in `wrangler.toml`; the
-D1 migration has not been applied to production and `wrangler deploy` has not been run.
+**Status: not deployed.** The `OAUTH_KV` namespace exists and its id is in `wrangler.toml`, and
+the D1 migration was applied to production on 2026-09-27. `wrangler deploy` has not been run, so
+the live worker is still the pre-MCP build.
 
 > `*.md` and `*.sql` are gitignored in this repo by convention (`.gitignore:79` and `:57`), so
 > this file and `database/mcp-oauth-tables.sql` are tracked as force-added exceptions — a deploy
@@ -43,16 +44,19 @@ wrangler kv namespace create OAUTH_KV
 
 and paste the id it prints into the `OAUTH_KV` binding. The worker will not start without one.
 
-### 2. Apply the D1 migration
+### 2. The D1 migration — DONE
+
+Applied to production 2026-09-27: 5 queries, 9 rows written. Verified afterwards — `api_scopes`
+now carries all four Graph scopes (`graph:read`, `graph:write`, `graph:publish`, `graph:delete`),
+and `mcp_audit_log` exists with its three indexes and no rows yet.
+
+Every statement is idempotent (`INSERT OR IGNORE`, `CREATE TABLE IF NOT EXISTS`), so re-running
+it is safe:
 
 ```bash
 wrangler d1 execute vegvisr_org --remote --config dev-worker/wrangler.toml \
   --file=database/mcp-oauth-tables.sql
 ```
-
-It adds one `api_scopes` row (`graph:publish`) and creates `mcp_audit_log` with three indexes.
-Both statements are idempotent (`INSERT OR IGNORE`, `CREATE TABLE IF NOT EXISTS`), so re-running
-it is safe.
 
 > `*.sql` is gitignored here by convention, so this migration is tracked as a force-added
 > exception alongside the other 18 `database/*.sql` files. Reproduced below for reference.
