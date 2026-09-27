@@ -275,6 +275,14 @@ normal API; a copy of the content here would only be a second place for it to le
    a deliberate step-up that this version does not expose. The tool additionally refuses to post
    to a group the CALLER is not a member of — group-chat-worker's `/bot-message` only checks the
    BOT's membership — and appends a non-suppressible line saying an AI assistant wrote it.
+
+   It always posts as ONE designated bot, set by `MCP_CHAT_BOT_USERNAME` (default `chatgpt`),
+   never whichever bot happens to be in the group. That makes a group's bot list the access
+   control: **adding that bot to a group is what permits an AI to post there**, and removing it
+   revokes that — a human decision in the chat app, per group, with no deploy. Resolving the bot
+   from the group was tried first and abandoned: DEVMO GROUP has five active bots, so there was
+   no single obvious one, and in a group with exactly one it would have borrowed an identity
+   created for something else.
 5. **Rate limiting is not enforced on `/mcp`.** `api_tokens.rate_limit` has never been enforced
    anywhere in this worker, and that is unchanged. The OTP path is throttled; tool calls are not.
 6. **`checkAccess` fails closed on 379 legacy graphs.** Their `created_by` names an app
