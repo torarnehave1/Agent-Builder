@@ -3,8 +3,8 @@
 `https://knowledge.vegvisr.org/mcp` — a stateless Streamable HTTP MCP server, protected by an
 OAuth 2.1 authorization server in the same worker.
 
-**Status: not deployed.** The `OAUTH_KV` id in `wrangler.toml` is a placeholder and the D1
-migration has not been applied to production.
+**Status: not deployed.** The `OAUTH_KV` namespace exists and its id is in `wrangler.toml`; the
+D1 migration has not been applied to production and `wrangler deploy` has not been run.
 
 > `*.md` and `*.sql` are gitignored in this repo by convention (`.gitignore:79` and `:57`), so
 > this file and `database/mcp-oauth-tables.sql` are tracked as force-added exceptions — a deploy
@@ -32,15 +32,16 @@ None of them existed in this worker before, so no REST route is shadowed.
 
 ## Deploying
 
-### 1. Create the KV namespace
+### 1. The KV namespace — DONE
+
+Created 2026-09-27; `dev-worker/wrangler.toml` carries its id. Nothing to do unless the namespace
+is ever recreated, in which case:
 
 ```bash
-cd /Volumes/T7/vegvisr-frontend
 wrangler kv namespace create OAUTH_KV
 ```
 
-Paste the id it prints over `REPLACE_ME_oauth_kv_namespace_id` in `dev-worker/wrangler.toml`.
-The worker will not start without it.
+and paste the id it prints into the `OAUTH_KV` binding. The worker will not start without one.
 
 ### 2. Apply the D1 migration
 
