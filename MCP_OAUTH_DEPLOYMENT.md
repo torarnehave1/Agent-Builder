@@ -283,6 +283,13 @@ normal API; a copy of the content here would only be a second place for it to le
    from the group was tried first and abandoned: DEVMO GROUP has five active bots, so there was
    no single obvious one, and in a group with exactly one it would have borrowed an identity
    created for something else.
+
+   **Granting it** is a user action, not a client one. The scope stays unadvertised, so no
+   client requests it; instead the consent screen carries an explicitly unticked checkbox for
+   it, with copy saying an AI writes the messages, that only groups carrying the bot can be
+   posted to, and that nothing can be deleted afterwards. Ticking it adds the scope to that one
+   authorization. RFC 6749 §3.3 permits an authorization server to issue a scope set different
+   from the one requested as long as the token response reports it, which the provider does.
 5. **Rate limiting is not enforced on `/mcp`.** `api_tokens.rate_limit` has never been enforced
    anywhere in this worker, and that is unchanged. The OTP path is throttled; tool calls are not.
 6. **`checkAccess` fails closed on 379 legacy graphs.** Their `created_by` names an app
