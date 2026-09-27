@@ -276,8 +276,14 @@ normal API; a copy of the content here would only be a second place for it to le
    to a group the CALLER is not a member of — group-chat-worker's `/bot-message` only checks the
    BOT's membership — and appends a non-suppressible line saying an AI assistant wrote it.
 
-   It always posts as ONE designated bot, set by `MCP_CHAT_BOT_USERNAME` (default `chatgpt`),
-   never whichever bot happens to be in the group. That makes a group's bot list the access
+   Each MCP client posts as ITS OWN bot, resolved from the host of its client id via
+   `MCP_CHAT_BOT_MAP` — `chatgpt.com` → `@chatgpt`, `claude.ai` → `@claude`. The mapping only
+   applies when the client id is an https URL, i.e. a Client ID Metadata Document the provider
+   fetched, so the host is verified. A client registered through `/register` has an opaque id
+   and a self-chosen name, so it cannot claim a named assistant's bot: it falls back to
+   `MCP_CHAT_BOT_FALLBACK_USERNAME` (`@ai-assistant`). The attribution line names the bot from
+   the database row, never anything the client sent. Never whichever bot happens to be in the
+   group. That makes a group's bot list the access
    control: **adding that bot to a group is what permits an AI to post there**, and removing it
    revokes that — a human decision in the chat app, per group, with no deploy. Resolving the bot
    from the group was tried first and abandoned: DEVMO GROUP has five active bots, so there was
