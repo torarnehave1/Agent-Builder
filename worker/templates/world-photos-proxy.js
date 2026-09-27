@@ -13,10 +13,15 @@
 // listing, delete, trash and album records, so the Photos app can run its real flow against a
 // founder's own storage instead of the shared bucket.
 //
-// EVERY v1 ROUTE IS BYTE-COMPATIBLE. universi.no is already live on v1 and is the canary for any
-// rollout: GET /photos/<key> with no query returns exactly what it returned before, POST
-// /photos/upload takes the same form fields and X-Upload-Secret, and /__photos/check keeps its
-// three original fields and only gains new ones.
+// EVERY v1 ROUTE IS BYTE-COMPATIBLE: GET /photos/<key> with no query returns exactly what it
+// returned before, POST /photos/upload takes the same form fields and X-Upload-Secret, and
+// /__photos/check keeps its three original fields and only gains new ones.
+//
+// ROLLOUT ORDER. Re-provision the NEWEST, emptiest World first, never the oldest. At the time of
+// writing that is stineoksvolddesign.no (provisioned 2026-09-27, one probe image, no consumers).
+// universi.no has been serving cdn.universi.no since 2026-07-20 and belongs to a different founder:
+// it goes LAST, once v2 has been exercised somewhere failure costs nothing. An earlier revision of
+// this comment had that backwards.
 //
 // Auth. Two credentials are accepted on every mutating route, deliberately — not a flag day:
 //   1. X-Upload-Secret: <PHOTOS_UPLOAD_SECRET>   the fixed secret upload_world_image already ships
