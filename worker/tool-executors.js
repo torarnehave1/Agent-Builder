@@ -4682,7 +4682,15 @@ async function executeAdminRegisterUser(input, env) {
       country: next.country,
       role: existing.Role || role,
       group_tags: nextGroupTags,
-      message: `Existing user ${email} was completed with the supplied profile fields.`,
+      // A role supplied for an EXISTING user is deliberately not applied — a vCard completing an
+      // account must not silently re-rank the person. But accepting the field and saying nothing
+      // was worse than not offering it: Grok asked for Admin, got "success", and only caught the
+      // no-op by re-reading the row afterwards (2026-09-28). Say it plainly instead.
+      roleApplied: false,
+      message:
+        role && existing.Role && role !== existing.Role
+          ? `Existing user ${email} was completed with the supplied profile fields. The role was NOT changed — it is still "${existing.Role}". Use admin_set_user_role to change it.`
+          : `Existing user ${email} was completed with the supplied profile fields.`,
     }
   }
 
@@ -4717,6 +4725,47 @@ async function executeAdminRegisterUser(input, env) {
     // tool result is sent to the model provider (xAI/OpenAI on those paths) and shown in chat.
     loginUrl: `https://login.vegvisr.org`,
     message: `User ${email} (${name || 'no name'}) registered with role "${role}". They can log in at login.vegvisr.org by entering their email.`
+  }
+}
+
+// Change an existing user's role. Separate from admin_register_user on purpose: that one
+// completes a profile and must never re-rank the person as a side effect, which left no way to
+// change a role at all (found 2026-09-28 when a role passed to registration was silently dropped).
+//
+// Two ceilings, both about not letting an assistant restructure who runs the platform:
+// Superadmin cannot be GRANTED, and a user who already IS Superadmin cannot be changed — a model
+// that could demote one could lock the owner out of their own system.
+const SELF_SERVICE_ROLES = ['Admin', 'ViewOnly', 'Subscriber', 'user', 'Realtime']
+
+async function executeAdminSetUserRole(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'change a user role')
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const email = String(input.email || '').trim().toLowerCase()
+  const role = String(input.role || '').trim()
+  if (!email) return { success: false, error: 'email is required' }
+  if (!SELF_SERVICE_ROLES.includes(role)) {
+    return { success: false, error: `role must be one of: ${SELF_SERVICE_ROLES.join(', ')}. Superadmin cannot be granted this way.` }
+  }
+
+  const existing = await env.DB.prepare('SELECT email, Role, user_id FROM config WHERE email = ?').bind(email).first()
+  if (!existing) return { success: false, error: `${email} is not registered.` }
+
+  if (String(existing.Role || '') === 'Superadmin') {
+    return { success: false, error: `${email} is a Superadmin. Changing a Superadmin's role is not available here — do it directly if it is really intended.` }
+  }
+  if (String(existing.Role || '') === role) {
+    return { success: true, email, role, previousRole: role, changed: false, message: `${email} already has role "${role}".` }
+  }
+
+  await env.DB.prepare('UPDATE config SET Role = ? WHERE email = ?').bind(role, email).run()
+  return {
+    success: true,
+    email,
+    role,
+    previousRole: existing.Role || null,
+    changed: true,
+    message: `${email}: role ${existing.Role || '(none)'} → ${role}.`,
   }
 }
 
@@ -16248,6 +16297,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeUpdateAgent(toolInput, env)
     case 'deactivate_agent':
       return await executeDeactivateAgent(toolInput, env)
+    case 'admin_set_user_role':
+      return await executeAdminSetUserRole(toolInput, env)
     case 'upload_agent_avatar':
       return await executeUploadAgentAvatar(toolInput, env)
     case 'generate_image':

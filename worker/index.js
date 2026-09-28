@@ -2832,6 +2832,32 @@ export default {
       // effects). `inputs` is the run-parameter map resolved as {{input.<key>}} inside step
       // configs; unsupplied keys fall back to the defaults declared on the Start step.
       // Appends an 'automation-run' node to the same graph as run history.
+      // POST /admin/set-user-role — the only way to re-rank an existing user.
+      if (pathname === '/admin/set-user-role' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        if (!body.email || !body.role) {
+          return new Response(JSON.stringify({ error: 'email and role are required' }), { status: 400, headers: corsHeaders })
+        }
+        let result
+        try {
+          result = await executeTool('admin_set_user_role', {
+            email: body.email,
+            role: body.role,
+            userId: callerAuth.userId,
+          }, env, {})
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 403, headers: corsHeaders })
+        }
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? 400 : 200,
+          headers: corsHeaders
+        })
+      }
+
       // POST /admin/register-user — create or complete a user record.
       //
       // Same reason as /publish/html-node: the MCP server needs this, and a second copy of

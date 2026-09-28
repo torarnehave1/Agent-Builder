@@ -1467,6 +1467,22 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'admin_set_user_role',
+    description: "Change the role of a user who is ALREADY registered. admin_register_user does NOT change the role of an existing account — it completes the profile and leaves the ranking alone — so this is the only way to re-rank someone. Superadmin cannot be granted here, and a user who already IS Superadmin cannot be changed. Superadmin caller only. Use for \"make X an Admin\", \"change X's role\".",
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: { type: 'string', description: 'The registered user to change.' },
+        role: {
+          type: 'string',
+          enum: ['Admin', 'ViewOnly', 'Subscriber', 'user', 'Realtime'],
+          description: 'The new role. Superadmin is deliberately absent.'
+        }
+      },
+      required: ['email', 'role']
+    }
+  },
+  {
     name: 'admin_register_user',
     description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, name, phone, role, and optional postal address fields. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user".',
     input_schema: {
