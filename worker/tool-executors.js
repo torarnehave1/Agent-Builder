@@ -10658,21 +10658,40 @@ async function executeUploadAgentAvatar(input, env) {
   const agent = await env.DB.prepare('SELECT name FROM agent_configs WHERE id = ?').bind(input.agentId).first()
   if (!agent) throw new Error(`Agent "${input.agentId}" not found`)
 
-  // Upload via photos-worker
+  // Upload via photos-worker.
+  //
+  // This was posting JSON — {userId, base64, mediaType, filename}, which is agent-worker's OWN
+  // /upload-image contract, not photos-worker's. photos-worker calls request.formData() and
+  // answers 400 "Expected a multipart/form-data body", so this has never worked against that
+  // endpoint; since 151aea6 (2026-09-27) it does not even get that far, because the request
+  // carries no X-API-Token. Both are fixed here: multipart, signed as the caller.
+  const apiToken = await resolveCallerApiToken(input, env)
+  if (!apiToken) {
+    throw new Error('No API token for the signed-in user — the photo service will not accept an anonymous upload. Sign in again and retry.')
+  }
+
+  const mediaType = input.mediaType || 'image/png'
+  const bytes = Uint8Array.from(atob(input.base64), (c) => c.charCodeAt(0))
+  const uploadName = input.filename || `avatar-${input.agentId}.png`
+  // photos-worker names the object `${filename}.${ext of the File's name}`, so the stem must not
+  // carry the extension itself — that is where the `.png.png` keys came from elsewhere.
+  const stem = uploadName.replace(/\.[^.]+$/, '')
+
+  const formData = new FormData()
+  formData.append('file', new File([bytes], uploadName, { type: mediaType }))
+  formData.append('filename', stem)
+
   const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      userId: input.userId || 'agent-builder',
-      base64: input.base64,
-      mediaType: input.mediaType || 'image/png',
-      filename: input.filename || `avatar-${input.agentId}.png`,
-    }),
+    headers: { 'X-API-Token': apiToken },
+    body: formData,
   })
-  const uploadData = await uploadRes.json()
-  if (!uploadRes.ok) throw new Error(uploadData.error || 'Failed to upload avatar')
+  const uploadData = await uploadRes.json().catch(() => ({}))
+  if (!uploadRes.ok) throw new Error(uploadData.error || `Failed to upload avatar (${uploadRes.status})`)
 
-  const avatarUrl = uploadData.url
+  // photos-worker returns { urls: [...] }; the old code read .url, which this endpoint has
+  // never returned, so even a successful upload would have thrown here.
+  const avatarUrl = uploadData.urls?.[0]
   if (!avatarUrl) throw new Error('Upload succeeded but no URL returned')
 
   // Update agent with avatar URL
