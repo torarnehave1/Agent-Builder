@@ -2832,6 +2832,47 @@ export default {
       // effects). `inputs` is the run-parameter map resolved as {{input.<key>}} inside step
       // configs; unsupplied keys fall back to the defaults declared on the Start step.
       // Appends an 'automation-run' node to the same graph as run history.
+      // POST /admin/register-user — create or complete a user record.
+      //
+      // Same reason as /publish/html-node: the MCP server needs this, and a second copy of
+      // executeAdminRegisterUser would drift from the original. That function already gets the
+      // hard parts right — Superadmin gate, idempotent on email (an existing row is completed,
+      // never overwritten, and keeps its token and role), and it deliberately does NOT return
+      // emailVerificationToken because a tool result is sent to the model provider and shown in
+      // chat. None of that is re-derived here.
+      if (pathname === '/admin/register-user' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+
+        const body = await request.json().catch(() => ({}))
+        if (!body.email) {
+          return new Response(JSON.stringify({ error: 'email is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        // userId is the VERIFIED caller, never a body field: executeAdminRegisterUser resolves the
+        // Superadmin check from it, so taking it from the request body would let anyone who can
+        // reach this route name a Superadmin and create accounts.
+        let result
+        try {
+          result = await executeTool('admin_register_user', {
+            email: body.email,
+            name: body.name,
+            phone: body.phone,
+            role: body.role,
+            userId: callerAuth.userId,
+          }, env, {})
+        } catch (e) {
+          return new Response(JSON.stringify({ error: e.message }), { status: 403, headers: corsHeaders })
+        }
+
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? 400 : 200,
+          headers: corsHeaders
+        })
+      }
+
       // POST /publish/html-node — publish one html-node to a live host.
       //
       // Exists so the MCP server on knowledge.vegvisr.org can publish WITHOUT a second copy of
