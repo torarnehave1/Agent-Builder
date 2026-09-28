@@ -8315,6 +8315,36 @@ function getAuthTokenFromToolInput(input) {
       : '')
 }
 
+/**
+ * The caller's own X-API-Token (emailVerificationToken), resolved server-side.
+ *
+ * Needed because the photo and album workers authenticate uploads with X-API-Token resolved
+ * against config.emailVerificationToken — they have no service-binding trust path. A subrequest
+ * over a binding with no header is anonymous, and photos-worker answers
+ * 401 "Missing X-API-Token header".
+ *
+ * Three sources, cheapest first: the profile resolveAuthorizedCaller already looked up, the raw
+ * token the request carried, then one D1 read keyed on userId. The same chain
+ * executeSetupContactRoute and executeGetAlbumImages use — this just puts it in one place.
+ *
+ * The token is never read from a model-supplied tool argument and is never returned to the
+ * caller; it exists only to sign the subrequest.
+ */
+async function resolveCallerApiToken(input, env) {
+  const ac = input?.authContext || {}
+  const direct = String(ac.profile?.emailVerificationToken || ac.authToken || input?.authToken || '').trim()
+  if (direct) return direct
+
+  const userId = String(ac.userId || input?.userId || '').trim()
+  if (!userId || !env.DB) return ''
+
+  // userId is an email on some paths and a UUID on others, so try both columns.
+  const row =
+    (await env.DB.prepare('SELECT emailVerificationToken FROM config WHERE email = ?').bind(userId).first()) ||
+    (await env.DB.prepare('SELECT emailVerificationToken FROM config WHERE user_id = ?').bind(userId).first())
+  return String(row?.emailVerificationToken || '').trim()
+}
+
 // ---------------------------------------------------------------------------
 // Vemotion — save a composition to the user's cloud library.
 // Two modes:
@@ -10569,11 +10599,22 @@ async function executeGenerateImage(input, env) {
   formData.append('filename', `sdxl-${Date.now()}`)
   formData.append('album', 'agent-generated')
 
+  // photos-worker /upload was anonymous until 2026-09-27, when commit 151aea6 closed the last
+  // anonymous write. This call still sent no header, so every generation since has failed at the
+  // upload with 401 "Missing X-API-Token header" — after the image had already been generated and
+  // paid for. Sending the caller's own token also means a World Founder's bytes land in their own
+  // R2 account, because photos-worker routes storage on that identity.
+  const apiToken = await resolveCallerApiToken(input, env)
+  if (!apiToken) {
+    throw new Error('No API token for the signed-in user — the photo service will not accept an anonymous upload. Sign in again and retry.')
+  }
+
   const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
     method: 'POST',
+    headers: { 'X-API-Token': apiToken },
     body: formData,
   })
-  const uploadData = await uploadRes.json()
+  const uploadData = await uploadRes.json().catch(() => ({}))
   if (!uploadRes.ok) throw new Error(uploadData.error || `Upload failed (${uploadRes.status})`)
 
   const url = uploadData.urls?.[0]
