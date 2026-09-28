@@ -220,7 +220,7 @@ vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
 `search_graphs`, `list_my_graphs`, `post_chat_message`, `list_chat_groups`,
-`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, `list_published_sites`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
 
@@ -232,6 +232,18 @@ image crosses the wire — Workers AI generates it and photos-worker stores it, 
 the upload running as the authenticated user on a credential read from their own `config` row.
 That needs the `PHOTOS_WORKER` service binding in `dev-worker/wrangler.toml`; without it the tool
 says so by name instead of failing as a generation error.
+
+`list_published_sites` is the Knowledge Graph Portfolio's "Published sites" chip as data.
+brand-worker writes an `html:<hostname>` key into `HTML_PAGES` on every html-node publish, and
+its metadata names the graph and node serving that host. The tool returns each live host with
+its graph, node id and publish time; `search_graphs` and `list_my_graphs` carry the same
+`publishedDomains` per result, and a hostname works as a search term. The registry is KV and
+global, so a host whose graph the caller cannot read is dropped before it is described — the
+reply says how many were withheld rather than quietly returning a short list.
+
+A node's own `publishedDomain` stamp is written client-side and survives a later publish that
+gave the host to another graph, so the registry wins: a stamp it contradicts is dropped, a host
+it has no opinion about is kept.
 
 ---
 
