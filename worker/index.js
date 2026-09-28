@@ -31,6 +31,33 @@ import { affiliationEdges, interactionEdges, buildNetwork, resolveNames, loadLay
 import { buildInstagramAuthorizeUrl, connectInstagram, getInstagramConnection, getInstagramConnectionByIgUserId, disconnectInstagram, verifyInstagramWebhookSignature, subscribeAccountToWebhooks, getAccountSubscriptions, sendInstagramMessage, ingestInboundMessage, getThreadByGroupId, relayGroupMessageToInstagram, replyWindowState, backfillThreadParticipant } from './instagram.js'
 
 // ---------------------------------------------------------------------------
+// The caller's own X-API-Token, for subrequests to workers that authenticate
+// with one (photos-worker, albums-worker, api-worker).
+//
+// Reads the credential off the REQUEST — X-API-Token, else the vegvisr_token
+// cookie or an Authorization bearer, both handled by resolveAuthorizedCaller.
+// Never from a body field: a route that looks a token up from body.userId lets
+// any caller act as any user by naming their id.
+//
+// Returns { token, email, userId } or { token: null, error }.
+// ---------------------------------------------------------------------------
+async function resolveCallerAuth(request, env) {
+  const xToken = (request.headers.get('X-API-Token') || '').trim()
+  const auth = xToken
+    ? await resolveAuthorizedCallerWithCredentials({ authToken: xToken }, env)
+    : await resolveAuthorizedCaller(request, env)
+
+  if (!auth?.authenticated) {
+    return { token: null, error: 'Unauthorized — send X-API-Token (your emailVerificationToken) or sign in.' }
+  }
+  const token = String(auth.profile?.emailVerificationToken || auth.authToken || '').trim()
+  if (!token) {
+    return { token: null, error: 'Signed in, but no API token on the account — log in again to refresh it.' }
+  }
+  return { token, email: auth.email || null, userId: auth.userId || null }
+}
+
+// ---------------------------------------------------------------------------
 // Agent version — bump this string when deploying an improvement.
 // Every session in the stats DB will be tagged with this version so you can
 // compare metrics before/after each change.
@@ -2618,29 +2645,28 @@ export default {
       // POST /upload-image - Upload base64 image to photos API, return imgix URL
       if (pathname === '/upload-image' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, base64, mediaType, filename } = body
+        const { base64, mediaType, filename } = body
 
-        if (!userId || !base64) {
-          return new Response(JSON.stringify({ error: 'userId and base64 are required' }), {
+        if (!base64) {
+          return new Response(JSON.stringify({ error: 'base64 is required' }), {
             status: 400, headers: corsHeaders
           })
         }
 
-        // Look up user email from D1
-        let userEmail = null
-        try {
-          const profile = await env.DB.prepare(
-            'SELECT email FROM config WHERE user_id = ?'
-          ).bind(userId).first()
-          if (!profile) {
-            const profileByEmail = await env.DB.prepare(
-              'SELECT email FROM config WHERE email = ?'
-            ).bind(userId).first()
-            userEmail = profileByEmail?.email || userId
-          } else {
-            userEmail = profile.email
-          }
-        } catch { userEmail = userId }
+        // Identity comes from the caller's own credential, never from body.userId.
+        //
+        // This route used to read `userId` out of the body, look the email up in D1, and post
+        // the bytes to photos-worker anonymously. That stopped working when 151aea6 in
+        // vegvisr-frontend (2026-09-27) closed the last anonymous write, and every upload here
+        // has returned 401 since. The fix is the caller's emailVerificationToken — and taking it
+        // from a body field would have meant anyone could upload as anyone by naming their
+        // userId, so it is read from the request instead.
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), {
+            status: 401, headers: corsHeaders
+          })
+        }
 
         // Convert base64 to binary and build FormData
         const binaryData = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
@@ -2649,11 +2675,11 @@ export default {
 
         const formData = new FormData()
         formData.append('file', blob, uploadName)
-        if (userEmail) formData.append('userEmail', userEmail)
 
         // Use service binding (avoids 522 worker-to-worker via public URL)
         const uploadRes = await env.PHOTOS_WORKER.fetch('https://photos-api.vegvisr.org/upload', {
           method: 'POST',
+          headers: { 'X-API-Token': callerAuth.token },
           body: formData
         })
 
@@ -4206,8 +4232,16 @@ export default {
 
         const body = await request.json()
         const rawPrompt = body.prompt
-        const userId = body.userId || 'unknown'
         if (!rawPrompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
+
+        // Same rule as /upload-image: the upload runs as the caller, on a credential read from
+        // the request. Checked BEFORE the model runs — this route used to generate an image and
+        // only then discover it could not store it, which burned the expensive half for nothing.
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const userId = callerAuth.userId || 'unknown'
 
         const startTime = Date.now()
         const imageModel = body.model || '@cf/bytedance/stable-diffusion-xl-lightning'
@@ -4244,8 +4278,12 @@ export default {
         formData.append('filename', `sdxl-${Date.now()}`)
         formData.append('album', 'agent-generated')
 
-        const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', { method: 'POST', body: formData })
-        const uploadData = await uploadRes.json()
+        const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
+          method: 'POST',
+          headers: { 'X-API-Token': callerAuth.token },
+          body: formData
+        })
+        const uploadData = await uploadRes.json().catch(() => ({}))
         if (!uploadRes.ok) return new Response(JSON.stringify({ error: uploadData.error || 'Upload failed' }), { status: 500, headers: corsHeaders })
 
         const url = uploadData.urls?.[0]

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getApiToken } from '../lib/auth';
 
 interface AgentConfig {
   id: string;
@@ -174,9 +175,13 @@ export default function AgentSettings({ agentId, userId, onSave, onCancel, onSel
         reader.onerror = () => reject(new Error('Failed to read file'));
         reader.readAsDataURL(file);
       });
+      // X-API-Token is required: agent-worker signs the photos upload as the caller.
+      const apiToken = getApiToken();
+      if (!apiToken) throw new Error('Not signed in — log in again to upload an avatar.');
+
       const res = await fetch(`${AGENT_API}/upload-image`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': apiToken },
         body: JSON.stringify({
           userId,
           base64,

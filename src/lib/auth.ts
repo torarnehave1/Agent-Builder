@@ -21,6 +21,25 @@ export const readStoredUser = (): AuthUser | null => {
   }
 };
 
+/**
+ * The signed-in user's X-API-Token (their emailVerificationToken).
+ *
+ * AuthUser deliberately omits it, but the Vegvisr workers authenticate subrequests with it —
+ * agent-worker's /upload-image and /generate-image both 401 without it. The auth flow persists
+ * it in localStorage.'user' (see persistUser in App.tsx).
+ *
+ * Returns '' when signed out, so callers can decide whether that is fatal.
+ */
+export const getApiToken = (): string => {
+  if (typeof window === 'undefined') return '';
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem('user') || '{}');
+    return parsed.emailVerificationToken || '';
+  } catch {
+    return '';
+  }
+};
+
 export const fetchAuthSession = async (): Promise<AuthUser | null> => {
   const res = await fetch(AUTH_SESSION_URL, { credentials: 'include' });
   if (!res.ok) return null;

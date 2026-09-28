@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { findToolCallIndex } from '../lib/toolCallPairing';
 import { logToAutomation, type AutomationDraft, type GraphTarget, type LoggedCall } from '../lib/logToAutomation';
 import { holdLargePaste } from '../lib/largePaste';
+import { getApiToken } from '../lib/auth';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
@@ -1647,9 +1648,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
       });
 
       // Upload to photos API via agent-worker
+      // X-API-Token is required: agent-worker signs the photos upload as the caller, and
+      // takes the identity from this header rather than from body.userId.
+      const apiToken = getApiToken();
+      if (!apiToken) throw new Error('Not signed in — log in again to upload an image.');
+
       const res = await fetch(`${AGENT_API}/upload-image`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': apiToken },
         body: JSON.stringify({ userId, base64, mediaType: file.type || 'image/png', filename: file.name }),
       });
 
