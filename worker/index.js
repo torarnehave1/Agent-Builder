@@ -2861,6 +2861,7 @@ export default {
             name: body.name,
             phone: body.phone,
             role: body.role,
+            group_tags: body.group_tags,
             userId: callerAuth.userId,
           }, env, {})
         } catch (e) {

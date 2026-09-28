@@ -4636,8 +4636,9 @@ async function executeAdminRegisterUser(input, env) {
 
   // Existing rows are updated only for fields supplied by this request. This lets a vCard
   // complete an account that already exists without replacing its login token or role.
+  const groupTags = (input.group_tags || '').trim() || null
   const existing = await env.DB.prepare(
-    'SELECT email, user_id, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country FROM config WHERE email = ?'
+    'SELECT email, user_id, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country, group_tags FROM config WHERE email = ?'
   ).bind(email).first()
   if (existing) {
     const existingData = (() => {
@@ -4659,11 +4660,12 @@ async function executeAdminRegisterUser(input, env) {
       profile: { ...existingProfile, user_id: existing.user_id, email, ...next, postal_code: next.postalCode },
     })
     const verifiedAt = testPhoneVerified ? (existing.phone_verified_at || Date.now()) : existing.phone_verified_at || null
+    const nextGroupTags = groupTags || existing.group_tags || null
     await env.DB.prepare(`
       UPDATE config
-      SET phone = ?, phone_verified_at = ?, data = ?, address = ?, street = ?, postal_code = ?, place = ?, city = ?, country = ?
+      SET phone = ?, phone_verified_at = ?, data = ?, address = ?, street = ?, postal_code = ?, place = ?, city = ?, country = ?, group_tags = ?
       WHERE email = ?
-    `).bind(next.phone, verifiedAt, mergedData, next.address, next.street, next.postalCode, next.place, next.city, next.country, email).run()
+    `).bind(next.phone, verifiedAt, mergedData, next.address, next.street, next.postalCode, next.place, next.city, next.country, nextGroupTags, email).run()
     return {
       success: true,
       updated: true,
@@ -4679,6 +4681,7 @@ async function executeAdminRegisterUser(input, env) {
       city: next.city,
       country: next.country,
       role: existing.Role || role,
+      group_tags: nextGroupTags,
       message: `Existing user ${email} was completed with the supplied profile fields.`,
     }
   }
@@ -4691,9 +4694,9 @@ async function executeAdminRegisterUser(input, env) {
   const data = JSON.stringify({ profile: { user_id, email, name, phone, address, street, postal_code: postalCode, place, city, country }, settings: {} })
 
   await env.DB.prepare(`
-    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(user_id, email, emailVerificationToken, role, phone, phone ? Date.now() : null, data, address, street, postalCode, place, city, country).run()
+    INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country, group_tags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(user_id, email, emailVerificationToken, role, phone, phone ? Date.now() : null, data, address, street, postalCode, place, city, country, groupTags).run()
 
   return {
     success: true,
@@ -4709,6 +4712,7 @@ async function executeAdminRegisterUser(input, env) {
     city,
     country,
     role,
+    group_tags: groupTags,
     // emailVerificationToken is deliberately NOT returned: it is the user's API credential, and a
     // tool result is sent to the model provider (xAI/OpenAI on those paths) and shown in chat.
     loginUrl: `https://login.vegvisr.org`,

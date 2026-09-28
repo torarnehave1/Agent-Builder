@@ -1494,6 +1494,10 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           enum: ['Admin', 'user', 'Subscriber', 'Superadmin'],
           description: 'Role to assign. Default: "Admin"'
+        },
+        group_tags: {
+          type: 'string',
+          description: 'Which group(s) this person belongs to, as space-separated #TAGS — the same convention metaArea uses on a graph, e.g. "#IIBA #DEMO". Supplying it on an existing user replaces their tags; omitting it leaves them alone.'
         }
       },
       required: ['email']
