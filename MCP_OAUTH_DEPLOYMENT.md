@@ -220,7 +220,7 @@ vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
 `search_graphs`, `list_my_graphs`, `post_chat_message`, `list_chat_groups`,
-`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, `list_published_sites`, `update_graph_metadata`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, `list_published_sites`, `update_graph_metadata`, `publish_html_node`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
 
@@ -253,6 +253,19 @@ conflict — omitting it defaults from the source the service actually reads. `m
 space-separated string and a write replaces all of it, so adding a tag means reading the current
 value and sending the complete new string. `publicationState` is not in the schema; publishing
 stays its own action.
+
+`publish_html_node` is the second tool whose effect leaves the system, after `post_chat_message`,
+and it is narrowed twice compared with the same action in the Agent Builder. It requires
+`graph:publish`, which stays OUT of `CONNECT_SCOPES` — no client can request it, and it is granted
+only by ticking an unticked box on the consent screen. And it can only publish to a host the node
+is ALREADY associated with: the Agent Builder lets a Superadmin publish anywhere and override that
+with `force:true`, but `force` is not forwarded by the route and is absent from the tool schema, so
+a model cannot take over another World's host. A node with no host is refused rather than allowed
+to claim one. There is no `create_subdomain` on this surface — new hosts stay a human action.
+
+No publish logic lives in the KG worker. It calls agent-worker's `POST /publish/html-node`, which
+wraps the single implementation (`executePublishHtmlNode`). Check `verified` in the result: only
+`verified:true` means the page is actually live.
 
 ---
 
