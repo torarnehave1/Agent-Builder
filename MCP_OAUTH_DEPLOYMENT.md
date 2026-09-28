@@ -220,7 +220,7 @@ vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
 `search_graphs`, `list_my_graphs`, `post_chat_message`, `list_chat_groups`,
-`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, `list_published_sites`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, `list_published_sites`, `update_graph_metadata`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
 
@@ -244,6 +244,15 @@ reply says how many were withheld rather than quietly returning a short list.
 A node's own `publishedDomain` stamp is written client-side and survives a later publish that
 gave the host to another graph, so the registry wins: a stamp it contradicts is dropped, a host
 it has no opinion about is kept.
+
+`update_graph_metadata` changes title, description, metaArea or category. Its `expectedVersion`
+is optional ON PURPOSE: graph-service's `updateMetadata` compares against `MAX(version)` in the
+history table, while `get_graph` reports `metadata.version`. Those agree for 1263 of 1272 graphs
+and differ for 9, so a model copying the version it just read would hit an unexplainable
+conflict — omitting it defaults from the source the service actually reads. `metaArea` is ONE
+space-separated string and a write replaces all of it, so adding a tag means reading the current
+value and sending the complete new string. `publicationState` is not in the schema; publishing
+stays its own action.
 
 ---
 
