@@ -220,9 +220,18 @@ vegvisr.org, the code step is skipped and only the consent screen appears.
 
 **Tools:** `create_graph`, `get_graph`, `add_node`, `update_node`, `get_graph_links`,
 `search_graphs`, `list_my_graphs`, `post_chat_message`, `list_chat_groups`,
-`read_chat_messages`, `get_fulltext_elements`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
+`read_chat_messages`, `get_fulltext_elements`, `generate_node_image`, plus `search` and `fetch` — the two fixed names ChatGPT's deep research
 connectors require, projected onto their `{id,title,url}` / `{id,title,text,url,metadata}` shape
 through the same graphService calls.
+
+`generate_node_image` is the counterpart to `get_fulltext_elements`. The element formats ship
+with placeholder image URLs — `HEADERIMG.png`, `SIDEIMG.png`, `FANCYIMG.png` — so a model that
+copies a format verbatim has already said where an image goes and how big it is. The tool fills
+that slot and nothing else: a node with no placeholder is refused rather than guessed at. No
+image crosses the wire — Workers AI generates it and photos-worker stores it, server-side, with
+the upload running as the authenticated user on a credential read from their own `config` row.
+That needs the `PHOTOS_WORKER` service binding in `dev-worker/wrangler.toml`; without it the tool
+says so by name instead of failing as a generation error.
 
 ---
 
