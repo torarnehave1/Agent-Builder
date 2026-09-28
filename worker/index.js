@@ -2832,6 +2832,51 @@ export default {
       // effects). `inputs` is the run-parameter map resolved as {{input.<key>}} inside step
       // configs; unsupplied keys fall back to the defaults declared on the Start step.
       // Appends an 'automation-run' node to the same graph as run history.
+      // POST /publish/html-node — publish one html-node to a live host.
+      //
+      // Exists so the MCP server on knowledge.vegvisr.org can publish WITHOUT a second copy of
+      // the publish logic. executePublishHtmlNode is ~250 lines of hard-won rules — the
+      // wrong-host guard, the dead-backend probe, gate and version-pill persistence, which of
+      // the two proxies signs the token, the read-back verification — and every one of those
+      // came from a real failure. A parallel implementation in another worker would drift from
+      // them one bug at a time, so there is exactly one implementation and this is the door to it.
+      //
+      // Auth is the caller's own credential (X-API-Token, or the cookie/bearer). The executor
+      // still applies its own Superadmin gate on top; this route does not widen it.
+      if (pathname === '/publish/html-node' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+
+        const body = await request.json().catch(() => ({}))
+        const { graphId, nodeId, host } = body
+        if (!graphId || !nodeId || !host) {
+          return new Response(JSON.stringify({ error: 'graphId, nodeId and host are required' }), {
+            status: 400, headers: corsHeaders
+          })
+        }
+
+        // force is deliberately NOT forwarded. The wrong-host guard — publish is refused when
+        // the host does not match the node's own references — is the whole reason a remote model
+        // is allowed to call this at all, so it must not be overridable from here.
+        const authContext = await resolveAuthorizedCallerWithCredentials({ authToken: callerAuth.token }, env)
+        const result = await executeTool('publish_html_node', {
+          graphId,
+          nodeId,
+          host,
+          overwrite: body.overwrite !== false,
+          ...(typeof body.version_pill === 'boolean' ? { version_pill: body.version_pill } : {}),
+          userId: callerAuth.userId,
+          authContext,
+        }, env, {})
+
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? 400 : 200,
+          headers: corsHeaders
+        })
+      }
+
       if (pathname === '/automation/run' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
         const { graphId } = body
