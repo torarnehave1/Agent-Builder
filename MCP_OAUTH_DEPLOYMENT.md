@@ -1,19 +1,46 @@
-# MCP + OAuth 2.1 on knowledge-graph-worker
+# VEGR.AI Knowledge Graph — MCP server
 
-`https://knowledge.vegvisr.org/mcp` — a stateless Streamable HTTP MCP server, protected by an
-OAuth 2.1 authorization server in the same worker.
+**Server version `1.5.0`** · worker `cd0b8af7-da37-4ef3-bc6e-e58864c4a7ef` · live since 2026-09-27
 
-**Status: LIVE since 2026-09-27**, version `6429904a-245e-43d0-a5f1-8aa3e8bb8105`.
+`https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
+protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
 
-What is verified on the live host, not just locally: all eleven REST routes probed still answer,
-OAuth discovery and RFC 9728 metadata are served, the Bearer challenge points at that metadata,
-PKCE is enforced with S256 only, an unregistered redirect_uri is refused, the login page renders,
-and the three auth bypasses measured at the start of this work are closed — nine rejection probes,
-after which the target graph was re-read and still stood at version 21 with 17 nodes, so nothing
-got through.
+## Terminology
 
-Still NOT verified end to end: the SMS leg and the code-for-token exchange. That needs a phone on
-an account. Until someone completes it, no MCP client has ever held a working token here.
+Use these words; they are the ones the MCP specification uses, and mixing them up makes a bug
+report ambiguous.
+
+| Term | What it means here |
+|---|---|
+| **MCP server** | This thing. `knowledge.vegvisr.org/mcp`. It reports itself as `vegvisr-knowledge-graph` v1.5.0 in the initialize handshake (`mcp/server.js`, `SERVER_INFO`). |
+| **remote MCP server** | An MCP server reached over HTTP at a URL, as opposed to a **local server** run as a subprocess over stdio. Only the remote kind needs OAuth, scopes and a consent screen — which is most of this document. |
+| **MCP client** | The thing that connects and calls tools: ChatGPT, Claude, Grok. |
+| **host** | The application the client lives in — the ChatGPT app, the Claude app. |
+| **connector** | What ChatGPT and Claude call a configured MCP server in their own UI. A product word, not a spec word. Say "connector" to a user, "MCP server" to a developer. |
+| **tools / resources / prompts** | The three things an MCP server can expose. This one exposes tools only — 22 of them. |
+| **authorization server** | Also this worker: `/authorize`, `/token`, `/register`, RFC 8414 metadata. Most systems keep this separate; here it is the same worker, which is why the existing phone OTP could be reused as the login. |
+| **protected resource** | Also this worker: `/mcp`, advertised per RFC 9728 as `VEGR.AI Knowledge Graph`. |
+
+It is **not** a "wrapper" and not a "plugin". A wrapper sits on top of an API; this does not.
+`mcp/tools.js` and the REST routes call the *same* internal service functions
+(`graph-service.js`, `chat-service.js`, `users-service.js`, …), so MCP is a second front door on
+one implementation, not a layer over the first door. "Plugin" is the deprecated ChatGPT term for
+something else entirely.
+
+The name to use in writing: **VEGR.AI Knowledge Graph MCP server**, or "the KG server" in short.
+"KG Manager" is only the label given to one connector inside one ChatGPT account.
+
+## Status
+
+Verified on the live host, not just locally: OAuth discovery and RFC 9728 metadata are served,
+the Bearer challenge points at that metadata, PKCE is enforced with S256 only, an unregistered
+redirect_uri is refused, and the three auth bypasses measured at the start of this work are
+closed — nine rejection probes, after which the target graph was re-read and still stood at
+version 21 with 17 nodes, so nothing got through.
+
+The full flow IS now proven end to end. ChatGPT, Claude and Grok have each completed the SMS leg
+and the code-for-token exchange and held working tokens; grants for all three are in `OAUTH_KV`,
+and `mcp_audit_log` records their tool calls.
 
 > `*.md` and `*.sql` are gitignored in this repo by convention (`.gitignore:79` and `:57`), so
 > this file and `database/mcp-oauth-tables.sql` are tracked as force-added exceptions — a deploy
@@ -21,16 +48,51 @@ an account. Until someone completes it, no MCP client has ever held a working to
 
 ---
 
+## Versions
+
+`SERVER_INFO.version` in `mcp/server.js` is what a client shows and what a bug report should
+name. It said `1.0.0` from launch straight through everything below — four tools became
+twenty-two and one scope became seven while the handshake still claimed the launch version.
+That is the reason the first real bump lands at 1.5.0 rather than 1.1.0: the numbers below
+describe what shipped, reconstructed, not versions any client ever saw.
+
+**Bump this with the surface from now on.** A minor for new tools or scopes, a patch for a fix
+that changes no contract.
+
+| Version | Date | What |
+|---|---|---|
+| `1.0.0` | 2026-09-27 | Launch. OAuth 2.1 + PKCE, phone-OTP login, stateless Streamable HTTP. Four tools: `create_graph`, `get_graph`, `add_node`, `get_graph_links`. Scopes `graph:read`, `graph:write`. |
+| `1.1.0` | 2026-09-27 | `update_node`, `search_graphs`, `list_my_graphs`, and the fixed pair `search`/`fetch` that ChatGPT deep research requires. |
+| `1.2.0` | 2026-09-27 | Chat: `post_chat_message`, `list_chat_groups`, `read_chat_messages`. Introduced the **opt-in scope** — `chat:write`/`chat:read` are unadvertised and grantable only by a ticked box on the consent screen. |
+| `1.3.0` | 2026-09-28 | `get_fulltext_elements` and `generate_node_image`. Images are generated and stored server-side; no bytes cross MCP. |
+| `1.4.0` | 2026-09-28 | `update_graph_metadata`, `list_published_sites`, `publish_html_node` (opt-in `graph:publish`, restricted to hosts the node already references). |
+| `1.5.0` | 2026-09-29 | The user directory: `register_user`, `list_users`, `set_user_groups`, `set_user_role` (opt-in `user:register`, `user:read`), plus `list_meta_areas` and `list_my_graphs` paging to 200. |
+
+### Current surface
+
+- **22 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
+  matches it exactly.
+- **2 advertised scopes**: `graph:read`, `graph:write`. These are all `CONNECT_SCOPES`, so they
+  are all a client can request.
+- **5 opt-in scopes**: `chat:write`, `chat:read`, `graph:publish`, `user:register`, `user:read`.
+  None is advertised; each is granted only by a person ticking its box. A test pins that no
+  opt-in ever leaks into the advertised set.
+- **3 outward-facing tools** — `post_chat_message`, `publish_html_node`, `register_user`. Their
+  effects leave this system and reach other people, so each declares `openWorldHint` and each
+  sits behind an opt-in scope. A test pins both properties together.
+
+---
+
 ## What is where
 
 | Path | Role |
 |---|---|
-| `dev-worker/index.js` | The 58 REST routes, now wrapped as the provider's `defaultHandler`. Its default export is the `OAuthProvider`. |
+| `dev-worker/index.js` | The REST routes (77 paths), wrapped as the provider's `defaultHandler`. Its default export is the `OAuthProvider`. |
 | `dev-worker/graph-service.js` | The one internal implementation of the graph operations. REST and MCP both call it. |
 | `dev-worker/oauth/authorize.js` | `/authorize`: the login page, the OTP step and consent. |
 | `dev-worker/oauth/otp.js` | The OTP challenge, bound to one OAuth transaction. |
 | `dev-worker/mcp/server.js` | `/mcp`: the stateless transport, plus the audit log. |
-| `dev-worker/mcp/tools.js` | The four tools. |
+| `dev-worker/mcp/tools.js` | The 22 tools. |
 | `database/mcp-oauth-tables.sql` | The `graph:publish` scope row and `mcp_audit_log`. |
 
 Endpoints the provider serves: `/authorize`, `/token`, `/register`,
@@ -208,7 +270,7 @@ else itself: the unauthenticated request returns
 ```
 WWW-Authenticate: Bearer realm="OAuth",
   resource_metadata="https://knowledge.vegvisr.org/.well-known/oauth-protected-resource/mcp",
-  scope="graph:read graph:write graph:publish"
+  scope="graph:read graph:write"
 ```
 
 and it follows that to the metadata, registers itself (CIMD, or `/register`), and opens
@@ -304,17 +366,23 @@ normal API; a copy of the content here would only be a second place for it to le
 
 ## Known limitations
 
-1. **The SMS leg and the token exchange are not verified end to end.** Everything up to the code
-   form is verified in the Workers runtime, and the OTP logic has 21 unit assertions, but no test
-   has taken a real code through `/token` to a real `/mcp` call. That needs a phone.
+1. ~~The SMS leg and the token exchange are not verified end to end.~~ **Closed 2026-09-28.**
+   ChatGPT, Claude and Grok have each completed the whole flow and held working tokens. Their
+   grants are in `OAUTH_KV` and their calls are in `mcp_audit_log`.
 2. **A user with no phone number cannot connect** unless they arrive with a vegvisr.org session
-   cookie. 13 of 46 users in `config` have a number on record; the rest must either be signed in
-   at vegvisr.org in the same browser, or add a number to their profile.
-3. **`graph:publish` is grantable but has no tool.** `graphService.publishGraph()` exists and is
-   tested; no MCP tool calls it yet.
+   cookie. 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
+   the rest must either be signed in at vegvisr.org in the same browser, or add a number. Note
+   the lookup compares the NORMALISED value against the stored column without normalising it, so
+   a number stored as `99242829` or `0047…` would never match — today none is, but a new one
+   written by hand could be. Non-Norwegian numbers cannot be used at all.
+3. ~~`graph:publish` is grantable but has no tool.~~ **Closed 2026-09-28** by
+   `publish_html_node`, which republishes an html-node to a host the node ALREADY references.
+   `graphService.publishGraph()` — publishing a *graph* rather than a page — still has no tool.
 4. **No delete.** Deliberate for v1. `graph:delete` is not offered in the consent screen.
-4b. **`post_chat_message` needs `chat:write`, which is never advertised.** It is the only tool
-   whose effect reaches other people, so an ordinary connection cannot obtain the scope: a
+4b. **`post_chat_message` needs `chat:write`, which is never advertised.** It is one of three
+   tools whose effect leaves this system — with `publish_html_node` and `register_user` — and
+   each sits behind an unadvertised opt-in for the same reason: an ordinary connection cannot
+   obtain the scope, because a
    client asking for it is granted `graph:read graph:write` and nothing more. Granting it needs
    a deliberate step-up that this version does not expose. The tool additionally refuses to post
    to a group the CALLER is not a member of — group-chat-worker's `/bot-message` only checks the
