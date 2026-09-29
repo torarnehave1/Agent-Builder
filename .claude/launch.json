@@ -73,18 +73,6 @@
         "/private/tmp/claude-501/-Users-torarnehave-Documents-GitHub-Agent-Builder/177c4c27-e06f-4fe2-97fb-e616e862989a/scratchpad/ph"
       ],
       "port": 8099
-    },
-    {
-      "name": "vac-harness",
-      "runtimeExecutable": "python3",
-      "runtimeArgs": [
-        "-m",
-        "http.server",
-        "8123",
-        "--directory",
-        "/private/tmp/claude-501/-Users-torarnehave-Documents-GitHub-Agent-Builder/366aaa48-5aae-4228-8bdc-b0d9aa543d16/scratchpad/vac"
-      ],
-      "port": 8123
     }
   ]
 }
