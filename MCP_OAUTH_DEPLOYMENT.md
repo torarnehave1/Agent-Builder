@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.5.0`** · worker `cd0b8af7-da37-4ef3-bc6e-e58864c4a7ef` · live since 2026-09-27
+**Server version `1.5.1`** · worker `3ae21943-25cd-431f-bd42-8bbe9c94f308` · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -67,6 +67,7 @@ that changes no contract.
 | `1.3.0` | 2026-09-28 | `get_fulltext_elements` and `generate_node_image`. Images are generated and stored server-side; no bytes cross MCP. |
 | `1.4.0` | 2026-09-28 | `update_graph_metadata`, `list_published_sites`, `publish_html_node` (opt-in `graph:publish`, restricted to hosts the node already references). |
 | `1.5.0` | 2026-09-29 | The user directory: `register_user`, `list_users`, `set_user_groups`, `set_user_role` (opt-in `user:register`, `user:read`), plus `list_meta_areas` and `list_my_graphs` paging to 200. |
+| `1.5.1` | 2026-09-29 | Patch. Stop refusing a POST whose `Accept` lacks `text/event-stream` — the server never returns an event stream, so the SDK's check only cost real requests (13 rejected in one day). `mcp_audit_log` gains a `method` column, because `tool` is NULL for anything that is not `tools/call` and a rejected handshake logged nothing identifying. |
 
 ### Current surface
 
