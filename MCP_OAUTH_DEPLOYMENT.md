@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.6.0`** · worker `42c73a68-c582-4410-a1e5-bc22bf098c5d` · live since 2026-09-27
+**Server version `1.7.0`** · worker `e4113399-9d95-427f-b1b7-fbad247e5d4a` · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -69,6 +69,7 @@ that changes no contract.
 | `1.5.0` | 2026-09-29 | The user directory: `register_user`, `list_users`, `set_user_groups`, `set_user_role` (opt-in `user:register`, `user:read`), plus `list_meta_areas` and `list_my_graphs` paging to 200. |
 | `1.5.1` | 2026-09-29 | Patch. Stop refusing a POST whose `Accept` lacks `text/event-stream` — the server never returns an event stream, so the SDK's check only cost real requests (13 rejected in one day). `mcp_audit_log` gains a `method` column, because `tool` is NULL for anything that is not `tools/call` and a rejected handshake logged nothing identifying. |
 | `1.6.0` | 2026-09-29 | The scope vocabulary is FROZEN — eight scopes named after risk classes instead of features, so a new tool costs a tool-list refresh rather than a re-authorization. Consent copy widened to describe the class. No tool changed. |
+| `1.7.0` | 2026-09-29 |  made grantable. It was in the vocabulary with no checkbox, so the first delete tool would have forced a re-authorization regardless — closed while one reconnect still cost one person. Six opt-in boxes now. |
 
 ### Current surface
 
@@ -104,7 +105,7 @@ array; that test failing is the warning, not a nuisance.
 | `graph:read` | reading content the user may already see | yes |
 | `graph:write` | creating or changing the user's own content, including files, images and metadata | yes |
 | `graph:publish` | making something reachable by people who are not signed in | opt-in |
-| `graph:delete` | destroying content — reserved, no tool uses it | opt-in |
+| `graph:delete` | destroying content — reserved, no tool uses it yet, but the box exists so the first one costs a refresh and not a re-authorization | opt-in |
 | `chat:write` | sending a message that reaches other people, in any channel | opt-in |
 | `chat:read` | reading messages other people wrote | opt-in |
 | `user:register` | creating or altering an account in the user directory | opt-in |
