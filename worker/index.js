@@ -301,8 +301,11 @@ function buildKnowledgePrompt(scope, universe, selected, webSearch) {
     : `\nThe user has currently selected NO graphs. Say so plainly and tell them to open the Knowledge panel and pick at least one — do not try to answer from elsewhere.\n`
   p += webSearch
     ? `\nWeb search is ON: perplexity_search and fetch_url are available. Say clearly which parts of an answer came from the web rather than from the graphs above.\n`
-    : `\nWeb search is OFF — the user switched it off. You have NO tool that reaches the internet. When something is not in the graphs above, say that it is not in the selected knowledge and that they can switch on web search in the Knowledge panel. Never guess from memory and present it as fact.\n`
-  p += `\nYou cannot create, change, publish or delete anything here; this surface is read-only. Answer in the language the user writes in.\n`
+    : `\nWeb search is OFF — the user switched it off. You have NO tool that reaches the internet. When something is not in the graphs above, say that it is not in the selected knowledge and that they can switch it on themselves. Never guess from memory and present it as fact.\n`
+  // The control is a "Knowledge" button directly above the chat. Left unsaid, the model
+  // invents a location ("the panel on the left of this page") and sends the reader hunting.
+  p += `\nThe user changes all of this with the **Knowledge** button directly above this chat — never describe it as being anywhere else on the page, and never name a menu or a sidebar.\n`
+  p += `\nDo not name internal tools (read_graph, perplexity_search, …) to the reader; say what you did in plain words. You cannot create, change, publish or delete anything here; this surface is read-only. Answer in the language the user writes in.\n`
   return p
 }
 
