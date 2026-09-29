@@ -9,6 +9,7 @@ import SessionAnalysisPanel from './SessionAnalysisPanel';
 import RecordingsPanel from './RecordingsPanel';
 import JsonViewerModal from './JsonViewerModal';
 import { providerOf } from '../lib/modelProvider';
+import { kgAuthHeaders, kgJsonHeaders } from '../lib/kgAuth';
 // rehype-sanitize removed: agent-generated content is trusted,
 // and the sanitizer was stripping graph viewer hrefs from links
 
@@ -1043,7 +1044,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
   // Load graph list
   useEffect(() => {
     // Without the role header the worker lists PUBLISHED graphs only — drafts never appear.
-    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=200`, { headers: { 'x-user-role': 'Superadmin' } })
+    fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=200`, { headers: kgAuthHeaders() })
       .then(r => r.json())
       .then(data => { if (data.results) setGraphs(data.results); })
       .catch(() => {});
@@ -2098,7 +2099,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 const graphId = `graph_${Date.now()}`;
                 const kgRes = await fetch(`${KG_BASE}/saveGraphWithHistory`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                  headers: kgJsonHeaders(),
                   body: JSON.stringify({
                     id: graphId,
                     graphData: {
@@ -2117,7 +2118,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 const nodeId = `node_${Date.now()}`;
                 const kgRes = await fetch(`${KG_BASE}/addNode`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+                  headers: kgJsonHeaders(),
                   body: JSON.stringify({
                     graphId: args.graphId,
                     node: { id: nodeId, label: args.label, type: 'fulltext', info: args.content, visible: true, position: { x: 0, y: 0 } },
@@ -2690,7 +2691,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           try {
             const saveRes = await fetch(`${KG_API}/saveGraphWithHistory`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+              headers: kgJsonHeaders(),
               body: JSON.stringify({
                 id: newGraphId,
                 graphData: {
@@ -2785,7 +2786,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             }
             const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+              headers: kgJsonHeaders(),
               body: JSON.stringify(payload),
             });
             if (!res.ok) throw new Error(`save failed (${res.status})`);
@@ -3224,7 +3225,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                         // Add node to existing graph
                         await fetch(`${KG_API}/addNode`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+                          headers: kgJsonHeaders(),
                           body: JSON.stringify({
                             graphId: targetGraphId,
                             node: { id: nodeId, label: '# Audio Transcription', type: 'fulltext', info: txBody, color: '#4A90D9' },
@@ -3240,7 +3241,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                         const title = `Transcription - ${new Date().toISOString().slice(0, 10)}`;
                         await fetch(`${KG_API}/saveGraphWithHistory`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+                          headers: kgJsonHeaders(),
                           body: JSON.stringify({
                             id: gId,
                             graphData: {

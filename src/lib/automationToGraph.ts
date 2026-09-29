@@ -10,6 +10,7 @@
 import type { Node, Edge } from '@xyflow/react';
 import type { AutomationInput, StepData, StepType } from './automation';
 import { stepSummary } from './automation';
+import { kgAuthHeaders, kgJsonHeaders } from './kgAuth';
 
 export const KG_API = 'https://knowledge.vegvisr.org';
 export const AGENT_API = 'https://agent.vegvisr.org';
@@ -254,7 +255,7 @@ export async function saveAutomation(
   // saveGraphWithHistory(override) replaces the whole nodes array.
   try {
     const existingRes = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(id)}`, {
-      headers: { 'x-user-role': 'Superadmin' },
+      headers: kgAuthHeaders(),
     });
     if (existingRes.ok) {
       const existing = (await existingRes.json()) as KgGraphData;
@@ -267,7 +268,7 @@ export async function saveAutomation(
 
   const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+    headers: kgJsonHeaders(),
     body: JSON.stringify({ id, graphData, override: true }),
   });
   if (!res.ok) throw new Error(`Save failed: ${res.status} ${await res.text()}`);
@@ -280,7 +281,7 @@ export async function loadAutomation(
   id: string,
 ): Promise<{ nodes: Node[]; edges: Edge[]; meta: AutomationMeta }> {
   const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(id)}`, {
-    headers: { 'x-user-role': 'Superadmin' },
+    headers: kgAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Load failed: ${res.status}`);
   const graph = (await res.json()) as KgGraphData;
@@ -310,7 +311,7 @@ export interface AutomationSummary {
 export async function listAutomations(): Promise<AutomationSummary[]> {
   const params = new URLSearchParams({ offset: '0', limit: '100', metaArea: 'automation' });
   const res = await fetch(`${KG_API}/getknowgraphsummaries?${params}`, {
-    headers: { 'x-user-role': 'Superadmin' },
+    headers: kgAuthHeaders(),
   });
   if (!res.ok) throw new Error(`List failed: ${res.status}`);
   const data = (await res.json()) as { results?: Array<{ id: string; metadata?: Record<string, unknown> }> };

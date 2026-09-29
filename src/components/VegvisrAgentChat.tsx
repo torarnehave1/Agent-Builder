@@ -15,6 +15,7 @@ function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () =
 import { useAgentChat, getToolPartState, getToolCallId, getToolInput, getToolOutput } from '@cloudflare/ai-chat/react';
 import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
 import { providerOf } from '../lib/modelProvider';
+import { kgJsonHeaders } from '../lib/kgAuth';
 
 const AGENT_HOST = 'agent.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
@@ -675,7 +676,7 @@ async function patchNodeWithVersionRetry(graphId: string, nodeId: string, fields
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const res = await fetch(`${KG_API}/patchNode`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+      headers: kgJsonHeaders(),
       body: JSON.stringify({ graphId, nodeId, fields, expectedVersion }),
     });
     const data = await res.json();
@@ -708,7 +709,7 @@ async function addStandaloneImageNodeToGraph(graphId: string, imageUrl: string, 
   };
   const res = await fetch(`${KG_API}/addNode`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+    headers: kgJsonHeaders(),
     body: JSON.stringify({ graphId, node }),
   });
   const data = await res.json().catch(() => ({}));
@@ -922,7 +923,7 @@ function GraphActionBar({
     try {
       const res = await fetch(`${KG_API}/saveGraphWithHistory`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        headers: kgJsonHeaders(),
         body: JSON.stringify({
           id: graphId,
           override: true,
@@ -987,7 +988,7 @@ function GraphActionBar({
     try {
       const res = await fetch(`${KG_API}/addNode`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        headers: kgJsonHeaders(),
         body: JSON.stringify({ graphId: gid, node }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1030,7 +1031,7 @@ function GraphActionBar({
         };
         const res = await fetch(`${KG_API}/addNode`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+          headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId: gid, node }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

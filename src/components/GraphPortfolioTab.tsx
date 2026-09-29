@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { kgAuthHeaders, kgJsonHeaders } from '../lib/kgAuth';
 
 const KG_API = 'https://knowledge.vegvisr.org';
 const PAGE_SIZE = 50; // larger pages for background loading
@@ -172,7 +173,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
 
     try {
       // First page — show results immediately
-      const firstRes = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_SIZE}`, { headers: { 'x-user-role': 'Superadmin' } });
+      const firstRes = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_SIZE}`, { headers: kgAuthHeaders() });
       if (!firstRes.ok) throw new Error('Failed');
       const firstData = await firstRes.json();
       const totalCount: number = firstData.total || 0;
@@ -189,7 +190,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
         setHydrating(true);
         while (offset < totalCount) {
           if (runId !== runIdRef.current) return;
-          const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: { 'x-user-role': 'Superadmin' } });
+          const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: kgAuthHeaders() });
           if (!res.ok) break;
           const data = await res.json();
           const page = (data.results as RawSummary[] || []).map(processSummary);
@@ -220,7 +221,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
         try {
           const params = new URLSearchParams({ q: search, limit: '50', offset: '0' });
           // Without the role header the worker searches PUBLISHED graphs only — drafts vanish.
-          const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: { 'x-user-role': 'Superadmin' } });
+          const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: kgAuthHeaders() });
           if (res.ok && runId === runIdRef.current) {
             const data = await res.json();
             const hits = ((data.results as RawSummary[]) || []).map(processSummary);
@@ -243,7 +244,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
     try {
       const res = await fetch(`${KG_API}/deleteknowgraph`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin' },
+        headers: kgJsonHeaders(),
         body: JSON.stringify({ id }),
       });
       if (!res.ok) throw new Error('Delete failed');

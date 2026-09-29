@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { kgAuthHeaders } from '../lib/kgAuth';
 
 interface GraphInfo {
   id: string;
@@ -24,7 +25,7 @@ const KG_API = 'https://knowledge.vegvisr.org';
 const PAGE_LIMIT = 50;
 
 // Session auth — without it the worker answers PUBLISHED graphs only, so drafts are invisible.
-const KG_HEADERS = { 'x-user-role': 'Superadmin' };
+const KG_HEADERS = kgAuthHeaders();
 
 function toGraphInfo(raw: RawGraph): GraphInfo {
   const info: GraphInfo = { id: raw.id, title: raw.metadata?.title || raw.title || raw.id };

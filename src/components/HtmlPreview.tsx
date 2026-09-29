@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { formatHtmlForReading } from '../lib/format-html';
+import { kgJsonHeaders, kgSessionToken, kgRole } from '../lib/kgAuth';
 
 // --- Direct anchor-section editing (no agent, no LLM) -------------------------
 // Editable regions are delimited by comment markers <!-- edit:<id>:start/end -->.
@@ -188,10 +189,11 @@ function replaceMatches(html: string, find: string, replace: string, wholeWord: 
   return html.replace(new RegExp('\\b' + escapeRegExp(find) + '\\b', 'g'), () => replace);
 }
 
-// KG writes authenticate with x-user-role + x-user-email (the pattern the rest of
-// the app uses). NOT X-API-Token — under impersonation the localStorage token is a
-// different account and the KG worker rejects it as "Invalid API token" (verified
-// in-browser: with X-API-Token → 401; x-user headers only → saved).
+// KG writes authenticate through src/lib/kgAuth.ts: x-user-role + X-Session-Token. The old
+// pattern here — x-user-role + x-user-email and nothing else — stopped working on 2026-09-26,
+// when the worker stopped trusting a self-asserted role header; every save in this file
+// answered 401 until 2026-09-29. Still NOT X-API-Token: under impersonation the localStorage
+// token belongs to a different account and the worker rejects it as "Invalid API token".
 
 interface Props {
   html: string | null;
@@ -285,12 +287,22 @@ function buildConsoleBridge(graphId?: string | null, nodeId?: string | null): st
 // for preview and live. The iframe is `about:srcdoc`, so page JS can't reach the builder's auth on
 // its own; we set window.__VEGVISR_USER (which the component reads first) so preview resolves the
 // current user with no login round-trip, plus window.__VEGVISR_GRAPH_ID. The component then defines
-// window.vegvisrPatchNode / window.vegvisrWhoAmI and the <vegvisr-auth> bar. Writes use
-// x-user-role + x-user-email (NOT X-API-Token — the KG worker rejects it; see commit 512555f).
+// window.vegvisrPatchNode / window.vegvisrWhoAmI and the <vegvisr-auth> bar.
+//
+// The TOKEN has to be here. vegvisr-auth's readStore() checks window.__VEGVISR_USER FIRST and
+// takes its `token` field verbatim, so seeding this without one made vegvisrPatchNode throw
+// "Session has no verifiable token" for every previewed page that tried to save — the same
+// 2026-09-26 breakage as the direct writes above, one layer further in. No new exposure: the
+// iframe is allow-same-origin on the builder's own origin and can read localStorage itself.
+// The role is the real one too, not a hardcoded Superadmin; the worker reads role from the
+// token's own database row regardless.
 function buildAuthBridge(graphId?: string | null, userEmail?: string): string {
-  const gId = graphId ? graphId.replace(/'/g, "\\'") : '';
-  const email = userEmail ? userEmail.replace(/'/g, "\\'") : '';
-  return `<script>window.__VEGVISR_USER={email:'${email}',role:'Superadmin'};window.__VEGVISR_GRAPH_ID='${gId}';</script>` +
+  const esc = (v: string) => v.replace(/[\\'"<]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+  const gId = graphId ? esc(graphId) : '';
+  const email = userEmail ? esc(userEmail) : '';
+  const token = esc(kgSessionToken());
+  const role = esc(kgRole());
+  return `<script>window.__VEGVISR_USER={email:'${email}',role:'${role}',token:'${token}'};window.__VEGVISR_GRAPH_ID='${gId}';</script>` +
     `<script src="https://api.vegvisr.org/components/vegvisr-auth.js"></script>`;
 }
 
@@ -783,13 +795,13 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (miss0) { setVisualMsg(miss0); setVisualSaving(false); return; }
       let expectedVersion = Number(g0?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+        method: 'POST', headers: kgJsonHeaders(),
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
         expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+          method: 'POST', headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
@@ -878,7 +890,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       let expectedVersion = Number(g?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+        headers: kgJsonHeaders(),
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
@@ -886,7 +898,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         expectedVersion = Number(latest?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+          headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
@@ -917,13 +929,13 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (missSr) { setSrMsg(missSr); setSrSaving(false); return; }
       let expectedVersion = Number(gSr?.metadata?.version || 0);
       let res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+        method: 'POST', headers: kgJsonHeaders(),
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
         expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+          method: 'POST', headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
         });
       }
@@ -949,11 +961,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     const g = await gRes.json();
     const miss = nodeMissingMsg(g, nodeId, graphId);
     if (miss) return { ok: false, error: miss };
-    const headers = {
-      'Content-Type': 'application/json',
-      'x-user-role': 'Superadmin',
-      ...(userEmail ? { 'x-user-email': userEmail } : {}),
-    };
+    const headers = kgJsonHeaders();
     const put = (expectedVersion: number) =>
       fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
@@ -1054,7 +1062,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
 
       const res = await fetch('https://knowledge.vegvisr.org/patchNode', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+        headers: kgJsonHeaders(),
         body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion }),
       });
 
@@ -1065,7 +1073,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         const retryVersion = Number(latestGraph?.metadata?.version || 0);
         const retryRes = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-user-role': 'Superadmin', ...(userEmail ? { 'x-user-email': userEmail } : {}) },
+          headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: versionHtml }, expectedVersion: retryVersion }),
         });
         if (!retryRes.ok) return;
