@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.5.1`** · worker `3ae21943-25cd-431f-bd42-8bbe9c94f308` · live since 2026-09-27
+**Server version `1.6.0`** · worker `42c73a68-c582-4410-a1e5-bc22bf098c5d` · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -68,6 +68,7 @@ that changes no contract.
 | `1.4.0` | 2026-09-28 | `update_graph_metadata`, `list_published_sites`, `publish_html_node` (opt-in `graph:publish`, restricted to hosts the node already references). |
 | `1.5.0` | 2026-09-29 | The user directory: `register_user`, `list_users`, `set_user_groups`, `set_user_role` (opt-in `user:register`, `user:read`), plus `list_meta_areas` and `list_my_graphs` paging to 200. |
 | `1.5.1` | 2026-09-29 | Patch. Stop refusing a POST whose `Accept` lacks `text/event-stream` — the server never returns an event stream, so the SDK's check only cost real requests (13 rejected in one day). `mcp_audit_log` gains a `method` column, because `tool` is NULL for anything that is not `tools/call` and a rejected handshake logged nothing identifying. |
+| `1.6.0` | 2026-09-29 | The scope vocabulary is FROZEN — eight scopes named after risk classes instead of features, so a new tool costs a tool-list refresh rather than a re-authorization. Consent copy widened to describe the class. No tool changed. |
 
 ### Current surface
 
@@ -81,6 +82,59 @@ that changes no contract.
 - **3 outward-facing tools** — `post_chat_message`, `publish_html_node`, `register_user`. Their
   effects leave this system and reach other people, so each declares `openWorldHint` and each
   sits behind an opt-in scope. A test pins both properties together.
+
+---
+
+## Scopes are frozen — pick one, do not add one
+
+Adding a scope string is the most expensive change in this system, and the cost lands on every
+user rather than on you. **A grant is never widened.** An existing connection keeps exactly the
+scopes it was created with, so a new scope means every person must delete their connector and add
+it again — and ChatGPT refuses to reuse the old connector name, so they end up with "KM2".
+
+Five scopes were added over two days in September 2026 and each one cost that. The mistake was
+naming them after FEATURES: `chat:write` arrived with chat, `graph:publish` with publishing,
+`user:register` with the directory. So every new capability implied a new scope.
+
+These eight are named after RISK CLASSES and are meant to be final. `scopes.test.mjs` pins the
+array; that test failing is the warning, not a nuisance.
+
+| Scope | The class of damage it covers | Advertised? |
+|---|---|---|
+| `graph:read` | reading content the user may already see | yes |
+| `graph:write` | creating or changing the user's own content, including files, images and metadata | yes |
+| `graph:publish` | making something reachable by people who are not signed in | opt-in |
+| `graph:delete` | destroying content — reserved, no tool uses it | opt-in |
+| `chat:write` | sending a message that reaches other people, in any channel | opt-in |
+| `chat:read` | reading messages other people wrote | opt-in |
+| `user:register` | creating or altering an account in the user directory | opt-in |
+| `user:read` | seeing other people's names, addresses and roles | opt-in |
+
+### Choosing a scope for a new tool
+
+1. **What is the worst thing this tool can do?** Not what it usually does.
+2. **Which row above does that damage resemble?** Use that scope. A tool that attaches a file to
+   a node is `graph:write`, not a new `files:write`. A tool that emails someone is `chat:write`,
+   not `email:send` — the damage is "a message reached a person", and the channel does not change
+   that.
+3. **If the honest answer is "none of them"** — then the scope is justified. Add it, and add a
+   row here saying what it cost, so the next person sees the price.
+4. **Widen the consent copy to match.** Consent must never be narrower than what the scope
+   permits, or the new tool is doing something the user never agreed to. `SCOPE_TEXT` and
+   `OPT_IN_SCOPE_DETAIL` describe the class, and a test asserts they do.
+
+Note that widening copy does not retroactively inform people who already consented under the
+narrower wording. A tool that materially enlarges what an existing scope reaches is still a
+deliberate decision — the freeze removes the re-authorization tax, it does not remove judgement.
+
+### What a new tool actually costs now
+
+| Change | Cost to the user |
+|---|---|
+| New tool in an existing scope | a tool-list refresh — in ChatGPT, a new conversation |
+| New tool needing a new scope | delete the connector, add it again, re-tick every box |
+| Changed tool description or schema | a tool-list refresh |
+| Backend fix behind an existing tool | nothing |
 
 ---
 
