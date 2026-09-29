@@ -67,7 +67,8 @@
       panelLead: 'Du bestemmer hva agenten kan lese. Endringene lagres på din bruker og gjelder med én gang.',
       graphsHead: 'Kunnskapsgrafer',
       webLabel: 'Søk på internett',
-      webHelp: 'Av: agenten har ingen verktøy som når utenfor grafene over.',
+      webHelpOff: 'Av: agenten har ingen verktøy som når utenfor grafene over.',
+      webHelpOn: 'På: agenten kan søke på nettet og hente sider, og skal si hva som kom utenfra.',
       selectAll: 'Velg alle',
       selectNone: 'Fjern alle',
       saving: 'Lagrer …',
@@ -89,7 +90,7 @@
       thinking: 'Tenker …',
       errorPrefix: 'Feil',
       nodes: 'noder',
-      closePanel: 'Lukk',
+      emptyHint: 'Still et spørsmål. Trykk «Kunnskap» for å se og endre hva jeg kan lese.',
     },
     en: {
       heading: 'Ask the agent',
@@ -97,7 +98,8 @@
       panelLead: 'You decide what the agent may read. Changes are saved to your account and take effect immediately.',
       graphsHead: 'Knowledge graphs',
       webLabel: 'Search the web',
-      webHelp: 'Off: the agent has no tool that reaches outside the graphs above.',
+      webHelpOff: 'Off: the agent has no tool that reaches outside the graphs above.',
+      webHelpOn: 'On: the agent may search the web and fetch pages, and must say what came from outside.',
       selectAll: 'Select all',
       selectNone: 'Clear all',
       saving: 'Saving …',
@@ -119,7 +121,7 @@
       thinking: 'Thinking …',
       errorPrefix: 'Error',
       nodes: 'nodes',
-      closePanel: 'Close',
+      emptyHint: 'Ask a question. Press "Knowledge" to see and change what I can read.',
     },
   }
 
@@ -224,6 +226,7 @@
       '.vac-msg.user{align-self:flex-end;background:var(--vac-accent);color:#fff}',
       '.vac-msg.user a{color:#fff;text-decoration:underline}',
       '.vac-msg.bot{align-self:flex-start;background:rgba(127,127,127,.1);border:1px solid var(--vac-line)}',
+      '.vac-msg.bot a{color:var(--vac-accent)}',
       '.vac-msg.err{align-self:flex-start;background:rgba(185,28,28,.1);border:1px solid rgba(185,28,28,.3);color:#b91c1c}',
       '.vac-msg p:first-child{margin-top:0}.vac-msg p:last-child{margin-bottom:0}',
       '.vac-msg pre{background:rgba(0,0,0,.18);padding:10px;border-radius:8px;overflow-x:auto;font-size:13px}',
@@ -311,7 +314,7 @@
       '<ul class="vac-list"></ul>' +
       '<label class="vac-web"><input type="checkbox" data-web>' +
       '<span><span class="vac-gt">' + esc(t.webLabel) + '</span>' +
-      '<span class="vac-gm">' + esc(t.webHelp) + '</span></span></label>' +
+      '<span class="vac-gm" data-webhelp>' + esc(t.webHelpOff) + '</span></span></label>' +
       '<p class="vac-status"></p>'
     el.appendChild(panel)
 
@@ -320,6 +323,7 @@
     var status = panel.querySelector('.vac-status')
     var btnAll = panel.querySelector('[data-all]')
     var btnNone = panel.querySelector('[data-none]')
+    var webHelp = panel.querySelector('[data-webhelp]')
 
     // --- thread + input ---
     var thread = document.createElement('div')
@@ -356,7 +360,10 @@
         (knowledge.webSearch ? t.statusOn : t.statusOff) +
         (knowledge.usingDefault ? ' · ' + t.usingDefault : '')
     }
-    function paintSummary () { kbtn.textContent = summaryLine() }
+    function paintSummary () {
+      kbtn.textContent = summaryLine()
+      webHelp.textContent = knowledge.webSearch ? t.webHelpOn : t.webHelpOff
+    }
 
     function paintList () {
       list.innerHTML = ''
@@ -482,7 +489,7 @@
       thread.innerHTML = ''
       var p = document.createElement('div')
       p.className = 'vac-empty'
-      p.textContent = el.getAttribute('data-intro') || t.panelLead
+      p.textContent = t.emptyHint
       thread.appendChild(p)
     }
     function clearEmpty () {
