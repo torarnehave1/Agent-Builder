@@ -91,6 +91,8 @@
       errorPrefix: 'Feil',
       nodes: 'noder',
       emptyHint: 'Still et spørsmål. Trykk «Kunnskap» for å se og endre hva jeg kan lese.',
+      draft: 'utkast',
+      draftNote: 'Merket «utkast» er ikke publisert — de er synlige her fordi du er logget inn, og står derfor ikke i porteføljen lenger nede på siden.',
     },
     en: {
       heading: 'Ask the agent',
@@ -122,6 +124,8 @@
       errorPrefix: 'Error',
       nodes: 'nodes',
       emptyHint: 'Ask a question. Press "Knowledge" to see and change what I can read.',
+      draft: 'draft',
+      draftNote: 'The ones marked "draft" are not published — you see them here because you are signed in, which is why they are absent from the portfolio further down the page.',
     },
   }
 
@@ -217,6 +221,10 @@
       '.vac-list input{margin:4px 0 0;flex:0 0 auto}',
       '.vac-gt{display:block;font-size:14px}',
       '.vac-gm{display:block;font-size:12px;color:var(--vac-muted)}',
+      '.vac-draft{display:inline-block;margin-left:7px;padding:0 7px;border-radius:999px;font-size:11px;',
+      'border:1px solid var(--vac-line);color:var(--vac-muted);vertical-align:1px}',
+      '.vac-note{margin:0 0 10px;font-size:12px;color:var(--vac-muted)}',
+      '.vac-note[hidden]{display:none}',
       '.vac-web{display:flex;gap:10px;align-items:flex-start;padding:10px 8px;border-top:1px solid var(--vac-line);cursor:pointer}',
       '.vac-web input{margin:4px 0 0;flex:0 0 auto}',
       '.vac-status{margin:10px 0 0;font-size:12px;color:var(--vac-muted);min-height:1.4em}',
@@ -311,6 +319,7 @@
       '<p class="vac-sub">' + esc(t.graphsHead) + '</p>' +
       '<div class="vac-bulk"><button type="button" data-all>' + esc(t.selectAll) + '</button>' +
       '<button type="button" data-none>' + esc(t.selectNone) + '</button></div>' +
+      '<p class="vac-note" data-draftnote hidden></p>' +
       '<ul class="vac-list"></ul>' +
       '<label class="vac-web"><input type="checkbox" data-web>' +
       '<span><span class="vac-gt">' + esc(t.webLabel) + '</span>' +
@@ -324,6 +333,7 @@
     var btnAll = panel.querySelector('[data-all]')
     var btnNone = panel.querySelector('[data-none]')
     var webHelp = panel.querySelector('[data-webhelp]')
+    var draftNote = panel.querySelector('[data-draftnote]')
 
     // --- thread + input ---
     var thread = document.createElement('div')
@@ -374,6 +384,10 @@
         list.appendChild(li)
         return
       }
+      var drafts = 0
+      knowledge.universe.forEach(function (g) { if (g.published === false) drafts++ })
+      draftNote.textContent = t.draftNote
+      draftNote.hidden = drafts === 0
       knowledge.universe.forEach(function (g) {
         var li = document.createElement('li')
         var label = document.createElement('label')
@@ -391,7 +405,8 @@
         var bits = []
         if (g.nodeCount) bits.push(g.nodeCount + ' ' + t.nodes)
         if (g.updatedAt) bits.push(String(g.updatedAt).slice(0, 10))
-        txt.innerHTML = '<span class="vac-gt">' + esc(g.title) + '</span>' +
+        txt.innerHTML = '<span class="vac-gt">' + esc(g.title) +
+          (g.published === false ? '<span class="vac-draft">' + esc(t.draft) + '</span>' : '') + '</span>' +
           (bits.length ? '<span class="vac-gm">' + esc(bits.join(' · ')) + '</span>' : '')
         label.appendChild(box)
         label.appendChild(txt)

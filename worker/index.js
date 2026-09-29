@@ -252,6 +252,10 @@ async function fetchScopeUniverse(env, scope, role) {
       metaArea: m.metaArea || '',
       nodeCount: r.nodeCount || 0,
       updatedAt: r.updatedAt || r.createdAt || null,
+      // Why the panel can show more graphs than the page's public portfolio does: most of
+      // these are drafts, visible here only because the reader is signed in. The panel says
+      // so per row rather than leaving two different counts on one page unexplained.
+      published: m.publicationState === 'published',
     }
   }).filter(g => g.id)
 }
