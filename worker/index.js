@@ -206,6 +206,106 @@ async function loadDynamicPrompt(env) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// KNOWLEDGE SCOPE — what a signed-in user has decided their agent may read.
+//
+// A published, login-gated page (iiba.vegr.ai) embeds the `agent-chat` component and
+// mounts it with a scope = a metaArea tag. Inside that scope the USER picks which graphs
+// the agent may read, and whether it may reach the internet at all. The choice is stored
+// per user in config.data.agent_knowledge[scope] and is read SERVER-SIDE on every /chat
+// call — the browser sends only the scope name, never the graph list, so a client cannot
+// widen its own reach by editing the request. Enforcement is the toolFilter allow-list in
+// agent-loop.js, not a sentence in the prompt: with web search off, the internet tools are
+// never sent to the model at all.
+// ---------------------------------------------------------------------------
+
+// The read-only toolbox a scoped knowledge chat gets. Deliberately small: this surface is
+// for answering FROM the selected graphs, not for building anything.
+const KNOWLEDGE_TOOLS = [
+  'read_graph', 'read_graph_content', 'read_node',
+  'search_graphs', 'list_meta_areas', 'analyze_graph',
+]
+// Added only when the user has switched web search ON.
+const KNOWLEDGE_WEB_TOOLS = ['perplexity_search', 'fetch_url']
+
+function normalizeScope(value) {
+  // A metaArea tag, with or without the leading '#'. Kept to characters that can appear in
+  // one, so the value can go straight into a query string and a prompt.
+  const s = String(value == null ? '' : value).trim().replace(/^#/, '')
+  return /^[A-Za-z0-9 ._-]{1,60}$/.test(s) ? s : ''
+}
+
+// The graphs a scope offers, from the KG worker's own metaArea filter (SQL LIKE).
+// The role header matters: without it the worker answers PUBLISHED graphs only, and an
+// IIBA member would see 3 of their 8 graphs.
+async function fetchScopeUniverse(env, scope, role) {
+  const url = `https://knowledge-graph-worker/getknowgraphsummaries?offset=0&limit=100&metaArea=${encodeURIComponent(scope)}`
+  const res = await env.KG_WORKER.fetch(url, { headers: { 'x-user-role': role || 'User' } })
+  if (!res.ok) throw new Error(`getknowgraphsummaries failed (${res.status})`)
+  const data = await res.json()
+  return (data.results || []).map(r => {
+    const m = r.metadata || {}
+    return {
+      id: r.id,
+      title: m.title || r.title || r.id,
+      description: m.description || '',
+      metaArea: m.metaArea || '',
+      nodeCount: r.nodeCount || 0,
+      updatedAt: r.updatedAt || r.createdAt || null,
+    }
+  }).filter(g => g.id)
+}
+
+async function readKnowledgePrefs(env, email) {
+  if (!email) return {}
+  const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(email).first()
+  try {
+    const d = JSON.parse(row?.data || '{}')
+    const k = d && typeof d.agent_knowledge === 'object' && d.agent_knowledge ? d.agent_knowledge : {}
+    return k
+  } catch { return {} }
+}
+
+// Resolve what this user may actually read in this scope, right now.
+// No saved row → every graph in the scope, web search OFF. A first-time member gets an
+// agent that knows their World and nothing outside it, rather than an empty one.
+// A saved row with graphs: [] is a real, deliberate empty selection — not "unset".
+async function resolveKnowledgeScope(env, { email, role, scope }) {
+  const universe = await fetchScopeUniverse(env, scope, role)
+  const ids = new Set(universe.map(g => g.id))
+  const saved = (await readKnowledgePrefs(env, email))[scope]
+  if (saved && Array.isArray(saved.graphs)) {
+    return {
+      scope, universe,
+      selected: saved.graphs.filter(id => ids.has(id)),
+      webSearch: saved.webSearch === true,
+      usingDefault: false,
+    }
+  }
+  return { scope, universe, selected: universe.map(g => g.id), webSearch: false, usingDefault: true }
+}
+
+// The prompt half of the scope. The tool filter is what actually holds; this tells the
+// model what it is holding, so it answers honestly instead of apologising for a tool it
+// cannot see.
+function buildKnowledgePrompt(scope, universe, selected, webSearch) {
+  const byId = new Map(universe.map(g => [g.id, g]))
+  const lines = selected.map(id => {
+    const g = byId.get(id)
+    return `- "${id}" — ${g ? g.title : id}${g && g.nodeCount ? ` (${g.nodeCount} nodes)` : ''}`
+  }).join('\n')
+  let p = `\n\n## Knowledge base (${scope}) — chosen by this user\n`
+  p += `You are a knowledge assistant for ${scope}. The user has decided what you may read, from a panel on this page.\n`
+  p += selected.length
+    ? `\nThe ONLY graphs you may read:\n${lines}\n\nUse read_graph / read_graph_content / read_node on these ids. Do not read, list or search for graphs outside this list — even if you can name one. search_graphs may be used to find WHERE inside these graphs something sits, but an answer must come from the graphs above.\n`
+    : `\nThe user has currently selected NO graphs. Say so plainly and tell them to open the Knowledge panel and pick at least one — do not try to answer from elsewhere.\n`
+  p += webSearch
+    ? `\nWeb search is ON: perplexity_search and fetch_url are available. Say clearly which parts of an answer came from the web rather than from the graphs above.\n`
+    : `\nWeb search is OFF — the user switched it off. You have NO tool that reaches the internet. When something is not in the graphs above, say that it is not in the selected knowledge and that they can switch on web search in the Knowledge panel. Never guess from memory and present it as fact.\n`
+  p += `\nYou cannot create, change, publish or delete anything here; this surface is read-only. Answer in the language the user writes in.\n`
+  return p
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url)
@@ -359,6 +459,68 @@ export default {
         let selected = []
         try { const d = JSON.parse(row?.data || '{}'); if (Array.isArray(d.app_interests)) selected = d.app_interests } catch { selected = [] }
         return new Response(JSON.stringify({ universe, selected }), { headers: corsHeaders })
+      }
+
+      // GET/POST /agent-knowledge — what a signed-in user lets their agent read in one scope.
+      //
+      // The Knowledge panel in the `agent-chat` component talks to this and to nothing else.
+      // Auth: X-API-Token (the user's emailVerificationToken) — the same value vegvisr-auth
+      // already keeps in localStorage['vegvisr_user'].token on every gated page.
+      //
+      // GET  ?scope=IIBA → { scope, universe:[{id,title,description,nodeCount,updatedAt}],
+      //                      selected:[graphId...], webSearch, usingDefault }
+      // POST { scope, graphs:[graphId...], webSearch } → saves to config.data.agent_knowledge[scope].
+      //
+      // POST intersects `graphs` with the scope's universe server-side, so a client cannot
+      // store a graph outside its own scope and have /chat honour it later.
+      if (pathname === '/agent-knowledge' && (request.method === 'GET' || request.method === 'POST')) {
+        const xToken = request.headers.get('X-API-Token') || ''
+        const auth = xToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: xToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        if (!auth?.email) {
+          return new Response(JSON.stringify({ error: 'Unauthorized — a valid X-API-Token is required' }), { status: 401, headers: corsHeaders })
+        }
+
+        const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {}
+        const scope = normalizeScope(request.method === 'POST' ? body.scope : url.searchParams.get('scope'))
+        if (!scope) {
+          return new Response(JSON.stringify({ error: 'scope is required (a metaArea tag, e.g. "IIBA")' }), { status: 400, headers: corsHeaders })
+        }
+
+        let universe = []
+        try {
+          universe = await fetchScopeUniverse(env, scope, auth.role)
+        } catch (err) {
+          console.error('[/agent-knowledge] universe fetch failed', err)
+          return new Response(JSON.stringify({ error: `Could not read the graphs for scope "${scope}": ${err.message}` }), { status: 502, headers: corsHeaders })
+        }
+
+        if (request.method === 'POST') {
+          const ids = new Set(universe.map(g => g.id))
+          const graphs = (Array.isArray(body.graphs) ? body.graphs : []).filter(g => typeof g === 'string' && ids.has(g))
+          const webSearch = body.webSearch === true
+          const row = await env.DB.prepare('SELECT data FROM config WHERE email = ?').bind(auth.email).first()
+          let data = {}
+          try { data = JSON.parse(row?.data || '{}') } catch { data = {} }
+          if (!data || typeof data !== 'object') data = {}
+          if (!data.agent_knowledge || typeof data.agent_knowledge !== 'object') data.agent_knowledge = {}
+          data.agent_knowledge[scope] = { graphs, webSearch, updatedAt: new Date().toISOString() }
+          await env.DB.prepare('UPDATE config SET data = ? WHERE email = ?').bind(JSON.stringify(data), auth.email).run()
+          console.log(`[/agent-knowledge] ${auth.email} scope=${scope} graphs=${graphs.length}/${universe.length} web=${webSearch}`)
+          return new Response(JSON.stringify({ success: true, scope, universe, selected: graphs, webSearch, usingDefault: false }), { headers: corsHeaders })
+        }
+
+        const ids = new Set(universe.map(g => g.id))
+        const saved = (await readKnowledgePrefs(env, auth.email))[scope]
+        const hasSaved = saved && Array.isArray(saved.graphs)
+        return new Response(JSON.stringify({
+          scope,
+          universe,
+          selected: hasSaved ? saved.graphs.filter(id => ids.has(id)) : universe.map(g => g.id),
+          webSearch: hasSaved ? saved.webSearch === true : false,
+          usingDefault: !hasSaved,
+        }), { headers: corsHeaders })
       }
 
       // GET/POST /world-credentials — a World's Cloudflare token, WITHOUT the agent chat.
@@ -2186,7 +2348,7 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext, knowledgeScope } = body
         const planMode = mode === 'plan'
         // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
         const authContext = authToken
@@ -2245,6 +2407,30 @@ export default {
           // Overrides any per-agent toolFilter — the lock is the stricter intent.
           toolFilter = exclusiveTools
           console.log(`[chat] exclusive context "${workContext.title}" — toolbox locked to: ${exclusiveTools.join(', ')}`)
+        }
+
+        // KNOWLEDGE SCOPE — a published, gated page (agent-chat component) sends only the
+        // scope NAME; the selection itself is read from D1 here, so the browser cannot widen
+        // its own reach. This is the strictest intent on the request and overrides any
+        // per-agent or work-context filter above.
+        const scope = normalizeScope(knowledgeScope)
+        if (scope) {
+          if (!authContext.email) {
+            return new Response(JSON.stringify({
+              error: 'knowledgeScope requires a signed-in user — send authToken with the request',
+            }), { status: 401, headers: corsHeaders })
+          }
+          try {
+            const k = await resolveKnowledgeScope(env, { email: authContext.email, role: authContext.role, scope })
+            toolFilter = k.webSearch ? [...KNOWLEDGE_TOOLS, ...KNOWLEDGE_WEB_TOOLS] : [...KNOWLEDGE_TOOLS]
+            systemPrompt += buildKnowledgePrompt(scope, k.universe, k.selected, k.webSearch)
+            console.log(`[chat] knowledge scope "${scope}" for ${authContext.email} — ${k.selected.length}/${k.universe.length} graphs, web=${k.webSearch}${k.usingDefault ? ' (default)' : ''}`)
+          } catch (err) {
+            console.error('[chat] knowledge scope failed', err)
+            return new Response(JSON.stringify({
+              error: `Could not load the knowledge for scope "${scope}": ${err.message}`,
+            }), { status: 502, headers: corsHeaders })
+          }
         }
 
         // Inject the selected Work Context as ORIENTATION (never a restriction).
