@@ -40,6 +40,13 @@
   var API_DEFAULT = 'https://agent.vegvisr.org'
   var STORE_KEY = 'vegvisr_user' // written by vegvisr-auth.js — {email, role, token}
   var CSS_ID = 'vegvisr-agent-chat-css'
+  // vegvisr-auth writes its identity store ASYNCHRONOUSLY: bootOnce() runs on DOMContentLoaded
+  // and only writes {email, role, token} after verifyMagic + a role lookup have resolved. This
+  // component mounts on the same event, so a single synchronous read finds nothing and would
+  // say "sign in" on a page that is, a moment later, signed in — observed on testiiba.vegr.ai
+  // (2026-09-29) with the auth bar showing the user's own address. vegvisr-auth announces the
+  // change on the window; this component listens and re-mounts.
+  var AUTH_CHANGED = 'vegvisr-auth-changed'
   var MAX_TURNS_NOTE = 12
 
   function log () {
@@ -187,6 +194,10 @@
     return null
   }
 
+  // What a mount was built for. A remount wipes the thread, so it must happen on a real
+  // sign-in/sign-out, not on every announcement.
+  function identityKey (me) { return me ? me.email + '|' + (me.token ? 'T' : '-') : '' }
+
   // ---------- CSS ----------
 
   function injectCss () {
@@ -270,6 +281,7 @@
     var height = parseInt(el.getAttribute('data-height') || '420', 10) || 420
 
     var me = readIdentity()
+    el.__vacIdentity = identityKey(me)
     log('mounting scope="' + scope + '" lang=' + lang + ' api=' + api +
       ' user=' + (me ? me.email : 'signed out') + ' token=' + (me && me.token ? 'yes' : 'no'))
 
@@ -663,6 +675,28 @@
     }
     log('mounting', nodes.length, 'chat(s)')
     Array.prototype.forEach.call(nodes, function (n) { mount(n) })
+
+    if (!window.__vacAuthWatch) {
+      window.__vacAuthWatch = true
+      window.addEventListener(AUTH_CHANGED, remountChanged)
+    }
+    // Safety net for the case the event cannot cover: this script loaded so late that
+    // vegvisr-auth had already announced. whoAmI() resolves a half-written store (an email
+    // whose role is still pending); it cannot complete a magic-link return, which is what the
+    // event is for.
+    if (!readIdentity() && typeof window.vegvisrWhoAmI === 'function') {
+      window.vegvisrWhoAmI().then(remountChanged).catch(function () {})
+    }
+  }
+
+  function remountChanged () {
+    var key = identityKey(readIdentity())
+    var nodes = document.querySelectorAll('[data-vegvisr-agent-chat]')
+    Array.prototype.forEach.call(nodes, function (n) {
+      if (n.__vacIdentity === key) return
+      log('identity changed (' + (n.__vacIdentity || 'none') + ' -> ' + (key || 'none') + ') — remounting')
+      mount(n)
+    })
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountAll)
