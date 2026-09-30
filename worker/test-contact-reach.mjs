@@ -88,9 +88,9 @@ function makeEnv({ ignoreSearch = false } = {}) {
         for (const [k, v] of Object.entries(body.where)) rows = rows.filter(r => String(r[k]) === String(v))
       }
       if (body.search && body.search.term && !ignoreSearch) {
-        const term = fold(body.search.term)
+        const words = fold(body.search.term).split(/\s+/).filter(Boolean)
         const cols = body.search.columns || []
-        rows = rows.filter(r => cols.some(c => fold(r[c]).includes(term)))
+        rows = rows.filter(r => words.every(w => cols.some(c => fold(r[c]).includes(w))))
       }
       if (Array.isArray(body.notEmpty)) {
         for (const c of body.notEmpty) rows = rows.filter(r => r[c] !== null && r[c] !== undefined && r[c] !== '')
@@ -140,6 +140,18 @@ const CALLER = { userId: 'ca3d9d93-3b02-4e49-a4ee-43552ec4ca2b', userEmail: 'own
   const r = await executeTool('search_contacts', { ...CALLER, query: 'Ingen Slik Person' }, env)
   check('a genuine miss returns no contacts and says so',
     (r.contacts || []).length === 0 && /No contacts match/.test(r.message || ''), `message: ${r.message}`)
+}
+
+// 1e. The name a person actually types: two words with a middle name between them in the
+//     stored value. A contiguous-substring match returns nothing here.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('search_contacts', { ...CALLER, query: 'Olve Storås' }, env)
+  check('a partial name finds the full one ("Olve Storås" -> "Olve Aleksander Storås")',
+    (r.contacts || []).some(c => c._id === OLVE_ID), `got ${JSON.stringify((r.contacts || []).map(c => c.full_name))}`)
+  const rec = await executeTool('list_recordings', { ...CALLER, query: 'Olve Storås', limit: 20 }, env)
+  check('list_recordings matches the same partial name',
+    (rec.recordings || []).length === 3, `got ${(rec.recordings || []).length}`)
 }
 
 // 1d. Against a drizzle-worker that does not know `search` yet (deploy order), the tool must

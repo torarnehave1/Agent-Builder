@@ -3190,7 +3190,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'search_contacts',
-    description: 'Search contacts by name, company, email, or phone. The search runs in SQL over the ENTIRE contacts table (case-insensitive substring, Norwegian letters included) and returns `total` matches plus the first `limit` of them, each with its `_id` (the contactId used by get_contact_logs and add_contact_log). A zero-result answer means the contact genuinely is not in the table — but say the search found nothing, never that the person does not exist, and offer list_contacts if the spelling may differ.',
+    description: 'Search contacts by name, company, email, or phone. The search runs in SQL over the ENTIRE contacts table (case-insensitive, Norwegian letters included; every word of the query must appear, in any order, so a partial name like \'Olve Storås\' finds \'Olve Aleksander Storås\') and returns `total` matches plus the first `limit` of them, each with its `_id` (the contactId used by get_contact_logs and add_contact_log). A zero-result answer means the contact genuinely is not in the table — but say the search found nothing, never that the person does not exist, and offer list_contacts if the spelling may differ.',
     input_schema: {
       type: 'object',
       properties: {

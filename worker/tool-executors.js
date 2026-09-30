@@ -8204,7 +8204,10 @@ async function executeListRecordings(input, env) {
 
   // Client-side filtering if query provided (search-recordings endpoint also has broken index)
   if (query) {
-    const q = query.toLowerCase().trim()
+    // Every word of the query must appear, in any order — "Olve Storås" has to find
+    // "Contact Log — Olve Aleksander Storås". A contiguous-substring match returned nothing
+    // for the name the user actually typed (2026-09-30).
+    const words = String(query).toLowerCase().split(/\s+/).filter(Boolean)
     allRecordings = allRecordings.filter(r => {
       const searchable = [
         r.recordingId || '',
@@ -8214,7 +8217,7 @@ async function executeListRecordings(input, env) {
         (r.tags || []).join(' '),
         r.category || '',
       ].join(' ').toLowerCase()
-      return searchable.includes(q)
+      return words.every(w => searchable.includes(w))
     })
   }
 
@@ -9820,9 +9823,10 @@ async function executeSearchContacts(input, env) {
   // yields an honest "no match" instead of the first 20 contacts in the table presented as
   // hits. When the server did filter, this is a no-op.
   const SEARCH_COLUMNS = ['full_name', 'organization', 'emails', 'phones']
-  const term = String(query).toLowerCase()
+  const words = String(query).toLowerCase().split(/\s+/).filter(Boolean)
   const rows = data.records || data.rows || []
-  const contacts = rows.filter(c => SEARCH_COLUMNS.some(k => String(c[k] ?? '').toLowerCase().includes(term)))
+  const contacts = rows.filter(c =>
+    words.every(w => SEARCH_COLUMNS.some(k => String(c[k] ?? '').toLowerCase().includes(w))))
   const serverFiltered = contacts.length === rows.length
   const total = serverFiltered ? (Number(data.total) || contacts.length) : contacts.length
 
