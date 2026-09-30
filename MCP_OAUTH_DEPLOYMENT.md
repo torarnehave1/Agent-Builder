@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.11.0`** · live since 2026-09-27
+**Server version `1.12.0`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -74,6 +74,7 @@ that changes no contract.
 | `1.9.0` | 2026-09-30 | `style`, `lighting` and `format` on the image tool — the chat UI's dropdown vocabulary, copied token for token, so the same choice gives the same picture through either surface. The reply carries `finalPrompt`. |
 | `1.10.0` | 2026-09-30 | `renderTraits`, `imageText` and `textTreatment`. Traits are emitted in the table's order rather than the caller's, so one set of choices always composes to one string. |
 | `1.11.0` | 2026-09-30 | `get_image_guide`, and per-model parameter resolution. `quality`, `steps`, `guidance`, `seed` and `negativePrompt` now resolve against the chosen model's own published schema: the five models disagree about which of those exist, so an unsupported one is reported in `notes` rather than dropped in silence. `mcp_audit_log` gains `client_info`, recording what each client declares at `initialize` — including whether it supports `elicitation`, which is what a server would need to ask the user a question mid-call. |
+| `1.12.0` | 2026-09-30 | `flux-1-schnell` retired from the image model enum — it accepts no width or height, and `generate_node_image` only ever fills a placeholder whose element already declared a size. Four models remain, all of which take a size and a seed, asserted as a property rather than a list. Naming a retired or unknown model now leads `notes` with the substitution and its reason instead of falling through to the default in silence. |
 
 ### Current surface
 
