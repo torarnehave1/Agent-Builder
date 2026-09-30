@@ -493,6 +493,12 @@ const IMAGE_STYLE_PRESETS = [
   { id: 'illustration', label: 'Illustration', token: 'illustrated style, crafted visual storytelling, clean shapes' },
   { id: 'pixar', label: 'Pixar / 3D', token: 'internal test render, Pixar style, polished 3D animated look' },
   { id: 'concept-art', label: 'Concept Art', token: 'concept art, artstation quality, atmospheric visual development' },
+  // Added 2026-09-30, tokens copied verbatim from IMAGE_STYLES in
+  // vegvisr-frontend/dev-worker/images-service.js so the same choice gives the same picture
+  // through the MCP server. Every style above describes a way of RENDERING a subject; these two
+  // are the first that change what the subject is.
+  { id: 'sketch', label: 'Sketch', token: 'hand-drawn sketch, loose pen strokes, minimal line work' },
+  { id: 'abstract', label: 'Abstract', token: 'abstract composition, non-representational forms, bold colour fields' },
 ] as const;
 
 const IMAGE_LIGHTING_PRESETS = [

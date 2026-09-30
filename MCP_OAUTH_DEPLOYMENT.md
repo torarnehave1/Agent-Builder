@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.13.0`** · live since 2026-09-27
+**Server version `1.14.0`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -80,6 +80,7 @@ that changes no contract.
 | `1.12.3` | 2026-09-30 | Content-Type is normalised too. The transport refuses a POST that is not `application/json` with 415 and the same `-32000`, and this handler has already parsed the body and passes `parsedBody`, so the transport validates a header describing something it never reads. Safe because the bearer token, not the media type, is what holds `/mcp` shut. |
 | `1.12.4` | 2026-09-30 | Log the transport's own refusal message with the headers as received. Two versions were spent inferring a cause from the audit code while the response said which check refused it. |
 | `1.13.0` | 2026-09-30 | `server/discover` was never broken. Claude probes with `Mcp-Protocol-Version: 2026-07-28`, which no published SDK implements (1.31.0 tops out at 2025-11-25); the refusal IS the negotiation, and `initialize` follows a second later at a supported version. `validateProtocolVersion` runs only for non-initialize messages, which is why one failed and the next did not. Now audited as `PROTOCOL_UNSUPPORTED` at info level instead of wearing an error code. Deliberately not "fixed" by accepting the version. |
+| `1.14.0` | 2026-09-30 | Two new image styles, `sketch` and `abstract`. Every existing style described a way of rendering a subject; these are the first that change what the subject is, and they covered the two most common non-photographic requests, which previously had to be hand-written into the prompt. Mirrored into the chat UI's own table in the same change, with the token AND the count pinned by test. |
 
 ### Current surface
 
