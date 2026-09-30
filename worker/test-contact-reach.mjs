@@ -66,7 +66,9 @@ for (const l of olveLogs) logs.push({ ...l, contact_id: OLVE_ID, contact_name: '
 for (let i = 0; i < 7; i++) {
   logs.push({
     _id: `olve-zoom-${i}`, contact_id: OLVE_ID, contact_name: 'Olve Aleksander Storås',
-    contact_type: 'zoom', notes: '<p>Olve Aleksander 1-1 med Tor Arne</p><p>Sted: zoom</p>',
+    // Real calendar-import notes run to a kilobyte-plus of HTML boilerplate; the payload
+    // guard below is only meaningful against notes that size.
+    contact_type: 'zoom', notes: '<p>Olve Aleksander 1-1 med Tor Arne</p><p>Sted: Videosamtale på zoom</p>' + '<p>Din personlige møtelink til zoom: https://zoom.us/j/2100388103</p>'.repeat(20),
     logged_at: `2026-05-${String(i + 1).padStart(2, '0')}T09:00:00.000Z`, recording_url: '',
   })
 }
@@ -217,9 +219,85 @@ const CALLER = { userId: 'ca3d9d93-3b02-4e49-a4ee-43552ec4ca2b', userEmail: 'own
   const r = await executeTool('search_contacts', { ...CALLER, query: 'Olve Storås' }, env)
   check('search_contacts states the interaction count next to the contact',
     /10 logged interactions \(3 with audio\)/.test(r.message || ''), `message: ${(r.message || '').slice(0, 300)}`)
-  check('search_contacts tells the agent to call get_contact_logs itself',
-    /call \s*get_contact_logs[^]*NOW/.test(r.message || '') && /do not tell the user/.test(r.message || ''),
+  check('a single hit is told to answer from the entries, not from the recordings list',
+    /answer from these entries/.test(r.message || '') && /never the whole history/.test(r.message || ''),
+    `message: ${(r.message || '').slice(-300)}`)
+  const many = await executeTool('search_contacts', { ...CALLER, query: 'Alf' }, env)
+  check('an ambiguous search still tells the agent to call get_contact_logs itself',
+    /call get_contact_logs with that contactId NOW/.test(many.message || '') && /do not tell the user/.test(many.message || ''),
+    `message: ${(many.message || '').slice(-300)}`)
+}
+
+// 5b. ROUTING: one search call, and the history is already there. The model does not get to
+//     decide whether to follow through — the rows arrive with the search result.
+{
+  const { env, queries } = makeEnv()
+  const r = await executeTool('search_contacts', { ...CALLER, query: 'Olve Storås' }, env)
+  check('a single-hit search brings the whole history back with it',
+    (r.logs || []).length === 10 && r.logsTotal === 10, `logs: ${(r.logs || []).length} total: ${r.logsTotal}`)
+  check('the history is rendered in the search message, entry by entry',
+    /Their interaction history, fetched with this search/.test(r.message || '')
+    && /2026-06-16 08:44 · Zoom · audio/.test(r.message || ''),
     `message: ${(r.message || '').slice(0, 400)}`)
+  check('no get_contact_logs call was needed — the search fetched the page itself',
+    queries.some(q => q.tableId === LOGS_TABLE && q.where && q.where.contact_id === OLVE_ID && (q.limit || 0) > 1),
+    `queries: ${JSON.stringify(queries.filter(q => q.tableId === LOGS_TABLE))}`)
+}
+
+// 5b-ii. The result must fit the loop's 12KB per-result ceiling, or agent-loop blind-slices
+//         the JSON and the history is mangled on its way to the model.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('search_contacts', { ...CALLER, query: 'Olve Storås' }, env)
+  const size = JSON.stringify(r).length
+  check('the search result stays under the loop\'s 12000-char result ceiling', size < 12000, `${size} chars`)
+  check('the structured entries are flattened, not raw HTML rows',
+    (r.logs || []).every(l => !/<p>/.test(l.notes || '')) && (r.logs || []).some(l => l.notesTruncated > 400),
+    `first entry: ${JSON.stringify((r.logs || [])[1] || {}).slice(0, 200)}`)
+  check('an audio entry carries a usable recordingId in the structured form',
+    (r.logs || []).filter(l => l.hasAudio).every(l => /^contactlog:log-/.test(l.recordingId || '')),
+    `audio entries: ${JSON.stringify((r.logs || []).filter(l => l.hasAudio).map(l => l.recordingId))}`)
+}
+
+// 5c. An ambiguous search stays cheap: no history is pulled for a list of hits.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('search_contacts', { ...CALLER, query: 'Alf' }, env)
+  check('a multi-hit search does not drag a history along',
+    (r.contacts || []).length > 1 && r.logs === undefined && !/interaction history, fetched/.test(r.message || ''),
+    `hits: ${(r.contacts || []).length} logs: ${r.logs && r.logs.length}`)
+}
+
+// 5d. The recordings list says what it is a subset OF — the exact claim that went wrong.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('list_recordings', { ...CALLER, query: 'Olve Storås', limit: 20 }, env)
+  check('list_recordings states the full interaction count and the contactId',
+    /10 logged interactions in all, 3 of them with audio/.test(r.message || '')
+    && r.message.includes(OLVE_ID)
+    && /Never present this list as a contact's complete interaction history/.test(r.message || ''),
+    `message tail: ${(r.message || '').slice(-400)}`)
+}
+
+// 5e. The Claude path never calls these tools directly — the contact subagent does, and the
+//     orchestrator only sees the delegate result's `message`. That message must carry the
+//     history the read produced, not a slice of the subagent's prose about it.
+{
+  const src = fs.readFileSync(path.join(tmp, 'tool-executors.js'), 'utf8')
+  const fn = src.match(/function contactReadSummary\(actions\) \{[^]*?\n\}/)
+  check('the delegate path has a history carrier', !!fn, 'contactReadSummary not found')
+  if (fn) {
+    const contactReadSummary = new Function(`${fn[0]}; return contactReadSummary`)()
+    const actions = [
+      { tool: 'search_contacts', success: true, summary: 'Found 1 contact(s) matching "Olve Storås":' },
+      { tool: 'get_contact_logs', success: true, summary: '10 logged interactions for Olve Aleksander Storås, 3 with an audio recording. Newest first:\n\n1. 2026-09-30 07:51 · Zoom' },
+      { tool: 'add_contact_log', success: true, summary: 'Log entry added' },
+    ]
+    const carried = contactReadSummary(actions)
+    check('it carries the read that holds the history, verbatim',
+      /10 logged interactions for Olve Aleksander Storås/.test(carried) && /2026-09-30 07:51/.test(carried), `carried: ${carried.slice(0, 200)}`)
+    check('with no contact read it carries nothing', contactReadSummary([{ tool: 'add_contact_log', success: true, summary: 'x' }]) === '', 'expected empty')
+  }
 }
 
 // 6. add_contact_log writes a type the Contacts app actually renders.

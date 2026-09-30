@@ -3207,7 +3207,8 @@ const TOOL_DEFINITIONS = [
       type: 'object',
       properties: {
         contactId: { type: 'string', description: 'The _id of the contact' },
-        limit: { type: 'number', description: 'Max log entries to return (default 50)' }
+        limit: { type: 'number', description: 'Max log entries to return (default 50)' },
+        fullNotes: { type: 'boolean', description: 'Return each entry\'s complete note text. Off by default — notes come back flattened and capped at 400 characters, with `notesTruncated` giving the real length.' }
       },
       required: ['contactId']
     }

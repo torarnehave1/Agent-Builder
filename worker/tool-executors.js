@@ -8163,6 +8163,10 @@ async function executeListRecordings(input, env) {
     }
   }
 
+  // Set when the user has a contact_logs table, so the summary below can say how many
+  // interactions the audio entries are a subset of.
+  let contactLogsTableId = null
+
   // Also include Contact Log recordings. The Contacts app stores each recording
   // in R2 and attaches its URL to the contact's log entry in Drizzle (the
   // authoritative store); it only registers the recording in audio-portfolio KV
@@ -8176,6 +8180,7 @@ async function executeListRecordings(input, env) {
       const { logsTableId } = await resolveContactTableIds(rawUserId, env)
         .catch(() => ({ logsTableId: null }))
       if (logsTableId) {
+        contactLogsTableId = logsTableId
         const logs = await fetchContactLogRecordings(env, logsTableId)
         const seenUrls = new Set(allRecordings.map(r => r.r2Url).filter(Boolean))
         for (const l of logs) {
@@ -8183,6 +8188,8 @@ async function executeListRecordings(input, env) {
           if (!url || seenUrls.has(url)) continue
           seenUrls.add(url)
           allRecordings.push({
+            contactId: l.contact_id || '',
+            contactName: l.contact_name || '',
             recordingId: `contactlog:${l._id || l.id}`,
             displayName: `Contact Log — ${l.contact_name || 'Unknown'}`,
             fileName: (url.split('/').pop() || '').split('?')[0],
@@ -8234,6 +8241,8 @@ async function executeListRecordings(input, env) {
 
   const recordings = allRecordings.slice(0, limit).map(r => ({
     recordingId: r.recordingId,
+    contactId: r.contactId || '',
+    contactName: r.contactName || '',
     displayName: r.displayName || r.fileName,
     fileName: r.fileName,
     duration: r.duration,
@@ -8261,11 +8270,35 @@ async function executeListRecordings(input, env) {
       + `   audioUrl: ${r.audioUrl}`
   })
 
+  // A recordings answer has to state what it is a subset OF. Asked for a contact's
+  // interactions, the agent showed the 2 contact-log recordings it found and called them the
+  // complete history — the contact had 10 logged interactions (2026-09-30). The true count
+  // now travels with the list, so "these are the only ones" cannot be said of a subset.
+  let subsetNote = ''
+  const byContact = new Map()
+  for (const r of recordings) if (r.contactId && !byContact.has(r.contactId)) byContact.set(r.contactId, r.contactName)
+  if (contactLogsTableId && byContact.size > 0) {
+    const parts = []
+    for (const [cid, cname] of [...byContact.entries()].slice(0, 3)) {
+      try {
+        const n = await countContactLogs(env, contactLogsTableId, cid)
+        parts.push(`${cname || 'that contact'} has ${n.logs} logged interaction${n.logs === 1 ? '' : 's'} in all, `
+          + `${n.audio} of them with audio — call get_contact_logs with contactId \`${cid}\` for the full history.`)
+      } catch { /* the note is a nicety; never fail the listing over it */ }
+    }
+    if (parts.length) {
+      subsetNote = '\n\nThese Contact Log entries are ONLY the interactions that carry an audio file. '
+        + parts.join(' ')
+        + ' Never present this list as a contact\'s complete interaction history.'
+    }
+  }
+
   const message = recordings.length === 0
     ? `No recordings found for ${userEmail}${query ? ` matching "${query}"` : ''}.`
     : `Found ${recordings.length} recording(s) for ${userEmail}${query ? ` matching "${query}"` : ''}:\n\n${lines.join('\n')}\n\n`
       + 'Show this list to the user so they can pick one. To transcribe, call transcribe_audio '
       + 'with the audioUrl copied EXACTLY as printed above — one call per recording.'
+      + subsetNote
 
   return {
     message,
@@ -9794,6 +9827,71 @@ async function fetchContactLogRecordings(env, logsTableId) {
   return rows
 }
 
+// The interaction history a delegated contact read produced, for the orchestrator that never
+// sees the tool result itself. Newest read wins; capped so a long history cannot crowd out the
+// rest of the delegate result inside the loop's 12KB ceiling.
+function contactReadSummary(actions) {
+  const reads = (actions || []).filter(a => a.success
+    && (a.tool === 'get_contact_logs' || a.tool === 'search_contacts')
+    && typeof a.summary === 'string' && a.summary.length > 0)
+  if (reads.length === 0) return ''
+  const withHistory = reads.filter(a => /logged interaction/.test(a.summary))
+  const chosen = (withHistory.length ? withHistory : reads)[withHistory.length ? withHistory.length - 1 : reads.length - 1]
+  return `\n\n${chosen.summary.slice(0, 6000)}`
+}
+
+// How much history a contact has, counted in SQL (not by the rows we happened to fetch).
+async function countContactLogs(env, logsTableId, contactId) {
+  const [all, audio] = await Promise.all([
+    drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: contactId }, limit: 1 }),
+    drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: contactId }, notEmpty: ['recording_url'], limit: 1 }),
+  ])
+  return { logs: Number(all.total) || 0, audio: Number(audio.total) || 0 }
+}
+
+// Contact-log notes arrive with HTML from the calendar import; flatten for a readable preview.
+function plainNoteText(v) {
+  return String(v || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ').trim()
+}
+
+// One rendering of an interaction, used wherever a history is shown so the two paths cannot
+// drift into describing the same rows differently.
+function formatContactLogLines(logs, noteChars = 160) {
+  return logs.map((l, i) => {
+    const when = String(l.logged_at || '').replace('T', ' ').slice(0, 16) || 'unknown date'
+    const note = plainNoteText(l.notes)
+    return `${i + 1}. ${when} · ${l.contact_type || 'Other'}${l.recording_url ? ' · audio' : ''}\n`
+      + (l.recording_url ? `   recordingId: \`contactlog:${l._id || l.id}\`\n   audioUrl: ${l.recording_url}\n` : '')
+      + (note ? `   ${note.slice(0, noteChars)}${note.length > noteChars ? '…' : ''}` : '')
+  })
+}
+
+// The structured form of an interaction. The rendered history already sits in `message`, so
+// shipping the raw rows beside it doubled the payload: one contact's 10 entries came to 14.7KB
+// of mostly calendar-boilerplate HTML — over the loop's 12KB per-result ceiling, which would
+// have blind-sliced the whole thing. Flatten the note and cap it; `fullNotes` gets the rest.
+function compactContactLog(l, noteChars = 400) {
+  const note = plainNoteText(l.notes)
+  return {
+    id: l._id || l.id,
+    logged_at: l.logged_at || '',
+    contact_type: l.contact_type || '',
+    contact_name: l.contact_name || '',
+    hasAudio: !!l.recording_url,
+    recordingId: l.recording_url ? `contactlog:${l._id || l.id}` : undefined,
+    audioUrl: l.recording_url || undefined,
+    notes: note.slice(0, noteChars),
+    notesTruncated: note.length > noteChars ? note.length : undefined,
+  }
+}
+
+// How many interactions a single-hit search brings back with it. Enough to BE the answer for
+// an ordinary contact, bounded so the search stays cheap for a heavily logged one.
+const SEARCH_AUTO_LOG_LIMIT = 15
+
 async function executeListContacts(input, env) {
   const { limit = 50, offset = 0, label, userId } = input
   const { contactsTableId } = await resolveContactTableIds(userId, env)
@@ -9839,12 +9937,29 @@ async function executeSearchContacts(input, env) {
   if (logsTableId) {
     for (const c of contacts.slice(0, 5)) {
       try {
-        const [all, audio] = await Promise.all([
-          drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: c._id }, limit: 1 }),
-          drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: c._id }, notEmpty: ['recording_url'], limit: 1 }),
-        ])
-        counts.set(c._id, { logs: Number(all.total) || 0, audio: Number(audio.total) || 0 })
+        counts.set(c._id, await countContactLogs(env, logsTableId, c._id))
       } catch { /* a count is a nicety; never fail the search over one */ }
+    }
+  }
+
+  // ROUTING — one unambiguous hit with history: the history comes back WITH the search, in
+  // the same tool result. Telling the model to "call get_contact_logs next" failed twice in
+  // production on the same contact: it answered from list_recordings, then printed the tool
+  // call at the user instead of making it (2026-09-30). The follow-through is no longer the
+  // model's to make; the rows are in front of it either way.
+  let embedded = null
+  if (logsTableId && contacts.length === 1) {
+    const n = counts.get(contacts[0]._id)
+    if (n && n.logs > 0) {
+      const page = await drizzleFetch(env, '/query', {
+        tableId: logsTableId,
+        where: { contact_id: contacts[0]._id },
+        limit: SEARCH_AUTO_LOG_LIMIT,
+        orderBy: 'logged_at',
+        order: 'desc',
+      }).catch(() => null)
+      const rows = page ? (page.records || page.rows || []) : []
+      if (rows.length) embedded = { rows, total: n.logs, audio: n.audio }
     }
   }
 
@@ -9861,20 +9976,36 @@ async function executeSearchContacts(input, env) {
     return `${i + 1}. **${c.full_name || c.name || '(no name)'}**${org ? ` — ${org}` : ''}${history}\n`
       + `   contactId: \`${c._id}\``
   })
-  const message = contacts.length === 0
-    ? `No contacts match "${query}".`
-    : `Found ${total} contact(s) matching "${query}"${total > contacts.length ? `, showing the first ${contacts.length}` : ''}:\n\n${lines.join('\n')}\n\n`
-      + 'To answer anything about a contact\'s interactions, meetings, calls or history, call '
+  const head = `Found ${total} contact(s) matching "${query}"${total > contacts.length ? `, showing the first ${contacts.length}` : ''}:\n\n${lines.join('\n')}`
+
+  const history = embedded
+    ? `\n\nTheir interaction history, fetched with this search — ${embedded.total} in total, `
+      + `${embedded.audio} with audio`
+      + (embedded.total > embedded.rows.length ? `, showing the ${embedded.rows.length} newest (get_contact_logs with a higher limit for the rest)` : '')
+      + `. Newest first:\n\n${formatContactLogLines(embedded.rows).join('\n')}\n\n`
+      + 'This IS the interaction history — answer from these entries. The ones marked "audio" '
+      + 'are the only ones list_recordings would return, so they are never the whole history.'
+    : '\n\nTo answer anything about a contact\'s interactions, meetings, calls or history, call '
       + 'get_contact_logs with that contactId NOW — do not tell the user to call it, and do not '
       + 'answer from list_recordings, which only covers the interactions that have an audio file.'
 
-  return { message, contacts, query, count: contacts.length, total }
+  const message = contacts.length === 0 ? `No contacts match "${query}".` : head + history
+
+  return {
+    message,
+    contacts,
+    query,
+    count: contacts.length,
+    total,
+    logs: embedded ? embedded.rows.map(l => compactContactLog(l)) : undefined,
+    logsTotal: embedded ? embedded.total : undefined,
+  }
 }
 
 async function executeGetContactLogs(input, env) {
   // 20 silently cut a contact with 25 entries down to "all of them"; report the real total
   // either way so a truncated history can never be presented as complete.
-  const { contactId, limit = 50, userId } = input
+  const { contactId, limit = 50, userId, fullNotes = false } = input
   if (!contactId) throw new Error('contactId is required')
   const { logsTableId } = await resolveContactTableIds(userId, env)
   if (!logsTableId) return { logs: [], contactId, total: 0, message: 'No contact log table found' }
@@ -9883,22 +10014,14 @@ async function executeGetContactLogs(input, env) {
   })
   const logs = data.records || data.rows || []
   const total = Number(data.total) || logs.length
-  const withAudio = logs.filter(l => l.recording_url).length
+  // Count the audio entries in SQL: counting the ones on this page under-reports the moment
+  // the history is longer than the page.
+  const withAudio = (await countContactLogs(env, logsTableId, contactId).catch(() => null))?.audio
+    ?? logs.filter(l => l.recording_url).length
 
   // The entries themselves, in the shape the Contacts app shows them (date, type, note) —
   // the agent used to get raw rows and a count, and answered with an audio list instead.
-  // Notes are stored with HTML from the calendar import, so flatten them for the preview.
-  const plain = (v) => String(v || '')
-    .replace(/<[^>]*>/g, ' ')
-    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/\s+/g, ' ').trim()
-  const lines = logs.map((l, i) => {
-    const when = String(l.logged_at || '').replace('T', ' ').slice(0, 16) || 'unknown date'
-    const note = plain(l.notes)
-    return `${i + 1}. ${when} · ${l.contact_type || 'Other'}${l.recording_url ? ' · audio' : ''}\n`
-      + (l.recording_url ? `   recordingId: \`contactlog:${l._id || l.id}\`\n   audioUrl: ${l.recording_url}\n` : '')
-      + (note ? `   ${note.slice(0, 160)}${note.length > 160 ? '…' : ''}` : '')
-  })
+  const lines = formatContactLogLines(logs)
 
   const message = logs.length === 0
     ? `No log entries for contact ${contactId}.`
@@ -9907,7 +10030,14 @@ async function executeGetContactLogs(input, env) {
       + `, ${withAudio} with an audio recording. Newest first:\n\n${lines.join('\n')}\n\n`
       + 'This IS the interaction history — show these entries to the user. Do not substitute '
       + 'the recordings list for it: recordings are only the entries that carry audio.'
-  return { message, logs, contactId, total, returned: logs.length, withRecording: withAudio }
+  return {
+    message,
+    logs: fullNotes ? logs : logs.map(l => compactContactLog(l)),
+    contactId,
+    total,
+    returned: logs.length,
+    withRecording: withAudio,
+  }
 }
 
 async function executeAddContactLog(input, env) {
@@ -16830,8 +16960,13 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
         actionsPerformed: (result.actions || []).map(a => ({
           tool: a.tool, success: a.success, summary: a.summary || a.error,
         })),
+        // The Claude orchestrator cannot call the contact tools itself (they are on
+        // ORCHESTRATOR_BLOCKED_TOOLS), so what it learns about a contact is whatever this
+        // field says. A 500-char slice of the subagent's prose is a retelling; the history
+        // the read tools produced is the thing. Carry that verbatim, exactly as the Grok
+        // path gets it — otherwise the two loops answer the same question differently.
         message: result.success
-          ? `Contact subagent completed: ${(result.summary || '').slice(0, 500)}`
+          ? `Contact subagent completed.${contactReadSummary(result.actions) || ` ${(result.summary || '').slice(0, 500)}`}`
           : `Contact subagent failed: ${error}`,
       }
     }
