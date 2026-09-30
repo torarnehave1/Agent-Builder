@@ -562,8 +562,53 @@ const IMAGE_PROMPT_PRESETS: ImagePromptPreset[] = [
 
 const IMAGE_RENDER_TRAITS = ['Long Exposure', '35mm Lens', '85mm Portrait', 'Shallow Depth of Field', 'Film Grain', 'Anamorphic Lens Flare'] as const;
 
+// Per-model image capabilities, transcribed from the Cloudflare model pages on 2026-09-30 —
+// NOT from memory. These models do not share a parameter set, and a control that advertises a
+// parameter the model rejects (or silently ignores) is worse than no control at all:
+//
+//   @cf/bytedance/stable-diffusion-xl-lightning  negative_prompt yes · guidance default 7.5 (no
+//        documented range) · num_steps 1-20 (default 20) · width/height 256-2048
+//   @cf/leonardo/lucid-origin                    negative_prompt NO · guidance 0-10 (default 4.5)
+//        · num_steps 1-40 · width/height up to 2500 (default 1120)
+//   @cf/leonardo/phoenix-1.0                     negative_prompt yes · guidance 2-10 (default 2)
+//        · num_steps 1-50 (default 25) · width/height up to 2048 (default 1024)
+//
+// worker/index.js holds the same table and is the authority: it clamps and drops anything the
+// selected model does not take, so a stale UI can never smuggle an unsupported field through.
+interface ImageModelCapabilities {
+  label: string;
+  negativePrompt: boolean;
+  guidance: { min: number; max: number; default: number } | null;
+  steps: { min: number; max: number; default: number | null };
+}
+
+const IMAGE_MODEL_CAPABILITIES: Record<string, ImageModelCapabilities> = {
+  '@cf/bytedance/stable-diffusion-xl-lightning': {
+    label: 'SDXL Lightning',
+    negativePrompt: true,
+    guidance: null,
+    steps: { min: 1, max: 20, default: 20 },
+  },
+  '@cf/leonardo/lucid-origin': {
+    label: 'Lucid Origin',
+    negativePrompt: false,
+    guidance: { min: 0, max: 10, default: 4.5 },
+    steps: { min: 1, max: 40, default: null },
+  },
+  '@cf/leonardo/phoenix-1.0': {
+    label: 'Phoenix 1.0',
+    negativePrompt: true,
+    guidance: { min: 2, max: 10, default: 2 },
+    steps: { min: 1, max: 50, default: 25 },
+  },
+};
+
 function isImageGenerationModel(model: string) {
-  return model === '@cf/bytedance/stable-diffusion-xl-lightning' || model === '@cf/leonardo/lucid-origin';
+  return Object.prototype.hasOwnProperty.call(IMAGE_MODEL_CAPABILITIES, model);
+}
+
+function getImageModelCapabilities(model: string): ImageModelCapabilities | null {
+  return IMAGE_MODEL_CAPABILITIES[model] || null;
 }
 
 function getFormatPresetById(formatId: string) {
@@ -1414,6 +1459,11 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [hasCustomImagePrompt, setHasCustomImagePrompt] = useState(false);
   const [showImageSettings, setShowImageSettings] = useState(true);
   const [showImageAdvanced, setShowImageAdvanced] = useState(false);
+  // Kept as strings so "unset" stays distinguishable from 0 — an empty field means "send nothing
+  // and let the model use its own default", which is not the same request as guidance: 0.
+  const [imageNegativePrompt, setImageNegativePrompt] = useState('');
+  const [imageGuidance, setImageGuidance] = useState('');
+  const [imageSteps, setImageSteps] = useState('');
 
   // Audio transcription state
   interface AudioFileInfo { file: File; name: string; size: number; type: string; duration: number | null; }
@@ -1474,6 +1524,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   }, [model, clearHistory]);
 
   const isImageModel = isImageGenerationModel(model);
+  const imageCaps = getImageModelCapabilities(model);
   const hasAspectRatioInPrompt = /--ar\s+\d+\s*:\s*\d+/i.test(inputText);
   const composedImagePrompt = composeImagePrompt({
     basePrompt: inputText,
@@ -1864,6 +1915,22 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       const requestBody: Record<string, unknown> = { prompt, userId, model };
       if (explicitWidth) requestBody.width = explicitWidth;
       if (explicitHeight) requestBody.height = explicitHeight;
+
+      // Only send what the selected model documents. negative_prompt is skipped entirely for
+      // Lucid Origin, whose schema has no such field. The worker gates on the same table, so
+      // this is convenience for the caller, not the enforcement point.
+      const caps = getImageModelCapabilities(model);
+      if (caps?.negativePrompt && imageNegativePrompt.trim()) {
+        requestBody.negative_prompt = imageNegativePrompt.trim();
+      }
+      const guidanceValue = Number(imageGuidance);
+      if (imageGuidance.trim() !== '' && Number.isFinite(guidanceValue)) {
+        requestBody.guidance = guidanceValue;
+      }
+      const stepsValue = Number(imageSteps);
+      if (imageSteps.trim() !== '' && Number.isFinite(stepsValue)) {
+        requestBody.num_steps = Math.round(stepsValue);
+      }
 
       const res = await fetch('https://agent.vegvisr.org/generate-image', {
         method: 'POST',
@@ -2620,6 +2687,27 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                     <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Short phrases render best. The exact text is added in quotes to the prompt preview.</div>
                   )}
                 </div>
+
+                {imageCaps?.negativePrompt ? (
+                  <label className={`block text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Negative prompt</span>
+                    <input
+                      value={imageNegativePrompt}
+                      onChange={(e) => setImageNegativePrompt(e.target.value)}
+                      placeholder="blurry, low quality, watermark, extra fingers"
+                      className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
+                    />
+                    <span className={`mt-1 block text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+                      Sent as the model's own <span className="font-mono">negative_prompt</span> — what to keep out of the image. It is not added to the prompt text above.
+                    </span>
+                  </label>
+                ) : (
+                  imageCaps && (
+                    <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+                      {imageCaps.label} has no <span className="font-mono">negative_prompt</span> parameter. Switch to Phoenix 1.0 to exclude elements.
+                    </div>
+                  )
+                )}
               </>
             )}
 
@@ -2660,13 +2748,56 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                     })}
                   </div>
                 </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {imageCaps?.guidance && (
+                    <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                      <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
+                        Guidance ({imageCaps.guidance.min}-{imageCaps.guidance.max}, default {imageCaps.guidance.default})
+                      </span>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="0.5"
+                        min={imageCaps.guidance.min}
+                        max={imageCaps.guidance.max}
+                        value={imageGuidance}
+                        onChange={(e) => setImageGuidance(e.target.value)}
+                        placeholder={`${imageCaps.guidance.default}`}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
+                      />
+                    </label>
+                  )}
+                  {imageCaps?.steps && (
+                    <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                      <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
+                        Steps ({imageCaps.steps.min}-{imageCaps.steps.max}
+                        {imageCaps.steps.default ? `, default ${imageCaps.steps.default}` : ''})
+                      </span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        step="1"
+                        min={imageCaps.steps.min}
+                        max={imageCaps.steps.max}
+                        value={imageSteps}
+                        onChange={(e) => setImageSteps(e.target.value)}
+                        placeholder={imageCaps.steps.default ? `${imageCaps.steps.default}` : 'model default'}
+                        className={`w-full rounded-lg border px-3 py-2 text-sm ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
+                      />
+                    </label>
+                  )}
+                </div>
+                <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+                  Leave a field empty to use the model's own default. Out-of-range values are clamped by the worker, which reports back the values it actually sent.
+                </div>
               </div>
             )}
 
             {(inputText.trim() || imageStylePreset !== 'none' || imageLightingPreset !== 'none' || imageRenderTraits.length > 0 || (includeImageText && imageTextValue.trim()) || imagePromptDraft.trim()) && (
               <div className={`rounded-lg border p-3 ${isLight ? 'border-slate-200 bg-white' : 'border-white/10 bg-black/20'}`}>
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                  <div className={`text-[11px] uppercase tracking-wide ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Final prompt sent to Lucid</div>
+                  <div className={`text-[11px] uppercase tracking-wide ${isLight ? 'text-slate-500' : 'text-white/40'}`}>Final prompt sent to {imageCaps?.label || 'the image model'}</div>
                   <button
                     type="button"
                     onClick={() => {
@@ -2691,7 +2822,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   className={`w-full resize-y rounded-lg border px-3 py-2 text-sm leading-6 ${isLight ? 'border-slate-300 bg-white text-slate-900 placeholder:text-slate-400' : 'border-white/10 bg-white/[0.04] text-white placeholder-white/30'}`}
                 />
                 <div className={`mt-2 text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
-                  This box is the exact prompt sent to Lucid. Edit it directly if the generated wording is not right.
+                  This box is the exact prompt sent to {imageCaps?.label || 'the image model'}. Edit it directly if the generated wording is not right.
                 </div>
               </div>
             )}

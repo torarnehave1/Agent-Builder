@@ -26,6 +26,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { buildImageInput, DEFAULT_IMAGE_MODEL } from './image-models.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
 import { affiliationEdges, interactionEdges, buildNetwork, resolveNames, loadLayout, saveLayout } from './network-analysis.js'
 import { buildInstagramAuthorizeUrl, connectInstagram, getInstagramConnection, getInstagramConnectionByIgUserId, disconnectInstagram, verifyInstagramWebhookSignature, subscribeAccountToWebhooks, getAccountSubscriptions, sendInstagramMessage, ingestInboundMessage, getThreadByGroupId, relayGroupMessageToInstagram, replyWindowState, backfillThreadParticipant } from './instagram.js'
@@ -4519,26 +4520,12 @@ export default {
       }
 
 
-      // POST /generate-image — direct SDXL Lightning call, no AI SDK involved
+      // POST /generate-image — direct Workers AI image call, no AI SDK involved.
+      // Which parameters each model takes, and the clamping, live in image-models.js so a test
+      // can assert them without a Workers runtime.
       if (pathname === '/generate-image' && request.method === 'POST') {
-        // Helper: parse --ar W:H from prompt, compute dimensions at same pixel area as default
-        function parseAspectRatio(rawPrompt, baseSize = 1120) {
-          const match = rawPrompt.match(/--ar\s+(\d+)\s*:\s*(\d+)/i)
-          if (!match) return { cleanPrompt: rawPrompt, width: baseSize, height: baseSize }
-          const ratioW = parseInt(match[1], 10)
-          const ratioH = parseInt(match[2], 10)
-          if (!ratioW || !ratioH) return { cleanPrompt: rawPrompt, width: baseSize, height: baseSize }
-          const baseArea = baseSize * baseSize
-          // width = sqrt(area * ratioW/ratioH), round to nearest multiple of 8
-          const w = Math.round(Math.sqrt(baseArea * ratioW / ratioH) / 8) * 8
-          const h = Math.round(Math.sqrt(baseArea * ratioH / ratioW) / 8) * 8
-          const cleanPrompt = rawPrompt.replace(/--ar\s+\d+\s*:\s*\d+/i, '').trim()
-          return { cleanPrompt, width: w, height: h }
-        }
-
         const body = await request.json()
-        const rawPrompt = body.prompt
-        if (!rawPrompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
+        if (!body.prompt) return new Response(JSON.stringify({ error: 'prompt is required' }), { status: 400, headers: corsHeaders })
 
         // Same rule as /upload-image: the upload runs as the caller, on a credential read from
         // the request. Checked BEFORE the model runs — this route used to generate an image and
@@ -4550,21 +4537,19 @@ export default {
         const userId = callerAuth.userId || 'unknown'
 
         const startTime = Date.now()
-        const imageModel = body.model || '@cf/bytedance/stable-diffusion-xl-lightning'
+        const imageModel = body.model || DEFAULT_IMAGE_MODEL
+        const built = buildImageInput(imageModel, body)
+        if (built.error) {
+          return new Response(JSON.stringify({ error: built.error, supported: built.supported }), { status: 400, headers: corsHeaders })
+        }
+        const { input: imageInput, prompt, negativePromptIgnored } = built
 
-        // Parse --ar from prompt; caller can still override width/height explicitly
-        const { cleanPrompt, width: arWidth, height: arHeight } = parseAspectRatio(rawPrompt)
-        const prompt = cleanPrompt
-
-        const imageInput = { prompt }
-        imageInput.width = body.width || arWidth
-        imageInput.height = body.height || arHeight
-        if (body.guidance) imageInput.guidance = body.guidance
-        if (body.seed) imageInput.seed = body.seed
         const imageResponse = await env.AI.run(imageModel, imageInput)
 
-        // SDXL returns a ReadableStream of raw JPEG bytes
-        // Lucid Origin returns { image: '<base64 string>' }
+        // The two response shapes are NOT interchangeable, confirmed by real calls on 2026-09-30:
+        //   Lucid Origin  → application/json, { image: '<base64 JPEG>' }
+        //   Phoenix 1.0   → image/jpeg, raw bytes (ReadableStream over the binding), like SDXL
+        // Both branches below are live paths, not defensive padding.
         let buffer
         if (imageResponse && typeof imageResponse === 'object' && 'image' in imageResponse) {
           // Base64 response (Lucid Origin)
@@ -4573,15 +4558,19 @@ export default {
           buffer = new Uint8Array(binaryStr.length)
           for (let i = 0; i < binaryStr.length; i++) buffer[i] = binaryStr.charCodeAt(i)
         } else {
-          // Stream response (SDXL Lightning)
+          // Stream / raw bytes (SDXL Lightning, Phoenix 1.0)
           const arrayBuffer = await new Response(imageResponse).arrayBuffer()
           buffer = new Uint8Array(arrayBuffer)
         }
 
-        const filename = `sdxl-${Date.now()}.jpg`
+        // The stored name is derived from the model that actually made the image. It was
+        // hardcoded to "sdxl-", which mislabelled every Lucid Origin file in the album and
+        // would have done the same to Phoenix.
+        const modelSlug = imageModel.split('/').pop().replace(/[^a-z0-9.-]+/gi, '-')
+        const basename = `${modelSlug}-${Date.now()}`
         const formData = new FormData()
-        formData.append('file', new File([buffer], filename, { type: 'image/jpeg' }))
-        formData.append('filename', `sdxl-${Date.now()}`)
+        formData.append('file', new File([buffer], `${basename}.jpg`, { type: 'image/jpeg' }))
+        formData.append('filename', basename)
         formData.append('album', 'agent-generated')
 
         const uploadRes = await env.PHOTOS_WORKER.fetch('https://vegvisr-photos-worker/upload', {
@@ -4610,7 +4599,22 @@ export default {
           ).run().catch(e => console.error('[stats] image gen insert failed:', e.message))
         }
 
-        return new Response(JSON.stringify({ url, prompt, width: imageInput.width, height: imageInput.height }), { headers: corsHeaders })
+        // Echo the parameters as SENT, after gating and clamping, so the caller can see when a
+        // value was changed or dropped instead of assuming its request went through verbatim.
+        return new Response(JSON.stringify({
+          url,
+          prompt,
+          model: imageModel,
+          width: imageInput.width,
+          height: imageInput.height,
+          negative_prompt: imageInput.negative_prompt ?? null,
+          guidance: imageInput.guidance ?? null,
+          num_steps: imageInput.num_steps ?? null,
+          seed: imageInput.seed ?? null,
+          ...(negativePromptIgnored
+            ? { warning: `${imageModel} has no negative_prompt parameter — that field was not sent.` }
+            : {}),
+        }), { headers: corsHeaders })
       }
 
       return new Response(JSON.stringify({

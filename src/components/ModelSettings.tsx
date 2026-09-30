@@ -129,7 +129,16 @@ const MODELS = [
   {
     id: '@cf/leonardo/lucid-origin',
     name: 'Lucid Origin',
-    description: 'Leonardo.AI. Prompt-responsive, renders text, wide style range. $0.007/tile.',
+    description: 'Leonardo.AI. Prompt-responsive, renders text, wide style range. No negative prompt. $0.007/tile.',
+    inputCost: 0,
+    outputCost: 0,
+    badge: 'Image Gen',
+    badgeColor: 'bg-pink-500/20 text-pink-300',
+  },
+  {
+    id: '@cf/leonardo/phoenix-1.0',
+    name: 'Phoenix 1.0',
+    description: 'Leonardo.AI. Same image chat as Lucid Origin, plus negative prompt and up to 50 steps. $0.0058/tile.',
     inputCost: 0,
     outputCost: 0,
     badge: 'Image Gen',
