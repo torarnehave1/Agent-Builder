@@ -9815,8 +9815,16 @@ async function executeSearchContacts(input, env) {
     orderBy: 'full_name',
     order: 'asc',
   })
-  const contacts = data.records || data.rows || []
-  const total = Number(data.total) || contacts.length
+  // Belt: if this reaches a drizzle-worker that predates the `search` parameter, the query
+  // comes back as an unfiltered page. Re-checking the returned rows against the term then
+  // yields an honest "no match" instead of the first 20 contacts in the table presented as
+  // hits. When the server did filter, this is a no-op.
+  const SEARCH_COLUMNS = ['full_name', 'organization', 'emails', 'phones']
+  const term = String(query).toLowerCase()
+  const rows = data.records || data.rows || []
+  const contacts = rows.filter(c => SEARCH_COLUMNS.some(k => String(c[k] ?? '').toLowerCase().includes(term)))
+  const serverFiltered = contacts.length === rows.length
+  const total = serverFiltered ? (Number(data.total) || contacts.length) : contacts.length
 
   // The result summary used to carry no data at all, so the chat line read
   // "search_contacts completed" and the model narrated a count it had not been given.
