@@ -8176,17 +8176,14 @@ async function executeListRecordings(input, env) {
       const { logsTableId } = await resolveContactTableIds(rawUserId, env)
         .catch(() => ({ logsTableId: null }))
       if (logsTableId) {
-        const logData = await drizzleFetch(env, '/query', {
-          tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc'
-        })
-        const logs = logData.records || logData.rows || []
+        const logs = await fetchContactLogRecordings(env, logsTableId)
         const seenUrls = new Set(allRecordings.map(r => r.r2Url).filter(Boolean))
         for (const l of logs) {
           const url = l.recording_url
           if (!url || seenUrls.has(url)) continue
           seenUrls.add(url)
           allRecordings.push({
-            recordingId: `contactlog:${l.id}`,
+            recordingId: `contactlog:${l._id || l.id}`,
             displayName: `Contact Log — ${l.contact_name || 'Unknown'}`,
             fileName: (url.split('/').pop() || '').split('?')[0],
             duration: 0,
@@ -8971,12 +8968,14 @@ async function executeTranscribeAudio(input, env) {
     if (!logsTableId) throw new Error('No contact_logs table found for this user')
     let row = null
     try {
-      const byId = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { id: logId }, limit: 1 })
+      // The primary key column is `_id`; `id` does not exist, so this lookup matched nothing
+      // and every contact-log transcription fell through to a scan that also compared `r.id`.
+      const byId = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { _id: logId }, limit: 1 })
       row = (byId.records || byId.rows || [])[0] || null
     } catch { /* fall through to a full scan */ }
     if (!row) {
-      const scan = await drizzleFetch(env, '/query', { tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc' })
-      row = (scan.records || scan.rows || []).find(r => String(r.id) === logId) || null
+      const scan = await fetchContactLogRecordings(env, logsTableId)
+      row = scan.find(r => String(r._id || r.id) === logId) || null
     }
     if (!row || !row.recording_url) throw new Error(`Contact log "${logId}" has no recording`)
     resolvedUrl = row.recording_url
@@ -9005,15 +9004,12 @@ async function executeTranscribeAudio(input, env) {
       const { logsTableId } = await resolveContactTableIds(rawUserId, env)
         .catch(() => ({ logsTableId: null }))
       if (logsTableId) {
-        const scan = await drizzleFetch(env, '/query', {
-          tableId: logsTableId, limit: 200, orderBy: 'logged_at', order: 'desc'
-        })
+        const scan = await fetchContactLogRecordings(env, logsTableId)
         const ts = tsMatch[1]
-        const row = (scan.records || scan.rows || [])
-          .find(r => r.recording_url && String(r.recording_url).includes(ts))
+        const row = scan.find(r => r.recording_url && String(r.recording_url).includes(ts))
         if (row) {
           resolvedUrl = row.recording_url
-          resolvedRecordingId = `contactlog:${row.id}`
+          resolvedRecordingId = `contactlog:${row._id || row.id}`
         }
       }
     }
@@ -9770,6 +9766,31 @@ async function resolveContactTableIds(userId, env) {
   }
 }
 
+// Every contact log that carries a recording — all of them, not a page.
+// The old callers read the newest 200 rows and treated that as the whole table. With 6866
+// logs that window stopped at 2026-06-18, so a recording from 2026-06-16 was invisible and
+// the agent reported 2 of a contact's 3 recordings as the complete list (2026-09-30).
+// `notEmpty` does the filtering in SQL, so this returns ~124 rows instead of 6866.
+async function fetchContactLogRecordings(env, logsTableId) {
+  const PAGE = 1000
+  const rows = []
+  for (let page = 0; page < 10; page++) {
+    const data = await drizzleFetch(env, '/query', {
+      tableId: logsTableId,
+      notEmpty: ['recording_url'],
+      limit: PAGE,
+      offset: page * PAGE,
+      orderBy: 'logged_at',
+      order: 'desc',
+    })
+    const batch = (data.records || data.rows || []).filter(r => r && r.recording_url)
+    rows.push(...batch)
+    const total = Number(data.total) || 0
+    if (batch.length === 0 || rows.length >= total || batch.length < PAGE) break
+  }
+  return rows
+}
+
 async function executeListContacts(input, env) {
   const { limit = 50, offset = 0, label, userId } = input
   const { contactsTableId } = await resolveContactTableIds(userId, env)
@@ -9783,30 +9804,56 @@ async function executeSearchContacts(input, env) {
   const { query, limit = 20, userId } = input
   if (!query) throw new Error('query is required')
   const { contactsTableId } = await resolveContactTableIds(userId, env)
-  // Fetch broad set and filter client-side (Drizzle /query only supports equality where)
+  // Search in SQL across the whole table. This used to read the first 1000 rows and filter
+  // them in JS: with 1811 contacts ordered by name, everyone past ~"L" was unreachable and
+  // the agent told the user the contact did not exist ("Olve Aleksander Storås", row 1229,
+  // 2026-09-30). Never filter a page client-side — filter in the query.
   const data = await drizzleFetch(env, '/query', {
-    tableId: contactsTableId, limit: 1000, orderBy: 'full_name', order: 'asc'
+    tableId: contactsTableId,
+    search: { term: query, columns: ['full_name', 'organization', 'emails', 'phones'] },
+    limit,
+    orderBy: 'full_name',
+    order: 'asc',
   })
-  const q = query.toLowerCase()
-  const all = data.records || data.rows || data
-  const filtered = all.filter(c =>
-    (c.full_name || c.name || '').toLowerCase().includes(q) ||
-    (c.organization || '').toLowerCase().includes(q) ||
-    (c.emails || '').toLowerCase().includes(q) ||
-    (c.phones || '').includes(q)
-  ).slice(0, limit)
-  return { contacts: filtered, query, count: filtered.length }
+  const contacts = data.records || data.rows || []
+  const total = Number(data.total) || contacts.length
+
+  // The result summary used to carry no data at all, so the chat line read
+  // "search_contacts completed" and the model narrated a count it had not been given.
+  const lines = contacts.map((c, i) => {
+    const org = (() => {
+      try { return JSON.parse(c.organization || 'null')?.name || '' } catch { return c.organization || '' }
+    })()
+    return `${i + 1}. **${c.full_name || c.name || '(no name)'}**${org ? ` — ${org}` : ''}\n`
+      + `   contactId: \`${c._id}\``
+  })
+  const message = contacts.length === 0
+    ? `No contacts match "${query}".`
+    : `Found ${total} contact(s) matching "${query}"${total > contacts.length ? `, showing the first ${contacts.length}` : ''}:\n\n${lines.join('\n')}\n\n`
+      + 'Use a contactId with get_contact_logs to read that contact\'s interaction history.'
+
+  return { message, contacts, query, count: contacts.length, total }
 }
 
 async function executeGetContactLogs(input, env) {
-  const { contactId, limit = 20, userId } = input
+  // 20 silently cut a contact with 25 entries down to "all of them"; report the real total
+  // either way so a truncated history can never be presented as complete.
+  const { contactId, limit = 50, userId } = input
   if (!contactId) throw new Error('contactId is required')
   const { logsTableId } = await resolveContactTableIds(userId, env)
-  if (!logsTableId) return { logs: [], contactId, message: 'No contact log table found' }
+  if (!logsTableId) return { logs: [], contactId, total: 0, message: 'No contact log table found' }
   const data = await drizzleFetch(env, '/query', {
     tableId: logsTableId, where: { contact_id: contactId }, limit, orderBy: 'logged_at', order: 'desc'
   })
-  return { logs: data.records || data.rows || data, contactId }
+  const logs = data.records || data.rows || []
+  const total = Number(data.total) || logs.length
+  const withAudio = logs.filter(l => l.recording_url).length
+  const message = logs.length === 0
+    ? `No log entries for contact ${contactId}.`
+    : `${total} log entr${total === 1 ? 'y' : 'ies'} for this contact`
+      + (total > logs.length ? `, showing the ${logs.length} newest (raise limit to see the rest)` : '')
+      + `. ${withAudio} of them ${withAudio === 1 ? 'has' : 'have'} an audio recording (recording_url).`
+  return { message, logs, contactId, total, returned: logs.length, withRecording: withAudio }
 }
 
 async function executeAddContactLog(input, env) {

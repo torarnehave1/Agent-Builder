@@ -3190,24 +3190,24 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'search_contacts',
-    description: 'Search contacts by name, company, email, or phone. Returns matching contacts with their IDs.',
+    description: 'Search contacts by name, company, email, or phone. The search runs in SQL over the ENTIRE contacts table (case-insensitive substring, Norwegian letters included) and returns `total` matches plus the first `limit` of them, each with its `_id` (the contactId used by get_contact_logs and add_contact_log). A zero-result answer means the contact genuinely is not in the table — but say the search found nothing, never that the person does not exist, and offer list_contacts if the spelling may differ.',
     input_schema: {
       type: 'object',
       properties: {
         query: { type: 'string', description: 'Search string to match against name, company, email, phone' },
-        limit: { type: 'number', description: 'Max results (default 20)' }
+        limit: { type: 'number', description: 'Max results to return (default 20); `total` reports how many matched' }
       },
       required: ['query']
     }
   },
   {
     name: 'get_contact_logs',
-    description: 'Get interaction log entries for a specific contact. Returns all logged interactions ordered by most recent first.',
+    description: 'Get interaction log entries for a specific contact, newest first. Returns `total` (how many the contact has), the entries themselves, and how many carry an audio recording (`recording_url`). If `total` is larger than the number returned, say so or raise `limit` — never present a truncated history as the complete one.',
     input_schema: {
       type: 'object',
       properties: {
         contactId: { type: 'string', description: 'The _id of the contact' },
-        limit: { type: 'number', description: 'Max log entries to return (default 20)' }
+        limit: { type: 'number', description: 'Max log entries to return (default 50)' }
       },
       required: ['contactId']
     }
