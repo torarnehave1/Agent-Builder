@@ -94,7 +94,11 @@ for (const empty of ['', '   ', undefined, null]) {
 // 6. Sides are clamped to each model's own maximum, and 2500 is Lucid's alone.
 {
   const lucid = buildImageInput(LUCID, { prompt: 'x', width: 4000, height: 4000 })
-  check('Lucid Origin clamps a side to 2500', lucid.input.width === 2500 && lucid.input.height === 2500, JSON.stringify(lucid.input))
+  // 2496, not 2500: the schema's ceiling is 2500, but a side must be divisible by 8, so the
+  // usable ceiling is the largest multiple of 8 below it. A bound that is not itself a multiple
+  // of 8 would hand back an invalid number to anyone who hit it.
+  check('Lucid Origin clamps a side to its own usable ceiling of 2496, above the 2048 of the others',
+    lucid.input.width === 2496 && lucid.input.height === 2496, JSON.stringify(lucid.input))
 
   const phoenix = buildImageInput(PHOENIX, { prompt: 'x', width: 4000, height: 4000 })
   check('Phoenix 1.0 clamps a side to 2048, not to Lucid\'s 2500', phoenix.input.width === 2048 && phoenix.input.height === 2048, JSON.stringify(phoenix.input))
@@ -102,8 +106,16 @@ for (const empty of ['', '   ', undefined, null]) {
   const tiny = buildImageInput(PHOENIX, { prompt: 'x', width: 1, height: 0 })
   check('a zero/one-pixel side is raised to 256', tiny.input.width === 256 && tiny.input.height === 256, JSON.stringify(tiny.input))
 
+  // 630 used to pass through here, and this check asserted that it should. It is in range, so
+  // nothing about the min/max was wrong — but SDXL refuses a side that is not divisible by 8, so
+  // "in range" was never the whole test. 630 becomes 632; 1120 was already valid.
   const preset = buildImageInput(PHOENIX, { prompt: 'x', width: 1120, height: 630 })
-  check('an in-range preset passes through untouched', preset.input.width === 1120 && preset.input.height === 630, JSON.stringify(preset.input))
+  check('an in-range side that is not a multiple of 8 is rounded to one',
+    preset.input.width === 1120 && preset.input.height === 632, JSON.stringify(preset.input))
+
+  const atCeiling = buildImageInput(LUCID, { prompt: 'x', width: 99999 })
+  check('  clamping to the ceiling still lands on a multiple of 8',
+    atCeiling.input.width === 2496, JSON.stringify(atCeiling.input))
 }
 
 // 7. seed: 0 is a legal seed and must survive; a negative seed is not (minimum: 0).
@@ -201,6 +213,28 @@ for (const empty of ['', '   ', undefined, null]) {
     const m = buildImageInput(model, { prompt: 'x', quality: 'max' }).input.num_steps
     check(`  ${IMAGE_MODEL_LIMITS[model].label}: draft < high < max (${d} < ${h} < ${m})`,
       d < h && h < m, `${d} ${h} ${m}`)
+  }
+}
+
+// 12. Every side sent to a model must be divisible by 8. Diffusion latents are 1/8 scale and SDXL
+// enforces it in the pipeline rather than rounding for you:
+//   ValueError: `height` and `width` have to be divisible by 8 but are 630 and 1120.
+// The 16:9 and 9:16 presets carried 630 for weeks. Lucid Origin tolerates it; SDXL Lightning —
+// the DEFAULT model here — does not, so the default model and the default format together could
+// not produce an image. Found through the MCP server, which had copied the same table.
+{
+  const awkward = [630, 1121, 1119, 257, 999, 1, 100000]
+  for (const model of Object.keys(IMAGE_MODEL_LIMITS)) {
+    const label = IMAGE_MODEL_LIMITS[model].label
+    for (const n of awkward) {
+      const r = buildImageInput(model, { prompt: 'x', width: n, height: n })
+      check(`${label}: width ${n} becomes a multiple of 8 (${r.input.width})`, r.input.width % 8 === 0, String(r.input.width))
+      check(`${label}: height ${n} becomes a multiple of 8 (${r.input.height})`, r.input.height % 8 === 0, String(r.input.height))
+    }
+    // And with no size at all, the --ar default path must land on a multiple of 8 too.
+    const bare = buildImageInput(model, { prompt: 'a fjord --ar 16:9' })
+    check(`  ${label}: an --ar derived size is a multiple of 8`,
+      bare.input.width % 8 === 0 && bare.input.height % 8 === 0, `${bare.input.width}x${bare.input.height}`)
   }
 }
 

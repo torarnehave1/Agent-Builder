@@ -47,7 +47,11 @@ export const IMAGE_MODEL_LIMITS = {
     negativePrompt: false,
     baseSize: 1120,
     minSide: 256,
-    maxSide: 2500,
+    // The schema says 2500. Ours is 2496 — the largest multiple of 8 below it — because every
+    // side sent to a model must be divisible by 8, and a bound that is not one would reintroduce
+    // an invalid number at exactly the moment a value gets clamped to it. Both bounds being
+    // multiples of 8 is what makes "round to 8, then clamp" safe in either order.
+    maxSide: 2496,
     guidance: { min: 0, max: 10 },
     steps: { min: 1, max: 40 },
     qualitySteps: { draft: 10, high: 30, max: 40 },
@@ -114,7 +118,13 @@ export function buildImageInput(model, body = {}) {
   }
 
   const { cleanPrompt, width: arWidth, height: arHeight } = parseAspectRatio(body.prompt, limits.baseSize)
-  const clampSide = (v) => Math.min(limits.maxSide, Math.max(limits.minSide, Math.round(v)))
+  // Rounded to a multiple of 8, not merely clamped. Diffusion latents are 1/8 scale and SDXL
+  // enforces it rather than rounding for you — `height` and `width` have to be divisible by 8 —
+  // so a width that only survived the min/max check could still fail at the model. parseAspectRatio
+  // already rounds what it derives; this covers an explicit width from the caller and any preset
+  // the frontend sends.
+  const clampSide = (v) =>
+    Math.min(limits.maxSide, Math.max(limits.minSide, Math.round(Math.round(v) / 8) * 8))
 
   // `Number(body.width) || arWidth` looks equivalent and is not: a width of 0 is falsy, so it
   // fell through to the --ar default instead of being clamped, while a width of 1 was clamped to

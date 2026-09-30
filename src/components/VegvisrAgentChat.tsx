@@ -467,12 +467,21 @@ function GenerateImageCard({ output }: { output: unknown }) {
   );
 }
 
+// EVERY side must be divisible by 8. Diffusion latents are 1/8 scale, and SDXL enforces it in the
+// pipeline instead of rounding for you:
+//
+//   ValueError: `height` and `width` have to be divisible by 8 but are 630 and 1120.
+//
+// 16:9 and 9:16 carried 630, which Lucid Origin tolerates and SDXL does not — so the DEFAULT
+// combination here (SDXL Lightning + Landscape 16:9) could not produce an image at all. Caught
+// through the MCP server on 2026-09-30, on the identical preset table. 1152x648 is exactly 16:9
+// and divisible by 8, so nothing is given up in the ratio.
 const IMAGE_FORMAT_PRESETS = [
-  { id: '16:9', label: 'Landscape 16:9', width: 1120, height: 630 },
+  { id: '16:9', label: 'Landscape 16:9', width: 1152, height: 648 },
   { id: '4:2', label: 'Cinematic 4:2', width: 1200, height: 600 },
   { id: '1:1', label: 'Square 1:1', width: 1024, height: 1024 },
   { id: '4:5', label: 'Portrait 4:5', width: 896, height: 1120 },
-  { id: '9:16', label: 'Story 9:16', width: 630, height: 1120 },
+  { id: '9:16', label: 'Story 9:16', width: 648, height: 1152 },
 ] as const;
 
 const IMAGE_STYLE_PRESETS = [
