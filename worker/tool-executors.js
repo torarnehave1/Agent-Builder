@@ -9830,19 +9830,43 @@ async function executeSearchContacts(input, env) {
   const serverFiltered = contacts.length === rows.length
   const total = serverFiltered ? (Number(data.total) || contacts.length) : contacts.length
 
+  // How much history each hit has. Without it the agent answered "list all interactions"
+  // with the 2 recordings it happened to find and called that the complete history, while
+  // the Contacts app showed 10 interactions for the same person (2026-09-30). A count the
+  // tool states cannot be narrated around.
+  const { logsTableId } = await resolveContactTableIds(userId, env).catch(() => ({ logsTableId: null }))
+  const counts = new Map()
+  if (logsTableId) {
+    for (const c of contacts.slice(0, 5)) {
+      try {
+        const [all, audio] = await Promise.all([
+          drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: c._id }, limit: 1 }),
+          drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: c._id }, notEmpty: ['recording_url'], limit: 1 }),
+        ])
+        counts.set(c._id, { logs: Number(all.total) || 0, audio: Number(audio.total) || 0 })
+      } catch { /* a count is a nicety; never fail the search over one */ }
+    }
+  }
+
   // The result summary used to carry no data at all, so the chat line read
   // "search_contacts completed" and the model narrated a count it had not been given.
   const lines = contacts.map((c, i) => {
     const org = (() => {
       try { return JSON.parse(c.organization || 'null')?.name || '' } catch { return c.organization || '' }
     })()
-    return `${i + 1}. **${c.full_name || c.name || '(no name)'}**${org ? ` — ${org}` : ''}\n`
+    const n = counts.get(c._id)
+    const history = n
+      ? ` — ${n.logs} logged interaction${n.logs === 1 ? '' : 's'}${n.audio ? ` (${n.audio} with audio)` : ''}`
+      : ''
+    return `${i + 1}. **${c.full_name || c.name || '(no name)'}**${org ? ` — ${org}` : ''}${history}\n`
       + `   contactId: \`${c._id}\``
   })
   const message = contacts.length === 0
     ? `No contacts match "${query}".`
     : `Found ${total} contact(s) matching "${query}"${total > contacts.length ? `, showing the first ${contacts.length}` : ''}:\n\n${lines.join('\n')}\n\n`
-      + 'Use a contactId with get_contact_logs to read that contact\'s interaction history.'
+      + 'To answer anything about a contact\'s interactions, meetings, calls or history, call '
+      + 'get_contact_logs with that contactId NOW — do not tell the user to call it, and do not '
+      + 'answer from list_recordings, which only covers the interactions that have an audio file.'
 
   return { message, contacts, query, count: contacts.length, total }
 }
@@ -9860,11 +9884,29 @@ async function executeGetContactLogs(input, env) {
   const logs = data.records || data.rows || []
   const total = Number(data.total) || logs.length
   const withAudio = logs.filter(l => l.recording_url).length
+
+  // The entries themselves, in the shape the Contacts app shows them (date, type, note) —
+  // the agent used to get raw rows and a count, and answered with an audio list instead.
+  // Notes are stored with HTML from the calendar import, so flatten them for the preview.
+  const plain = (v) => String(v || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ').trim()
+  const lines = logs.map((l, i) => {
+    const when = String(l.logged_at || '').replace('T', ' ').slice(0, 16) || 'unknown date'
+    const note = plain(l.notes)
+    return `${i + 1}. ${when} · ${l.contact_type || 'Other'}${l.recording_url ? ' · audio' : ''}\n`
+      + (l.recording_url ? `   recordingId: \`contactlog:${l._id || l.id}\`\n   audioUrl: ${l.recording_url}\n` : '')
+      + (note ? `   ${note.slice(0, 160)}${note.length > 160 ? '…' : ''}` : '')
+  })
+
   const message = logs.length === 0
     ? `No log entries for contact ${contactId}.`
-    : `${total} log entr${total === 1 ? 'y' : 'ies'} for this contact`
+    : `${total} logged interaction${total === 1 ? '' : 's'} for ${logs[0].contact_name || 'this contact'}`
       + (total > logs.length ? `, showing the ${logs.length} newest (raise limit to see the rest)` : '')
-      + `. ${withAudio} of them ${withAudio === 1 ? 'has' : 'have'} an audio recording (recording_url).`
+      + `, ${withAudio} with an audio recording. Newest first:\n\n${lines.join('\n')}\n\n`
+      + 'This IS the interaction history — show these entries to the user. Do not substitute '
+      + 'the recordings list for it: recordings are only the entries that carry audio.'
   return { message, logs, contactId, total, returned: logs.length, withRecording: withAudio }
 }
 

@@ -60,10 +60,15 @@ const olveLogs = [
   { _id: 'log-jul', logged_at: '2026-07-08T08:43:27.734Z', recording_url: 'https://audio.vegvisr.org/norwegian-audio/jul.webm' },
   { _id: 'log-jun', logged_at: '2026-06-16T08:44:55.111Z', recording_url: 'https://audio.vegvisr.org/norwegian-audio/jun.webm' },
 ]
-for (const l of olveLogs) logs.push({ ...l, contact_id: OLVE_ID, contact_name: 'Olve Aleksander Storås', notes: 'samtale' })
-// 22 more logs for Olve without audio, so his history is 25 entries — more than a default page of 20.
-for (let i = 0; i < 22; i++) {
-  logs.push({ _id: `olve-note-${i}`, contact_id: OLVE_ID, contact_name: 'Olve Aleksander Storås', notes: 'samtale', logged_at: `2026-05-${String(i + 1).padStart(2, '0')}T09:00:00.000Z`, recording_url: '' })
+for (const l of olveLogs) logs.push({ ...l, contact_id: OLVE_ID, contact_name: 'Olve Aleksander Storås', contact_type: 'Zoom', notes: 'samtale' })
+// 7 more logs without audio, so his history is 10 entries of which 3 carry audio — the real
+// shape, and the one the Contacts app shows under "Interaction History".
+for (let i = 0; i < 7; i++) {
+  logs.push({
+    _id: `olve-zoom-${i}`, contact_id: OLVE_ID, contact_name: 'Olve Aleksander Storås',
+    contact_type: 'zoom', notes: '<p>Olve Aleksander 1-1 med Tor Arne</p><p>Sted: zoom</p>',
+    logged_at: `2026-05-${String(i + 1).padStart(2, '0')}T09:00:00.000Z`, recording_url: '',
+  })
 }
 
 const fold = (v) => String(v ?? '').toLowerCase()
@@ -186,16 +191,46 @@ const CALLER = { userId: 'ca3d9d93-3b02-4e49-a4ee-43552ec4ca2b', userEmail: 'own
     r.audioUrl === 'https://audio.vegvisr.org/norwegian-audio/jun.webm', `got ${JSON.stringify(r).slice(0, 200)}`)
 }
 
-// 4. A truncated history is reported as truncated.
+// 4. The interaction history IS the answer: the entries, the real total, and a truncation
+//    that says it is one. The agent answered "list all interactions" with 2 audio files
+//    while the contact had 10 logged interactions (2026-09-30).
 {
   const { env } = makeEnv()
-  const r = await executeTool('get_contact_logs', { ...CALLER, contactId: OLVE_ID, limit: 10 }, env)
-  check('get_contact_logs reports the real total when it returns fewer',
-    r.total === 25 && r.returned === 10 && /25 log entries/.test(r.message || ''), `message: ${r.message} total: ${r.total}`)
   const full = await executeTool('get_contact_logs', { ...CALLER, contactId: OLVE_ID }, env)
-  check('the default page covers a 25-entry history', (full.logs || []).length === 25, `got ${(full.logs || []).length}`)
+  check('get_contact_logs returns the contact\'s 10 interactions', (full.logs || []).length === 10, `got ${(full.logs || []).length}`)
   check('get_contact_logs counts the entries that have audio', full.withRecording === 3, `got ${full.withRecording}`)
+  check('the message IS the history — dated entries with their type',
+    /10 logged interactions/.test(full.message || '') && /2026-08-12 07:57 · Zoom · audio/.test(full.message || ''),
+    `message: ${(full.message || '').slice(0, 300)}`)
+  check('HTML from the calendar import is flattened in the preview',
+    /Olve Aleksander 1-1 med Tor Arne/.test(full.message || '') && !/<p>/.test(full.message || ''),
+    `message: ${(full.message || '').slice(0, 300)}`)
+  const r = await executeTool('get_contact_logs', { ...CALLER, contactId: OLVE_ID, limit: 4 }, env)
+  check('a truncated history says it is truncated',
+    r.total === 10 && r.returned === 4 && /showing the 4 newest/.test(r.message || ''), `message: ${(r.message || '').slice(0, 200)}`)
+}
+
+// 5. The search result states how much history each hit has, so an audio list can never
+//    be passed off as the whole history.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('search_contacts', { ...CALLER, query: 'Olve Storås' }, env)
+  check('search_contacts states the interaction count next to the contact',
+    /10 logged interactions \(3 with audio\)/.test(r.message || ''), `message: ${(r.message || '').slice(0, 300)}`)
+  check('search_contacts tells the agent to call get_contact_logs itself',
+    /call \s*get_contact_logs[^]*NOW/.test(r.message || '') && /do not tell the user/.test(r.message || ''),
+    `message: ${(r.message || '').slice(0, 400)}`)
+}
+
+// 6. add_contact_log writes a type the Contacts app actually renders.
+{
+  const defs = await import(path.join(tmp, 'tool-definitions.js'))
+  const t = defs.TOOL_DEFINITIONS.find(d => d.name === 'add_contact_log')
+  const APP_TYPES = ['Meeting', 'Phone Call', 'Zoom', 'Email', 'Message', 'Note', 'Other']
+  const en = t?.input_schema?.properties?.contact_type?.enum || []
+  check('add_contact_log offers the Contacts app\'s own interaction types',
+    APP_TYPES.every(x => en.includes(x)) && en.length === APP_TYPES.length, `enum: ${JSON.stringify(en)}`)
 }
 
 if (failures) { console.error(`\nFAILED — ${failures} check(s)`); process.exit(1) }
-console.log('\nPASS — contacts and contact recordings are reachable past the first page: search runs in SQL, every recording-bearing log is read, recordingIds resolve, and a truncated log history says so.')
+console.log('\nPASS — a contact and their whole history are reachable: search runs in SQL and matches a partial name, every recording-bearing log is read, recordingIds resolve, get_contact_logs returns the interactions themselves, and a truncated list says it is truncated.')

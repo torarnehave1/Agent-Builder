@@ -1193,7 +1193,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_recordings',
-    description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp. ALWAYS show the user the returned list (name, date, length, transcription status, recordingId) rather than only reporting how many were found — they need it to pick one. To transcribe several, make ONE transcribe_audio call per recording in the same turn, each with that recording\'s `audioUrl` and its `displayName` as `title`; they are transcribed one after another in the browser.',
+    description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. The Contact-app entries here are ONLY the logged interactions that carry an audio file — for a contact\'s full interaction history use search_contacts then get_contact_logs, never this tool. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp. ALWAYS show the user the returned list (name, date, length, transcription status, recordingId) rather than only reporting how many were found — they need it to pick one. To transcribe several, make ONE transcribe_audio call per recording in the same turn, each with that recording\'s `audioUrl` and its `displayName` as `title`; they are transcribed one after another in the browser.',
     input_schema: {
       type: 'object',
       properties: {
@@ -3202,7 +3202,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_contact_logs',
-    description: 'Get interaction log entries for a specific contact, newest first. Returns `total` (how many the contact has), the entries themselves, and how many carry an audio recording (`recording_url`). If `total` is larger than the number returned, say so or raise `limit` — never present a truncated history as the complete one.',
+    description: 'THE contact\'s INTERACTION HISTORY — every meeting, Zoom call, phone call, email, message and note logged against them, newest first. This is the same list the Contacts app shows under "Interaction History", so use it for any question about interactions, history, meetings or contact with a person. `list_recordings` is NOT a substitute: it returns only the subset of these entries that carry an audio file. Returns `total` (how many the contact has), the entries themselves, and how many carry an audio recording (`recording_url`). If `total` is larger than the number returned, say so or raise `limit` — never present a truncated history as the complete one.',
     input_schema: {
       type: 'object',
       properties: {
@@ -3222,8 +3222,8 @@ const TOOL_DEFINITIONS = [
         contactName: { type: 'string', description: 'Display name of the contact' },
         contact_type: {
           type: 'string',
-          enum: ['Møte', 'Telefon', 'E-post', 'Melding', 'Annet'],
-          description: 'Type of interaction'
+          enum: ['Meeting', 'Phone Call', 'Zoom', 'Email', 'Message', 'Note', 'Other'],
+          description: 'Type of interaction. These are the exact values the Contacts app stores and renders; a Norwegian value such as "Møte" shows up as an unknown type there.'
         },
         notes: { type: 'string', description: 'Notes or transcribed voice content from the interaction' },
         logged_at: { type: 'string', description: 'ISO datetime of the interaction (defaults to now if omitted)' }
