@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.12.2`** · live since 2026-09-27
+**Server version `1.13.0`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -77,6 +77,9 @@ that changes no contract.
 | `1.12.0` | 2026-09-30 | `flux-1-schnell` retired from the image model enum — it accepts no width or height, and `generate_node_image` only ever fills a placeholder whose element already declared a size. Four models remain, all of which take a size and a seed, asserted as a property rather than a list. Naming a retired or unknown model now leads `notes` with the substitution and its reason instead of falling through to the default in silence. |
 | `1.12.1` | 2026-09-30 | Every image side is rounded to a multiple of 8, named formats included, and both size bounds are themselves multiples of 8. `landscape-16:9` and `story-9:16` carried 630, which Lucid Origin tolerates and SDXL refuses in the pipeline — one live image call in eight failed on it. Now 1152x648 and 648x1152, still exactly 16:9. lucid-origin's ceiling reads 2496 rather than the schema's 2500 for the same reason. |
 | `1.12.2` | 2026-09-30 | Accept is widened whenever EITHER `application/json` or `text/event-stream` is missing. 1.5.1 only handled the missing-event-stream half, so a client sending `text/event-stream` alone was still refused 406/-32000 — the `server/discover` rows, three per connector setup. An unknown method answers -32601 with HTTP 200, so a -32000 always meant the request never reached dispatch. |
+| `1.12.3` | 2026-09-30 | Content-Type is normalised too. The transport refuses a POST that is not `application/json` with 415 and the same `-32000`, and this handler has already parsed the body and passes `parsedBody`, so the transport validates a header describing something it never reads. Safe because the bearer token, not the media type, is what holds `/mcp` shut. |
+| `1.12.4` | 2026-09-30 | Log the transport's own refusal message with the headers as received. Two versions were spent inferring a cause from the audit code while the response said which check refused it. |
+| `1.13.0` | 2026-09-30 | `server/discover` was never broken. Claude probes with `Mcp-Protocol-Version: 2026-07-28`, which no published SDK implements (1.31.0 tops out at 2025-11-25); the refusal IS the negotiation, and `initialize` follows a second later at a supported version. `validateProtocolVersion` runs only for non-initialize messages, which is why one failed and the next did not. Now audited as `PROTOCOL_UNSUPPORTED` at info level instead of wearing an error code. Deliberately not "fixed" by accepting the version. |
 
 ### Current surface
 
