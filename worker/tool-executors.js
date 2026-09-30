@@ -10415,6 +10415,17 @@ async function executeAddUserToChatGroup(input, env) {
   if (!targetProfile) throw new Error(`User not found: ${email}`)
   if (!targetProfile.phone) throw new Error(`User ${email} has no phone number`)
 
+  // added_by_* names the person DOING the adding, added to /groups/{id}/join on 2026-09-30.
+  // The endpoint takes the TARGET's credentials — that is the only shape it accepts, and it is
+  // why it never checked ownership: there was no requester in the request to check. Sending the
+  // requester too lets the chat worker verify that they are an owner or admin of the group,
+  // instead of trusting that whoever called this tool had the standing to.
+  //
+  // The fields are omitted when the caller has no phone on file, because the endpoint accepts
+  // that shape and refusing here would break the tool over a check that is not the one
+  // protecting it.
+  const requester = await resolveUserProfile(input.userId, env).catch(() => null)
+
   const res = await env.CHAT_WORKER.fetch(`https://group-chat-worker/groups/${groupId}/join`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -10423,6 +10434,9 @@ async function executeAddUserToChatGroup(input, env) {
       phone: targetProfile.phone,
       email: targetProfile.email || email,
       role: input.role || 'member',
+      ...(requester?.user_id && requester?.phone
+        ? { added_by_user_id: requester.user_id, added_by_phone: requester.phone, added_by_email: requester.email || '' }
+        : {}),
     })
   })
   const data = await res.json()
