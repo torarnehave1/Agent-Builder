@@ -40,6 +40,7 @@ export const IMAGE_MODEL_LIMITS = {
     maxSide: 2048,
     guidance: null,
     steps: { min: 1, max: 20 },
+    qualitySteps: { draft: 4, high: 12, max: 20 },
   },
   '@cf/leonardo/lucid-origin': {
     label: 'Lucid Origin',
@@ -49,6 +50,7 @@ export const IMAGE_MODEL_LIMITS = {
     maxSide: 2500,
     guidance: { min: 0, max: 10 },
     steps: { min: 1, max: 40 },
+    qualitySteps: { draft: 10, high: 30, max: 40 },
   },
   '@cf/leonardo/phoenix-1.0': {
     label: 'Phoenix 1.0',
@@ -58,10 +60,24 @@ export const IMAGE_MODEL_LIMITS = {
     maxSide: 2048,
     guidance: { min: 2, max: 10 },
     steps: { min: 1, max: 50 },
+    qualitySteps: { draft: 10, high: 35, max: 50 },
   },
 }
 
 export const DEFAULT_IMAGE_MODEL = '@cf/bytedance/stable-diffusion-xl-lightning'
+
+/**
+ * Quality as a NAMED level, because the step ceiling is different for every model — 20 for SDXL
+ * Lightning, 40 for Lucid Origin, 50 for Phoenix — so a single number cannot mean the same thing
+ * across them. `standard` deliberately sends no step count at all, leaving Cloudflare's own
+ * default in place: "standard" has to mean exactly what a caller got before this existed.
+ *
+ * The qualitySteps figures above are chosen points inside each model's documented range, not a
+ * formula over it, so they can be read and argued with. They are the same numbers the MCP server
+ * uses (dev-worker/images-service.js) — a user asking for "high quality" through either surface
+ * should get the same request.
+ */
+export const IMAGE_QUALITY_LEVELS = ['draft', 'standard', 'high', 'max']
 
 /**
  * Pull `--ar W:H` out of the prompt and turn it into dimensions at the same pixel area as the
@@ -126,10 +142,19 @@ export function buildImageInput(model, body = {}) {
       : guidance
   }
 
+  // An explicit step count beats a named level: whoever types a number knows what it is. A
+  // `quality` this model has no entry for, or the level `standard`, resolves to nothing — which
+  // is how "leave the model's own default alone" is expressed.
   const rawSteps = body.num_steps ?? body.steps
   const numSteps = Number(rawSteps)
-  if (rawSteps !== undefined && rawSteps !== null && rawSteps !== '' && Number.isFinite(numSteps)) {
-    input.num_steps = Math.min(limits.steps.max, Math.max(limits.steps.min, Math.round(numSteps)))
+  const hasExplicitSteps = rawSteps !== undefined && rawSteps !== null && rawSteps !== '' && Number.isFinite(numSteps)
+  const fromQuality =
+    !hasExplicitSteps && body.quality && body.quality !== 'standard'
+      ? (limits.qualitySteps?.[body.quality] ?? null)
+      : null
+  const wantSteps = hasExplicitSteps ? Math.round(numSteps) : fromQuality
+  if (wantSteps !== null) {
+    input.num_steps = Math.min(limits.steps.max, Math.max(limits.steps.min, wantSteps))
   }
 
   const seed = Number(body.seed)

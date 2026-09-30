@@ -580,7 +580,24 @@ interface ImageModelCapabilities {
   negativePrompt: boolean;
   guidance: { min: number; max: number; default: number } | null;
   steps: { min: number; max: number; default: number | null };
+  // What a named quality level costs on THIS model. The numbers differ because the ceilings do —
+  // 20 steps is "max" for SDXL Lightning and barely past "draft" for Phoenix. Mirrors
+  // qualitySteps in worker/image-models.js, which is the authority.
+  qualitySteps: { draft: number; high: number; max: number };
 }
+
+// Quality is offered as a level rather than a number so the same choice means the same THING on
+// every model, and so a user who just wants a sharper picture does not have to learn what a
+// diffusion step is. The numeric Steps field under "advanced" is still there for anyone who does,
+// and it wins: worker/image-models.js ignores the level when an explicit count is present.
+const IMAGE_QUALITY_PRESETS = [
+  { id: 'standard', label: 'Standard' },
+  { id: 'draft', label: 'Draft (fastest)' },
+  { id: 'high', label: 'High' },
+  { id: 'max', label: 'Max (slowest)' },
+] as const;
+
+type ImageQualityId = (typeof IMAGE_QUALITY_PRESETS)[number]['id'];
 
 const IMAGE_MODEL_CAPABILITIES: Record<string, ImageModelCapabilities> = {
   '@cf/bytedance/stable-diffusion-xl-lightning': {
@@ -588,18 +605,21 @@ const IMAGE_MODEL_CAPABILITIES: Record<string, ImageModelCapabilities> = {
     negativePrompt: true,
     guidance: null,
     steps: { min: 1, max: 20, default: 20 },
+    qualitySteps: { draft: 4, high: 12, max: 20 },
   },
   '@cf/leonardo/lucid-origin': {
     label: 'Lucid Origin',
     negativePrompt: false,
     guidance: { min: 0, max: 10, default: 4.5 },
     steps: { min: 1, max: 40, default: null },
+    qualitySteps: { draft: 10, high: 30, max: 40 },
   },
   '@cf/leonardo/phoenix-1.0': {
     label: 'Phoenix 1.0',
     negativePrompt: true,
     guidance: { min: 2, max: 10, default: 2 },
     steps: { min: 1, max: 50, default: 25 },
+    qualitySteps: { draft: 10, high: 35, max: 50 },
   },
 };
 
@@ -609,6 +629,27 @@ function isImageGenerationModel(model: string) {
 
 function getImageModelCapabilities(model: string): ImageModelCapabilities | null {
   return IMAGE_MODEL_CAPABILITIES[model] || null;
+}
+
+/**
+ * The headers for a POST to agent-worker.
+ *
+ * /generate-image runs the upload as the CALLER — photos-worker has no anonymous write since
+ * 2026-09-27 — so it resolves an identity through resolveCallerAuth, which reads `X-API-Token`,
+ * a cookie, or an Authorization header. Neither /generate-image call from this component sent
+ * any of the three: the fetch had `Content-Type` and nothing else, and the token travelled only
+ * in the chat transport's body, which this route never reads. A signed-in user therefore got
+ * "Unauthorized — send X-API-Token (your emailVerificationToken) or sign in" while looking at
+ * their own name in the header (reported 2026-09-30, on Phoenix 1.0 — but every model, and both
+ * call sites, behaved the same).
+ *
+ * The cookie would not have covered it either: agent.vegvisr.org is a different origin, and
+ * these fetches do not set `credentials: 'include'`, so no cookie is sent. `X-API-Token` is
+ * already in the worker's Access-Control-Allow-Headers, so the preflight passes.
+ */
+function agentAuthHeaders(): Record<string, string> {
+  const token = readVegvisrAuthToken();
+  return { 'Content-Type': 'application/json', ...(token ? { 'X-API-Token': token } : {}) };
 }
 
 function getFormatPresetById(formatId: string) {
@@ -1464,6 +1505,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
   const [imageNegativePrompt, setImageNegativePrompt] = useState('');
   const [imageGuidance, setImageGuidance] = useState('');
   const [imageSteps, setImageSteps] = useState('');
+  const [imageQuality, setImageQuality] = useState<ImageQualityId>('standard');
 
   // Audio transcription state
   interface AudioFileInfo { file: File; name: string; size: number; type: string; duration: number | null; }
@@ -1930,11 +1972,16 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       const stepsValue = Number(imageSteps);
       if (imageSteps.trim() !== '' && Number.isFinite(stepsValue)) {
         requestBody.num_steps = Math.round(stepsValue);
+      } else if (imageQuality !== 'standard') {
+        // Only when no explicit count was typed. Sending both would leave the precedence rule
+        // living in two places; the worker already resolves it, and this keeps the request
+        // honest about what was actually chosen.
+        requestBody.quality = imageQuality;
       }
 
       const res = await fetch('https://agent.vegvisr.org/generate-image', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: agentAuthHeaders(),
         body: JSON.stringify(requestBody),
       });
       const data = await res.json() as { url?: string; error?: string; width?: number; height?: number; prompt?: string };
@@ -2048,7 +2095,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
       try {
         const res = await fetch(`https://agent.vegvisr.org/generate-image`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: agentAuthHeaders(),
           body: JSON.stringify({ prompt, userId }),
         });
         const data = await res.json() as { url?: string; error?: string };
@@ -2605,7 +2652,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
 
             {showImageSettings && (
               <>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                   <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
                     <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Format</span>
                     <select
@@ -2633,6 +2680,29 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                           {preset.label}
                         </option>
                       ))}
+                    </select>
+                  </label>
+
+                  <label className={`text-xs ${isLight ? 'text-slate-700' : 'text-white/70'}`}>
+                    <span className={`block mb-1 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Quality</span>
+                    <select
+                      value={imageQuality}
+                      onChange={(e) => setImageQuality(e.target.value as ImageQualityId)}
+                      disabled={imageSteps.trim() !== ''}
+                      title={imageSteps.trim() !== '' ? 'An explicit step count under Advanced overrides this' : undefined}
+                      className={`w-full rounded-lg border px-3 py-2 disabled:opacity-40 ${isLight ? 'border-slate-300 bg-white text-slate-900' : 'border-white/10 bg-white/[0.04] text-white'}`}
+                    >
+                      {IMAGE_QUALITY_PRESETS.map((preset) => {
+                        // The step count is shown IN the option, per model, so switching from
+                        // Lucid Origin to SDXL Lightning visibly changes what "Max" costs
+                        // instead of the label quietly meaning something else.
+                        const steps = preset.id === 'standard' ? null : imageCaps?.qualitySteps[preset.id] ?? null;
+                        return (
+                          <option key={preset.id} value={preset.id} className="bg-slate-900 text-white">
+                            {steps ? `${preset.label} — ${steps} steps` : `${preset.label} (model default)`}
+                          </option>
+                        );
+                      })}
                     </select>
                   </label>
 
@@ -2789,7 +2859,7 @@ export default function VegvisrAgentChat({ userId, model = '@cf/meta/llama-4-sco
                   )}
                 </div>
                 <div className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
-                  Leave a field empty to use the model's own default. Out-of-range values are clamped by the worker, which reports back the values it actually sent.
+                  Leave a field empty to use the model's own default. A number in Steps overrides the Quality setting above. Out-of-range values are clamped by the worker, which reports back the values it actually sent.
                 </div>
               </div>
             )}

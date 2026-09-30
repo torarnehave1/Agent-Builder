@@ -11,7 +11,7 @@
 // same way width/height were advertised in the generate_image schema and dropped by the executor.
 //
 //     node test-image-models.mjs
-import { buildImageInput, IMAGE_MODEL_LIMITS, parseAspectRatio } from './image-models.js'
+import { buildImageInput, IMAGE_MODEL_LIMITS, IMAGE_QUALITY_LEVELS, parseAspectRatio } from './image-models.js'
 
 const SDXL = '@cf/bytedance/stable-diffusion-xl-lightning'
 const LUCID = '@cf/leonardo/lucid-origin'
@@ -156,6 +156,51 @@ for (const empty of ['', '   ', undefined, null]) {
       check(`  ${IMAGE_MODEL_LIMITS[model].label} still has no negative_prompt under a full body`,
         !('negative_prompt' in r.input), JSON.stringify(r.input))
     }
+  }
+}
+
+// 11. `quality` is a named level because the step ceiling is per-model — the whole reason it is
+// not a number. "max" must resolve to each model's OWN ceiling, and "standard" must resolve to
+// nothing at all, since a caller choosing it is asking for the behaviour that predates the
+// control. The chat UI mirrors IMAGE_QUALITY_LEVELS, so a level here with no entry in a model's
+// qualitySteps would render a dropdown option that silently does nothing.
+{
+  for (const model of Object.keys(IMAGE_MODEL_LIMITS)) {
+    const limits = IMAGE_MODEL_LIMITS[model]
+
+    const max = buildImageInput(model, { prompt: 'x', quality: 'max' })
+    check(`${limits.label}: quality max reaches its own ceiling of ${limits.steps.max}`,
+      max.input.num_steps === limits.steps.max, JSON.stringify(max.input))
+
+    const standard = buildImageInput(model, { prompt: 'x', quality: 'standard' })
+    check(`${limits.label}: quality standard sends no step count`,
+      !('num_steps' in standard.input), JSON.stringify(standard.input))
+
+    for (const level of IMAGE_QUALITY_LEVELS) {
+      if (level === 'standard') continue
+      const r = buildImageInput(model, { prompt: 'x', quality: level })
+      const n = r.input.num_steps
+      check(`  ${limits.label}: quality ${level} lands inside ${limits.steps.min}-${limits.steps.max}`,
+        Number.isInteger(n) && n >= limits.steps.min && n <= limits.steps.max, JSON.stringify(r.input))
+    }
+
+    const explicit = buildImageInput(model, { prompt: 'x', quality: 'draft', num_steps: 7 })
+    check(`  ${limits.label}: an explicit num_steps overrides the named level`,
+      explicit.input.num_steps === 7, JSON.stringify(explicit.input))
+  }
+
+  // An unknown level must not be guessed at, and must not become a step count.
+  const bogus = buildImageInput(LUCID, { prompt: 'x', quality: 'ultra' })
+  check('an unrecognised quality level sends no step count rather than a guess',
+    !('num_steps' in bogus.input), JSON.stringify(bogus.input))
+
+  // draft really is cheaper than max, per model — otherwise the label is a lie.
+  for (const model of Object.keys(IMAGE_MODEL_LIMITS)) {
+    const d = buildImageInput(model, { prompt: 'x', quality: 'draft' }).input.num_steps
+    const h = buildImageInput(model, { prompt: 'x', quality: 'high' }).input.num_steps
+    const m = buildImageInput(model, { prompt: 'x', quality: 'max' }).input.num_steps
+    check(`  ${IMAGE_MODEL_LIMITS[model].label}: draft < high < max (${d} < ${h} < ${m})`,
+      d < h && h < m, `${d} ${h} ${m}`)
   }
 }
 
