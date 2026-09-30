@@ -8182,12 +8182,26 @@ async function executeListRecordings(input, env) {
       if (logsTableId) {
         contactLogsTableId = logsTableId
         const logs = await fetchContactLogRecordings(env, logsTableId)
-        const seenUrls = new Set(allRecordings.map(r => r.r2Url).filter(Boolean))
+        const byUrl = new Map()
+        for (const r of allRecordings) if (r.r2Url && !byUrl.has(r.r2Url)) byUrl.set(r.r2Url, r)
         for (const l of logs) {
           const url = l.recording_url
-          if (!url || seenUrls.has(url)) continue
-          seenUrls.add(url)
-          allRecordings.push({
+          if (!url) continue
+          const known = byUrl.get(url)
+          if (known) {
+            // The same file, already in the portfolio KV under a name that says nothing about
+            // who it is with — "Contact Log Recording - 6/16/2026". Skipping the contact-log
+            // row as a duplicate threw that identity away, so a search by the contact's name
+            // returned 2 of their 3 recordings (2026-09-30, live). Keep the KV entry and give
+            // it the contact it belongs to.
+            if (!known.contactId) known.contactId = l.contact_id || ''
+            if (!known.contactName) known.contactName = l.contact_name || ''
+            if (l.contact_name && !String(known.displayName || '').includes(l.contact_name)) {
+              known.displayName = `Contact Log — ${l.contact_name}`
+            }
+            continue
+          }
+          const entry = {
             contactId: l.contact_id || '',
             contactName: l.contact_name || '',
             recordingId: `contactlog:${l._id || l.id}`,
@@ -8201,7 +8215,9 @@ async function executeListRecordings(input, env) {
             r2Url: url,
             createdAt: l.logged_at || '',
             source: 'Contact Log',
-          })
+          }
+          byUrl.set(url, entry)
+          allRecordings.push(entry)
         }
       }
     }
@@ -8223,6 +8239,8 @@ async function executeListRecordings(input, env) {
         r.transcriptionText || '',
         (r.tags || []).join(' '),
         r.category || '',
+        // The contact a recording belongs to is part of how a person searches for it.
+        r.contactName || '',
       ].join(' ').toLowerCase()
       return words.every(w => searchable.includes(w))
     })

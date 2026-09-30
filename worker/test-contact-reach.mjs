@@ -111,8 +111,18 @@ function makeEnv({ ignoreSearch = false } = {}) {
       return json({ records: rows.slice(offset, offset + limit), total, limit, offset })
     },
   }
-  // No KV recordings at all — the contact logs are the only source, as they were in production.
-  const AUDIO_PORTFOLIO = { async fetch() { return json({ recordings: [] }) } }
+  // The audio portfolio holds ONE of the three under a generic name, exactly as production
+  // does: the June recording is registered in KV as "Contact Log Recording - 6/16/2026" with
+  // nothing to say whose call it was.
+  const AUDIO_PORTFOLIO = { async fetch() { return json({ recordings: [{
+    recordingId: 'rec_1781599491599_a6s54b17q',
+    displayName: 'Contact Log Recording - 6/16/2026',
+    fileName: 'jun.webm',
+    r2Url: 'https://audio.vegvisr.org/norwegian-audio/jun.webm',
+    createdAt: '2026-06-16T08:44:51.599Z',
+    transcriptionText: '',
+    tags: [],
+  }] }) } }
   return { env: { DRIZZLE_WORKER, AUDIO_PORTFOLIO }, queries }
 }
 
@@ -180,8 +190,9 @@ const CALLER = { userId: 'ca3d9d93-3b02-4e49-a4ee-43552ec4ca2b', userEmail: 'own
   check('list_recordings asks Drizzle for the rows that have a recording',
     queries.some(q => q.tableId === LOGS_TABLE && Array.isArray(q.notEmpty) && q.notEmpty.includes('recording_url')),
     `queries: ${JSON.stringify(queries.filter(q => q.tableId === LOGS_TABLE))}`)
-  check('every recordingId carries the log id, never "undefined"',
-    (r.recordings || []).every(x => /^contactlog:log-/.test(x.recordingId)),
+  check('every recordingId is usable — never "undefined", and log-sourced ones carry the log id',
+    (r.recordings || []).every(x => x.recordingId && !/undefined/.test(x.recordingId))
+    && (r.recordings || []).filter(x => String(x.recordingId).startsWith('contactlog:')).every(x => /^contactlog:log-/.test(x.recordingId)),
     `ids: ${JSON.stringify((r.recordings || []).map(x => x.recordingId))}`)
 }
 
@@ -266,6 +277,20 @@ const CALLER = { userId: 'ca3d9d93-3b02-4e49-a4ee-43552ec4ca2b', userEmail: 'own
   check('a multi-hit search does not drag a history along',
     (r.contacts || []).length > 1 && r.logs === undefined && !/interaction history, fetched/.test(r.message || ''),
     `hits: ${(r.contacts || []).length} logs: ${r.logs && r.logs.length}`)
+}
+
+// 5c-ii. A recording the portfolio already knows under a generic name must still be findable
+//        by the contact's name — dropping it as a duplicate returned 2 of 3 on the live worker.
+{
+  const { env } = makeEnv()
+  const r = await executeTool('list_recordings', { ...CALLER, query: 'Olve Storås', limit: 20 }, env)
+  const urls = (r.recordings || []).map(x => x.audioUrl)
+  check('a KV-registered contact recording is not lost to the dedupe',
+    olveLogs.every(l => urls.includes(l.recording_url)), `got ${JSON.stringify(urls)}`)
+  const kv = (r.recordings || []).find(x => x.recordingId === 'rec_1781599491599_a6s54b17q')
+  check('the portfolio entry is given the contact it belongs to',
+    !!kv && kv.contactId === OLVE_ID && /Olve Aleksander Storås/.test(kv.displayName || ''),
+    `entry: ${JSON.stringify(kv || null)}`)
 }
 
 // 5d. The recordings list says what it is a subset OF — the exact claim that went wrong.
