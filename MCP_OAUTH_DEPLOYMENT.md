@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.7.0`** · worker `e4113399-9d95-427f-b1b7-fbad247e5d4a` · live since 2026-09-27
+**Server version `1.11.0`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -70,10 +70,14 @@ that changes no contract.
 | `1.5.1` | 2026-09-29 | Patch. Stop refusing a POST whose `Accept` lacks `text/event-stream` — the server never returns an event stream, so the SDK's check only cost real requests (13 rejected in one day). `mcp_audit_log` gains a `method` column, because `tool` is NULL for anything that is not `tools/call` and a rejected handshake logged nothing identifying. |
 | `1.6.0` | 2026-09-29 | The scope vocabulary is FROZEN — eight scopes named after risk classes instead of features, so a new tool costs a tool-list refresh rather than a re-authorization. Consent copy widened to describe the class. No tool changed. |
 | `1.7.0` | 2026-09-29 | `graph:delete` made grantable. It was in the vocabulary with no checkbox, so the first delete tool would have forced a re-authorization regardless — closed while one reconnect still cost one person. Six opt-in boxes now. |
+| `1.8.0` | 2026-09-30 | `generate_node_image` takes a `model`, and the default becomes `@cf/leonardo/lucid-origin`. The old default was SDXL Lightning, inherited from Agent-Builder without anyone asking whether a distilled few-step model suited a published header image. |
+| `1.9.0` | 2026-09-30 | `style`, `lighting` and `format` on the image tool — the chat UI's dropdown vocabulary, copied token for token, so the same choice gives the same picture through either surface. The reply carries `finalPrompt`. |
+| `1.10.0` | 2026-09-30 | `renderTraits`, `imageText` and `textTreatment`. Traits are emitted in the table's order rather than the caller's, so one set of choices always composes to one string. |
+| `1.11.0` | 2026-09-30 | `get_image_guide`, and per-model parameter resolution. `quality`, `steps`, `guidance`, `seed` and `negativePrompt` now resolve against the chosen model's own published schema: the five models disagree about which of those exist, so an unsupported one is reported in `notes` rather than dropped in silence. `mcp_audit_log` gains `client_info`, recording what each client declares at `initialize` — including whether it supports `elicitation`, which is what a server would need to ask the user a question mid-call. |
 
 ### Current surface
 
-- **22 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
+- **23 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
   matches it exactly.
 - **2 advertised scopes**: `graph:read`, `graph:write`. These are all `CONNECT_SCOPES`, so they
   are all a client can request.
