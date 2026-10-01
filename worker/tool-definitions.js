@@ -4120,6 +4120,39 @@ const PROFF_TOOLS = [
     }
   },
   {
+    name: 'compose_image_from_references',
+    description: 'Compose a NEW image from one to four reference pictures you already have URLs for, using gpt-image-2.5. Use this when the point is a SPECIFIC thing rather than a described one — this exact product, mascot, person or logo, placed in a new scene, or two of them combined. generate_image is the right tool when a description is enough; this one is slower and costs real money per call. ORDER MATTERS: write the prompt referring to "the first reference image", "the second", and so on, matching the order of referenceImageUrls. List every feature that must survive (exact colours, markings, clothing) — what you do not name may change. Returns a base64 image; upload it if it should be kept. Reference URLs must be on a VEGR.AI host such as vegvisr.imgix.net.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        prompt: {
+          type: 'string',
+          description: 'What to make, naming each reference by position and listing every feature that must be preserved.'
+        },
+        referenceImageUrls: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'One to four https image URLs on a VEGR.AI host, in the order the prompt refers to them.'
+        },
+        quality: {
+          type: 'string',
+          enum: ['low', 'high', 'max'],
+          description: 'low (~13s, ~$0.03) · high (~33s, ~$0.06) · max (~99s, ~$0.22). Measured. Default low; ask the user before spending more. max is available here and NOT over MCP, because a person is watching this one.'
+        },
+        size: {
+          type: 'string',
+          description: 'WIDTHxHEIGHT with both edges a multiple of 16, or "auto". E.g. 1280x720 for 16:9, 1024x1024 square, 720x1280 for a story.'
+        },
+        model: {
+          type: 'string',
+          enum: ['gpt-image-2.5-sunburst', 'gpt-image-2.5-flare'],
+          description: 'sunburst for editing precision (default), flare for speed.'
+        }
+      },
+      required: ['prompt', 'referenceImageUrls']
+    }
+  },
+  {
     name: 'proff_find_business_network',
     description: 'Find the shortest path/connection between two people in the Norwegian business network. Shows how they are connected through companies and roles. Requires personIds from proff_search_persons.',
     input_schema: {

@@ -10452,6 +10452,69 @@ async function executeAddUserToChatGroup(input, env) {
   }
 }
 
+/**
+ * Compose an image from reference pictures — gpt-image-2.5 through openai-worker.
+ *
+ * generate_image above runs on Workers AI, which cannot hold onto a SPECIFIC subject across a new
+ * scene: lucid-origin and phoenix-1.0 take no image input at all, and the SDXL family transforms
+ * one picture rather than composing from several. Verified against the published schemas on
+ * 2026-09-30.
+ *
+ * MAX IS ALLOWED HERE AND NOT OVER MCP. Measured on the real API: low answers in 13 seconds, high
+ * in 33, max in 99. Ninety-nine seconds is longer than an MCP client will wait, but it is fine in
+ * a chat where a person is watching a progress indicator and chose it deliberately. The same
+ * capability, two different patience budgets.
+ */
+async function executeComposeImageFromReferences(input, env) {
+  if (!input.prompt) throw new Error('prompt is required')
+  if (!env.OPENAI_WORKER) throw new Error('OPENAI_WORKER binding is not configured')
+
+  const refs = Array.isArray(input.referenceImageUrls) ? input.referenceImageUrls.filter(Boolean) : []
+  if (refs.length === 0) throw new Error('referenceImageUrls must name at least one image')
+  if (refs.length > 4) throw new Error('at most 4 reference images')
+
+  const quality = input.quality || 'low'
+  const started = Date.now()
+
+  const res = await env.OPENAI_WORKER.fetch('https://openai-worker/images/edits', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt: String(input.prompt).trim(),
+      referenceImageUrls: refs,
+      quality,
+      size: input.size || 'auto',
+      ...(input.model ? { model: input.model } : {}),
+      userId: input.userId,
+    })
+  })
+
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    // Passed through: the allowlist refusal and the multiple-of-16 refusal both live there, and
+    // both are things the caller can act on.
+    throw new Error(data.error || `Image service refused the request (status ${res.status})`)
+  }
+
+  const b64 = data?.data?.[0]?.b64_json
+  if (!b64) throw new Error('The image service returned no image')
+
+  return {
+    success: true,
+    image_base64: b64,
+    model: data.model || input.model || 'gpt-image-2.5-sunburst',
+    quality,
+    size: data.size || input.size || 'auto',
+    reference_images: refs.length,
+    cost_usd: data.cost_usd ?? null,
+    duration_ms: data.duration_ms ?? (Date.now() - started),
+    message:
+      `Composed from ${refs.length} reference image${refs.length === 1 ? '' : 's'} at ${quality} quality` +
+      (data.cost_usd != null ? ` — $${data.cost_usd}` : '') +
+      (data.duration_ms != null ? `, ${Math.round(data.duration_ms / 1000)}s` : '') + '.'
+  }
+}
+
 async function executeGetGroupMessages(input, env) {
   if (!input.groupId && !input.groupName) throw new Error('groupId or groupName is required')
 
@@ -16520,6 +16583,9 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAddAppTableColumn(toolInput, env)
     case 'list_chat_groups':
       return await executeListChatGroups(toolInput, env)
+    case 'compose_image_from_references':
+      return await executeComposeImageFromReferences(toolInput, env)
+
     case 'add_user_to_chat_group':
       return await executeAddUserToChatGroup(toolInput, env)
     case 'get_group_messages':
