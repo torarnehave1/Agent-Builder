@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.15.0`** · live since 2026-09-27
+**Server version `1.16.1`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -82,10 +82,14 @@ that changes no contract.
 | `1.13.0` | 2026-09-30 | `server/discover` was never broken. Claude probes with `Mcp-Protocol-Version: 2026-07-28`, which no published SDK implements (1.31.0 tops out at 2025-11-25); the refusal IS the negotiation, and `initialize` follows a second later at a supported version. `validateProtocolVersion` runs only for non-initialize messages, which is why one failed and the next did not. Now audited as `PROTOCOL_UNSUPPORTED` at info level instead of wearing an error code. Deliberately not "fixed" by accepting the version. |
 | `1.14.0` | 2026-09-30 | Two new image styles, `sketch` and `abstract`. Every existing style described a way of rendering a subject; these are the first that change what the subject is, and they covered the two most common non-photographic requests, which previously had to be hand-written into the prompt. Mirrored into the chat UI's own table in the same change, with the token AND the count pinned by test. |
 | `1.15.0` | 2026-09-30 | Chat group membership: `list_group_members`, `add_group_member`, `remove_group_member`, `create_group_invite`. The chat worker's `/join` checks the credentials of the person being added and nothing about who is asking, so the owner/admin gate lives in `chat-members.js` — it exists nowhere else on that path. Adding is limited to already-registered users; invites cover everyone else and keep consent with the joiner. Ownership is not grantable. Under `chat:write`, whose consent TEXT was widened to name membership — the scope names stay frozen. |
+| `1.15.1` | 2026-09-30 | `add_group_member` names the requester to the chat worker as well, so an add-by-proxy is authorised in both layers. |
+| `1.15.2` | 2026-09-30 | `expiredPage()` was called twice and never written — the Error 1101 seen twice that day, named by the error boundary. Both call sites sit behind `if (!tx)`, which is not a path anyone walks when reading the flow. The consent form now disables its buttons on submit, and a `no-undef` test covers every module: these files import `cloudflare:` builtins and will not load outside the Workers runtime, so a unit test could not have caught it. |
+| `1.16.0` | 2026-10-01 | `compose_node_image` — build an image FROM one to four reference pictures, through `gpt-image-2.5` on openai-worker's new `/images/edits`. Workers AI cannot hold onto a specific subject across a new scene. Two qualities only: `max` measured 99 seconds, longer than an MCP client waits, so it lives in the Agent Builder instead. `COMPOSE_FORMATS` carries the same five format names at multiple-of-16 sizes, because three of the Workers AI presets are multiples of 8 only. |
+| `1.16.1` | 2026-10-01 | `get_graph` declares an `outputSchema` — it was the only tool of 28 without one, so clients ignored `structuredContent` and read a one-line count instead of the nodes that were there all along. The text now lists each node as id — label [type] with a preview, and the edges. A test asserts every tool has an output schema. |
 
 ### Current surface
 
-- **27 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
+- **28 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
   matches it exactly.
 - **2 advertised scopes**: `graph:read`, `graph:write`. These are all `CONNECT_SCOPES`, so they
   are all a client can request.
