@@ -1,6 +1,6 @@
 # VEGR.AI Knowledge Graph — MCP server
 
-**Server version `1.16.1`** · live since 2026-09-27
+**Server version `1.16.2`** · live since 2026-09-27
 
 `https://knowledge.vegvisr.org/mcp` — a **remote MCP server**: stateless Streamable HTTP,
 protected by an OAuth 2.1 authorization server running in the same Cloudflare Worker.
@@ -86,6 +86,7 @@ that changes no contract.
 | `1.15.2` | 2026-09-30 | `expiredPage()` was called twice and never written — the Error 1101 seen twice that day, named by the error boundary. Both call sites sit behind `if (!tx)`, which is not a path anyone walks when reading the flow. The consent form now disables its buttons on submit, and a `no-undef` test covers every module: these files import `cloudflare:` builtins and will not load outside the Workers runtime, so a unit test could not have caught it. |
 | `1.16.0` | 2026-10-01 | `compose_node_image` — build an image FROM one to four reference pictures, through `gpt-image-2.5` on openai-worker's new `/images/edits`. Workers AI cannot hold onto a specific subject across a new scene. Two qualities only: `max` measured 99 seconds, longer than an MCP client waits, so it lives in the Agent Builder instead. `COMPOSE_FORMATS` carries the same five format names at multiple-of-16 sizes, because three of the Workers AI presets are multiples of 8 only. |
 | `1.16.1` | 2026-10-01 | `get_graph` declares an `outputSchema` — it was the only tool of 28 without one, so clients ignored `structuredContent` and read a one-line count instead of the nodes that were there all along. The text now lists each node as id — label [type] with a preview, and the edges. A test asserts every tool has an output schema. |
+| `1.16.2` | 2026-10-02 | Generated images go to a per-user photo album (`mcp-<user>`, from the validated OAuth identity) instead of no album at all. The old reason for no album — that photos-worker claimed a shared one for whoever uploaded first — had gone stale: it now sets `createdBy` only on an album the upload CREATES. A per-user album is owned correctly from its first write, where a shared one belongs to nobody. New uploads only. |
 
 ### Current surface
 
