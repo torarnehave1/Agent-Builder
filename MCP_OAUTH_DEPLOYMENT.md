@@ -486,14 +486,32 @@ ever appears in that column.
    the SMS code is what mints the `vegvisr_token` the cookie carries. So a phone number is not a
    convenience, it is the only identity this system issues.
 
-   **This is what blocks NIBI.** `NIBI FELLES` is owned by `post@nibi.no` — the World's mailbox,
-   not a person — which has no routable number, so it cannot authenticate to MCP, to the chat app,
-   or to vegvisr.org. `set_group_member_role` is owner-only by design, and an owner who cannot
-   sign in cannot delegate. Three ways out, none of them built: give that address a real number;
-   a Superadmin-only `transfer_group_ownership` used once per World at provisioning; or a blanket
-   Superadmin bypass in `requireGroupRole`. The first unblocks NIBI today, the second fixes the
-   class — a World's main group should be owned by a human account, not by the World's mailbox
-   identity — and the third is the widest. Undecided.
+   **This blocks MCP only — the Agent Builder has a way around it, and it is the right one.**
+   Corrected 2026-10-02 after claiming here that `post@nibi.no` could not authenticate anywhere.
+   It cannot LOG IN, which is a different thing: logging in MINTS a token and that is what needs
+   the SMS. The Agent Builder's System Owner "Login as…" bar (`ImpersonationBar.tsx` →
+   `POST /realtime/admin/impersonate`, gated on `auth.isSystemOwner`) hands over a token that
+   ALREADY EXISTS — `realtime-worker/index.js:1641` reads `emailVerificationToken` straight from
+   `config` and refuses only when the column is empty. `post@nibi.no` has one. No SMS is involved.
+   Nor does the phone block anything downstream: group-chat-worker's `/join` uses the number as a
+   LOOKUP value against its own member row, never as an SMS destination, so a number that cannot
+   receive a message works there exactly as well as one that can.
+
+   So `NIBI FELLES`, owned by `post@nibi.no`, is administered by impersonating that account in the
+   Agent Builder and using `add_user_to_chat_group` — `executeAddUserToChatGroup` resolves the
+   requester from `input.userId`, which under impersonation IS the owner. Nothing needed building
+   for this case.
+
+   What is left is the MCP surface, which has no impersonation bar: there, owner-only means an
+   owner who can complete the OAuth flow. A World's main group owned by the World's mailbox
+   address cannot be administered over MCP at all. Three ways out, none built and none urgent:
+   give that address a real number; a Superadmin-only `transfer_group_ownership` used once per
+   World at provisioning; or a Superadmin bypass in `requireGroupRole`. The second fixes the class
+   — a World's main group should be owned by a human account, not by the World's mailbox identity.
+
+   Also uneven: the Agent Builder has NO role-change tool. `add_user_to_chat_group` takes a `role`,
+   but `/join` is `INSERT OR IGNORE`, so it does nothing to somebody already in the group. MCP can
+   change a role; the Agent Builder cannot.
 
    The old note on the lookup still stands: 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
    the rest must either be signed in at vegvisr.org in the same browser, or add a number. Note
