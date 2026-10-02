@@ -87,10 +87,11 @@ that changes no contract.
 | `1.16.0` | 2026-10-01 | `compose_node_image` — build an image FROM one to four reference pictures, through `gpt-image-2.5` on openai-worker's new `/images/edits`. Workers AI cannot hold onto a specific subject across a new scene. Two qualities only: `max` measured 99 seconds, longer than an MCP client waits, so it lives in the Agent Builder instead. `COMPOSE_FORMATS` carries the same five format names at multiple-of-16 sizes, because three of the Workers AI presets are multiples of 8 only. |
 | `1.16.1` | 2026-10-01 | `get_graph` declares an `outputSchema` — it was the only tool of 28 without one, so clients ignored `structuredContent` and read a one-line count instead of the nodes that were there all along. The text now lists each node as id — label [type] with a preview, and the edges. A test asserts every tool has an output schema. |
 | `1.16.2` | 2026-10-02 | Generated images go to a per-user photo album (`mcp-<user>`, from the validated OAuth identity) instead of no album at all. The old reason for no album — that photos-worker claimed a shared one for whoever uploaded first — had gone stale: it now sets `createdBy` only on an album the upload CREATES. A per-user album is owned correctly from its first write, where a shared one belongs to nobody. New uploads only. |
+| `1.17.0` | 2026-10-02 | `set_group_member_role` — an owner can promote a member of their own group to admin, who can then add people. The roles were already enforced by the invite and removal checks, but nothing could CHANGE one after a member was added: the only `UPDATE` on `group_members` anywhere sets `alerts_enabled`, and `/join` is `INSERT OR IGNORE`, so re-adding somebody as admin did nothing. group-chat-worker gained `PATCH /groups/{id}/members/{userId}`, owner-only, refusing `owner` (a transfer, not a role change), refusing the owner demoting themselves, and 404ing a target who is not already in the group. Built as the narrow alternative to letting any platform Superadmin bypass the owner check in every group — and it does NOT solve the case it was built for, see *Known limitations*. |
 
 ### Current surface
 
-- **28 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
+- **29 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
   matches it exactly.
 - **2 advertised scopes**: `graph:read`, `graph:write`. These are all `CONNECT_SCOPES`, so they
   are all a client can request.
@@ -479,8 +480,22 @@ ever appears in that column.
    `elicitation` capability — see *What each client declares about itself*. Anything the user
    must choose has to be a tool parameter the model can set, or a tool that hands back the
    options. Grok is the one client not yet measured.
-2. **A user with no phone number cannot connect** unless they arrive with a vegvisr.org session
-   cookie. 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
+2. **A user with no phone number cannot connect** — and the session-cookie escape is not one,
+   because every vegvisr.org login ends at the phone step too (`verifyMagicToken` sets
+   `step.value = 'phone'` on every branch in `LoginView.vue`). The magic link proves the address;
+   the SMS code is what mints the `vegvisr_token` the cookie carries. So a phone number is not a
+   convenience, it is the only identity this system issues.
+
+   **This is what blocks NIBI.** `NIBI FELLES` is owned by `post@nibi.no` — the World's mailbox,
+   not a person — which has no routable number, so it cannot authenticate to MCP, to the chat app,
+   or to vegvisr.org. `set_group_member_role` is owner-only by design, and an owner who cannot
+   sign in cannot delegate. Three ways out, none of them built: give that address a real number;
+   a Superadmin-only `transfer_group_ownership` used once per World at provisioning; or a blanket
+   Superadmin bypass in `requireGroupRole`. The first unblocks NIBI today, the second fixes the
+   class — a World's main group should be owned by a human account, not by the World's mailbox
+   identity — and the third is the widest. Undecided.
+
+   The old note on the lookup still stands: 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
    the rest must either be signed in at vegvisr.org in the same browser, or add a number. Note
    the lookup compares the NORMALISED value against the stored column without normalising it, so
    a number stored as `99242829` or `0047…` would never match — today none is, but a new one
