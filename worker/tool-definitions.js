@@ -1498,7 +1498,7 @@ const TOOL_DEFINITIONS = [
         },
         phone: {
           type: 'string',
-          description: 'Phone number for the new user (optional)'
+          description: 'Phone number for the new user (optional). Marked verified immediately — a phone you set here can sign in by SMS right away and lets this person be added to a chat group without delay.'
         },
         address: { type: 'string', description: 'Address line (optional)' },
         street: { type: 'string', description: 'Street or road name (optional)' },
@@ -1530,7 +1530,7 @@ const TOOL_DEFINITIONS = [
           description: 'Email address of the already-registered member to update (required)'
         },
         name: { type: 'string', description: "The member's full name (optional)" },
-        phone: { type: 'string', description: 'Phone number (optional)' },
+        phone: { type: 'string', description: 'Phone number (optional). Marked verified immediately if it is new or different from what was on file — a phone you set here can sign in by SMS right away and lets this member be added to a chat group without delay.' },
         address: { type: 'string', description: 'Address line (optional)' },
         street: { type: 'string', description: 'Street or road name (optional)' },
         postal_code: { type: 'string', description: 'Postal code (optional)' },

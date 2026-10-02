@@ -4604,10 +4604,21 @@ async function executeWhoAmI(input, env) {
 
 // ── Admin operations ──────────────────────────────────────────────
 
-const SUPERADMIN_VERIFIED_TEST_PHONES = new Map([
-  ['post@slowyou.net', '+4712003400'],
-  ['post@nibi.no', '+4712003401'],
-])
+// A phone number a Superadmin enters through admin_register_user or update_member_info is
+// trusted immediately, on the same basis as any other contact field they type for a member —
+// so it is marked verified without the person completing an SMS OTP. This matters beyond
+// cosmetics: group-chat-worker's /join (and every other chat route) authenticates by
+// (user_id, phone) and refuses anyone whose phone_verified_at is null (sms-worker's
+// /api/auth/user/validate), so an unverified phone silently blocked a freshly added member
+// from the group they were just added to (found 2026-10-02). Previously only two hardcoded
+// test accounts (SUPERADMIN_VERIFIED_TEST_PHONES, removed here) got this; now any Superadmin
+// write does. Keeps the existing verified timestamp when the number is unchanged and already
+// verified; stamps a fresh one when the number is new or changed.
+function phoneVerifiedAtFor(newPhone, existingPhone, existingVerifiedAt) {
+  if (!newPhone) return existingVerifiedAt || null
+  if (newPhone === existingPhone && existingVerifiedAt) return existingVerifiedAt
+  return Date.now()
+}
 
 async function executeAdminRegisterUser(input, env) {
   const callerUserId = input.userId
@@ -4632,7 +4643,6 @@ async function executeAdminRegisterUser(input, env) {
   const city = (input.city || '').trim() || null
   const country = (input.country || '').trim() || null
   const role = (input.role || 'Admin').trim()
-  const testPhoneVerified = phone && SUPERADMIN_VERIFIED_TEST_PHONES.get(email) === phone
 
   // Existing rows are updated only for fields supplied by this request. This lets a vCard
   // complete an account that already exists without replacing its login token or role.
@@ -4659,7 +4669,10 @@ async function executeAdminRegisterUser(input, env) {
       ...existingData,
       profile: { ...existingProfile, user_id: existing.user_id, email, ...next, postal_code: next.postalCode },
     })
-    const verifiedAt = testPhoneVerified ? (existing.phone_verified_at || Date.now()) : existing.phone_verified_at || null
+    // Pass the RAW input phone, not next.phone (which falls back to the existing number) — a
+    // call that never touched phone must never stamp a fresh verified-at as a side effect of
+    // updating some other field.
+    const verifiedAt = phoneVerifiedAtFor(phone, existing.phone, existing.phone_verified_at)
     const nextGroupTags = groupTags || existing.group_tags || null
     await env.DB.prepare(`
       UPDATE config
@@ -4700,11 +4713,12 @@ async function executeAdminRegisterUser(input, env) {
     .map(b => b.toString(16).padStart(2, '0')).join('')
 
   const data = JSON.stringify({ profile: { user_id, email, name, phone, address, street, postal_code: postalCode, place, city, country }, settings: {} })
+  const verifiedAt = phoneVerifiedAtFor(phone, null, null)
 
   await env.DB.prepare(`
     INSERT INTO config (user_id, email, emailVerificationToken, Role, phone, phone_verified_at, data, address, street, postal_code, place, city, country, group_tags)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(user_id, email, emailVerificationToken, role, phone, phone ? Date.now() : null, data, address, street, postalCode, place, city, country, groupTags).run()
+  `).bind(user_id, email, emailVerificationToken, role, phone, verifiedAt, data, address, street, postalCode, place, city, country, groupTags).run()
 
   return {
     success: true,
@@ -4712,7 +4726,7 @@ async function executeAdminRegisterUser(input, env) {
     email,
     name,
     phone,
-    phoneVerifiedAt: testPhoneVerified ? Date.now() : null,
+    phoneVerifiedAt: verifiedAt,
     address,
     street,
     postal_code: postalCode,
@@ -4759,7 +4773,6 @@ async function executeUpdateMemberInfo(input, env) {
   const place = (input.place || '').trim() || null
   const city = (input.city || '').trim() || null
   const country = (input.country || '').trim() || null
-  const testPhoneVerified = phone && SUPERADMIN_VERIFIED_TEST_PHONES.get(email) === phone
 
   const existingData = (() => {
     try { return JSON.parse(existing.data || '{}') } catch { return {} }
@@ -4779,7 +4792,9 @@ async function executeUpdateMemberInfo(input, env) {
     ...existingData,
     profile: { ...existingProfile, user_id: existing.user_id, email, ...next, postal_code: next.postalCode },
   })
-  const verifiedAt = testPhoneVerified ? (existing.phone_verified_at || Date.now()) : existing.phone_verified_at || null
+  // Raw input phone, not next.phone — see phoneVerifiedAtFor's note above: a call that never
+  // touched phone must not stamp a fresh verified-at as a side effect of updating another field.
+  const verifiedAt = phoneVerifiedAtFor(phone, existing.phone, existing.phone_verified_at)
 
   await env.DB.prepare(`
     UPDATE config
