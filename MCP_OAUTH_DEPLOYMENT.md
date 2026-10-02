@@ -511,7 +511,9 @@ ever appears in that column.
 
    Also uneven: the Agent Builder has NO role-change tool. `add_user_to_chat_group` takes a `role`,
    but `/join` is `INSERT OR IGNORE`, so it does nothing to somebody already in the group. MCP can
-   change a role; the Agent Builder cannot.
+   change a role, and since 2026-10-02 so can the chat app — "Make admin" / "Make member" sits
+   beside Remove on the member row, owner-only, live on chat.vegvisr.org at `be5bc5f` and confirmed
+   rendering. The Agent Builder is the one surface still without it.
 
    The old note on the lookup still stands: 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
    the rest must either be signed in at vegvisr.org in the same browser, or add a number. Note
