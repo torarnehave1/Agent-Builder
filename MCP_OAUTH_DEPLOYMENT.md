@@ -435,6 +435,39 @@ Deliberately not recorded: access tokens, refresh tokens, authorization codes, O
 `Authorization` header, and node content. The graph id is enough to find the data through the
 normal API; a copy of the content here would only be a second place for it to leak from.
 
+### What each client declares about itself
+
+`client_info` holds what a client sends in its `initialize` handshake: product name, protocol
+version, and the MCP capabilities it claims. Software metadata, not user data.
+
+```sql
+SELECT ts, client_id, client_info FROM mcp_audit_log
+WHERE method = 'initialize' AND client_info IS NOT NULL ORDER BY ts DESC;
+```
+
+Observed so far:
+
+| Client | `clientInfo.name` | Protocol | Capabilities declared |
+|---|---|---|---|
+| Claude (connector) | `Anthropic/ClaudeAI/1.0.0` | `2025-11-25` | `extensions` |
+| Claude (toolbox leg) | `Anthropic/Toolbox/1.0.0` | `2025-11-25` | *(none)* |
+| ChatGPT / Codex | `openai-mcp (Codex)/1.0.0` | `2025-11-25` | `experimental`, `extensions` |
+| Grok | — | — | **unknown — has not connected since the column started recording** |
+
+Claude connects twice per setup, Toolbox first and ClaudeAI second, which is why one reconnect
+produces two rows and not one.
+
+**Why this is recorded at all: NO CLIENT DECLARES `elicitation`.** That is the MCP capability
+that would let this server ASK THE USER a question in the middle of a tool call — "which quality
+do you want?" — instead of the model guessing. A server that blocks on a question no client will
+answer hangs the call, so it cannot be used on an assumption. It was an open question for days
+and is now settled by data from two vendors.
+
+The consequence is a design rule, not a footnote: **every choice this server offers has to be a
+tool parameter or a tool of its own.** `get_image_guide` exists as a tool for exactly this
+reason — it was not a preference, it was the only mechanism that works. Revisit if `elicitation`
+ever appears in that column.
+
 ---
 
 ## Known limitations
@@ -442,6 +475,10 @@ normal API; a copy of the content here would only be a second place for it to le
 1. ~~The SMS leg and the token exchange are not verified end to end.~~ **Closed 2026-09-28.**
    ChatGPT, Claude and Grok have each completed the whole flow and held working tokens. Their
    grants are in `OAUTH_KV` and their calls are in `mcp_audit_log`.
+1. **The server cannot ask the user anything mid-call.** No connected client declares the
+   `elicitation` capability — see *What each client declares about itself*. Anything the user
+   must choose has to be a tool parameter the model can set, or a tool that hands back the
+   options. Grok is the one client not yet measured.
 2. **A user with no phone number cannot connect** unless they arrive with a vegvisr.org session
    cookie. 13 of 53 users in `config` have a number in the `+47XXXXXXXX` form the lookup needs;
    the rest must either be signed in at vegvisr.org in the same browser, or add a number. Note
