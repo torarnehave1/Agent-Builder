@@ -1484,7 +1484,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'admin_register_user',
-    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, name, phone, role, and optional postal address fields. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user".',
+    description: 'Register a new user in the Vegvisr platform. Superadmin only. Creates a user record with email, name, phone, role, and optional postal address fields. The new user can then log in via magic link at login.vegvisr.org using their email. Returns the generated user_id (never the login token). Use for "add/create/register a new user". To change contact fields (phone, address, etc.) on a member who ALREADY HAS an account without touching their role, use update_member_info instead — it reads more clearly for that case and refuses if the account does not exist yet.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1515,6 +1515,28 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           description: 'Which group(s) this person belongs to, as space-separated #TAGS — the same convention metaArea uses on a graph, e.g. "#IIBA #DEMO". Supplying it on an existing user replaces their tags; omitting it leaves them alone.'
         }
+      },
+      required: ['email']
+    }
+  },
+  {
+    name: 'update_member_info',
+    description: 'Update contact info — phone, address, street, postal code, place, city, country, name — for a member who is ALREADY REGISTERED. Only touches the fields you supply; leaves everything else, including role and group tags, untouched. Fails with a clear error if the email is not registered (use admin_register_user to create the account first — that tool also accepts these same fields). Does NOT change role — use admin_set_user_role for that. Superadmin only. Use for "add/update/change the phone number/address/country/etc. for an existing member".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        email: {
+          type: 'string',
+          description: 'Email address of the already-registered member to update (required)'
+        },
+        name: { type: 'string', description: "The member's full name (optional)" },
+        phone: { type: 'string', description: 'Phone number (optional)' },
+        address: { type: 'string', description: 'Address line (optional)' },
+        street: { type: 'string', description: 'Street or road name (optional)' },
+        postal_code: { type: 'string', description: 'Postal code (optional)' },
+        place: { type: 'string', description: 'Postal place/locality (optional)' },
+        city: { type: 'string', description: 'City/municipality (optional)' },
+        country: { type: 'string', description: 'Country (optional)' }
       },
       required: ['email']
     }

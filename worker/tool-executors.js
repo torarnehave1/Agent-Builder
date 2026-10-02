@@ -4728,6 +4728,86 @@ async function executeAdminRegisterUser(input, env) {
   }
 }
 
+// Update contact info (phone, address, street, postal_code, place, city, country, name) for a
+// member who is ALREADY registered — the complement to admin_register_user's create path.
+// Split out as its own tool, rather than relying on admin_register_user's own update branch
+// under a different name, because admin_register_user's description has to say "register a
+// NEW user" to be found for that intent — and a model reading that will not also try it on an
+// existing member. That is exactly what happened 2026-10-02: asked to add a phone number to an
+// existing account, a Grok-powered agent invented a nonexistent worker instead of calling the
+// (already working) update path. Refusing when the email isn't registered yet keeps this
+// tool's name honest: it never creates an account as a side effect.
+async function executeUpdateMemberInfo(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, "update a member's contact info")
+  if (!gate.ok) return { success: false, error: gate.error }
+
+  const email = (input.email || '').trim().toLowerCase()
+  if (!email) return { success: false, error: 'email is required' }
+
+  const existing = await env.DB.prepare(
+    'SELECT email, user_id, phone, phone_verified_at, data, address, street, postal_code, place, city, country, Role, group_tags FROM config WHERE email = ?'
+  ).bind(email).first()
+  if (!existing) {
+    return { success: false, error: `${email} is not registered. Use admin_register_user to create the account first.` }
+  }
+
+  const name = (input.name || '').trim() || null
+  const phone = (input.phone || '').trim() || null
+  const address = (input.address || '').trim() || null
+  const street = (input.street || '').trim() || null
+  const postalCode = (input.postal_code || '').trim() || null
+  const place = (input.place || '').trim() || null
+  const city = (input.city || '').trim() || null
+  const country = (input.country || '').trim() || null
+  const testPhoneVerified = phone && SUPERADMIN_VERIFIED_TEST_PHONES.get(email) === phone
+
+  const existingData = (() => {
+    try { return JSON.parse(existing.data || '{}') } catch { return {} }
+  })()
+  const existingProfile = existingData.profile && typeof existingData.profile === 'object' ? existingData.profile : {}
+  const next = {
+    phone: phone || existing.phone || null,
+    address: address || existing.address || null,
+    street: street || existing.street || null,
+    postalCode: postalCode || existing.postal_code || null,
+    place: place || existing.place || null,
+    city: city || existing.city || null,
+    country: country || existing.country || null,
+    name: name || existingProfile.name || null,
+  }
+  const mergedData = JSON.stringify({
+    ...existingData,
+    profile: { ...existingProfile, user_id: existing.user_id, email, ...next, postal_code: next.postalCode },
+  })
+  const verifiedAt = testPhoneVerified ? (existing.phone_verified_at || Date.now()) : existing.phone_verified_at || null
+
+  await env.DB.prepare(`
+    UPDATE config
+    SET phone = ?, phone_verified_at = ?, data = ?, address = ?, street = ?, postal_code = ?, place = ?, city = ?, country = ?
+    WHERE email = ?
+  `).bind(next.phone, verifiedAt, mergedData, next.address, next.street, next.postalCode, next.place, next.city, next.country, email).run()
+
+  return {
+    success: true,
+    updated: true,
+    user_id: existing.user_id,
+    email,
+    name: next.name,
+    phone: next.phone,
+    phoneVerifiedAt: verifiedAt,
+    address: next.address,
+    street: next.street,
+    postal_code: next.postalCode,
+    place: next.place,
+    city: next.city,
+    country: next.country,
+    role: existing.Role || null,
+    group_tags: existing.group_tags || null,
+    roleApplied: false,
+    message: `${email} was updated with the supplied contact fields. Role ("${existing.Role || 'unknown'}") and group tags were not changed.`,
+  }
+}
+
 // Change an existing user's role. Separate from admin_register_user on purpose: that one
 // completes a profile and must never re-rank the person as a side effect, which left no way to
 // change a role at all (found 2026-09-28 when a role passed to registration was silently dropped).
@@ -16479,6 +16559,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAnalyzeTranscription(toolInput, env, progress)
     case 'admin_register_user':
       return await executeAdminRegisterUser(toolInput, env)
+    case 'update_member_info':
+      return await executeUpdateMemberInfo(toolInput, env)
     case 'preflight_world':
       return await executePreflightWorld(toolInput, env)
 
