@@ -1687,7 +1687,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_world_email_template',
-    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — in the graph tagged metaArea "#EMAIL-<domain>" (created on first use, found by that tag afterwards; universi.no and vegr.ai already have one), which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals. For purpose "login" the subject and body are OPTIONAL: omit both to use the built-in login template (Norwegian or English, logo row only when the brand has a logo) — prefer this over writing HTML. Run the World Email Template wizard (system prompt) to collect the brand first. Superadmin, or the World Founder of that domain.',
+    description: 'Create or update a World\'s branded email template (and optional brand) for a purpose + language. Stores it in the World\'s Knowledge Graph — the SSOT — in the graph tagged metaArea "#EMAIL-<domain>" (created on first use, found by that tag afterwards; universi.no and vegr.ai already have one), which email-worker reads at send time to brand transactional emails (e.g. the magic-link login) as the World instead of Vegvisr. Use when a World Founder wants their login/meeting emails to look like their own World. The body is HTML with {placeholders}: system vars {magicLink}, {expiryMinutes}, {meetingId}; brand vars {brandName}, {brandLogo}, {brandAccent}, {brandFromName}, {brandFooter}. Keep templates variables-only — no conditionals. For purpose "login" the subject and body are OPTIONAL: omit both to use the built-in login template (Norwegian or English, logo row only when the brand has a logo) — prefer this over writing HTML. Run the World Email Template wizard (system prompt) to collect the brand first. Pass `signature` to store an email signature — several per World, selected by name at send time; a signature-only call needs no purpose. Superadmin, or the World Founder of that domain.',
     input_schema: {
       type: 'object',
       properties: {
@@ -1707,9 +1707,24 @@ const TOOL_DEFINITIONS = [
             fromEmail: { type: 'string', description: "The address this World's mail is SENT from, e.g. \"post@universi.no\". Must be an email account configured (with a credential) on the World founder's profile — or, for a platform domain, on the System Owner's. When omitted, email-worker infers a sender from the account list, which often picks the wrong address." },
             footer: { type: 'string', description: 'Footer line, e.g. "Universi AS · universi.no".' }
           }
+        },
+        signature: {
+          type: 'object',
+          description: 'Optional. Upserts an email-signature node — the block appended at the bottom of a sent email. A World can hold several (a person, a role, a short one) and a send picks one by name; the brand\'s `footer` is a different thing, one line per World. Pass this ALONE, with no purpose, to add a signature without touching any template.',
+          properties: {
+            name: { type: 'string', description: 'The selector a send uses, lowercase letters/digits/hyphens, e.g. "tor-arne". Unique within this World. Matching is exact — "none" is reserved and means "append no signature".' },
+            html: { type: 'string', description: 'The signature block as HTML. May use {placeholders} and the brand vars {brandName}/{brandAccent}/{brandLogo}.' },
+            language: { type: 'string', description: 'ISO code, e.g. "no". Optional — a send prefers a signature whose language matches.' },
+            isDefault: { type: 'boolean', description: 'Use this when a send names no signature. At most one per language; setting it clears the flag on the others.' },
+            senderEmail: { type: 'string', description: 'Optional. Restricts this signature to one sending address, e.g. "post@nibi.no", so a World with two senders does not sign both the same way.' },
+            personName: { type: 'string', description: 'Who it is, e.g. "Tor Arne Håve". Only used to make the node readable in the editor.' },
+            title: { type: 'string', description: 'Their role, e.g. "Systemeier".' },
+            phone: { type: 'string', description: 'Contact number, if the signature shows one.' }
+          },
+          required: ['name', 'html']
         }
       },
-      required: ['domain', 'purpose']
+      required: ['domain']
     }
   },
   {

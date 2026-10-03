@@ -7845,6 +7845,11 @@ function buildDefaultWorldEmailBody(t, withLogo) {
     `  <p style="text-align:center;margin:28px 0"><a href="{magicLink}" style="background:{brandAccent};color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;display:inline-block">${t.cta}</a></p>`,
     '  <!-- edit:cta:end -->',
     `  <p>${t.ignore}</p>`,
+    // The signature slot. Empty here on purpose: a template that carries the marker lets a
+    // signature be dropped in at send time without the composer having to guess WHERE, and a
+    // World with no signature simply renders an empty div. Appending instead of filling a slot
+    // is a composition the template author did not design, which is why the composer warns.
+    '  <!-- edit:signature:start --><!-- edit:signature:end -->',
     '  <!-- edit:footer:start -->',
     '  <p style="font-size:12px;color:#888;border-top:1px solid #eee;padding-top:12px">{brandFooter}</p>',
     '  <!-- edit:footer:end -->',
@@ -7901,6 +7906,77 @@ async function pickAccentFromLogo(logoUrl) {
   return { accent: hex, contrast: Number(whiteTextContrast(hex).toFixed(2)), source: `darkened logo colour ${base.toLowerCase()}` }
 }
 
+// A World's e-mail signature, as a node beside its templates.
+//
+// Signatures did not exist anywhere in the system before 2026-10-03 — the closest thing was the
+// brand node's single `footer` line, which is per-WORLD. A signature is per-PERSON or per-ROLE:
+// one World needs "Tor Arne, Systemeier" and "NIBI Felles" at the same time, so it cannot be a
+// field on the brand.
+//
+// `metadata.name` is the selector a send names. Matching is EXACT and never fuzzy: suggestNodeType
+// guesses a near-miss because the cost of being wrong is a badly-typed node, while the cost here
+// is the wrong person's name at the bottom of somebody's e-mail.
+const SIGNATURE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,47}$/
+
+function normalizeSignatureInput(sig) {
+  const name = String(sig.name || '').trim().toLowerCase()
+  if (!name) throw new Error('signature.name is required — it is how a send selects this signature')
+  if (!SIGNATURE_NAME_RE.test(name)) {
+    throw new Error('signature.name must be lowercase letters, digits and hyphens, e.g. "tor-arne"')
+  }
+  // Reserved: a send passes signature:"none" to append nothing at all, so a signature actually
+  // called "none" would be unreachable and would silently shadow that meaning.
+  if (name === 'none') throw new Error('"none" is reserved — a send uses it to mean "no signature"')
+  const html = typeof sig.html === 'string' ? sig.html : ''
+  if (!html.trim()) throw new Error('signature.html is required (the signature block, as HTML)')
+  return {
+    name,
+    html,
+    language: String(sig.language || '').trim().toLowerCase() || null,
+    isDefault: !!sig.isDefault,
+    senderEmail: String(sig.senderEmail || '').trim().toLowerCase() || null,
+    personName: String(sig.personName || '').trim(),
+    title: String(sig.title || '').trim(),
+    phone: String(sig.phone || '').trim(),
+  }
+}
+
+/** Upsert one email-signature node by metadata.name. Mutates `nodes`; returns the node id. */
+function upsertSignatureNode(nodes, sig, markBody) {
+  const meta = {
+    name: sig.name,
+    ...(sig.language ? { language: sig.language } : {}),
+    isDefault: sig.isDefault,
+    ...(sig.senderEmail ? { senderEmail: sig.senderEmail } : {}),
+    ...(sig.personName ? { personName: sig.personName } : {}),
+    ...(sig.title ? { title: sig.title } : {}),
+    ...(sig.phone ? { phone: sig.phone } : {}),
+  }
+  // At most one default per language, so a send that names no signature has one answer rather
+  // than whichever node happened to be stored first.
+  if (sig.isDefault) {
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i]
+      if ((n.type || '').toLowerCase() !== 'email-signature') continue
+      if (String(n.metadata?.name || '').toLowerCase() === sig.name) continue
+      if (String(n.metadata?.language || '') !== String(sig.language || '')) continue
+      if (n.metadata?.isDefault) nodes[i] = { ...n, metadata: { ...n.metadata, isDefault: false } }
+    }
+  }
+  const label = `Signature — ${sig.personName || sig.name}${sig.language ? ` (${sig.language})` : ''}`
+  const body = markBody(sig.html, 'signature')
+  const idx = nodes.findIndex((n) =>
+    (n.type || '').toLowerCase() === 'email-signature' &&
+    String(n.metadata?.name || '').toLowerCase() === sig.name)
+  if (idx >= 0) {
+    nodes[idx] = { ...nodes[idx], type: 'email-signature', label, info: body, metadata: { ...(nodes[idx].metadata || {}), ...meta } }
+    return nodes[idx].id
+  }
+  const id = crypto.randomUUID()
+  nodes.push({ id, label, type: 'email-signature', info: body, color: '#2a5d4e', position: {}, visible: true, bibl: [], metadata: meta })
+  return id
+}
+
 async function executeSetWorldEmailTemplate(input, env) {
   const domain = (input.domain || '').trim().toLowerCase()
   if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "universi.no")')
@@ -7918,15 +7994,23 @@ async function executeSetWorldEmailTemplate(input, env) {
     if (!own) return { success: false, error: `Only a Superadmin or the World Founder of ${domain} can change its email templates.` }
   }
 
+  // A signature-only call is legitimate: a World adds a signature long after its templates are
+  // settled, and requiring a purpose would mean faking a template edit to get one in.
+  const signature = input.signature && typeof input.signature === 'object'
+    ? normalizeSignatureInput(input.signature)
+    : null
+
   const purpose = (input.purpose || '').trim().toLowerCase()
-  if (!purpose) throw new Error('purpose is required (e.g. "login", "meeting")')
+  if (!purpose && !signature) throw new Error('purpose is required (e.g. "login", "meeting") — or pass a signature instead')
   const language = (input.language || 'no').trim().toLowerCase()
-  const defaults = DEFAULT_WORLD_EMAIL_TEMPLATES[purpose] && (DEFAULT_WORLD_EMAIL_TEMPLATES[purpose][language] || DEFAULT_WORLD_EMAIL_TEMPLATES[purpose].en)
+  const defaults = purpose && DEFAULT_WORLD_EMAIL_TEMPLATES[purpose] && (DEFAULT_WORLD_EMAIL_TEMPLATES[purpose][language] || DEFAULT_WORLD_EMAIL_TEMPLATES[purpose].en)
   const subject = (input.subject || '').trim() || (defaults ? defaults.subject : '')
   let body = typeof input.body === 'string' ? input.body : ''
-  const usedDefaultBody = !body.trim() && !!defaults
-  if (!subject) throw new Error(`subject is required (only purpose "login" has a built-in default)`)
-  if (!body.trim() && !defaults) throw new Error(`body (HTML) is required — only purpose "login" has a built-in default template`)
+  const usedDefaultBody = !!purpose && !body.trim() && !!defaults
+  if (purpose) {
+    if (!subject) throw new Error(`subject is required (only purpose "login" has a built-in default)`)
+    if (!body.trim() && !defaults) throw new Error(`body (HTML) is required — only purpose "login" has a built-in default template`)
+  }
   const brand = input.brand && typeof input.brand === 'object' ? { ...input.brand } : null
   let accentPick = null
   if (brand && String(brand.accent || '').trim().toLowerCase() === 'auto') {
@@ -7939,9 +8023,9 @@ async function executeSetWorldEmailTemplate(input, env) {
   // Sections are delimited by <!-- edit:<id>:start --> … <!-- edit:<id>:end -->. Keep any the author
   // added; if none, wrap the whole body as one section "email-body". email-worker strips these markers
   // at send time so delivered emails stay clean.
-  const markBody = (b) => (/<!--\s*edit:[a-z0-9-]+:start\s*-->/i.test(b)
+  const markBody = (b, sectionId = 'email-body') => (/<!--\s*edit:[a-z0-9-]+:start\s*-->/i.test(b)
     ? b
-    : `<!-- edit:email-body:start -->\n${b}\n<!-- edit:email-body:end -->`)
+    : `<!-- edit:${sectionId}:start -->\n${b}\n<!-- edit:${sectionId}:end -->`)
 
   // Graph ids MUST be UUIDs, so we can't use a deterministic id. Instead the email graph is a UUID
   // graph tagged with a metaArea marker `#EMAIL-<domain>`; we locate it by that marker. Superadmin
@@ -8000,27 +8084,48 @@ async function executeSetWorldEmailTemplate(input, env) {
   // The built-in body needs to know whether the World's brand (new or already stored) has a logo.
   const storedBrand = (nodes.find((n) => (n.type || '').toLowerCase() === 'email-brand') || {}).metadata || {}
   if (usedDefaultBody) body = buildDefaultWorldEmailBody(defaults, !!String(storedBrand.logo || '').trim())
-  const bodyMarked = markBody(body)
+  const bodyMarked = purpose ? markBody(body) : ''
 
-  // Upsert the email-template node for (purpose, language).
-  const tMeta = { purpose, language, subject }
-  const tIdx = nodes.findIndex((n) =>
-    (n.type || '').toLowerCase() === 'email-template' &&
-    String(n.metadata?.purpose || '').toLowerCase() === purpose &&
-    String(n.metadata?.language || '').toLowerCase() === language)
-  const tLabel = `Email — ${purpose} (${language})`
-  let templateNodeId
-  if (tIdx >= 0) {
-    templateNodeId = nodes[tIdx].id
-    nodes[tIdx] = { ...nodes[tIdx], type: 'email-template', label: tLabel, info: bodyMarked, metadata: { ...(nodes[tIdx].metadata || {}), ...tMeta } }
-  } else {
-    templateNodeId = crypto.randomUUID()
-    nodes.push({ id: templateNodeId, label: tLabel, type: 'email-template', info: bodyMarked, color: '#1a4a6e', position: {}, visible: true, bibl: [], metadata: tMeta })
+  // Upsert the email-template node for (purpose, language) — skipped on a signature-only call.
+  let templateNodeId = null
+  if (purpose) {
+    const tMeta = { purpose, language, subject }
+    const tIdx = nodes.findIndex((n) =>
+      (n.type || '').toLowerCase() === 'email-template' &&
+      String(n.metadata?.purpose || '').toLowerCase() === purpose &&
+      String(n.metadata?.language || '').toLowerCase() === language)
+    const tLabel = `Email — ${purpose} (${language})`
+    if (tIdx >= 0) {
+      templateNodeId = nodes[tIdx].id
+      nodes[tIdx] = { ...nodes[tIdx], type: 'email-template', label: tLabel, info: bodyMarked, metadata: { ...(nodes[tIdx].metadata || {}), ...tMeta } }
+    } else {
+      templateNodeId = crypto.randomUUID()
+      nodes.push({ id: templateNodeId, label: tLabel, type: 'email-template', info: bodyMarked, color: '#1a4a6e', position: {}, visible: true, bibl: [], metadata: tMeta })
+    }
   }
 
-  const createdBy = input.userId && String(input.userId).includes('@')
-    ? input.userId
-    : (graphExists && existing.metadata.createdBy) || 'agent@vegvisr.org'
+  const signatureNodeId = signature ? upsertSignatureNode(nodes, signature, markBody) : null
+
+  // WHO OWNS THIS GRAPH. It decides who can edit it afterwards: checkAccess (graph-service.js:258)
+  // wants the owner or a Superadmin, and ownerOf returns null for a creator field that is not an
+  // address. Both existing e-mail graphs were stamped 'agent@vegvisr.org' — owned by nobody — so a
+  // World Founder could not touch their own templates over MCP. That placeholder is therefore
+  // treated as unowned and replaced, rather than preserved the way a real owner is.
+  const PLACEHOLDER_OWNER = 'agent@vegvisr.org'
+  const priorOwner = graphExists ? String(existing.metadata.createdBy || '').trim().toLowerCase() : ''
+  const realPriorOwner = priorOwner && priorOwner !== PLACEHOLDER_OWNER ? existing.metadata.createdBy : null
+  let createdBy = realPriorOwner
+    || callerEmail
+    || (input.userId && String(input.userId).includes('@') ? input.userId : null)
+  if (!createdBy) {
+    // Last resort before the placeholder: the World's own founder, so the graph lands on somebody.
+    const founder = await env.DB
+      .prepare('SELECT COALESCE(founder_email, account_holder_email) AS e FROM world_founders WHERE domain = ? LIMIT 1')
+      .bind(domain)
+      .first()
+      .catch(() => null)
+    createdBy = founder?.e || PLACEHOLDER_OWNER
+  }
   const graphData = {
     metadata: {
       ...(graphExists ? existing.metadata : {}),
@@ -8043,22 +8148,40 @@ async function executeSetWorldEmailTemplate(input, env) {
   const data = await res.json().catch(() => ({}))
   if (!res.ok) throw new Error(data.error || `Failed to save email template graph (status ${res.status})`)
 
+  const saved = [
+    purpose ? `the ${purpose}/${language} email template` : null,
+    brand ? 'the brand node' : null,
+    signature ? `the "${signature.name}" signature${signature.isDefault ? ' (now the default)' : ''}` : null,
+  ].filter(Boolean)
+
   return {
     success: true,
     graphId,
     nodeId: templateNodeId,
     // The email body HTML — lets the Agent-Builder open it directly in HtmlPreview for editing.
     html: bodyMarked,
-    purpose,
+    purpose: purpose || null,
     language,
-    subject,
+    subject: purpose ? subject : null,
     brandUpdated: !!brand,
     brand: storedBrand,
     used_default_template: usedDefaultBody,
+    ...(signature ? {
+      signature: {
+        nodeId: signatureNodeId,
+        name: signature.name,
+        language: signature.language,
+        isDefault: signature.isDefault,
+        senderEmail: signature.senderEmail,
+      },
+    } : {}),
+    owner: createdBy,
     ...(accentPick ? { accent_pick: accentPick } : {}),
     message:
-      `Saved the ${purpose}/${language} email template for ${domain} in graph ${graphId} (${graphExists ? 'updated' : 'created'})${brand ? ' + brand node' : ''}${usedDefaultBody ? ' using the built-in template' : ''}. ` +
+      `Saved ${saved.join(' + ')} for ${domain} in graph ${graphId} (${graphExists ? 'updated' : 'created'})${usedDefaultBody ? ', using the built-in template' : ''}. ` +
       (accentPick ? `Accent ${accentPick.accent} chosen from ${accentPick.source} (white text contrast ${accentPick.contrast}:1).${accentPick.note ? ' ' + accentPick.note : ''} ` : '') +
+      (signature ? `A send selects it with signature="${signature.name}"; pass "none" to append no signature. ` : '') +
+      `Owned by ${createdBy}. ` +
       `email-worker locates this at send time via the metaArea marker ${emailMetaArea} — from the ${domain} World's graph (the SSOT).`,
     viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`,
   }

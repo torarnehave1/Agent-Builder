@@ -170,6 +170,70 @@ const brandNode = (graphs) => [...graphs.values()][0]?.nodes.find((n) => n.type 
   check('no user context refused', noUser.success === false, JSON.stringify(noUser))
 }
 
+// 8. Signatures (2026-10-03). A World can hold several; a send picks one by name. Nothing like
+//    this existed before — the nearest thing was the brand's single `footer`, which is per-WORLD,
+//    and one World needs "Tor Arne, Systemeier" and "NIBI Felles" at the same time.
+const sigs = (graphs) => [...graphs.values()][0]?.nodes.filter((n) => n.type === 'email-signature') || []
+const sigNamed = (graphs, name) => sigs(graphs).find((n) => n.metadata.name === name)
+{
+  const { env, graphs } = makeEnv()
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', brand: { name: 'Nibi', accent: '#1f3a5f' } })
+
+  // A signature-only call: no purpose at all. Requiring one would mean faking a template edit
+  // every time somebody wants to add a signature.
+  const only = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'tor-arne', html: '<p>Tor Arne Håve</p>', language: 'no', isDefault: true, personName: 'Tor Arne Håve', title: 'Systemeier' } })
+  check('a signature needs no purpose', only.success === true && only.signature?.name === 'tor-arne', JSON.stringify(only))
+  check('  and does not invent a template', !only.purpose && sigs(graphs).length === 1 && graphs.size === 1, JSON.stringify({ purpose: only.purpose, n: sigs(graphs).length }))
+  check('  stored with its selector and marked section', sigNamed(graphs, 'tor-arne')?.metadata.name === 'tor-arne' && /<!-- edit:signature:start -->/.test(sigNamed(graphs, 'tor-arne')?.info || ''), JSON.stringify(sigNamed(graphs, 'tor-arne')))
+
+  // A second one, also default in the same language: exactly one default must survive.
+  const second = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'nibi-felles', html: '<p>NIBI Felles</p>', language: 'no', isDefault: true } })
+  check('a second signature lives beside the first', second.success === true && sigs(graphs).length === 2, JSON.stringify(sigs(graphs).map((s) => s.metadata.name)))
+  check('  and only one stays the default', sigs(graphs).filter((s) => s.metadata.isDefault).length === 1 && sigNamed(graphs, 'nibi-felles').metadata.isDefault === true, JSON.stringify(sigs(graphs).map((s) => [s.metadata.name, s.metadata.isDefault])))
+
+  // Re-upsert by name, not by id — the editor has no id to send back.
+  const edited = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'tor-arne', html: '<p>Tor Arne Håve, Systemeier</p>' } })
+  check('editing by name replaces rather than duplicates', edited.success === true && sigs(graphs).length === 2 && /Systemeier/.test(sigNamed(graphs, 'tor-arne').info), JSON.stringify(sigs(graphs).map((s) => s.metadata.name)))
+
+  // The selector is a contract, so its shape is checked rather than coerced.
+  const reserved = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'none', html: '<p>x</p>' } })
+  check('"none" is reserved, because a send uses it to mean no signature', /reserved/.test(reserved.thrown || reserved.error || ''), JSON.stringify(reserved))
+  const bad = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'Tor Arne!', html: '<p>x</p>' } })
+  check('a selector that is not lowercase-hyphen is refused', /lowercase/.test(bad.thrown || bad.error || ''), JSON.stringify(bad))
+  const empty = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'blank' } })
+  check('a signature with no html is refused', /html is required/.test(empty.thrown || empty.error || ''), JSON.stringify(empty))
+  check('  and none of the three refusals wrote anything', sigs(graphs).length === 2, JSON.stringify(sigs(graphs).map((s) => s.metadata.name)))
+
+  // senderEmail lets a World with two senders sign them differently.
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', signature: { name: 'drift', html: '<p>Drift</p>', senderEmail: 'POST@NIBI.NO' } })
+  check('senderEmail is stored lowercased', sigNamed(graphs, 'drift')?.metadata.senderEmail === 'post@nibi.no', JSON.stringify(sigNamed(graphs, 'drift')?.metadata))
+
+  // The template carries the slot a signature drops into, so the composer never has to guess.
+  check('the built-in template carries a signature slot', /<!-- edit:signature:start -->/.test(template(graphs, 'no')?.info || ''), template(graphs, 'no')?.info)
+}
+
+// 9. Ownership. checkAccess wants the graph's owner or a Superadmin, and ownerOf returns null for
+//    a creator field that is not an address — so the old 'agent@vegvisr.org' stamp left both live
+//    e-mail graphs owned by NOBODY, and a World Founder could not edit their own templates.
+{
+  const { env, graphs } = makeEnv()
+  const r = await run(env, { userId: 'b8e7', domain: 'nibi.no', purpose: 'login', brand: { name: 'Nibi' } })
+  check('a new graph is owned by the caller, not by a placeholder', r.owner === 'post@nibi.no' && [...graphs.values()][0].metadata.createdBy === 'post@nibi.no', JSON.stringify(r.owner))
+
+  // An existing REAL owner is never taken over, however privileged the editor is.
+  const bySuper = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', language: 'en' })
+  check('a Superadmin editing does not steal ownership', bySuper.owner === 'post@nibi.no', JSON.stringify(bySuper.owner))
+}
+{
+  // The placeholder IS treated as unowned — that is what repairs the two graphs already live.
+  const { env, graphs } = makeEnv()
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login' })
+  const g = [...graphs.values()][0]
+  g.metadata.createdBy = 'agent@vegvisr.org'
+  const repaired = await run(env, { userId: 'b8e7', domain: 'nibi.no', purpose: 'login', language: 'en' })
+  check('an agent@vegvisr.org stamp is replaced, not preserved', repaired.owner === 'post@nibi.no', JSON.stringify(repaired.owner))
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log(failures ? `\n${failures} FAILED` : '\nPASS — World login email template: built-in body, accent from logo, caller gate.')
+console.log(failures ? `\n${failures} FAILED` : '\nPASS — World email template: built-in body, accent from logo, caller gate, signatures, ownership.')
 process.exit(failures ? 1 : 0)
