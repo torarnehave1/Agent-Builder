@@ -3145,6 +3145,41 @@ export default {
         })
       }
 
+      // Set a World's email template / brand / signature, for a caller outside this app.
+      //
+      // Built 2026-10-03 so the MCP server has one implementation to reach rather than a fourth
+      // copy of the node shape. Exactly the shape /publish/html-node established: the caller's
+      // own credential, the executor's own gate (Superadmin or that World's founder) untouched,
+      // and nothing widened here. The executor also decides ownership of the graph from
+      // world_founders, so a remote caller cannot end up owning a World they do not run.
+      if (pathname === '/email/world-template' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+
+        const body = await request.json().catch(() => ({}))
+        if (!body.domain) {
+          return new Response(JSON.stringify({ error: 'domain is required' }), { status: 400, headers: corsHeaders })
+        }
+
+        const result = await executeTool('set_world_email_template', {
+          domain: body.domain,
+          ...(body.purpose ? { purpose: body.purpose } : {}),
+          ...(body.language ? { language: body.language } : {}),
+          ...(body.subject ? { subject: body.subject } : {}),
+          ...(body.body ? { body: body.body } : {}),
+          ...(body.brand ? { brand: body.brand } : {}),
+          ...(body.signature ? { signature: body.signature } : {}),
+          userId: callerAuth.userId,
+        }, env, {}).catch((e) => ({ success: false, error: e.message }))
+
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? 400 : 200,
+          headers: corsHeaders
+        })
+      }
+
       if (pathname === '/automation/run' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
         const { graphId } = body
