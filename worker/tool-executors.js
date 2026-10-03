@@ -8062,8 +8062,12 @@ async function executeSetWorldEmailTemplate(input, env) {
 
   // Upsert the email-brand node (only when brand fields are supplied).
   if (brand) {
+    // The built-in template writes `background:{brandAccent}`, so an empty accent is not "no
+    // colour" — it is invalid CSS and an unstyled sign-in button. A brand with no accent and no
+    // logo to read one from gets the same neutral pickAccentFromLogo falls back to.
     const bMeta = {
-      name: brand.name || '', logo: brand.logo || '', accent: brand.accent || '',
+      name: brand.name || '', logo: brand.logo || '',
+      accent: String(brand.accent || '').trim() || '#1f3a5f',
       fromName: brand.fromName || '', footer: brand.footer || '',
     }
     // fromEmail names the SENDING address for this World's mail. It is optional and only
@@ -8111,21 +8115,29 @@ async function executeSetWorldEmailTemplate(input, env) {
   // address. Both existing e-mail graphs were stamped 'agent@vegvisr.org' — owned by nobody — so a
   // World Founder could not touch their own templates over MCP. That placeholder is therefore
   // treated as unowned and replaced, rather than preserved the way a real owner is.
+  // THE WORLD'S FOUNDER FIRST, not the caller. This is a #EMAIL-<domain> graph: it belongs to the
+  // World, not to whoever happened to run the command. Preferring the caller meant a Superadmin
+  // setting up nibi.no ended up owning NIBI's graph, and post@nibi.no — the registered founder —
+  // could not edit their own templates over MCP, which is the exact fault this block exists to
+  // repair. Found 2026-10-03 by reading the row rather than the success message.
+  //
+  // It also means the two graphs stamped 'agent@vegvisr.org', and this one, repair themselves on
+  // the next write: world_founders is the authority on who a World belongs to, so there is no
+  // prior owner worth preserving against it.
   const PLACEHOLDER_OWNER = 'agent@vegvisr.org'
+  const founder = await env.DB
+    .prepare('SELECT COALESCE(founder_email, account_holder_email) AS e FROM world_founders WHERE domain = ? LIMIT 1')
+    .bind(domain)
+    .first()
+    .catch(() => null)
   const priorOwner = graphExists ? String(existing.metadata.createdBy || '').trim().toLowerCase() : ''
   const realPriorOwner = priorOwner && priorOwner !== PLACEHOLDER_OWNER ? existing.metadata.createdBy : null
-  let createdBy = realPriorOwner
+  // A platform domain (vegr.ai) has no founder row, so there the caller is the right answer.
+  const createdBy = founder?.e
+    || realPriorOwner
     || callerEmail
     || (input.userId && String(input.userId).includes('@') ? input.userId : null)
-  if (!createdBy) {
-    // Last resort before the placeholder: the World's own founder, so the graph lands on somebody.
-    const founder = await env.DB
-      .prepare('SELECT COALESCE(founder_email, account_holder_email) AS e FROM world_founders WHERE domain = ? LIMIT 1')
-      .bind(domain)
-      .first()
-      .catch(() => null)
-    createdBy = founder?.e || PLACEHOLDER_OWNER
-  }
+    || PLACEHOLDER_OWNER
   const graphData = {
     metadata: {
       ...(graphExists ? existing.metadata : {}),

@@ -218,11 +218,37 @@ const sigNamed = (graphs, name) => sigs(graphs).find((n) => n.metadata.name === 
 {
   const { env, graphs } = makeEnv()
   const r = await run(env, { userId: 'b8e7', domain: 'nibi.no', purpose: 'login', brand: { name: 'Nibi' } })
-  check('a new graph is owned by the caller, not by a placeholder', r.owner === 'post@nibi.no' && [...graphs.values()][0].metadata.createdBy === 'post@nibi.no', JSON.stringify(r.owner))
+  check('a new graph is owned by a person, not by a placeholder', r.owner === 'post@nibi.no' && [...graphs.values()][0].metadata.createdBy === 'post@nibi.no', JSON.stringify(r.owner))
 
   // An existing REAL owner is never taken over, however privileged the editor is.
   const bySuper = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', language: 'en' })
   check('a Superadmin editing does not steal ownership', bySuper.owner === 'post@nibi.no', JSON.stringify(bySuper.owner))
+}
+
+// 9b. The case the tests above could NOT catch, because the caller and the founder were the same
+//     person in every one of them. A Superadmin setting up a World they do not own: the graph is
+//     the WORLD's, so world_founders decides, not whoever typed the command. Live on 2026-10-03
+//     this stamped torarnehave@gmail.com on NIBI's graph — the very fault the stamping was
+//     rewritten to fix, wearing a different name.
+{
+  const { env, graphs } = makeEnv()
+  const r = await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', brand: { name: 'Nibi' } })
+  check('a Superadmin creating another World\'s graph does not end up owning it', r.owner === 'post@nibi.no' && [...graphs.values()][0].metadata.createdBy === 'post@nibi.no', JSON.stringify(r.owner))
+}
+{
+  // A platform domain has no founder row, so there the caller IS the right answer.
+  const { env } = makeEnv()
+  const r = await run(env, { userId: 'owner-uuid', domain: 'vegr.ai', purpose: 'login', brand: { name: 'Vegr' } })
+  check('a domain with no founder falls back to the caller', r.owner === 'owner@example.com', JSON.stringify(r.owner))
+}
+
+// 10. An empty accent is not "no colour" — the built-in template writes background:{brandAccent},
+//     so it is invalid CSS and an unstyled sign-in button. Grok dropped accent:"auto" from the
+//     real call on 2026-10-03 and the brand stored an empty string.
+{
+  const { env, graphs } = makeEnv()
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', brand: { name: 'Nibi', footer: 'Nibi · nibi.no' } })
+  check('a brand with no accent gets the neutral, never an empty string', brandNode(graphs)?.metadata.accent === '#1f3a5f', JSON.stringify(brandNode(graphs)?.metadata))
 }
 {
   // The placeholder IS treated as unowned — that is what repairs the two graphs already live.
