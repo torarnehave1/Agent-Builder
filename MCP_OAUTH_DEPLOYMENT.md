@@ -146,9 +146,10 @@ send as an address last month. A grant is re-verified against the holder's profi
 the holder can remove the address or lose the credential afterwards, and the row says nothing
 about that.
 
-**The cap** is `MCP_DAILY_SEND_CAP` in `dev-worker/wrangler.toml`, currently 100 per caller per
-24 hours, counted from `email_send_log` rows with `outcome = 'SENT'` — so refusals do not spend
-anybody's allowance. An absent or unusable value falls back to the code default rather than to
+**The cap** is `MCP_DAILY_SEND_CAP` — see *dev-worker configuration* below, which is now the only
+tracked record of it. 100 per caller per 24 hours, counted from `email_send_log` rows with
+`outcome = 'SENT'`, so refusals do not spend anybody's allowance. An absent or unusable value
+falls back to the code default rather than to
 zero. Changing it is a config change and a deploy of dev-worker, no code edit.
 
 **The log** is `email_send_log`, written for refusals as well as sends. It stores the recipient's
@@ -165,6 +166,49 @@ registered founder may write them, and the graph is owned by the founder however
 
 A placeholder no variable filled is reported by `preview_email` and REFUSED by `send_email` — a
 literal `{name}` in somebody's inbox cannot be recalled.
+
+---
+
+## dev-worker configuration
+
+`dev-worker/wrangler.toml` was untracked on 2026-10-04, along with
+`group-chat-worker/wrangler.toml` — `.gitignore` had carried `*.toml` and named the first one
+explicitly for a long time, and git held both anyway, because gitignore only prevents UNTRACKED
+files from being added and has no effect on anything already in the index. Neither held a secret;
+the point was to close a door in the file class that holds credentials.
+
+The cost is that the `[vars]` are no longer documented anywhere in a repo. **This section is that
+record.** Keep it current when a var changes — nothing else will.
+
+| Var | Value | What it decides |
+|---|---|---|
+| `MCP_PUBLIC_ORIGIN` | `https://knowledge.vegvisr.org` | The issuer and resource URLs in the OAuth discovery documents |
+| `MCP_DAILY_SEND_CAP` | `100` | Sends per caller per 24h on the e-mail path |
+| `MCP_CHAT_BOT_MAP` | `{"chatgpt.com":"chatgpt","claude.ai":"claude","grok.com":"grok"}` | Which chat bot each client posts as |
+| `MCP_CHAT_BOT_FALLBACK_USERNAME` | `ai-assistant` | The bot a client with no mapped host posts as |
+
+**`MCP_DAILY_SEND_CAP`** was a hard-coded `20` for exactly one day. It was raised to 100 on
+2026-10-04, which is the usual fate of a limit guessed before anyone used the thing — hence a var
+rather than a constant, so the next adjustment is a config change and a deploy of dev-worker, with
+no code edit. It counts rows in `email_send_log` with `outcome = 'SENT'` in the last 24 hours, so
+it caps what actually went out rather than what was attempted, and a refused send does not spend
+anyone's allowance. It counts the CALLER, never the sending address: one person's volume cannot
+eat another's. An absent, empty, zero or non-numeric value falls back to the code default
+(`DEFAULT_DAILY_SEND_CAP` in `email-service.js`) rather than to a cap of zero — which would stop
+every send on this path with a rate-limit message, the worst way for a config typo to present.
+All three properties are pinned by test.
+
+**`MCP_CHAT_BOT_MAP`** is keyed by the HOST of a client's id, and only when that id is a URL —
+a Client ID Metadata Document the provider actually fetched. A client registered through
+`/register` has an opaque id and a self-chosen name, so it cannot claim a named assistant's bot
+and falls back to `MCP_CHAT_BOT_FALLBACK_USERNAME`. Adding the bot to a group is what permits
+`post_chat_message` to post there, so a group's bot list is the real access control — set and
+revoked by a human in the chat app, with no deploy.
+
+Secrets are `wrangler secret put`, never vars: `GRAPH_ALERT_SECRET`, `ENCRYPTION_MASTER_KEY`, and
+since 2026-10-03 `INTERNAL_SHARED_SECRET`, which must hold the same value as `email-worker`,
+`group-chat-worker` and `agent-worker`. Cloudflare secrets are write-only, so a lost value is
+rotated on all four together rather than recovered.
 
 ---
 
