@@ -1728,6 +1728,21 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'set_mailbox_password',
+    description: "Store the IMAP password for a mailbox, so that mail sent from that address can also be filed in its own Sent folder. Cloudflare Email Sending delivers straight to the recipient and never touches the sender's mailbox, which is why a sent copy does not appear there on its own. The password is encrypted (AES-256-GCM) in the same store the AI provider keys use, is never returned by any tool, and is read only by the send path. It is a far more powerful credential than an API key — it grants read and write access to every message in the mailbox — so confirm with the user before calling this, and never guess a value. By default it is stored for the caller's own account; a Superadmin may pass targetEmail to store it for somebody else. Find the host in the mail client under incoming mail server.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        mailboxAddress: { type: 'string', description: 'The full address of the mailbox, e.g. "post@nibi.no". This is the mailbox whose Sent folder the copies go into.' },
+        password: { type: 'string', description: 'The mailbox password. Pass exactly what the user supplied — never invent, truncate or paraphrase it, and if you do not have it, ask rather than calling this.' },
+        imapHost: { type: 'string', description: 'The IMAP server, e.g. "mail.uniweb.no".' },
+        imapPort: { type: 'number', description: 'IMAP port. Defaults to 993 (implicit TLS).' },
+        targetEmail: { type: 'string', description: "Superadmin only: store it for this user instead of yourself." }
+      },
+      required: ['mailboxAddress', 'password', 'imapHost']
+    }
+  },
+  {
     name: 'send_email',
     description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. Use this when the user asks to send, write, or compose an email. A Superadmin can pass forUserEmail to send from a DIFFERENT user account (e.g. to trigger a verified send for a founder, which stamps last_verified_at on that founder).',
     input_schema: {

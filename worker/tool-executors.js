@@ -7371,6 +7371,77 @@ async function resolveKeyTarget(input, env) {
   }
 }
 
+/**
+ * Store the IMAP password for a mailbox, so a sent copy can be put in its own Sent folder.
+ *
+ * SAME STORAGE AS THE AI KEYS, DELIBERATELY NOT THE SAME TOOL. user_api_keys already does
+ * AES-256-GCM under ENCRYPTION_MASTER_KEY with one row per (user, provider), and reusing it means
+ * no new table, no new crypto and no new secret. But a mailbox password is a different class of
+ * thing from an API key: the six providers buy a model call, this one reads and writes every
+ * message in somebody's mailbox. Sharing a tool would give a model asked to store an OpenAI key a
+ * path to store this.
+ *
+ * The address lives inside the provider string (`imap:post@nibi.no`) because UNIQUE(user_id,
+ * provider) is what keeps one row per credential, and a person can hold several mailboxes.
+ *
+ * Authorisation is resolveKeyTarget, unchanged: your own mailbox by default, somebody else's only
+ * as Superadmin. The password is never returned, never logged, and never read back by any tool —
+ * only by the send path, server-side.
+ */
+async function executeSetMailboxPassword(input, env) {
+  const address = String(input.mailboxAddress || '').trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address)) {
+    throw new Error('mailboxAddress must be the full e-mail address of the mailbox, e.g. "post@nibi.no"')
+  }
+  const password = typeof input.password === 'string' ? input.password : ''
+  if (!password.trim()) {
+    // The most likely cause by far, so it is the first thing the message says.
+    throw new Error(
+      'password is required and arrived empty. If you pasted it into the chat, the model may have ' +
+      'dropped it rather than passing it through — say so and we will use a non-chat path instead.',
+    )
+  }
+  const host = String(input.imapHost || '').trim().toLowerCase()
+  if (!host || !/^[a-z0-9.-]+$/.test(host)) {
+    throw new Error('imapHost is required, e.g. "mail.uniweb.no" — it is in your mail client under incoming mail server')
+  }
+  const port = Number(input.imapPort || 993)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('imapPort must be 1-65535')
+
+  const { targetUserId, targetEmail, onBehalf } = await resolveKeyTarget(input, env)
+
+  const res = await env.USER_KEYS_WORKER.fetch('https://user-keys-worker/user-api-keys', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      userId: targetUserId,
+      provider: `imap:${address}`,
+      apiKey: password,
+      // The host and port ride along in the metadata so a second World on another provider needs
+      // no code change — the send path reads them back rather than assuming Uniweb.
+      metadata: { keyName: `${host}:${port}`, displayName: `IMAP ${address}` },
+    }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.error) {
+    throw new Error(data.error || `Failed to store the mailbox password (HTTP ${res.status})`)
+  }
+
+  return {
+    success: true,
+    mailboxAddress: address,
+    imapHost: host,
+    imapPort: port,
+    storedFor: targetEmail,
+    onBehalf,
+    // Deliberately no echo of what was stored, not even a length.
+    message:
+      `Stored the IMAP password for ${address} (${host}:${port})${onBehalf ? ` on behalf of ${targetEmail}` : ''}, ` +
+      'encrypted. It is never returned by any tool and is read only by the send path. Next: a ' +
+      'folder probe has to find what this server calls its Sent folder before copies can be filed.',
+  }
+}
+
 async function executeStoreUserApiKey(input, env) {
   const provider = (input.provider || '').trim().toLowerCase()
   const apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : ''
@@ -16818,6 +16889,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     case 'compose_image_from_references':
       return await executeComposeImageFromReferences(toolInput, env)
 
+    case 'set_mailbox_password':
+      return await executeSetMailboxPassword(input, env)
     case 'add_user_to_chat_group':
       return await executeAddUserToChatGroup(toolInput, env)
     case 'get_group_messages':
