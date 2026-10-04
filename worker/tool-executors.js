@@ -7775,8 +7775,12 @@ async function executeSetEmailPassword(input, env) {
   if (!email || !email.includes('@')) throw new Error('A valid email address is required')
   const emailLower = email.toLowerCase()
 
-  const appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
-  if (!appPassword) throw new Error('appPassword is required')
+  let appPassword = typeof input.appPassword === 'string' ? input.appPassword.trim() : ''
+  // The required-check used to be here, and it made the cf-email-service path unusable for repair:
+  // a sender whose stored token was destroyed could not be restored from the World token that was
+  // sitting in `config.cf_api_token` the whole time, because the tool refused before it ever looked.
+  // Found 2026-10-04, after that exact repair failed three times in a row. The check now runs after
+  // the lookup below.
   // A model asked for a tool it did not have reached for this one instead and filled both secret
   // fields with plausible-looking nonsense — the literal string "app password" and an account id of
   // 3f3c8e2c5f0e0e0e0e0e0e0e0e0e0e0e — overwriting another World's sender twice (universi.no,
@@ -7785,7 +7789,7 @@ async function executeSetEmailPassword(input, env) {
     'app password', 'apppassword', 'app-password', 'your app password', 'the app password',
     'password', 'secret', 'xxxx', 'placeholder', 'changeme', 'test', 'string',
   ]
-  if (PLACEHOLDER_SECRETS.includes(appPassword.toLowerCase())) {
+  if (appPassword && PLACEHOLDER_SECRETS.includes(appPassword.toLowerCase())) {
     return { success: false, error: `appPassword is the placeholder "${appPassword}", not a credential. NEVER invent or guess a password. Ask the user to store it in Settings -> World Cloudflare credentials, or to paste the real value; nothing was written.` }
   }
 
@@ -7834,7 +7838,62 @@ async function executeSetEmailPassword(input, env) {
   }
 
   const effectiveAccountType = newAccountType || existing.accountType || (emailLower.endsWith('@gmail.com') ? 'gmail' : 'smtp')
-  const effectiveCfAccountId = newCfAccountId || existing.cfAccountId || ''
+  let effectiveCfAccountId = newCfAccountId || existing.cfAccountId || ''
+
+  // DOWNGRADING A WORKING cf-email-service SENDER IS DESTRUCTIVE AND IRREVERSIBLE.
+  //
+  // On 2026-10-04 this tool was asked to store an IMAP password. It was the wrong tool — the model
+  // picked it on name similarity — and it obliged: it switched post@nibi.no from cf-email-service
+  // to smtp and wrote the mailbox password over the Cloudflare API token. Cloudflare never shows a
+  // token twice, so the World's ability to send was destroyed by one successful-looking call.
+  //
+  // Converting TO cf-email-service stays allowed; that is an upgrade and the description advertises
+  // it. Converting AWAY is refused, because the thing it overwrites cannot be recovered.
+  if (existing.accountType === 'cf-email-service' && newAccountType && newAccountType !== 'cf-email-service') {
+    return {
+      success: false,
+      error:
+        `${emailLower} currently sends through cf-email-service, and its stored Cloudflare token ` +
+        `cannot be read back or recreated — changing it to "${newAccountType}" would overwrite that ` +
+        `token and silently stop this World from sending. Nothing was written. If the intent was to ` +
+        `store a MAILBOX password (IMAP), that is a different tool: set_mailbox_password.`,
+    }
+  }
+
+  // Reuse the World's stored Cloudflare token rather than demanding one be pasted — the same branch
+  // add_email_account has had since 2026-09-23. set_world_credentials already put it in
+  // config.cf_api_token for this domain, and a cf-email-service sender needs exactly that token for
+  // exactly that account. Explicit arguments still win, so existing callers are unaffected.
+  let credentialNote = ''
+  if (effectiveAccountType === 'cf-email-service' && (!appPassword || !effectiveCfAccountId)) {
+    const senderDomain = emailLower.split('@')[1] || ''
+    if (senderDomain) {
+      const ctx = await resolveWorldInfraContext({ ...input, domain: senderDomain }, env)
+      if (!ctx.error) {
+        if (!appPassword && ctx.cfToken) {
+          appPassword = ctx.cfToken
+          credentialNote = `Reused the Cloudflare token already stored for ${senderDomain} (${ctx.credentialSource || 'World credentials'}) — no token had to be pasted.`
+        }
+        if (!effectiveCfAccountId && ctx.cfAccount) effectiveCfAccountId = String(ctx.cfAccount).trim()
+      }
+    }
+  }
+
+  if (!appPassword) {
+    throw new Error(
+      effectiveAccountType === 'cf-email-service'
+        ? `appPassword (a Cloudflare API token with "Email Sending: Edit") is required, and no World token is stored for ${emailLower.split('@')[1] || 'that domain'}. Run set_world_credentials for the domain first — then this tool reuses it and no secret goes through the chat.`
+        : 'appPassword is required',
+    )
+  }
+  const PLACEHOLDER_SECRETS_2 = [
+    'app password', 'apppassword', 'app-password', 'your app password', 'the app password',
+    'password', 'secret', 'xxxx', 'placeholder', 'changeme', 'test', 'string',
+  ]
+  if (PLACEHOLDER_SECRETS_2.includes(appPassword.toLowerCase())) {
+    return { success: false, error: `appPassword is the placeholder "${appPassword}", not a credential. NEVER invent or guess a password; nothing was written.` }
+  }
+
   if (effectiveAccountType === 'cf-email-service' && !effectiveCfAccountId) {
     throw new Error('cfAccountId is required to set a sender to cf-email-service. Pass cfAccountId (the Cloudflare account id that owns the sending domain).')
   }
@@ -16890,7 +16949,7 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeComposeImageFromReferences(toolInput, env)
 
     case 'set_mailbox_password':
-      return await executeSetMailboxPassword(input, env)
+      return await executeSetMailboxPassword(toolInput, env)
     case 'add_user_to_chat_group':
       return await executeAddUserToChatGroup(toolInput, env)
     case 'get_group_messages':

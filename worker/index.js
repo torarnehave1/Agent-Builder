@@ -3180,6 +3180,34 @@ export default {
         })
       }
 
+      // Store a mailbox password without a model in the loop.
+      //
+      // The reason this route exists is L154: on 2026-10-04 the same job was handed to the chat,
+      // the model picked set_email_password on name similarity, and it destroyed a World's sender.
+      // A credential write should not depend on a model choosing correctly between two similar
+      // names. Same shape as /publish/html-node — the caller's own credential, the executor's own
+      // gate untouched.
+      if (pathname === '/email/mailbox-password' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const result = await executeTool('set_mailbox_password', {
+          mailboxAddress: body.mailboxAddress,
+          password: body.password,
+          imapHost: body.imapHost,
+          ...(body.imapPort ? { imapPort: body.imapPort } : {}),
+          ...(body.targetEmail ? { targetEmail: body.targetEmail } : {}),
+          userId: callerAuth.userId,
+        }, env, {}).catch((e) => ({ success: false, error: e.message }))
+
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? 400 : 200,
+          headers: corsHeaders
+        })
+      }
+
       if (pathname === '/automation/run' && request.method === 'POST') {
         const body = await request.json().catch(() => ({}))
         const { graphId } = body
