@@ -90,20 +90,81 @@ that changes no contract.
 | `1.17.0` | 2026-10-02 | `set_group_member_role` — an owner can promote a member of their own group to admin, who can then add people. The roles were already enforced by the invite and removal checks, but nothing could CHANGE one after a member was added: the only `UPDATE` on `group_members` anywhere sets `alerts_enabled`, and `/join` is `INSERT OR IGNORE`, so re-adding somebody as admin did nothing. group-chat-worker gained `PATCH /groups/{id}/members/{userId}`, owner-only, refusing `owner` (a transfer, not a role change), refusing the owner demoting themselves, and 404ing a target who is not already in the group. Built as the narrow alternative to letting any platform Superadmin bypass the owner check in every group — and it does NOT solve the case it was built for, see *Known limitations*. |
 | `1.18.0`–`1.19.0` | 2026-10-03 | E-mail, in three deliberate pieces. `1.19.0` adds `preview_email` and `list_email_senders` — rendering only; nothing sends yet. **The right to send as an address is own-profile or an explicit, revocable grant, and platform Superadmin is neither** — which is the whole point: the System Owner is a World Founder on many sites and not all of them want mail sent in their name. A test asserts a Superadmin with no grant is refused with the same code AND the same message string as a plain user, because a refusal that varies with role is a bypass nobody has written down. Measured first: `post@vegr.ai` and `post@universi.no` are already on the System Owner's own profile; `post@nibi.no` sits only on NIBI's, which is the case grants exist for. Grants are a REST route rather than a tool, because a World's mailbox usually cannot complete the OAuth flow at all — the holder authenticates through the Agent Builder's "Login as…" bar. Signatures are a new `email-signature` node type beside `email-template`; selection is EXACT and never fuzzy, since a near miss puts the wrong person's name on an e-mail. Two divergences from email-worker's `renderTemplate`, both commented: model-supplied values are HTML-escaped, and double braces are replaced before single ones (upstream does the reverse, turning `{{name}}` into `{Tor}`). `email_send_log` records refusals too, with the recipient's domain and a hash — never the local part, never the subject or body. 32 tools. |
 | `1.20.0` | 2026-10-03 | `send_email`, the fourth outward-facing tool, and the end of the e-mail work. **Proven on the live path, in the order that proves something:** refused before the grant existed, sent twice with it, refused again after `post@nibi.no` revoked it — four rows in `email_send_log`, no reconnect needed, because the grant is read from D1 on every call. A send that works proves plumbing; a refusal that works proves the grant is load-bearing. The outgoing call carries `x-internal-auth` plus `x-internal-caller` set to the HOLDER's address, and `resolveCaller`'s internal branch returns no `role` field at all, so `isSuper` is false by construction — forwarding a token instead would have re-armed the bypass, since the api-token branch does return `Role`. That invariant is a test, not a comment, and it caught a real bug on its first run (`renderEmail` never returned `holderEmail`, so the send would have gone out as the string "undefined"). An unfilled `{placeholder}` is REFUSED on send where the preview only warns. `preview_email` whitelists its payload rather than spreading, because the render result carries the sending account and an `accountId` is what email-worker's unauthenticated gmail route needs to impersonate a sender. The `chat:write` consent copy now names e-mail and its limit; it does not reach back to anyone who consented under the narrower wording, and what they gained is bounded by the own-profile rule. 33 tools. |
+| `1.21.0` | 2026-10-04 | `set_email_template` — a World's e-mail template, brand and signature can now be written from an MCP client instead of only from the Agent Builder. **No template logic in the new module**, for the same reason `publish-service.js` holds no publish logic: agent-worker's `executeSetWorldEmailTemplate` stays the one implementation, and nearly every line of it exists because something went wrong once — the built-in login templates (pasting HTML into a chat broke), the accent picked from the logo at WCAG 4.5:1 and read from the ORIGINAL image, the edit-section markers, the signature slot, the ownership stamp from `world_founders`, and the Superadmin-or-founder gate on a template that decides where a World's sign-in button points. A second writer would drift from the first one bug at a time. New route `POST /email/world-template` on agent-worker, exactly the shape `/publish/html-node` established: the caller's own credential, the executor's own gate untouched, nothing widened at the door. Behind `graph:write`, the same scope `add_node` already needs — `add_node` can write these nodes raw today; what it cannot do is find the graph, create one, fill in the defaults, or get `metadata.purpose` right, and an exact-match miss there produces a template that exists and is invisible to every send. `openWorldHint` is false: it writes a node and reaches nobody. The daily send cap moved from a hard-coded 20 to `MCP_DAILY_SEND_CAP` (now 100) — raised the day after shipping, which is the usual fate of a limit guessed before anyone used the thing. An absent or unusable value falls back to the default rather than to a cap of zero, the cap counts the CALLER rather than the sending address, and the refusal names the number. 34 tools. |
 | `1.18.0` | 2026-10-02 | `update_user_profile` — update phone, address, street, postal code, place, city or country on someone who is ALREADY registered, without touching role or group tags. `register_user` refuses an email that already exists (deliberately, see 1.5.0's note), which left no way to update anyone's contact info once they had an account — found when a Grok-powered Agent Builder session, asked to add a phone number to an existing member, had no tool that fit and called a nonexistent worker instead. Same split as `set_user_groups`: a sibling tool for the existing-account case, sharing the already-frozen `user:register` scope rather than costing a sixth opt-in. Routes through the same `agent-worker` `/admin/register-user` merge path `register_user` uses; that route gained forwarding for the address fields it previously silently dropped. |
 
 ### Current surface
 
-- **30 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
+<!-- These counts went stale for four versions because each update's verification grep matched
+     the number inside the version row I had just written rather than the line below it. Read them
+     back from source — `TOOL_NAMES.length`, `CONNECT_SCOPES`, `OPT_IN_SCOPES`, and the `outward`
+     list the tests pin — not from the row above. (2026-10-04) -->
+
+- **34 tools** — `TOOL_NAMES` in `mcp/tools.js` is the list, and a test asserts `tools/list`
   matches it exactly.
 - **2 advertised scopes**: `graph:read`, `graph:write`. These are all `CONNECT_SCOPES`, so they
   are all a client can request.
-- **5 opt-in scopes**: `chat:write`, `chat:read`, `graph:publish`, `user:register`, `user:read`.
-  None is advertised; each is granted only by a person ticking its box. A test pins that no
-  opt-in ever leaks into the advertised set.
-- **3 outward-facing tools** — `post_chat_message`, `publish_html_node`, `register_user`. Their
-  effects leave this system and reach other people, so each declares `openWorldHint` and each
-  sits behind an opt-in scope. A test pins both properties together.
+- **6 opt-in scopes**: `chat:write`, `chat:read`, `graph:publish`, `graph:delete`,
+  `user:register`, `user:read`. None is advertised; each is granted only by a person ticking its
+  box. A test pins that no opt-in ever leaks into the advertised set. `graph:delete` is grantable
+  and still has no tool — deliberately, so the first delete tool does not force everyone to
+  reconnect.
+- **9 outward-facing tools** — `post_chat_message`, `publish_html_node`, `register_user`,
+  `add_group_member`, `remove_group_member`, `create_group_invite`, `set_group_member_role`,
+  `compose_node_image`, `send_email`. Their effects leave this system and reach other people, so
+  each declares `openWorldHint` and each sits behind an opt-in scope. A test pins both properties
+  together, in four places.
+
+---
+
+## Sending e-mail
+
+Four tools, all of which refuse the same way: **the right to send as an address is own-profile or
+an explicit grant, and platform Superadmin is neither.**
+
+| Tool | Scope | Effect |
+|---|---|---|
+| `list_email_senders` | `chat:write` | What you may send as, and why each one is allowed |
+| `preview_email` | `chat:write` | Renders exactly what a send would produce. Sends nothing |
+| `send_email` | `chat:write` | Delivers. `openWorldHint`, cannot be recalled |
+| `set_email_template` | `graph:write` | Writes a World's template, brand or signature |
+
+**To let somebody send as an address they do not hold**, the HOLDER grants it. Not a Superadmin,
+and deliberately not the World Founder of the sender's domain either — founder-on-paper must not
+be a self-service route into a World's mailbox. Because a World's mailbox usually cannot complete
+the OAuth flow, this is a REST route rather than a tool, authenticated with the holder's own token
+(the Agent Builder's "Login as…" bar hands one over):
+
+```
+POST /email/sender-grants            { senderEmail, granteeEmail, expiresInDays?, note? }
+POST /email/sender-grants/{id}/revoke
+GET  /email/sender-grants?includeRevoked=1
+```
+
+Rows are never deleted — revocation is a write, so `email_sender_grants` still answers who could
+send as an address last month. A grant is re-verified against the holder's profile on every use:
+the holder can remove the address or lose the credential afterwards, and the row says nothing
+about that.
+
+**The cap** is `MCP_DAILY_SEND_CAP` in `dev-worker/wrangler.toml`, currently 100 per caller per
+24 hours, counted from `email_send_log` rows with `outcome = 'SENT'` — so refusals do not spend
+anybody's allowance. An absent or unusable value falls back to the code default rather than to
+zero. Changing it is a config change and a deploy of dev-worker, no code edit.
+
+**The log** is `email_send_log`, written for refusals as well as sends. It stores the recipient's
+DOMAIN and a SHA-256 of the full address, never the local part, and never the subject or body — a
+copy of the content in a log is a second place for it to leak from. `recipient_hash` answers "was
+this person mailed?" for somebody who already knows the address, without the log becoming a
+contact list.
+
+**Templates** live in each World's `#EMAIL-<domain>` knowledge graph as three node types:
+`email-template` (selected by `metadata.purpose`, matched EXACTLY), `email-brand` (one per World,
+supplies `{brandName}` and friends), and `email-signature` (several per World, selected by
+`metadata.name`; `"none"` is reserved and means append nothing). Only a Superadmin or that World's
+registered founder may write them, and the graph is owned by the founder however set it up.
+
+A placeholder no variable filled is reported by `preview_email` and REFUSED by `send_email` — a
+literal `{name}` in somebody's inbox cannot be recalled.
 
 ---
 
@@ -507,7 +568,15 @@ ever appears in that column.
 
    What is left is the MCP surface, which has no impersonation bar: there, owner-only means an
    owner who can complete the OAuth flow. A World's main group owned by the World's mailbox
-   address cannot be administered over MCP at all. Three ways out, none built and none urgent:
+   address cannot be administered over MCP at all.
+
+   **E-mail solved the same shape differently, and that is the model to copy if this is ever
+   fixed.** `email_sender_grants` does not ask the mailbox to sign in: the holder's authority is
+   exercised ONCE, through the Agent Builder's impersonation bar against a REST route, and what it
+   leaves behind is a durable, revocable row that every later call reads. Exercised end to end on
+   2026-10-03 — granted, two sends, revoked, refused — with no reconnect anywhere, because the row
+   is read on every call. `transfer_group_ownership` would be the chat equivalent; a grant table is
+   the more honest one, because it never has to move anything. Three ways out, none built and none urgent:
    give that address a real number; a Superadmin-only `transfer_group_ownership` used once per
    World at provisioning; or a Superadmin bypass in `requireGroupRole`. The second fixes the class
    — a World's main group should be owned by a human account, not by the World's mailbox identity.
