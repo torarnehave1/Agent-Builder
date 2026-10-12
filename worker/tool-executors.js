@@ -2858,11 +2858,21 @@ async function executePublishHtmlNode(input, env) {
       ...(Array.isArray(node.bibl) ? node.bibl : []),
       ...(node.path ? [node.path] : []),
     ].some(r => { try { return new URL(String(r)).hostname.toLowerCase() === host } catch { return String(r).toLowerCase().includes(host) } })
+    // publishedDomain is the stamp the Knowledge Graph Portfolio reads for its domain tag and its
+    // "Published sites" filter. The graph viewer's own publish button sets it client-side; this
+    // executor did not, so a site published from here to a World's OWN brand proxy showed no tag
+    // at all — its page never reaches the platform page registry, the only other source the
+    // portfolio has (found on lipi.vegr.ai, 2026-10-12). Same patch as the host refs, so a publish
+    // still costs at most one bookkeeping version here.
+    const fields = {}
     if (!already) {
-      const references = [...(Array.isArray(node.references) ? node.references : []), hostUrl]
-      const bibl = [...(Array.isArray(node.bibl) ? node.bibl : []), hostUrl]
-      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, { references, bibl })
-      hostRecorded = true
+      fields.references = [...(Array.isArray(node.references) ? node.references : []), hostUrl]
+      fields.bibl = [...(Array.isArray(node.bibl) ? node.bibl : []), hostUrl]
+    }
+    if (String(node.publishedDomain || '').toLowerCase() !== host) fields.publishedDomain = host
+    if (Object.keys(fields).length) {
+      await patchNodeWithVersionRetry(env, input.graphId, input.nodeId, fields)
+      hostRecorded = !already
     }
   } catch (e) { /* bookkeeping only — publish already succeeded */ }
 

@@ -121,6 +121,20 @@ const sha8 = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0,
   check('default publish adds no pill', r.success === true && !store['minside.nibi.no'].html.includes('vegvisr-version-pill') && r.version_pill === null, JSON.stringify(r).slice(0, 300))
 }
 
+// 6. A publish stamps node.publishedDomain — the field the Knowledge Graph Portfolio reads for its
+//    domain tag. A World on its own brand proxy has no entry in the platform page registry, so
+//    without the stamp the graph shows no published site at all (lipi.vegr.ai, 2026-10-12).
+{
+  const { env, graph } = makeEnv()
+  const r = await executeTool('publish_html_node', { ...OWNER, graphId: GRAPH, nodeId: 'nibi-members-page', host: 'MinSide.nibi.no' }, env)
+  check('publish stamps publishedDomain on the node, lowercased', r.success === true && graph.nodes[0].publishedDomain === 'minside.nibi.no', JSON.stringify({ r: r.success, stamp: graph.nodes[0].publishedDomain }))
+  check('existing host refs are left as they were', graph.nodes[0].bibl.length === 1 && graph.nodes[0].bibl[0] === 'https://minside.nibi.no/', JSON.stringify(graph.nodes[0].bibl))
+  check('the other node is not stamped', graph.nodes[1].publishedDomain === undefined, String(graph.nodes[1].publishedDomain))
+  const v = graph.metadata.version
+  await executeTool('publish_html_node', { ...OWNER, graphId: GRAPH, nodeId: 'nibi-members-page', host: 'minside.nibi.no' }, env)
+  check('republish to the same host writes no further graph version', graph.metadata.version === v, `${v} -> ${graph.metadata.version}`)
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — version pill is served-copy only, per host, and tells two published nodes apart.')
 process.exit(failures ? 1 : 0)
