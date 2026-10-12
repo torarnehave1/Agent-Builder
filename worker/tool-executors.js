@@ -2922,6 +2922,29 @@ async function executePublishHtmlNode(input, env) {
   const sub = host.split('.')[0]
   const root = host.split('.').slice(1).join('.')
 
+  // TELL THE REGISTRY about a World site. A page on the shared brand-worker gets its registry
+  // key from brand-worker itself. A page on a World's own proxy lives in that World's store, so
+  // nothing in the platform registry knew the site existed: list_published_sites and the
+  // portfolio's "Published sites" filter both missed it (lipi.vegr.ai, 2026-10-12). Only after
+  // the publish is verified live — a record for a page that is not served would be a false one.
+  // Bookkeeping: never fail a successful publish over it.
+  let siteRegistered = false
+  if (isLive && !sharedHost) {
+    try {
+      const reg = await env.KG_WORKER.fetch('https://knowledge-graph-worker/recordPublishedSite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hostname: host,
+          graphId: input.graphId,
+          nodeId: input.nodeId,
+          publishedBy: (input.authContext && input.authContext.email) || input.userId || null,
+        }),
+      })
+      siteRegistered = reg.ok
+    } catch (e) { /* bookkeeping only — publish already succeeded */ }
+  }
+
   let message
   if (isLive) {
     message = `Published node "${input.nodeId}" (${html.length} chars) to https://${host}/ and verified it serves from that host's own store. It is now live.${hostRecorded ? ` Recorded ${host} on the node so future rollbacks/edits can flag when the live page is stale.` : ''}`
@@ -2944,6 +2967,7 @@ async function executePublishHtmlNode(input, env) {
     via: proxyUrl,
     servedBy: sharedHost ? 'shared-brand-worker' : 'world-brand-proxy',
     hostRecorded,
+    siteRegistered,
     hostRoutes,
     verified: isLive,
     verification: verify,

@@ -46,10 +46,15 @@ function makeEnv() {
     edges: [],
   }
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+  const registered = []
   const KG_WORKER = {
     async fetch(url, init = {}) {
       const u = new URL(url)
       if (u.pathname === '/getknowgraph') return json(JSON.parse(JSON.stringify(graph)))
+      if (u.pathname === '/recordPublishedSite') {
+        registered.push(JSON.parse(init.body))
+        return json({ success: true })
+      }
       if (u.pathname === '/patchNode') {
         const b = JSON.parse(init.body)
         const n = graph.nodes.find((x) => x.id === b.nodeId)
@@ -75,7 +80,7 @@ function makeEnv() {
     return new Response('', { status: 200 })
   }
   const env = { KG_WORKER, HTML_PUBLISH_SECRET: 'test-secret' }
-  return { env, graph, store }
+  return { env, graph, store, registered }
 }
 
 const OWNER = { userId: 'owner-uuid', authContext: { role: 'Superadmin', email: 'owner@example.com' } }
@@ -133,6 +138,24 @@ const sha8 = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0,
   const v = graph.metadata.version
   await executeTool('publish_html_node', { ...OWNER, graphId: GRAPH, nodeId: 'nibi-members-page', host: 'minside.nibi.no' }, env)
   check('republish to the same host writes no further graph version', graph.metadata.version === v, `${v} -> ${graph.metadata.version}`)
+}
+
+// 7. A verified publish to a World's own proxy is recorded in the platform site registry, so
+//    list_published_sites and the portfolio's Published sites filter know the site.
+{
+  const { env, registered } = makeEnv()
+  const r = await executeTool('publish_html_node', { ...OWNER, graphId: GRAPH, nodeId: 'nibi-members-page', host: 'minside.nibi.no' }, env)
+  check('a World-proxy publish is served by the World proxy', r.servedBy === 'world-brand-proxy', String(r.servedBy))
+  check('it is recorded in the site registry, once, with host, graph and node', registered.length === 1 && registered[0].hostname === 'minside.nibi.no' && registered[0].graphId === GRAPH && registered[0].nodeId === 'nibi-members-page' && registered[0].publishedBy === 'owner@example.com' && r.siteRegistered === true, JSON.stringify({ registered, flag: r.siteRegistered }))
+}
+
+// 8. If the registry call fails, the publish still succeeds and says the site was not registered.
+{
+  const { env } = makeEnv()
+  const kg = env.KG_WORKER.fetch.bind(env.KG_WORKER)
+  env.KG_WORKER.fetch = async (url, init) => (new URL(url).pathname === '/recordPublishedSite' ? new Response('{"error":"down"}', { status: 500 }) : kg(url, init))
+  const r = await executeTool('publish_html_node', { ...OWNER, graphId: GRAPH, nodeId: 'nibi-members-page', host: 'minside.nibi.no' }, env)
+  check('a failed registry record does not fail the publish', r.success === true && r.verified === true && r.siteRegistered === false, JSON.stringify({ s: r.success, v: r.verified, reg: r.siteRegistered }))
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })
