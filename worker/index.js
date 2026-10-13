@@ -3052,6 +3052,41 @@ export default {
         })
       }
 
+      // POST /admin/deploy-worker — upload a worker script, for a caller outside this app.
+      //
+      // The door the MCP server's deploy_worker uses, same shape as /publish/html-node: the
+      // caller's own credential, the executor's own Superadmin gate. It reaches
+      // deploy_worker_guarded, not deploy_worker — a target that has bindings is refused, and
+      // bindAdmin is not forwarded, so nothing in the body can turn it on.
+      if (pathname === '/admin/deploy-worker' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        if (!body.workerName || !body.code) {
+          return new Response(JSON.stringify({ error: 'workerName and code are required' }), { status: 400, headers: corsHeaders })
+        }
+        const authContext = await resolveAuthorizedCallerWithCredentials({ authToken: callerAuth.token }, env)
+        let result
+        try {
+          result = await executeTool('deploy_worker_guarded', {
+            workerName: body.workerName,
+            code: body.code,
+            ...(body.compatibilityDate ? { compatibilityDate: body.compatibilityDate } : {}),
+            ...(body.description ? { description: body.description } : {}),
+            userId: callerAuth.userId,
+            authContext,
+          }, env, {})
+        } catch (e) {
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status: 403, headers: corsHeaders })
+        }
+        return new Response(JSON.stringify(result), {
+          status: result?.success === false ? (result.refused ? 409 : 400) : 200,
+          headers: corsHeaders
+        })
+      }
+
       // POST /admin/register-user — create or complete a user record.
       //
       // Same reason as /publish/html-node: the MCP server needs this, and a second copy of
