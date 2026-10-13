@@ -13755,70 +13755,6 @@ async function executeDeployWorker(input, env) {
   }
 }
 
-// deploy_worker for a caller outside this app (the MCP server, via POST /admin/deploy-worker).
-//
-// executeDeployWorker PUTs the script with ONLY the bindings it sets itself, and a Cloudflare
-// script upload replaces the whole binding set. Pointed at a worker that has D1, KV, secrets or
-// service bindings, it would deploy fine and leave that worker running without any of them. In
-// the app a human can see which worker is named; a remote model cannot, so here the target is
-// inspected first and refused unless it is new or has no bindings at all.
-//
-// Fails CLOSED: only a definite "no such script" counts as new. A timeout, a 403 or an
-// unreadable answer is a refusal, because "could not tell" is not "has none".
-//
-// bindAdmin is forced off. It stamps INTERNAL_SHARED_SECRET and the platform D1 onto the
-// uploaded code, and code that arrives from a model must not be handed either.
-const WORKER_NAME_RE = /^[a-z0-9][a-z0-9-]{0,62}$/
-
-async function inspectWorkerBindings(workerName, env) {
-  const { res, data } = await fetchJsonWithTimeout(`${getCfApiBase(env)}/scripts/${workerName}/settings`, {
-    headers: { 'Authorization': `Bearer ${env.CLOUDFLARE_API_TOKEN}` },
-  })
-  const codes = Array.isArray(data?.errors) ? data.errors.map(e => e?.code) : []
-  if (res.status === 404 && codes.includes(10007)) return { known: true, exists: false, bindings: [] }
-  if (res.ok && data?.success === true && Array.isArray(data.result?.bindings)) {
-    return { known: true, exists: true, bindings: data.result.bindings }
-  }
-  return { known: false, status: res.status }
-}
-
-async function executeDeployWorkerGuarded(input, env) {
-  getVerifiedWorkerAdmin(input)
-  if (!env.CLOUDFLARE_API_TOKEN) return { success: false, error: 'CLOUDFLARE_API_TOKEN not configured on agent-worker.' }
-
-  const workerName = String(input.workerName || '').trim()
-  if (!WORKER_NAME_RE.test(workerName)) {
-    return { success: false, error: 'workerName must be lowercase letters, digits and hyphens (max 63 characters).' }
-  }
-  if (typeof input.code !== 'string' || !input.code.trim()) return { success: false, error: 'code is required' }
-
-  let target
-  try {
-    target = await inspectWorkerBindings(workerName, env)
-  } catch (e) {
-    target = { known: false, status: e.message }
-  }
-  if (!target.known) {
-    return {
-      success: false,
-      refused: 'BINDINGS_UNKNOWN',
-      error: `Could not read the current bindings of "${workerName}" (${target.status}), so it was not deployed. Nothing was changed.`,
-    }
-  }
-  if (target.bindings.length) {
-    const names = target.bindings.map(b => `${b.name} (${b.type})`).join(', ')
-    return {
-      success: false,
-      refused: 'HAS_BINDINGS',
-      error: `"${workerName}" has ${target.bindings.length} binding(s): ${names}. Uploading through this tool would remove all of them, so it was not deployed. Deploy that worker with wrangler from its own directory.`,
-    }
-  }
-
-  const result = await executeDeployWorker({ ...input, workerName, bindAdmin: false }, env)
-  if (result?.error) return { success: false, ...result }
-  return { ...result, created: !target.exists }
-}
-
 async function executeRegisterDeployedWorker(input, env) {
   const caller = getVerifiedWorkerAdmin(input)
   const { workerName } = input
@@ -17181,9 +17117,6 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeBuildCapabilityWorkerScaffold(toolInput, env)
     case 'deploy_worker':
       return await executeDeployWorker(toolInput, env)
-    // Not in tool-definitions on purpose: reached only through POST /admin/deploy-worker.
-    case 'deploy_worker_guarded':
-      return await executeDeployWorkerGuarded(toolInput, env)
     case 'register_deployed_worker':
       return await executeRegisterDeployedWorker(toolInput, env)
     case 'register_capability_worker':
