@@ -7322,6 +7322,29 @@ async function executeProvisionWorldGraphs(input, env) {
   }
 }
 
+// Move one platform graph into a World's own graph store (G6). The KG worker does the work and the
+// checks — Superadmin only, row + every version copied and verified by SHA-256 before the graph's
+// id points at the World, platform original to the platform trash — and learns who is asking from
+// the acting user executeTool attaches. This wrapper only forwards and reports.
+async function executeMoveGraphToWorld(input, env) {
+  const graphId = String(input.graphId || '').trim()
+  const world = String(input.world || '').trim().toLowerCase()
+  if (!graphId || !world) return { success: false, error: 'graphId and world are required, e.g. world "sodesign.no".' }
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/moveGraphToWorld', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ graphId, world }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || !data.success) return { success: false, error: data.error || `Move failed (HTTP ${res.status}).`, code: data.code }
+  return {
+    ...data,
+    message: `Moved graph ${graphId} into ${world}: ${data.history} version(s), each verified by SHA-256` +
+      (data.duplicatesDropped ? `; ${data.duplicatesDropped} duplicate platform history row(s) not carried over` : '') +
+      `. Same graph id and links. Platform original: ${data.platformCopy}.`,
+  }
+}
+
 // Resolve a World's photo-storage context from the registry (config photos_* columns), by domain or
 // founder_email. Builds on resolveWorldInfraContext (Superadmin gate + cf creds), then reads the
 // photos_* fields provision_world_photos recorded. Returns { …, bucket, deliveryBase, proxyWorker }
@@ -17134,6 +17157,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldPhotos(toolInput, env)
     case 'provision_world_graphs':
       return await executeProvisionWorldGraphs(toolInput, env)
+    case 'move_graph_to_world':
+      return await executeMoveGraphToWorld(toolInput, env)
     case 'upload_world_image':
       return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':

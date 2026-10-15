@@ -3725,6 +3725,19 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'move_graph_to_world',
+    description:
+      "Move ONE existing graph from the platform's shared storage into a World's OWN storage (the World Founder's Cloudflare account), e.g. world \"sodesign.no\". Superadmin only. The row and its full version history are copied, every version is verified by SHA-256, and only then does the graph id point at the World; the platform original goes to the platform trash for 30 days. The graph id and its links stay the same. A #EMAIL- system graph cannot be moved. Move only graphs the user has named — never pick graphs to move on your own.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        graphId: { type: 'string', description: 'The platform graph to move.' },
+        world: { type: 'string', description: 'The World domain to move it to, e.g. sodesign.no.' },
+      },
+      required: ['graphId', 'world'],
+    },
+  },
+  {
     name: 'upload_world_image',
     description:
       "Copy an image into a World Founder's OWN photo storage (their isolated R2 bucket) and return its cdn.<domain> URL. Fetches source_url and stores it via the World's photos-proxy, so the image lives in the founder's OWN Cloudflare account (world-photos-<stem>), NOT the shared blog-pictures/imgix path. The World must be photo-provisioned first (provision_world_photos). Superadmin only. Use this to bring an external image (a pexels/unsplash result, or any HTTPS image) into a World's own Cloudflare-native storage; the returned url (https://cdn.<domain>/photos/<key>) is what to embed in that World's nodes.",
