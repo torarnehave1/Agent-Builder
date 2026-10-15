@@ -7322,6 +7322,41 @@ async function executeProvisionWorldGraphs(input, env) {
   }
 }
 
+// Switch a World's graph store between 'provisioned' and 'active' (G7). Active means: a NEW graph
+// created by that World's founder or account holder, with no World named, goes to the World's own
+// store instead of the platform. Existing graphs are unaffected either way — where a graph lives is
+// decided by graph_locations, not by this row. Superadmin only; reads the row back.
+async function executeSetWorldGraphStoreStatus(input, env) {
+  const gate = await resolveSuperadminCaller(input, env, 'change a World graph store')
+  if (!gate.ok) return { success: false, error: gate.error }
+  const domain = String(input.domain || '').trim().toLowerCase()
+  const status = String(input.status || '').trim().toLowerCase()
+  if (!domain) return { success: false, error: 'domain is required, e.g. sodesign.no.' }
+  if (!['active', 'provisioned'].includes(status)) return { success: false, error: "status must be 'active' or 'provisioned'." }
+  const row = await env.DB.prepare('SELECT domain, status, endpoint_base FROM world_graph_stores WHERE domain = ?').bind(domain).first().catch(() => null)
+  if (!row) return { success: false, error: `${domain} has no graph store. Run provision_world_graphs first.` }
+  if (status === 'active') {
+    // Never point founders' new graphs at a store that does not answer right now.
+    const check = await fetch(`${row.endpoint_base}/__graphs/check`).then((r) => r.json()).catch((e) => ({ ok: false, error: e.message }))
+    if (!check.ok) return { success: false, error: `Not activated: ${row.endpoint_base} is not ready (${check.error || JSON.stringify(check)}).` }
+  }
+  await env.DB.prepare('UPDATE world_graph_stores SET status = ?, updated_at = ? WHERE domain = ?').bind(status, new Date().toISOString(), domain).run()
+  const back = await env.DB.prepare('SELECT status, updated_at FROM world_graph_stores WHERE domain = ?').bind(domain).first()
+  const founders = await env.DB.prepare('SELECT founder_email, account_holder_email FROM world_founders WHERE domain = ?').bind(domain).all()
+  const who = [...new Set((founders.results || []).flatMap((f) => [f.founder_email, f.account_holder_email]).filter(Boolean))]
+  return {
+    success: back?.status === status,
+    domain,
+    previous_status: row.status,
+    status: back?.status,
+    updated_at: back?.updated_at,
+    applies_to: who,
+    message: status === 'active'
+      ? `${domain} graph store is ACTIVE: new graphs created by ${who.join(', ') || 'its founder'} without naming a World now go to ${row.endpoint_base}. A Superadmin must still name the World explicitly. Existing graphs did not move.`
+      : `${domain} graph store is back to provisioned: new graphs default to the platform again. Graphs already stored in ${domain} stay there.`,
+  }
+}
+
 // Move one platform graph into a World's own graph store (G6). The KG worker does the work and the
 // checks — Superadmin only, row + every version copied and verified by SHA-256 before the graph's
 // id points at the World, platform original to the platform trash — and learns who is asking from
@@ -17159,6 +17194,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldGraphs(toolInput, env)
     case 'move_graph_to_world':
       return await executeMoveGraphToWorld(toolInput, env)
+    case 'set_world_graph_store_status':
+      return await executeSetWorldGraphStoreStatus(toolInput, env)
     case 'upload_world_image':
       return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':

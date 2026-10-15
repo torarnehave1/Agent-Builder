@@ -3725,6 +3725,19 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'set_world_graph_store_status',
+    description:
+      "Switch a World's own graph store between 'provisioned' and 'active' (Superadmin only). ACTIVE means: when that World's founder or account holder creates a graph without naming a World, it is stored in the World's own storage instead of the platform's. Existing graphs never move because of this. Activation is refused if the store does not answer its readiness check. Use only when the user asks to activate or deactivate a World's graph storage.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. sodesign.no.' },
+        status: { type: 'string', enum: ['active', 'provisioned'], description: "'active' to make the World the default for its founder's new graphs; 'provisioned' to go back to the platform default." },
+      },
+      required: ['domain', 'status'],
+    },
+  },
+  {
     name: 'move_graph_to_world',
     description:
       "Move ONE existing graph from the platform's shared storage into a World's OWN storage (the World Founder's Cloudflare account), e.g. world \"sodesign.no\". Superadmin only. The row and its full version history are copied, every version is verified by SHA-256, and only then does the graph id point at the World; the platform original goes to the platform trash for 30 days. The graph id and its links stay the same. A #EMAIL- system graph cannot be moved. Move only graphs the user has named — never pick graphs to move on your own.",
