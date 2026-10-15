@@ -1745,11 +1745,17 @@
               if (node.type !== 'fulltext') return
               var section = document.createElement('section')
               section.setAttribute('data-node-id', node.id)
-              var heading = document.createElement('h2')
-              heading.textContent = String(node.label || '').replace(/^#+\s*/, '')
-              section.appendChild(heading)
+              var label = String(node.label || '').replace(/^#+\s*/, '')
+              section.setAttribute('aria-label', label)
+              // Node info usually opens with its own heading; adding the label as one prints
+              // the title twice (the rule in this file's header). Only a heading-less node gets one.
+              if (!/^\s*#{1,6}\s/.test(String(node.info || ''))) {
+                var heading = document.createElement('h2')
+                heading.textContent = label
+                section.appendChild(heading)
+              }
               var content = document.createElement('div')
-              renderGraphInto(content, { nodes: [node], edges: [] }, ft, Object.assign({}, opts, { dialogTitle: heading.textContent }))
+              renderGraphInto(content, { nodes: [node], edges: [] }, ft, Object.assign({}, opts, { dialogTitle: label }))
               section.appendChild(content)
               host.appendChild(section)
             })
