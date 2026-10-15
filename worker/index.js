@@ -3100,6 +3100,56 @@ export default {
         })
       }
 
+      // POST /contacts/list and POST /contacts/search — the caller's OWN ContactHub contacts.
+      //
+      // The MCP server's list_contacts / search_contacts reach these, so the per-user table
+      // lookup (resolveContactTableIds) and the SQL search stay in one place — the same
+      // executors the Agent-Builder chat uses. The table is resolved from the VERIFIED caller,
+      // never a body field, so nobody can read another person's address book by naming them.
+      //
+      // The reply is a lean projection: identity and reachability fields only. Notes, photo and
+      // the interaction history search_contacts embeds for the chat are left out — they are not
+      // needed to register someone, and they would put more of other people's lives into a
+      // model's context than the question asked for.
+      if ((pathname === '/contacts/list' || pathname === '/contacts/search') && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200)
+        const parseList = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+        const lean = (c) => {
+          const addr = parseList(c.addresses)[0] || null
+          return {
+            id: c._id || c.id,
+            name: c.full_name || [c.first_name, c.last_name].filter(Boolean).join(' ') || null,
+            emails: parseList(c.emails).map(e => e?.value).filter(Boolean),
+            phones: parseList(c.phones).map(p => p?.value).filter(Boolean),
+            labels: parseList(c.labels),
+            organization: c.organization || null,
+            address: addr ? { street: addr.street || null, postalCode: addr.postalCode || null, city: addr.city || null, country: addr.country || null } : null,
+          }
+        }
+        try {
+          if (pathname === '/contacts/list') {
+            const r = await executeTool('list_contacts', { userId: callerAuth.userId, label: body.label || undefined, limit, offset: Number(body.offset) || 0 }, env, {})
+            const contacts = (Array.isArray(r?.contacts) ? r.contacts : []).map(lean)
+            return new Response(JSON.stringify({ success: true, contacts, returned: contacts.length, total: Number(r?.total) || contacts.length }), { headers: corsHeaders })
+          }
+          if (!String(body.query || '').trim()) {
+            return new Response(JSON.stringify({ error: 'query is required' }), { status: 400, headers: corsHeaders })
+          }
+          const r = await executeTool('search_contacts', { userId: callerAuth.userId, query: String(body.query), limit }, env, {})
+          const contacts = (Array.isArray(r?.contacts) ? r.contacts : []).map(lean)
+          return new Response(JSON.stringify({ success: true, contacts, returned: contacts.length, total: Number(r?.total) || contacts.length }), { headers: corsHeaders })
+        } catch (e) {
+          // No contacts table for this user is an empty address book, not a server fault.
+          const status = /contact|table/i.test(e.message) ? 404 : 500
+          return new Response(JSON.stringify({ error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /publish/html-node — publish one html-node to a live host.
       //
       // Exists so the MCP server on knowledge.vegvisr.org can publish WITHOUT a second copy of

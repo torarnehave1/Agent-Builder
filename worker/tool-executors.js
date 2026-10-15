@@ -10540,9 +10540,20 @@ async function executeListContacts(input, env) {
   const { limit = 50, offset = 0, label, userId } = input
   const { contactsTableId } = await resolveContactTableIds(userId, env)
   const body = { tableId: contactsTableId, limit, offset, orderBy: 'full_name', order: 'asc' }
-  if (label) body.where = { labels: label }
+  // labels is a JSON array string ('["* myContacts","STILLEROM"]'), so `where: { labels }` was an
+  // equality test against the whole array and never matched anything (found 2026-10-15). Match
+  // the label as a quoted JSON element in SQL, so paging and total stay server-side, then drop
+  // any row whose parsed labels do not hold it exactly.
+  if (label) body.search = { term: JSON.stringify(String(label)), columns: ['labels'] }
   const data = await drizzleFetch(env, '/query', body)
-  return { contacts: data.records || data.rows || data, total: data.total }
+  let contacts = data.records || data.rows || data
+  if (label && Array.isArray(contacts)) {
+    const want = String(label).toLowerCase()
+    contacts = contacts.filter(c => {
+      try { return JSON.parse(c.labels || '[]').some(l => String(l).toLowerCase() === want) } catch { return false }
+    })
+  }
+  return { contacts, total: data.total }
 }
 
 async function executeSearchContacts(input, env) {
