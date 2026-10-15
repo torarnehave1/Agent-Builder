@@ -273,7 +273,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'proff_get_public_company_info', 'proff_search_persons', 'proff_get_person_details',
   'proff_find_business_network',
 ]
-const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
+export const OPENAI_AGENT_TOOLS = new Set(OPENAI_AGENT_TOOL_NAMES)
 
 // Tools that MUTATE a knowledge-graph node/graph (they read the version, edit, then patch
 // with expectedVersion). These MUST run one-at-a-time — running two on the SAME node in
@@ -589,6 +589,14 @@ function getTextContent(content) {
       .join('\n')
   }
   return ''
+}
+
+// Tool names the user wrote (snake_case words that are real tool names) that this provider path
+// does not carry. delegate_to_chat/_contact are deliberately swapped for their direct tools here.
+const REPLACED_ON_OPENAI_PATH = new Set(['delegate_to_chat', 'delegate_to_contact'])
+export function missingRequestedTools(text, knownNames, allowedNames) {
+  const found = new Set(String(text || '').match(/\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b/g) || [])
+  return [...found].filter((n) => knownNames.has(n) && !allowedNames.has(n) && !REPLACED_ON_OPENAI_PATH.has(n))
 }
 
 function getLatestUserText(messages) {
@@ -1160,6 +1168,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     if (!provider.binding) throw new Error(`${provider.bindingName} service binding is not configured.`)
 
     let { allTools, operationMap } = await loadAllTools(env)
+    const knownToolNames = new Set([...allTools, ...TOOL_DEFINITIONS].map((tool) => tool.name))
     allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
     // Grok/OpenAI must not route chat work through the Claude-only chat subagent.
     // Expose the existing chat tools directly on this provider path instead.
@@ -1181,6 +1190,20 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     const openAIAllowedTools = new Set(allTools.map((tool) => tool.name))
     const openAITools = allTools.map(toOpenAITool)
 
+    // A tool the user NAMES but this path does not carry stops the run before the model sees it.
+    // On 2026-10-15 Grok, asked for save_component (not in its list), called
+    // save_world_founder_template(html:"test") instead and overwrote the shared console template.
+    // The prompt already told it to name the missing tool; it substituted anyway. So: code, not prompt.
+    const missingNamed = missingRequestedTools(getLatestUserText(messages), knownToolNames, openAIAllowedTools)
+    if (missingNamed.length) {
+      const list = missingNamed.map((n) => '`' + n + '`').join(', ')
+      const stopMsg = `Stopped before doing anything: you asked for ${list}, which ${missingNamed.length === 1 ? 'is' : 'are'} not available on the ${provider.label} path. No other tool was run in ${missingNamed.length === 1 ? 'its' : 'their'} place. Switch the model to Claude, or ask for ${list} to be added to the ${provider.label} tool list.`
+      log(`blocked: requested tool(s) not on this path: ${missingNamed.join(', ')}`)
+      stats.error = `requested tool not available on ${provider.name}: ${missingNamed.join(', ')}`
+      writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: stopMsg })}\n\n`))
+      writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: 0, blocked: 'tool_not_on_path', tools: missingNamed })}\n\n`))
+    }
+
     const openAIToolPrompt =
       `${systemPrompt}\n\n` +
       `## ${provider.label} AgentChat Tooling\n` +
@@ -1195,7 +1218,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 
     log(`started | model=${selectedModel} providerModel=${providerModel} maxTurns=${maxTurns} mode=${planMode ? 'PLAN' : 'auto'} tools=${allTools.length}`)
 
-    while (turn < maxTurns) {
+    while (!missingNamed.length && turn < maxTurns) {
       turn++
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
