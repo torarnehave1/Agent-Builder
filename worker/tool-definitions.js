@@ -3725,6 +3725,24 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'set_world_redirect',
+    description:
+      "Make one host of a World answer with a redirect (Superadmin only), e.g. the apex stineoksvolddesign.no → https://www.stineoksvolddesign.no/. Deploys a tiny redirect worker in the World's OWN Cloudflare account and attaches the host to it as a Workers custom domain. The host's existing A/AAAA/CNAME records conflict with that and are REMOVED — they are read first, returned in removed_dns_records, and put back automatically if the attach fails. Refuses a host already served by another worker unless force is true. Checks the redirect live. Use only when the user asks for a host to redirect.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain (its zone), e.g. stineoksvolddesign.no." },
+        host: { type: 'string', description: 'The host to redirect: the domain itself or a subdomain. Defaults to the domain.' },
+        target: { type: 'string', description: 'Full https URL to send visitors to, e.g. https://www.stineoksvolddesign.no/' },
+        status: { type: 'number', enum: [301, 302, 307, 308], description: '301 (permanent, default) or 302/307/308.' },
+        keep_path: { type: 'boolean', description: 'Carry the path and query over to the target (default true).' },
+        worker_name: { type: 'string', description: 'Override the worker name (default <host>-redirect).' },
+        force: { type: 'boolean', description: 'Take the host over from another worker.' },
+      },
+      required: ['domain', 'target'],
+    },
+  },
+  {
     name: 'set_world_brand',
     description:
       "Set how one of a World's hosts looks (Superadmin only): writes brand:<host> into the World's OWN BRAND_CONFIG (the KV its brand proxy serves as /branding.json). Name, slogan, logo, tab title, favicon, and — under editor — the knowledge-graph editor's fonts and colours, which the editor applies on editor.<domain>. Replaces the whole value for that host; reads it back.",

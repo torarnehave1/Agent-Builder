@@ -7322,6 +7322,114 @@ async function executeProvisionWorldGraphs(input, env) {
   }
 }
 
+// Make one host of a World answer with a redirect (e.g. stineoksvolddesign.no → www, whose DNS
+// pointed unproxied at Cloudflare IPs and answered Error 1000). A tiny worker in the World's OWN
+// account, attached to the host as a Workers custom domain. The host's existing A/AAAA/CNAME
+// records conflict with that and are removed — but read first and returned, and put back if the
+// attach fails, so nothing is lost silently. Superadmin only, via resolveWorldInfraContext.
+const REDIRECT_WORKER_SCRIPT = `export default {
+  async fetch(request, env) {
+    const from = new URL(request.url)
+    const to = new URL(env.TARGET)
+    if (env.KEEP_PATH === 'true') {
+      to.pathname = (to.pathname.replace(/\\/$/, '') + from.pathname) || '/'
+      to.search = from.search
+    }
+    return Response.redirect(to.toString(), Number(env.STATUS) || 301)
+  },
+}
+`
+
+async function executeSetWorldRedirect(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfAccount, cfToken, domain } = ctx
+  const host = String(input.host || domain || '').trim().toLowerCase()
+  if (!(host === domain || host.endsWith('.' + domain))) return { success: false, error: `host must be ${domain} or one of its subdomains.` }
+  let target
+  try { target = new URL(String(input.target || '')) } catch { return { success: false, error: 'target must be a full https URL, e.g. https://www.' + domain + '/' } }
+  if (target.protocol !== 'https:') return { success: false, error: 'target must be https.' }
+  if (target.hostname === host) return { success: false, error: 'target is the same host: that would redirect to itself.' }
+  const status = [301, 302, 307, 308].includes(Number(input.status)) ? Number(input.status) : 301
+  const keepPath = input.keep_path !== false
+  const workerName = (input.worker_name || `${host.replace(/[^a-z0-9]+/g, '-')}-redirect`).slice(0, 63)
+
+  const zr = await cfApi(`/zones?name=${encodeURIComponent(domain)}`, cfToken)
+  const zone = zr.ok ? (zr.json.result || []).find((z) => !z.account || z.account.id === cfAccount) : null
+  if (!zone) return { success: false, error: `Zone ${domain} not found in account ${cfAccount} (${zr.status}: ${zr.error || 'not found'}).` }
+
+  // Already attached to some worker? Only ours may be replaced without force.
+  const attached = await cfApi(`/accounts/${cfAccount}/workers/domains?hostname=${encodeURIComponent(host)}`, cfToken)
+  const current = attached.ok ? (attached.json.result || [])[0] : null
+  if (current && current.service !== workerName && !input.force) {
+    return { success: false, error: `${host} is already served by the worker ${current.service}. Pass force: true to take it over.` }
+  }
+
+  // 1. Upload the redirect worker.
+  const metadata = {
+    main_module: 'index.js',
+    compatibility_date: '2025-01-15',
+    bindings: [
+      { type: 'plain_text', name: 'TARGET', text: target.toString() },
+      { type: 'plain_text', name: 'STATUS', text: String(status) },
+      { type: 'plain_text', name: 'KEEP_PATH', text: keepPath ? 'true' : 'false' },
+    ],
+  }
+  const form = new FormData()
+  form.append('metadata', JSON.stringify(metadata))
+  form.append('index.js', new File([REDIRECT_WORKER_SCRIPT], 'index.js', { type: 'application/javascript+module' }))
+  const up = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}`, {
+    method: 'PUT', headers: { Authorization: `Bearer ${cfToken}` }, body: form,
+  })
+  const upJson = await up.json().catch(() => null)
+  if (!up.ok || !upJson?.success) return { success: false, error: `Redirect worker upload failed: ${upJson?.errors?.[0]?.message || `HTTP ${up.status}`}` }
+
+  // 2. Read, then remove, the records a custom domain cannot coexist with.
+  const recs = await cfApi(`/zones/${zone.id}/dns_records?name=${encodeURIComponent(host)}&per_page=100`, cfToken)
+  if (!recs.ok) return { success: false, error: `Could not read DNS for ${host} (${recs.status}): ${recs.error}` }
+  const conflicting = (recs.json.result || []).filter((r) => ['A', 'AAAA', 'CNAME'].includes(r.type))
+  const removed = conflicting.map((r) => ({ type: r.type, name: r.name, content: r.content, proxied: r.proxied, ttl: r.ttl }))
+  for (const r of conflicting) {
+    const del = await cfApi(`/zones/${zone.id}/dns_records/${r.id}`, cfToken, { method: 'DELETE' })
+    if (!del.ok) return { success: false, error: `Could not remove ${r.type} ${r.name} → ${r.content} (${del.status}): ${del.error}. Records removed before this one: ${JSON.stringify(removed.slice(0, conflicting.indexOf(r)))}` }
+  }
+
+  // 3. Attach the host. If that fails, put the records back exactly as they were.
+  const att = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, host)
+  if (!att.ok) {
+    const restored = []
+    for (const r of removed) {
+      const put = await cfApi(`/zones/${zone.id}/dns_records`, cfToken, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: r.type, name: r.name, content: r.content, proxied: r.proxied, ttl: r.ttl }),
+      })
+      restored.push({ ...r, restored: put.ok })
+    }
+    return { success: false, error: `Could not attach ${host} to ${workerName}: ${att.status}: ${att.detail}. The DNS records were put back.`, restored }
+  }
+
+  // 4. Read it back from the internet: the first request may wait for the edge certificate.
+  let verified = null
+  for (let i = 0; i < 6 && !verified; i++) {
+    if (i) await new Promise((r) => setTimeout(r, 5000))
+    try {
+      const res = await fetch(`https://${host}/redirect-check?x=1`, { redirect: 'manual' })
+      const loc = res.headers.get('location') || ''
+      if (res.status === status && loc.startsWith(target.origin)) verified = { status: res.status, location: loc }
+    } catch { /* certificate or DNS still settling */ }
+  }
+
+  return {
+    success: true,
+    host, target: target.toString(), status, keep_path: keepPath, worker: workerName,
+    removed_dns_records: removed,
+    verified,
+    message: verified
+      ? `${host} now answers ${status} → ${target.origin}… (checked: ${verified.location}). Removed ${removed.length} DNS record(s), listed in removed_dns_records for rollback.`
+      : `${host} is attached to ${workerName} and redirects to ${target}, but the live check did not answer yet (certificate/DNS can take a few minutes). Removed ${removed.length} DNS record(s), listed in removed_dns_records for rollback.`,
+  }
+}
+
 // Write a World's look for one of its hosts into the World's OWN BRAND_CONFIG KV (G8): the value the
 // brand proxy serves as /branding.json on that host. Until now nothing wrote BRAND_CONFIG in a
 // founder's account. The editor (Knowledge-Editor) applies it on editor.<domain> when theme.editor
@@ -17276,6 +17384,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeSetWorldGraphStoreStatus(toolInput, env)
     case 'set_world_brand':
       return await executeSetWorldBrand(toolInput, env)
+    case 'set_world_redirect':
+      return await executeSetWorldRedirect(toolInput, env)
     case 'upload_world_image':
       return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':
