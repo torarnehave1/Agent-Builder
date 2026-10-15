@@ -7322,6 +7322,68 @@ async function executeProvisionWorldGraphs(input, env) {
   }
 }
 
+// Write a World's look for one of its hosts into the World's OWN BRAND_CONFIG KV (G8): the value the
+// brand proxy serves as /branding.json on that host. Until now nothing wrote BRAND_CONFIG in a
+// founder's account. The editor (Knowledge-Editor) applies it on editor.<domain> when theme.editor
+// is present; other apps reading /branding.json see the usual brand/meta fields. Superadmin only,
+// via resolveWorldInfraContext (the World's stored token); reads the value back.
+async function executeSetWorldBrand(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfAccount, cfToken, domain } = ctx
+  const host = String(input.host || '').trim().toLowerCase()
+  if (!host || !(host === domain || host.endsWith('.' + domain))) {
+    return { success: false, error: `host must be ${domain} or one of its subdomains, e.g. editor.${domain}.` }
+  }
+  // The BRAND_CONFIG the World's proxy actually reads: find the worker serving me.<domain> (or the
+  // host itself) and take the namespace bound to it — never a guessed id.
+  const stem = domain.split('.')[0]
+  let proxy = await inspectBrandProxy(cfAccount, cfToken, host, `${stem}-brand-proxy`)
+  if (!proxy.exists) proxy = await inspectBrandProxy(cfAccount, cfToken, `me.${domain}`, `${stem}-brand-proxy`)
+  if (proxy.denied) return { success: false, error: `The World token may not read the brand proxy (${proxy.deniedCall}: ${proxy.deniedStatus}).` }
+  const ns = (proxy.bindings || []).find((b) => b.name === 'BRAND_CONFIG' && b.type === 'kv_namespace')
+  if (!ns) return { success: false, error: `${proxy.name || 'the brand proxy'} has no BRAND_CONFIG binding. Redeploy it with deploy_world_proxy first.` }
+
+  const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+  const color = (v) => (typeof v === 'string' && /^#[0-9a-f]{3,8}$/i.test(v.trim()) ? v.trim() : undefined)
+  const ed = input.editor || {}
+  const fontsCssUrl = str(ed.fontsCssUrl)
+  if (fontsCssUrl && !/^https:\/\/fonts\.googleapis\.com\//.test(fontsCssUrl)) {
+    return { success: false, error: 'editor.fontsCssUrl must be a https://fonts.googleapis.com/ stylesheet URL.' }
+  }
+  const prune = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && !(v && typeof v === 'object' && !Object.keys(v).length)))
+  const value = {
+    targetApp: str(input.target_app),
+    branding: prune({
+      brand: prune({ name: str(input.name), slogan: str(input.slogan), logoUrl: str(input.logo_url) }),
+      meta: prune({ title: str(input.title) || str(input.name), faviconUrl: str(input.favicon_url) }),
+      theme: prune({
+        editor: prune({ fontsCssUrl, fontSans: str(ed.fontSans), fontUi: str(ed.fontUi), accent: color(ed.accent), ink: color(ed.ink) }),
+      }),
+    }),
+  }
+  if (!value.targetApp) delete value.targetApp
+  const key = `brand:${host}`
+  const put = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces/${ns.namespace_id}/values/${encodeURIComponent(key)}`, cfToken, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value),
+  })
+  if (!put.ok) return { success: false, error: `Could not write ${key} (${put.status}): ${put.error || 'unknown'}` }
+  const back = await fetch(`https://api.cloudflare.com/client/v4/accounts/${cfAccount}/storage/kv/namespaces/${ns.namespace_id}/values/${encodeURIComponent(key)}`, {
+    headers: { Authorization: `Bearer ${cfToken}` },
+  }).then((r) => r.text()).catch(() => '')
+  const same = back === JSON.stringify(value)
+  return {
+    success: same,
+    domain, host, key,
+    brand_proxy: proxy.name,
+    brand_config_namespace: ns.namespace_id,
+    value,
+    message: same
+      ? `Brand for ${host} written to ${proxy.name}'s BRAND_CONFIG (${key}) and read back. https://${host}/branding.json serves it within about 5 minutes (the proxy caches it).`
+      : `Wrote ${key}, but reading it back did not match.`,
+  }
+}
+
 // Switch a World's graph store between 'provisioned' and 'active' (G7). Active means: a NEW graph
 // created by that World's founder or account holder, with no World named, goes to the World's own
 // store instead of the platform. Existing graphs are unaffected either way — where a graph lives is
@@ -17207,6 +17269,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeMoveGraphToWorld(toolInput, env)
     case 'set_world_graph_store_status':
       return await executeSetWorldGraphStoreStatus(toolInput, env)
+    case 'set_world_brand':
+      return await executeSetWorldBrand(toolInput, env)
     case 'upload_world_image':
       return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':

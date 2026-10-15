@@ -1,4 +1,4 @@
-// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-09-24.
+// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-15 (editor origin added).
 // The KV key is the SOURCE — deploy_world_proxy reads it, not this file. This copy exists because
 // that template once drifted seven months from any reviewable source, and a change nobody can read
 // is a change nobody can check. Update BOTH when changing the proxy, and keep the KV backup key
@@ -78,10 +78,15 @@ export default {
       return new Response('Missing DEFAULT_ORIGIN', { status: 500 });
     }
 
+    // editor.<World domain> serves the knowledge-graph editor under the World's own name (G8,
+    // 2026-10-15). The editor reads /branding.json from this same host for its look, so the
+    // World's BRAND_CONFIG brand:editor.<domain> dresses it; the editor's data calls go to
+    // knowledge.vegvisr.org with the signed-in user's token either way.
     const appOrigins = {
       aichat: env.APP_AICHAT_ORIGIN,
       connect: env.APP_CONNECT_ORIGIN,
-      photos: env.APP_PHOTOS_ORIGIN
+      photos: env.APP_PHOTOS_ORIGIN,
+      editor: env.APP_EDITOR_ORIGIN || 'https://editor.vegvisr.org'
     };
 
     const url = new URL(request.url);

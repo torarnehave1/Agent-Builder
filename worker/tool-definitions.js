@@ -3725,6 +3725,36 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'set_world_brand',
+    description:
+      "Set how one of a World's hosts looks (Superadmin only): writes brand:<host> into the World's OWN BRAND_CONFIG (the KV its brand proxy serves as /branding.json). Name, slogan, logo, tab title, favicon, and — under editor — the knowledge-graph editor's fonts and colours, which the editor applies on editor.<domain>. Replaces the whole value for that host; reads it back.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World domain, e.g. sodesign.no (resolves the World's account and token)." },
+        host: { type: 'string', description: 'The host to dress, e.g. editor.sodesign.no.' },
+        name: { type: 'string', description: 'Brand name shown in the app, e.g. "Stine Oksvold Design".' },
+        slogan: { type: 'string', description: 'Short tagline under the name.' },
+        logo_url: { type: 'string', description: 'HTTPS URL of the logo image.' },
+        title: { type: 'string', description: 'Browser tab title. Defaults to name.' },
+        favicon_url: { type: 'string', description: 'HTTPS URL of the favicon (180x180 works well).' },
+        target_app: { type: 'string', description: "Which app the host serves through the proxy, e.g. 'editor'. Omit to route by the host's first label." },
+        editor: {
+          type: 'object',
+          description: "The editor's look on this host.",
+          properties: {
+            fontsCssUrl: { type: 'string', description: 'Google Fonts stylesheet URL, e.g. https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap' },
+            fontSans: { type: 'string', description: 'CSS font-family for body text, e.g. "\'Alegreya Sans\', sans-serif".' },
+            fontUi: { type: 'string', description: 'CSS font-family for UI chrome; defaults to fontSans.' },
+            accent: { type: 'string', description: 'Accent colour, hex, e.g. #a3386b.' },
+            ink: { type: 'string', description: 'Dark ink colour, hex, e.g. #2b3445.' },
+          },
+        },
+      },
+      required: ['domain', 'host'],
+    },
+  },
+  {
     name: 'set_world_graph_store_status',
     description:
       "Switch a World's own graph store between 'provisioned' and 'active' (Superadmin only). ACTIVE means: when that World's founder or account holder creates a graph without naming a World, it is stored in the World's own storage instead of the platform's. Existing graphs never move because of this. Activation is refused if the store does not answer its readiness check. Use only when the user asks to activate or deactivate a World's graph storage.",
