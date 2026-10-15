@@ -196,10 +196,14 @@ async function executeCreateGraph(input, env) {
     edges: []
   }
 
+  // world: store the graph in that World's OWN storage (its founder's Cloudflare account). The KG
+  // worker decides whether this user may — the World's founder, its account holder, or a
+  // Superadmin — from the acting user executeTool attaches, not from anything said here.
+  const world = typeof input.world === 'string' && input.world.trim() ? input.world.trim().toLowerCase() : null
   const response = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: graphId, graphData })
+    body: JSON.stringify({ id: graphId, graphData, ...(world ? { world } : {}) })
   })
 
   const data = await response.json()
@@ -226,12 +230,19 @@ async function executeCreateGraph(input, env) {
   const discardedNote = supplied && supplied !== finalGraphId
     ? ` The graphId you supplied (${supplied}) was NOT used — it does not exist; write to ${finalGraphId}.`
     : ''
+  // A World's graph is not readable by the public gnew-viewer (it is private to that World), so
+  // its link is the editor, which signs in. Platform graphs keep the viewer link they always had.
+  const storedIn = data.world || null
+  const viewUrl = storedIn
+    ? `https://editor.vegvisr.org/?graphId=${finalGraphId}`
+    : `https://www.vegvisr.org/gnew-viewer?graphId=${finalGraphId}`
   return {
     graphId: finalGraphId,
     ...(supplied && supplied !== finalGraphId ? { discardedGraphId: supplied } : {}),
     version: data.newVersion || 1,
-    message: `Graph "${title}" created with graphId ${finalGraphId} (0 nodes). Use exactly this graphId for create_node / add_edge on it.${discardedNote}${warning}`,
-    viewUrl: `https://www.vegvisr.org/gnew-viewer?graphId=${finalGraphId}`
+    ...(storedIn ? { world: storedIn } : {}),
+    message: `Graph "${title}" created with graphId ${finalGraphId} (0 nodes)${storedIn ? `, stored in ${storedIn}'s own storage` : ''}. Use exactly this graphId for create_node / add_edge on it.${discardedNote}${warning}`,
+    viewUrl,
   }
 }
 
@@ -16776,7 +16787,64 @@ async function executeListOrders(input, env) {
 
 // Every tool runs through here so a Cloudflare token picked up anywhere in the call (noteCfToken)
 // is named on the result — the agent log then shows which dashboard token was used.
+// ── Who the KG worker is acting for ───────────────────────────────────────────────────────────
+// Every KG_WORKER.fetch from an executor used to arrive at the knowledge-graph worker as an
+// anonymous service binding. That was enough while every graph lived on the platform; a graph in
+// a World's own store is served only to that World's founder or a Superadmin, so the KG worker
+// has to know who the user behind the tool call is. It accepts x-acting-user-email on the
+// service-binding path only (an internet request cannot set it), matches it to a config row and
+// takes the role from that row. Here the email comes from the authenticated chat user — the same
+// identity the loop already injects as input.userId — never from a tool argument.
+const ACTING_EMAIL_TTL_MS = 60_000
+const actingEmailCache = new Map()
+
+async function actingEmailFor(toolInput, env) {
+  const ac = (toolInput && toolInput.authContext) || {}
+  const direct = String(ac.email || ac.profile?.email || ac.session?.email || '').trim().toLowerCase()
+  if (direct.includes('@')) return direct
+  const uid = String((toolInput && toolInput.userId) || ac.userId || '').trim()
+  if (!uid) return null
+  if (uid.includes('@')) return uid.toLowerCase()
+  const hit = actingEmailCache.get(uid)
+  if (hit && hit.at > Date.now() - ACTING_EMAIL_TTL_MS) return hit.email
+  const profile = await resolveUserProfile(uid, env).catch(() => null)
+  const email = profile?.email ? String(profile.email).toLowerCase() : null
+  actingEmailCache.set(uid, { email, at: Date.now() })
+  return email
+}
+
+function kgWorkerActingAs(kg, email) {
+  return {
+    fetch(input, init = {}) {
+      if (input instanceof Request) {
+        const headers = new Headers(input.headers)
+        if (!headers.has('x-acting-user-email')) headers.set('x-acting-user-email', email)
+        return kg.fetch(new Request(input, { headers }))
+      }
+      const headers = new Headers(init.headers || {})
+      if (!headers.has('x-acting-user-email')) headers.set('x-acting-user-email', email)
+      return kg.fetch(input, { ...init, headers })
+    },
+  }
+}
+
+/** env with KG_WORKER naming the user; every other binding untouched. Unchanged when unknown. */
+async function envActingFor(toolInput, env) {
+  if (!env || !env.KG_WORKER || env.__kgActing) return env
+  const email = await actingEmailFor(toolInput, env)
+  if (!email) return env
+  const kg = kgWorkerActingAs(env.KG_WORKER, email)
+  return new Proxy(env, {
+    get(target, prop) {
+      if (prop === 'KG_WORKER') return kg
+      if (prop === '__kgActing') return email
+      return target[prop]
+    },
+  })
+}
+
 async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
+  env = await envActingFor(toolInput, env)
   const ledger = []
   if (toolInput && typeof toolInput === 'object') toolInput[CF_TOKEN_LEDGER] = ledger
   let result

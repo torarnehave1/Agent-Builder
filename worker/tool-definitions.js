@@ -29,6 +29,10 @@ const TOOL_DEFINITIONS = [
           type: 'string',
           description: 'Hashtag categories for the graph, e.g. "#Health #Neuroscience #Biology". Use 3-5 relevant hashtags separated by spaces.'
         },
+        world: {
+          type: 'string',
+          description: "Store the graph in a World's OWN storage instead of the platform's, e.g. \"sodesign.no\" for Stine Oksvold Design. Only that World's founder or a Superadmin may; the server checks. Omit to store on the platform as usual. Pass it only when the user asks for the graph to live in their World/domain.",
+        },
         metaArea: {
           type: 'string',
           description: 'A single community-relevant meta area tag in ALL CAPS, e.g. "NEUROSCIENCE", "AI TECHNOLOGY", "NORSE MYTHOLOGY". Should be a proper noun or well-known field of study.'
