@@ -7358,7 +7358,12 @@ async function executeSetWorldBrand(input, env) {
       brand: prune({ name: str(input.name), slogan: str(input.slogan), logoUrl: str(input.logo_url) }),
       meta: prune({ title: str(input.title) || str(input.name), faviconUrl: str(input.favicon_url) }),
       theme: prune({
-        editor: prune({ fontsCssUrl, fontSans: str(ed.fontSans), fontUi: str(ed.fontUi), accent: color(ed.accent), ink: color(ed.ink) }),
+        editor: prune({
+          fontsCssUrl, fontSans: str(ed.fontSans), fontUi: str(ed.fontUi), fontDisplay: str(ed.fontDisplay),
+          accent: color(ed.accent), ink: color(ed.ink), surface: color(ed.surface),
+          scheme: ed.scheme === 'light' || ed.scheme === 'dark' ? ed.scheme : undefined,
+          lang: ed.lang === 'no' || ed.lang === 'en' ? ed.lang : undefined,
+        }),
       }),
     }),
   }

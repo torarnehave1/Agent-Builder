@@ -60,7 +60,7 @@ function makeEnv() {
 const STINE = {
   domain: 'sodesign.no', host: 'editor.sodesign.no', name: 'Stine Oksvold Design', slogan: 'Kunnskapsgrafer',
   logo_url: 'https://favicons.vegvisr.org/x.png', target_app: 'editor',
-  editor: { fontsCssUrl: 'https://fonts.googleapis.com/css2?family=Alegreya&family=Alegreya+Sans&display=swap', fontSans: "'Alegreya Sans', sans-serif", accent: '#a3386b', ink: '#2b3445' },
+  editor: { fontsCssUrl: 'https://fonts.googleapis.com/css2?family=Alegreya&family=Alegreya+Sans&display=swap', fontSans: "'Alegreya Sans', sans-serif", fontDisplay: 'Alegreya, serif', accent: '#a3386b', ink: '#2b3445', surface: '#eadce2', scheme: 'light', lang: 'no' },
 }
 
 {
@@ -71,6 +71,8 @@ const STINE = {
   check('into the BRAND_CONFIG bound to the World proxy, never HTML_PAGES', kv.has('ns-brand|brand:editor.sodesign.no') && ![...kv.keys()].some((k) => k.startsWith('ns-pages|')), JSON.stringify([...kv.keys()]))
   check('in the shape the editor reads (branding.theme.editor)', stored.branding?.theme?.editor?.accent === '#a3386b' && stored.branding?.theme?.editor?.fontSans === "'Alegreya Sans', sans-serif" && stored.branding?.brand?.name === 'Stine Oksvold Design' && stored.targetApp === 'editor', JSON.stringify(stored))
   check('title defaults to the name', stored.branding?.meta?.title === 'Stine Oksvold Design', JSON.stringify(stored.branding?.meta))
+  const ed = stored.branding?.theme?.editor || {}
+  check('surface, scheme, lang and heading font are kept', ed.surface === '#eadce2' && ed.scheme === 'light' && ed.lang === 'no' && ed.fontDisplay === 'Alegreya, serif', JSON.stringify(ed))
 }
 {
   const { env, kv } = makeEnv()
@@ -84,7 +86,7 @@ const STINE = {
 }
 {
   const { env, kv } = makeEnv()
-  const r = await executeTool('set_world_brand', { userId: 'owner-uuid', ...STINE, editor: { accent: 'red; background:url(x)' } }, env)
+  const r = await executeTool('set_world_brand', { userId: 'owner-uuid', ...STINE, editor: { accent: 'red; background:url(x)', scheme: 'neon', lang: 'xx' } }, env)
   const stored = JSON.parse(kv.get('ns-brand|brand:editor.sodesign.no') || '{}')
   check('a colour that is not hex is dropped, not written', r.success === true && stored.branding?.theme?.editor === undefined, JSON.stringify(stored))
 }
