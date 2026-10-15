@@ -74,5 +74,18 @@ const schemaOf = (g) => g.nodes[0].metadata.schema
   check('an explicit schema still replaces it', r.success === true && schemaOf(graph).description === 'New' && !schemaOf(graph).props.a, JSON.stringify(schemaOf(graph)))
 }
 
+{
+  const { env, graph } = makeEnv()
+  const r = await executeTool('save_component', { ...base, schemaProps: JSON.stringify({ world: { attr: 'data-world' } }) }, env)
+  check('schemaProps sent as a JSON string is parsed and applied, and the message lists the props', r.success === true && schemaOf(graph).props.world?.attr === 'data-world' && /world/.test(r.message), JSON.stringify(r).slice(0, 300))
+}
+{
+  const { env, graph } = makeEnv()
+  const before = JSON.stringify(graph.nodes[0])
+  // The exact 2026-10-15 shape: a string with unescaped inner quotes.
+  const r = await executeTool('save_component', { ...base, schemaProps: '{"include": {"description": ""published" (default)"}}' }, env)
+  check('an invalid JSON string refuses the whole save and writes nothing', r.success === false && /Nothing was saved/.test(r.error) && JSON.stringify(graph.nodes[0]) === before, JSON.stringify(r))
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall save_component schema checks pass')

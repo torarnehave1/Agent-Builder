@@ -12781,6 +12781,20 @@ async function executeSaveRegistryItem(input, env, kind) {
   if (kind === 'layout' && !/data-slot=/.test(impl)) {
     return { success: false, error: `A layout impl must contain <div data-slot="NAME"> containers. This impl has none.` }
   }
+  // Models sometimes send an object argument as a JSON STRING (Claude did, 2026-10-15, with
+  // schemaProps — and the string was not even valid JSON). Parse it, and refuse the whole save
+  // before anything is written if it does not parse: silently dropping it let the agent report
+  // "all props registered" when none were.
+  for (const key of ['schema', 'schemaProps', 'verify']) {
+    if (typeof input[key] !== 'string') continue
+    if (!input[key].trim()) { delete input[key]; continue }
+    try { input[key] = JSON.parse(input[key]) } catch (e) {
+      return { success: false, error: `${key} must be a JSON object; it came as a string that is not valid JSON (${e.message}). Nothing was saved. Send ${key} as an object, with inner quotes escaped.` }
+    }
+    if (!input[key] || typeof input[key] !== 'object' || Array.isArray(input[key])) {
+      return { success: false, error: `${key} must be a JSON object. Nothing was saved.` }
+    }
+  }
   const schema = (input.schema && typeof input.schema === 'object') ? input.schema : {}
   const v = (input.verify && typeof input.verify === 'object') ? input.verify : {}
   const verdict = String(v.verdict || 'UNVERIFIED').toUpperCase()
@@ -12856,7 +12870,9 @@ async function executeSaveRegistryItem(input, env, kind) {
       metadata: { ...(existing.metadata || {}), ...itemMeta },
       info: input.description || existing.info || `${kind}: ${name}`,
     })
-    return { success: true, graphId, name, kind, nodeId: existing.id, overwritten: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, message: `Updated ${kind} "${name}" in the Component Registry (${impl.length} chars).${deliveryNote}${unverifiedNote}` }
+    const propNames = Object.keys(itemMeta.schema?.props || {})
+    const addedProps = input.schemaProps && typeof input.schemaProps === 'object' ? Object.keys(input.schemaProps) : []
+    return { success: true, graphId, name, kind, nodeId: existing.id, overwritten: true, verified: verdict === 'PASS', verifyVerdict: verdict, version: data.newVersion, schemaProps: propNames, message: `Updated ${kind} "${name}" in the Component Registry (${impl.length} chars). Schema props now: ${propNames.join(', ') || '(none)'}${addedProps.length ? ` (added/updated: ${addedProps.join(', ')})` : ''}.${deliveryNote}${unverifiedNote}` }
   }
 
   const nodeId = `${kind}-${name}`
