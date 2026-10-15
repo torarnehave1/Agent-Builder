@@ -243,6 +243,10 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'setup_realtime_kit',
   'run_cloudflare_selftest',
   'list_components', 'get_component', 'list_layouts', 'get_layout',
+  // The registry's WRITE half. Without it, Grok asked for save_component on 2026-10-15 and called
+  // save_world_founder_template(html:"test") instead, overwriting the shared console template.
+  // Both executors are Superadmin-gated and refuse a dropped graph-js delivery or a large shrink.
+  'save_component', 'save_layout',
   // The deterministic component/structure tools were Claude-only: the Grok/OpenAI loop had to
   // retype registry components through insert_html_at and could not delete a leftover script.
   'insert_component', 'setup_chat_workspace', 'create_world_member_page', 'fill_slot_with_component', 'bind_node_text', 'apply_layout',

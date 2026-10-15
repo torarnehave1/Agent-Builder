@@ -18311,12 +18311,28 @@ async function executeSaveWorldFounderTemplate(input, env) {
   if (!html) return { success: false, error: 'html is required — the full HTML string to save.' }
   if (!template_key.startsWith('template:world-')) return { success: false, error: 'template_key must start with "template:world-" (e.g. "template:world-founder-page" or "template:world-member-page") to prevent accidental overwrites.' }
 
+  // A template is load-bearing: every World page republished from it takes its content. On
+  // 2026-10-15 a model, asked for an unrelated tool it did not have, called this one with
+  // html:"test" and replaced the 39 015-byte shared console template with 4 bytes. Nothing
+  // refused it and KV keeps no history. So: refuse a large shrink without force, and keep the
+  // previous value under <key>.prev before every overwrite.
+  if (template_key.endsWith('.prev')) return { success: false, error: 'A .prev key is the automatic rollback copy; save to the template key itself.' }
+  const previous = await env.WORLD_TEMPLATES.get(template_key)
+  if (previous && input.force !== true && previous.length > 2000 && html.length < previous.length * 0.6) {
+    return {
+      success: false, blocked: 'template_shrank',
+      error: `Refusing to overwrite "${template_key}" — the stored template is ${previous.length} bytes and this save is ${html.length}, a ${Math.round((1 - html.length / previous.length) * 100)}% reduction. Every World page republished from it would take this content. Read it with list_world_founder_templates and save the FULL edited HTML; pass force:true only if the shrink is intended.`,
+    }
+  }
+  if (previous && previous !== html) await env.WORLD_TEMPLATES.put(`${template_key}.prev`, previous)
   await env.WORLD_TEMPLATES.put(template_key, html)
   return {
     success: true,
     template_key,
     savedBytes: html.length,
-    message: `Saved ${html.length} bytes to WORLD_TEMPLATES["${template_key}"]. Run publish_world_page or republish_all_world_pages to push the change live.`
+    previousBytes: previous ? previous.length : 0,
+    rollbackKey: previous && previous !== html ? `${template_key}.prev` : null,
+    message: `Saved ${html.length} bytes to WORLD_TEMPLATES["${template_key}"]${previous && previous !== html ? ` (previous ${previous.length} bytes kept as "${template_key}.prev")` : ''}. Run publish_world_page or republish_all_world_pages to push the change live.`
   }
 }
 

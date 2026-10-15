@@ -3575,12 +3575,13 @@ const TOOL_DEFINITIONS = [
   {
     name: 'save_world_founder_template',
     description:
-      "Save (create or overwrite) a world-founder page template in WORLD_TEMPLATES KV. Provide the template_key (must start with 'template:world-founder') and the full html string. Use this after editing a template retrieved via list_world_founder_templates. After saving, run publish_world_page or publish_all_world_pages to push the change live to all me.<domain> sites. Superadmin only. Code-hardcoded (not in registry).",
+      "Save (create or overwrite) a world-founder page template in WORLD_TEMPLATES KV. Provide the template_key (must start with 'template:world-founder') and the full html string. Use this after editing a template retrieved via list_world_founder_templates. After saving, run publish_world_page or publish_all_world_pages to push the change live to all me.<domain> sites. The previous value is kept as '<template_key>.prev' (one step of rollback). NEVER call this to test, probe or stand in for another tool: it overwrites a template every World page is built from. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
         template_key: { type: 'string', description: "KV key for the template, e.g. 'template:world-founder-page' or 'template:world-founder-page-v2'" },
-        html: { type: 'string', description: 'The full HTML string to save as the template.' },
+        html: { type: 'string', description: 'The full HTML string to save as the template — the WHOLE edited document, never a fragment or placeholder. A save more than 40% smaller than the stored template is refused unless force:true.' },
+        force: { type: 'boolean', description: 'Allow a save that shrinks the stored template by more than 40%. Only when the shrink is intended.' },
       },
       required: ['template_key', 'html'],
     },
