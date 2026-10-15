@@ -3702,6 +3702,21 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'provision_world_graphs',
+    description:
+      "Provision a World Founder's OWN knowledge-graph storage inside the founder's OWN Cloudflare account (Superadmin only), idempotent: (1) find-or-create D1 database world-graphs-<stem> with EU jurisdiction, (2) deploy the <stem>-graphs-proxy worker from WORLD_TEMPLATES template:world-graphs-proxy, bound to that database, the World's domain and the platform's PUBLIC signing key (no secret goes into the founder's account), (3) attach graphs.<domain>, (4) create the graph tables through the proxy from the platform's live schema, (5) read the proxy back, (6) record world_graph_stores with status 'provisioned'. It never sets the store active: graphs keep living on the platform until the architect switches the row to active. Needs the World token to carry D1 edit, Workers Scripts edit, Workers Routes edit and Zone Read. Pass force:true to redeploy the proxy after a template update.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. sodesign.no (resolves founder, account and token from the registry)." },
+        founder_email: { type: 'string', description: 'Override the founder email (else resolved from the domain via world_founders).' },
+        cf_account_id: { type: 'string', description: "Override the World's Cloudflare account id (else from the registry)." },
+        force: { type: 'boolean', description: 'Redeploy the graph proxy even if it already exists (after a template update).' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
     name: 'upload_world_image',
     description:
       "Copy an image into a World Founder's OWN photo storage (their isolated R2 bucket) and return its cdn.<domain> URL. Fetches source_url and stores it via the World's photos-proxy, so the image lives in the founder's OWN Cloudflare account (world-photos-<stem>), NOT the shared blog-pictures/imgix path. The World must be photo-provisioned first (provision_world_photos). Superadmin only. Use this to bring an external image (a pexels/unsplash result, or any HTTPS image) into a World's own Cloudflare-native storage; the returned url (https://cdn.<domain>/photos/<key>) is what to embed in that World's nodes.",

@@ -31,6 +31,7 @@ import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
 import { checkVemotionComposition, formatVemotionGateError } from './vemotion-composition-gate.js'
+import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -7145,6 +7146,168 @@ async function executeProvisionWorldPhotos(input, env) {
     next: route.ok
       ? `Photo storage ready: bucket ${bucketName} + ${workerName} + ${deliveryBase}. Upload a test image (POST ${deliveryBase}/photos/upload with X-Upload-Secret), then open ${deliveryBase}/photos/<key>.`
       : `Bucket + worker ready, but ${deliveryHost} is NOT routed: ${route.note}`,
+  }
+}
+
+// ── World graph store ──────────────────────────────────────────────────────────────────────────
+// A World Founder's knowledge graphs in a D1 inside the founder's OWN Cloudflare account, reached
+// only through the KG worker. This provisions the storage half; the KG worker routes to it once
+// world_graph_stores.status is 'active' (set by hand for the first World, never by this tool).
+// Plan: ~/.claude/plans/i-world-for-stine-ancient-dragonfly.md (G2). Proxy source and its SQL live
+// in vegvisr-frontend/dev-worker (graph-store.js + world-graphs-proxy/), built into the
+// WORLD_TEMPLATES key template:world-graphs-proxy.
+
+const WORLD_GRAPH_TABLES = ['knowledge_graphs', 'knowledge_graph_history', 'graph_trash']
+
+// The World's schema is the platform's schema, read from the live sqlite_master each time — never a
+// copy kept in code, which is how the test schema drifted from production (ai_instructions,
+// graph_trash). Each CREATE gets IF NOT EXISTS so a re-run is harmless.
+async function readWorldGraphSchema(env) {
+  const rows = await env.DB.prepare(
+    `SELECT type, name, sql FROM sqlite_master
+     WHERE tbl_name IN (${WORLD_GRAPH_TABLES.map(() => '?').join(',')}) AND sql IS NOT NULL
+     ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, name`
+  ).bind(...WORLD_GRAPH_TABLES).all()
+  const statements = []
+  for (const r of rows.results || []) {
+    const sql = String(r.sql).trim()
+    if (r.type === 'table') statements.push(sql.replace(/^CREATE\s+TABLE\s+(IF\s+NOT\s+EXISTS\s+)?/i, 'CREATE TABLE IF NOT EXISTS '))
+    else if (r.type === 'index') statements.push(sql.replace(/^CREATE\s+(UNIQUE\s+)?INDEX\s+(IF\s+NOT\s+EXISTS\s+)?/i, (_m, u) => `CREATE ${u || ''}INDEX IF NOT EXISTS `))
+  }
+  const missing = WORLD_GRAPH_TABLES.filter((t) => !(rows.results || []).some((r) => r.type === 'table' && r.name === t))
+  // One history row per (graph, version) in a World store: the platform cannot add this index
+  // without cleaning its history first; a new database can start with it.
+  statements.push('CREATE UNIQUE INDEX IF NOT EXISTS ux_wg_history_graph_version ON knowledge_graph_history (graph_id, version)')
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(statements.join('\n')))
+  const version = [...new Uint8Array(digest)].slice(0, 6).map((b) => b.toString(16).padStart(2, '0')).join('')
+  return { statements, version, missing }
+}
+
+async function ensureWorldGraphRegistry(env) {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS world_graph_stores (
+       domain TEXT PRIMARY KEY, cf_account_id TEXT NOT NULL, d1_database_id TEXT NOT NULL, d1_database_name TEXT NOT NULL,
+       proxy_worker TEXT NOT NULL, endpoint_base TEXT NOT NULL, schema_version TEXT, template_version TEXT,
+       status TEXT NOT NULL DEFAULT 'provisioned', provisioned_at TEXT, updated_at TEXT)`
+  ).run()
+}
+
+async function executeProvisionWorldGraphs(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfAccount, cfToken, domain } = ctx
+  if (!domain) return { success: false, error: 'domain is required, e.g. sodesign.no.' }
+  const stem = domain.split('.')[0]
+  const dbName = `world-graphs-${stem}`
+  const workerName = `${stem}-graphs-proxy`
+  const host = `graphs.${domain}`
+  const endpoint = `https://${host}`
+  const steps = []
+
+  if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
+  const script = await env.WORLD_TEMPLATES.get('template:world-graphs-proxy')
+  if (!script) return { success: false, error: 'The graph proxy is not in WORLD_TEMPLATES (key "template:world-graphs-proxy"). Build and push it: vegvisr-frontend/dev-worker/world-graphs-proxy/build.sh --push <namespace id>.' }
+  if (!env.WORLD_GRAPH_SIGNING_KEY) return { success: false, error: 'agent-worker has no WORLD_GRAPH_SIGNING_KEY secret, so it cannot sign the schema migration. Nothing was created.' }
+  let publicJwk
+  try { publicJwk = publicJwkOf(env.WORLD_GRAPH_SIGNING_KEY) } catch { return { success: false, error: 'WORLD_GRAPH_SIGNING_KEY is not a JSON Ed25519 JWK. Nothing was created.' } }
+
+  // Read the schema BEFORE touching the founder's account: a broken read must not leave an empty
+  // database and a deployed proxy behind.
+  const schema = await readWorldGraphSchema(env)
+  if (schema.missing.length) return { success: false, error: `Platform schema read incomplete — no CREATE TABLE found for ${schema.missing.join(', ')}. Nothing was created.` }
+
+  // 1. D1 database, find-or-create, EU jurisdiction (decided 2026-10-13; it cannot be changed later).
+  let db
+  {
+    const list = await cfApi(`/accounts/${cfAccount}/d1/database?name=${encodeURIComponent(dbName)}`, cfToken)
+    if (!list.ok) return { success: false, error: `Could not list D1 databases in ${cfAccount} (${list.status}): ${list.error || 'unknown'}. The token needs Account → D1 → Edit.` }
+    db = (list.json.result || []).find((d) => d.name === dbName)
+    if (db) steps.push(`HAD  d1 — ${dbName} (${db.uuid})`)
+    else {
+      const mk = await cfApi(`/accounts/${cfAccount}/d1/database`, cfToken, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: dbName, jurisdiction: 'eu' }),
+      })
+      if (!mk.ok) return { success: false, error: `Could not create D1 database ${dbName} (${mk.status}): ${mk.error || 'unknown'}` }
+      db = mk.json.result
+      steps.push(`DID  d1 — ${dbName} created (${db.uuid}, jurisdiction eu)`)
+    }
+  }
+
+  // 2. Proxy worker from the template, bound to that database, the World and the public key only.
+  const scriptUrl = `https://api.cloudflare.com/client/v4/accounts/${cfAccount}/workers/scripts/${workerName}`
+  const existing = await fetch(scriptUrl, { headers: { Authorization: `Bearer ${cfToken}` } })
+  if (!existing.ok || input.force) {
+    const metadata = {
+      main_module: 'index.js',
+      compatibility_date: '2025-01-15',
+      bindings: [
+        { type: 'd1', name: 'GRAPH_DB', id: db.uuid },
+        { type: 'plain_text', name: 'WORLD_DOMAIN', text: domain },
+        { type: 'plain_text', name: 'PLATFORM_PUBLIC_KEY', text: JSON.stringify(publicJwk) },
+      ],
+    }
+    const form = new FormData()
+    form.append('metadata', JSON.stringify(metadata))
+    form.append('index.js', new File([script], 'index.js', { type: 'application/javascript+module' }))
+    const up = await fetch(scriptUrl, { method: 'PUT', headers: { Authorization: `Bearer ${cfToken}` }, body: form })
+    const upJson = await up.json().catch(() => null)
+    if (!up.ok || !upJson?.success) {
+      const detail = upJson?.errors?.[0]?.message || upJson?.errors?.[0]?.code || `HTTP ${up.status}`
+      return { success: false, error: `Graph proxy upload failed: ${detail}`, steps, d1_database_id: db.uuid, note: 'token needs Workers Scripts edit; a D1 binding may also need D1 edit.' }
+    }
+    steps.push(`DID  proxy — ${workerName} ${existing.ok ? 'redeployed (force)' : 'deployed'}`)
+  } else steps.push(`HAD  proxy — ${workerName}`)
+
+  // 3. graphs.<domain> as the proxy's custom domain.
+  const route = await attachBrandProxyDomain(cfAccount, cfToken, domain, workerName, host)
+  if (!route.ok) return { success: false, error: `Could not attach ${host} to ${workerName}: ${route.status}: ${route.detail}`, steps, note: route.note || 'token needs Zone Read + Workers Routes edit.' }
+  steps.push(route.alreadyAttached ? `HAD  host — ${host}` : `DID  host — ${host} attached`)
+
+  // 4. Tables, through the proxy, signed. A fresh custom domain can take a few seconds for its
+  //    certificate, so the first calls are retried.
+  const body = JSON.stringify({ statements: schema.statements, schema_version: schema.version })
+  let migrated = null
+  let lastError = ''
+  for (let attempt = 0; attempt < 8 && !migrated; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 3000))
+    try {
+      const token = await signWorldGraphToken(env.WORLD_GRAPH_SIGNING_KEY, { aud: domain, op: 'migrate', body })
+      const res = await fetch(`${endpoint}/__graphs/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body })
+      const j = await res.json().catch(() => null)
+      if (res.ok && j?.ok) migrated = j
+      else lastError = j?.error || `HTTP ${res.status}`
+    } catch (e) { lastError = e.message }
+  }
+  if (!migrated) return { success: false, error: `Schema migration through ${endpoint} failed: ${lastError}`, steps }
+  steps.push(`DID  schema — ${migrated.applied} statements, version ${migrated.schema_version}`)
+
+  // 5. Read the proxy back — the evidence, not the steps above.
+  const check = await fetch(`${endpoint}/__graphs/check`).then((r) => r.json()).catch((e) => ({ ok: false, error: e.message }))
+  const tablesOk = WORLD_GRAPH_TABLES.every((t) => (check.tables || []).includes(t))
+  if (!check.ok || !tablesOk || check.world !== domain || check.schema_version !== schema.version) {
+    return { success: false, error: `Proxy read-back did not match: ${JSON.stringify(check)}`, steps }
+  }
+
+  // 6. Registry row. Status stays 'provisioned': the KG worker routes graphs here only at 'active',
+  //    and that switch is the architect's, not this tool's.
+  await ensureWorldGraphRegistry(env)
+  const now = new Date().toISOString()
+  await env.DB.prepare(
+    `INSERT INTO world_graph_stores (domain, cf_account_id, d1_database_id, d1_database_name, proxy_worker, endpoint_base, schema_version, template_version, status, provisioned_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'provisioned', ?, ?)
+     ON CONFLICT(domain) DO UPDATE SET cf_account_id = excluded.cf_account_id, d1_database_id = excluded.d1_database_id,
+       d1_database_name = excluded.d1_database_name, proxy_worker = excluded.proxy_worker, endpoint_base = excluded.endpoint_base,
+       schema_version = excluded.schema_version, template_version = excluded.template_version, updated_at = excluded.updated_at`
+  ).bind(domain, cfAccount, db.uuid, dbName, workerName, endpoint, schema.version, check.template_version, now, now).run()
+  const row = await env.DB.prepare('SELECT status, schema_version FROM world_graph_stores WHERE domain = ?').bind(domain).first()
+  steps.push(`DID  registry — world_graph_stores ${domain} status ${row?.status}`)
+
+  return {
+    success: true,
+    message: `Graph store for ${domain} ready: D1 ${dbName} (EU) behind ${endpoint}, schema ${schema.version}, template ${check.template_version}. Registry status "${row?.status}" — graphs are NOT routed here until it is set to active.`,
+    domain, cf_account_id: cfAccount, d1_database_id: db.uuid, d1_database_name: dbName,
+    proxy_worker: workerName, endpoint, schema_version: schema.version, template_version: check.template_version,
+    tables: check.tables, registry_status: row?.status, steps,
   }
 }
 
@@ -16901,6 +17064,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldKv(toolInput, env)
     case 'provision_world_photos':
       return await executeProvisionWorldPhotos(toolInput, env)
+    case 'provision_world_graphs':
+      return await executeProvisionWorldGraphs(toolInput, env)
     case 'upload_world_image':
       return await executeUploadWorldImage(toolInput, env)
     case 'check_world_publish':
