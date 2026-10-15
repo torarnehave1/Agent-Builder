@@ -41,14 +41,22 @@ function fromB64url(str) {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0))
 }
 
+// Only the key material goes into importKey. Node exports an Ed25519 JWK with "alg":"Ed25519";
+// the Workers runtime refuses that ("alg does not match requested Ed25519 curve", seen live on the
+// first provisioning, 2026-10-15) and expects "EdDSA" or nothing. Dropping alg and key_ops makes the
+// same key importable in both runtimes.
+function keyMaterial(jwk, withPrivate) {
+  const k = typeof jwk === 'string' ? JSON.parse(jwk) : jwk
+  return withPrivate ? { kty: k.kty, crv: k.crv, x: k.x, d: k.d } : { kty: k.kty, crv: k.crv, x: k.x }
+}
+
 export async function bodyHash(body) {
   return b64url(await crypto.subtle.digest('SHA-256', enc.encode(body)))
 }
 
 /** privateJwk: the Ed25519 private key as a JWK object (or its JSON string). */
 export async function signWorldGraphToken(privateJwk, { aud, op, body, ttlSeconds = 60, now = Date.now() }) {
-  const jwk = typeof privateJwk === 'string' ? JSON.parse(privateJwk) : privateJwk
-  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'Ed25519' }, false, ['sign'])
+  const key = await crypto.subtle.importKey('jwk', keyMaterial(privateJwk, true), { name: 'Ed25519' }, false, ['sign'])
   const iat = Math.floor(now / 1000)
   const claims = { aud, op, bh: await bodyHash(body), iat, exp: iat + Math.min(ttlSeconds, MAX_LIFETIME_S) }
   const head = b64url(enc.encode(JSON.stringify(claims)))
@@ -58,8 +66,7 @@ export async function signWorldGraphToken(privateJwk, { aud, op, body, ttlSecond
 
 /** The public half of a private JWK — what the proxy is given. */
 export function publicJwkOf(privateJwk) {
-  const jwk = typeof privateJwk === 'string' ? JSON.parse(privateJwk) : privateJwk
-  return { kty: jwk.kty, crv: jwk.crv, x: jwk.x }
+  return keyMaterial(privateJwk, false)
 }
 
 /**
@@ -78,8 +85,7 @@ export async function verifyWorldGraphToken(publicJwk, token, { aud, op, body, n
   }
   let valid = false
   try {
-    const jwk = typeof publicJwk === 'string' ? JSON.parse(publicJwk) : publicJwk
-    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'Ed25519' }, false, ['verify'])
+    const key = await crypto.subtle.importKey('jwk', keyMaterial(publicJwk, false), { name: 'Ed25519' }, false, ['verify'])
     valid = await crypto.subtle.verify({ name: 'Ed25519' }, key, fromB64url(parts[1]), enc.encode(parts[0]))
   } catch {
     valid = false
