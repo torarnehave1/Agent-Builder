@@ -2996,6 +2996,10 @@ const TOOL_DEFINITIONS = [
         nodeId: {
           type: 'string',
           description: 'A specific node ID to work with, if applicable.'
+        },
+        world: {
+          type: 'string',
+          description: "Where a NEW graph is to be stored: a World's domain, e.g. \"sodesign.no\", when the user says the graph should live in their (or a founder's) World or own storage. The subagent's create_graph is then made there — pass it here rather than only in the task text, which the subagent may not act on. Omit for the platform's normal storage."
         }
       },
       required: ['task']

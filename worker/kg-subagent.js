@@ -107,6 +107,11 @@ function getKgSubagentTools() {
 
 async function runKgSubagent(input, env, onProgress, executeTool) {
   const { task, nodeId, userId } = input
+  // Where a new graph is stored, chosen by the orchestrator from what the user said. Injected into
+  // create_graph below the same way graphId is — code, not a request in the task text, because
+  // the text alone was dropped on the first live run (G5, 2026-10-15) and the graph landed on the
+  // platform.
+  const world = typeof input.world === 'string' && input.world.trim() ? input.world.trim().toLowerCase() : null
   const rawGraphId = input.graphId || null
   let graphId = (typeof rawGraphId === 'string' && rawGraphId.trim()) ? rawGraphId.trim() : null
   let discardedGraphId = null // the id the model passed to create_graph, which the server did not use
@@ -263,6 +268,10 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         if (graphId && GRAPH_MUTATION_TOOLS.has(toolUse.name) && !toolUse.input.graphId) {
           toolUse.input.graphId = graphId
           log(`auto-injected graphId=${graphId} into ${toolUse.name}`)
+        }
+        if (world && toolUse.name === 'create_graph' && !toolUse.input.world) {
+          toolUse.input.world = world
+          log(`injected world=${world} into create_graph`)
         }
         // If graphId is provided and LLM tries to create a NEW graph, block it
         if (graphId && toolUse.name === 'create_graph') {
