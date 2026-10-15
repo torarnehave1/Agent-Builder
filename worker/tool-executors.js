@@ -12842,6 +12842,16 @@ async function executeSaveRegistryItem(input, env, kind) {
     // patchNodeWithVersionRetry supplies expectedVersion + 409 retry — a raw patchNode
     // call without it is rejected by the KG worker ("expectedVersion (integer) required"),
     // which silently broke every registry OVERWRITE (2026-07-24 theme-picker re-register).
+    // An overwrite without a schema keeps the stored one, and schemaProps adds props to it. Until
+    // 2026-10-15 a schema-less overwrite replaced it with {}, so extending a component (a new
+    // attribute) meant re-sending its whole schema through a tool-call argument.
+    if (!(input.schema && typeof input.schema === 'object')) {
+      const prevSchema = (existing.metadata?.schema && typeof existing.metadata.schema === 'object') ? existing.metadata.schema : {}
+      itemMeta.schema = { ...prevSchema }
+    }
+    if (input.schemaProps && typeof input.schemaProps === 'object') {
+      itemMeta.schema = { ...itemMeta.schema, props: { ...(itemMeta.schema.props || {}), ...input.schemaProps } }
+    }
     const data = await patchNodeWithVersionRetry(env, graphId, existing.id, {
       metadata: { ...(existing.metadata || {}), ...itemMeta },
       info: input.description || existing.info || `${kind}: ${name}`,

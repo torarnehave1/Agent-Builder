@@ -26,6 +26,17 @@
 //        data-endpoint="https://knowledge.vegvisr.org/getknowgraphsummaries">
 //   </div>
 //
+// WORLD MODE (2026-10-15, first use: the Kunnskapsgrafer tab on me.sodesign.no). A World
+// keeps its graphs in its own store; the knowledge worker lists them at
+// /getknowgraphs?world=<domain>, in the same row shape as getknowgraphsummaries, and only
+// to someone allowed into that World. So World mode is the one mode that sends a token:
+//        data-world="sodesign.no"                        (lists that World's graphs, one request)
+//        data-token-from="localStorage:<key>"            (sent as X-API-Token on the list AND the
+//                                                         dialog's graph read; never a literal token)
+//        data-include="all"                              (World-mode default: private graphs too)
+// The meta-area attribute still filters, here in the browser (the listing is one set).
+// Without data-world nothing changes: no token is read and nothing is sent but before.
+//
 // THE CARD KEEPS THE READER ON THIS SITE. data-open="modal" (the default) reads the
 // graph and renders it in a dialog on the page — the visitor never leaves the
 // domain the grid is embedded on. In that mode a card is a <button>, not a link,
@@ -93,6 +104,7 @@
   var TEXT = {
     no: {
       empty: 'Ingen publiserte grafer her ennå.',
+      emptyWorld: 'Du har ingen grafer ennå. Lag den første – den lagres i din egen konto.',
       error: 'Kunne ikke laste porteføljen akkurat nå.',
       all: 'Alle',
       nodes: 'noder',
@@ -120,6 +132,7 @@
     },
     en: {
       empty: 'No published graphs here yet.',
+      emptyWorld: 'You have no graphs yet. Make the first one – it is stored in your own account.',
       error: 'Could not load the portfolio right now.',
       all: 'All',
       nodes: 'nodes',
@@ -196,7 +209,8 @@
   // "published" (default) = the strict rule above. "public" = whatever the API
   // hands an anonymous caller, which today includes drafts.
   function visibleRows (rows, include) {
-    if (String(include || '').toLowerCase() === 'public') return (rows || []).slice()
+    var inc = String(include || '').toLowerCase()
+    if (inc === 'public' || inc === 'all') return (rows || []).slice()
     return (rows || []).filter(isPublished)
   }
 
@@ -732,14 +746,36 @@
     root.appendChild(el)
   }
 
+  function withAccept (headers) {
+    var h = { accept: 'application/json' }
+    for (var k in (headers || {})) h[k] = headers[k]
+    return h
+  }
+
+  // data-token-from="localStorage:<key>" — the token the host page already keeps for its
+  // signed-in user. Only that source is read; a token written into the markup is not.
+  function tokenHeaders (spec) {
+    var m = /^localStorage:(.+)$/.exec(String(spec || '').trim())
+    if (!m) return {}
+    var tok = ''
+    try { tok = window.localStorage.getItem(m[1].trim()) || '' } catch (e) { tok = '' }
+    return tok ? { 'X-API-Token': tok } : {}
+  }
+
+  // World mode lists one set; a meta-area attribute narrows it here, not on the server.
+  function inAreas (row, areas) {
+    if (!areas.length) return true
+    return areas.some(function (a) { return matchesArea(row, a) })
+  }
+
   // Fetch ONE area completely (paged), or every published graph when area is ''.
-  function fetchArea (endpoint, area, onRows) {
+  function fetchArea (endpoint, area, onRows, headers) {
     var rows = []
     function page (offset) {
       var url = endpoint + (endpoint.indexOf('?') === -1 ? '?' : '&') +
         'offset=' + offset + '&limit=' + PAGE +
         (area ? '&metaArea=' + encodeURIComponent(area) : '')
-      return fetch(url, { headers: { accept: 'application/json' } }).then(function (r) {
+      return fetch(url, { headers: withAccept(headers) }).then(function (r) {
         if (!r.ok) throw new Error('HTTP ' + r.status)
         return r.json()
       }).then(function (data) {
@@ -1197,7 +1233,7 @@
     var token = card.id
     d.token = token
     Promise.all([
-      fetch(GRAPH_ENDPOINT + encodeURIComponent(card.id), { headers: { accept: 'application/json' } })
+      fetch(GRAPH_ENDPOINT + encodeURIComponent(card.id), { headers: withAccept(opts.headers) })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() }),
       ensureFulltext(),
     ]).then(function (both) {
@@ -1645,7 +1681,16 @@
   function mount (root) {
     var lang = (root.getAttribute('data-lang') || 'no').trim().toLowerCase() === 'en' ? 'en' : 'no'
     var t = TEXT[lang]
-    var endpoint = (root.getAttribute('data-endpoint') || ENDPOINT).trim()
+    var world = (root.getAttribute('data-world') || '').trim().toLowerCase()
+    if (world) {
+      var tw = {}
+      for (var tk in t) tw[tk] = t[tk]
+      tw.empty = t.emptyWorld
+      t = tw
+    }
+    var headers = world ? tokenHeaders(root.getAttribute('data-token-from')) : {}
+    var endpoint = (root.getAttribute('data-endpoint') ||
+      (world ? 'https://knowledge.vegvisr.org/getknowgraphs?world=' + encodeURIComponent(world) : ENDPOINT)).trim()
     var viewer = (root.getAttribute('data-viewer') || VIEWER).trim()
     var target = (root.getAttribute('data-target') || '_blank').trim()
     var limit = parseInt(root.getAttribute('data-limit') || '0', 10)
@@ -1656,11 +1701,11 @@
     var sections = root.getAttribute('data-display') === 'sections'
     var matchAll = root.getAttribute('data-match') === 'all'
     var filterMode = (root.getAttribute('data-filters') || 'auto').trim().toLowerCase()
-    var include = (root.getAttribute('data-include') || 'published').trim().toLowerCase()
+    var include = (root.getAttribute('data-include') || (world ? 'all' : 'published')).trim().toLowerCase()
     var open = (root.getAttribute('data-open') || 'modal').trim().toLowerCase()
     if (open !== 'page' && open !== 'self') open = 'modal'
     var shareUrl = (root.getAttribute('data-share-url') || '').trim()
-    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open, shareUrl: shareUrl }
+    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open, shareUrl: shareUrl, headers: headers }
 
     injectStyle()
     root.classList.add('vgp')
@@ -1719,7 +1764,8 @@
     }
 
     // One request per area (server-side filter), or a single unfiltered sweep.
-    var jobs = graphId ? [fetch(GRAPH_ENDPOINT + encodeURIComponent(graphId), { headers: { accept: 'application/json' } }).then(function (response) {
+    // World mode: one listing, narrowed by area in the browser.
+    var jobs = world ? [fetchArea(endpoint, '', function (r) { return r.filter(function (row) { return inAreas(row, areas) }) }, headers)] : graphId ? [fetch(GRAPH_ENDPOINT + encodeURIComponent(graphId), { headers: { accept: 'application/json' } }).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status)
       return response.json()
     }).then(function (graph) {

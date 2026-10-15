@@ -33,6 +33,7 @@ const need = [
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
   'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl', 'cssForHtmlNode',
+  'withAccept', 'tokenHeaders', 'inAreas',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -313,6 +314,26 @@ check('case and spacing differences still match', api.sameHeading('  HVA   ligge
 check('trailing punctuation is ignored', api.sameHeading('De to aksene —', 'De to aksene'))
 check('a genuinely different heading is kept', !api.sameHeading('Om Tor Arne Håve', 'Hva ligger i sentrum?'))
 check('an empty heading never counts as a duplicate', !api.sameHeading('', '') && !api.sameHeading('   ', 'Title'))
+
+// 12. World mode (2026-10-15): private graphs shown, token read only from localStorage, areas in the browser.
+check('include "all" keeps drafts and private graphs',
+  api.visibleRows([row('a'), row('b', { state: 'private' }), row('c', { state: 'draft' })], 'all').length === 3)
+check('the default still keeps only published', api.visibleRows([row('a'), row('b', { state: 'private' })]).length === 1)
+{
+  const store = { k: 'tok-123' }
+  globalThis.window = { localStorage: { getItem: (k) => (k in store ? store[k] : null) } }
+  check('a localStorage token becomes X-API-Token', api.tokenHeaders('localStorage:k')['X-API-Token'] === 'tok-123')
+  check('a literal token in the markup is never sent', Object.keys(api.tokenHeaders('tok-123')).length === 0)
+  check('no stored token sends no header', Object.keys(api.tokenHeaders('localStorage:missing')).length === 0)
+  globalThis.window = { localStorage: { getItem: () => { throw new Error('blocked') } } }
+  check('blocked storage sends no header and does not throw', Object.keys(api.tokenHeaders('localStorage:k')).length === 0)
+  delete globalThis.window
+}
+check('accept stays alongside the token header',
+  api.withAccept({ 'X-API-Token': 't' }).accept === 'application/json' && api.withAccept({ 'X-API-Token': 't' })['X-API-Token'] === 't' && api.withAccept(undefined).accept === 'application/json')
+check('no areas keeps every World row', api.inAreas(row('a', { metaArea: '' }), []))
+check('areas narrow World rows like a chip does',
+  api.inAreas(row('a', { metaArea: '#STINE #STRIKK' }), ['STRIKK']) && !api.inAreas(row('b', { metaArea: '#STINE' }), ['NIBI']))
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed.')
 process.exit(failed ? 1 : 0)
