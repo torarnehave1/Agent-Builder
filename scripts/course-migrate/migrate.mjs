@@ -6,8 +6,11 @@
 //   upload    each video into the World's own R2 under <folder>/<NN>-<slug>.mp4, in <album>,
 //             with lesson metadata on the object, using a 5-minute token scoped to that World
 //   verify    each uploaded video answers a byte range (206) — iPhone playback depends on it
+//   transcribe each video's audio (mono MP3) through openai.vegvisr.org/audio (Whisper), kept in
+//             state so a re-run never pays twice; timestamped paragraphs of about a minute
 //   graph     the course graph in the World: a course node, the text lessons, one realtime-video
-//             node per video lesson in order, `next` edges; re-runs overwrite the same graph
+//             node per video lesson in order, each followed by its transcript as a fulltext node,
+//             `next` edges; re-runs overwrite the same graph
 //
 // State per course in state/<slug>.json, so an interrupted run resumes where it stopped.
 // Downloading from Kajabi is not here: it needs the signed-in browser (Claude in Chrome).
@@ -33,10 +36,14 @@ const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 const token = process.env.VEGVISR_TOKEN
 if (!token) { console.error('VEGVISR_TOKEN is not set'); process.exit(2) }
 const actor = process.env.VEGVISR_EMAIL || 'torarnehave@gmail.com'
+const userId = process.env.VEGVISR_USER_ID || ''
+const AUDIO = 'https://openai.vegvisr.org/audio'
+const LANGUAGE = m.language || 'no'
 
 fs.mkdirSync(path.join(here, 'state'), { recursive: true })
 const statePath = path.join(here, 'state', `${m.slug}.json`)
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { uploads: {}, graphId: null }
+state.transcripts = state.transcripts || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
 
@@ -122,6 +129,39 @@ async function verifyRange(u) {
   return true
 }
 
+// ---- transcribe -------------------------------------------------------------------------------
+const stamp = (t) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`
+async function transcribe(lesson, file) {
+  const digest = state.uploads[lesson.lesson_id] && state.uploads[lesson.lesson_id].sha256
+  const have = state.transcripts[lesson.lesson_id]
+  if (have && have.video_sha256 === digest) { log(`transcript cached: ${lesson.title}`); return have }
+  if (!userId) throw new Error('VEGVISR_USER_ID is not set (needed by the transcription service)')
+  const mp3 = path.join(here, 'state', `${m.slug}-${lesson.lesson_id}.mp3`)
+  execFileSync('ffmpeg', ['-nostdin', '-loglevel', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', mp3])
+  const fd = new FormData()
+  fd.append('file', await fs.openAsBlob(mp3, { type: 'audio/mpeg' }), path.basename(mp3))
+  fd.append('model', 'whisper-1')
+  fd.append('language', LANGUAGE)
+  fd.append('response_format', 'verbose_json')
+  fd.append('userId', userId)
+  const r = await fetch(AUDIO, { method: 'POST', body: fd })
+  const j = await r.json().catch(() => ({}))
+  fs.unlinkSync(mp3)
+  if (!r.ok || typeof j.text !== 'string') throw new Error(`transcription of ${lesson.title} failed (${r.status}): ${j.error || JSON.stringify(j).slice(0, 200)}`)
+  // Paragraphs of about a minute, each led by its start time, so the text can be followed in the video.
+  const paras = []
+  for (const seg of j.segments || []) {
+    const last = paras[paras.length - 1]
+    if (!last || seg.start - last.start >= 60) paras.push({ start: seg.start, text: seg.text.trim() })
+    else last.text += ` ${seg.text.trim()}`
+  }
+  const markdown = paras.length ? paras.map((p) => `**[${stamp(p.start)}]** ${p.text}`).join('\n\n') : j.text.trim()
+  state.transcripts[lesson.lesson_id] = { video_sha256: digest, model: 'whisper-1', language: LANGUAGE, segments: (j.segments || []).length, duration_s: Math.round(j.duration || 0), markdown, at: new Date().toISOString() }
+  save()
+  log(`transcribed ${lesson.title}: ${(j.segments || []).length} segments`)
+  return state.transcripts[lesson.lesson_id]
+}
+
 // ---- graph ------------------------------------------------------------------------------------
 async function saveGraph() {
   const id = state.graphId || crypto.randomUUID()
@@ -129,7 +169,7 @@ async function saveGraph() {
   for (const [lid, u] of Object.entries(state.uploads)) urls[lid] = await urlFor(u)
   const nodes = [{
     id: 'kurs', label: m.title, type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 0 },
-    info: `**${m.title}**\n\n${m.lessons.length} leksjoner · ${m.source.module}`,
+    info: `${m.lessons.length} leksjoner · ${m.source.module}`,
     metadata: { course: { slug: m.slug, folder: m.folder, album: m.album, lessons: m.lessons.length, source: m.source } },
   }]
   const edges = []
@@ -142,6 +182,19 @@ async function saveGraph() {
     if (lesson.type === 'video') {
       const u = state.uploads[lesson.lesson_id]
       nodes.push({ ...base, type: 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
+      const t = state.transcripts[lesson.lesson_id]
+      if (t) {
+        const tid = `${nid}-transkripsjon`
+        nodes.push({
+          id: tid, label: `Transkripsjon – ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
+          info: `_Automatisk transkribert (Whisper). Kan inneholde feil._\n\n${t.markdown}`,
+          metadata: { transcript: { lesson_id: lesson.lesson_id, of: nid, model: t.model, language: t.language, segments: t.segments, duration_s: t.duration_s, source: 'automatic' } },
+        })
+        edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
+        edges.push({ source: nid, target: tid, type: 'next', label: 'next' })
+        prev = tid
+        return
+      }
     } else {
       const pdfNote = lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : ''
       nodes.push({ ...base, type: 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: lesson.pdf || null } } })
@@ -171,6 +224,7 @@ for (const lesson of m.lessons) {
   const u = await upload(lesson, order, file)
   await verifyRange(u)
   log(`range ok: ${lesson.title}`)
+  await transcribe(lesson, file)
 }
 const graphId = await saveGraph()
 console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: await Promise.all(Object.values(state.uploads).map(urlFor)) }, null, 2))
