@@ -6681,7 +6681,26 @@ async function attachBrandProxyDomain(cfAccount, cfToken, domain, workerNameOver
   const existing = await cfApi(`/accounts/${cfAccount}/workers/domains?hostname=${encodeURIComponent(host)}`, cfToken)
   if (existing.ok && Array.isArray(existing.json.result) && existing.json.result.length) {
     const cur = existing.json.result[0]
-    if ((cur.service || '') === workerName) return { ok: true, host, workerName, alreadyAttached: true }
+    if ((cur.service || '') === workerName) {
+      // Attached is not routed: the attachment can outlive its DNS record. On 2026-10-16 an R2
+      // custom domain on sodesign.no took the apex record and deleting it removed the record, while
+      // the Workers attachment stayed — sodesign.no resolved nowhere and this said "already routed".
+      // No record for the host: drop the stale attachment and attach again, which recreates it.
+      // Asked of public DNS, not the DNS-records API: a Workers-managed record is what must resolve.
+      const resolves = async (type) => {
+        try {
+          const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${type}`, { headers: { accept: 'application/dns-json' } })
+          if (!r.ok) return null
+          const j = await r.json()
+          return Array.isArray(j.Answer) && j.Answer.length > 0
+        } catch { return null }
+      }
+      const a = await resolves('A')
+      const aaaa = a ? true : await resolves('AAAA')
+      // Unknown (lookup failed) counts as routed: never tear down an attachment on a guess.
+      if (a !== false || aaaa !== false) return { ok: true, host, workerName, alreadyAttached: true }
+      if (cur.id) await cfApi(`/accounts/${cfAccount}/workers/domains/${cur.id}`, cfToken, { method: 'DELETE' })
+    }
   }
 
   // Resolve the zone id for the apex domain (the custom-domain API requires zone_id).
