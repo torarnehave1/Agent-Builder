@@ -7107,9 +7107,18 @@ async function executeProvisionWorldPhotos(input, env) {
   if (ctx.error) return { success: false, error: ctx.error }
   const { founderEmail, cfAccount, cfToken, domain } = ctx
   const stem = (domain || '').split('.')[0]
-  const bucketName = (input.bucket_name || `world-photos-${stem}`).trim()
-  const workerName = (input.worker_name || `${stem}-photos-proxy`).trim()
-  const deliveryHost = (input.delivery_host || `cdn.${domain}`).trim().toLowerCase()
+  // A World that already has photo storage keeps it. Names derived from the domain change when
+  // the World's primary domain does (stineoksvolddesign.no -> sodesign.no, 2026-10-15), and a
+  // re-run would then create a new bucket and a new, EMPTY albums namespace and bind the existing
+  // proxy to them. The registered values win over derived ones; explicit input wins over both.
+  let prior = null
+  try {
+    prior = await env.DB.prepare('SELECT photos_bucket_name, photos_proxy_worker, photos_delivery_base, photos_albums_kv_id FROM config WHERE email = ?').bind(founderEmail).first()
+  } catch { prior = null }
+  const priorHost = prior && prior.photos_delivery_base ? String(prior.photos_delivery_base).replace(/^https?:\/\//, '').replace(/\/+$/, '') : ''
+  const bucketName = (input.bucket_name || (prior && prior.photos_bucket_name) || `world-photos-${stem}`).trim()
+  const workerName = (input.worker_name || (prior && prior.photos_proxy_worker) || `${stem}-photos-proxy`).trim()
+  const deliveryHost = (input.delivery_host || priorHost || `cdn.${domain}`).trim().toLowerCase()
   const deliveryBase = `https://${deliveryHost}`
 
   if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
@@ -7135,7 +7144,8 @@ async function executeProvisionWorldPhotos(input, env) {
   {
     const list = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces?per_page=100`, cfToken)
     if (!list.ok) return { success: false, error: `Could not list KV namespaces (${list.status}): ${list.error || 'unknown'} — token likely lacks Workers KV Storage scope.` }
-    let ns = (list.json.result || []).find((n) => n.title === albumsTitle)
+    const priorKv = prior && prior.photos_albums_kv_id
+    let ns = (priorKv && (list.json.result || []).find((n) => n.id === priorKv)) || (list.json.result || []).find((n) => n.title === albumsTitle)
     if (!ns) {
       const mk = await cfApi(`/accounts/${cfAccount}/storage/kv/namespaces`, cfToken, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: albumsTitle }) })
       if (!mk.ok) return { success: false, error: `Could not create KV namespace "${albumsTitle}" (${mk.status}): ${mk.error || 'unknown'}` }

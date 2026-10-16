@@ -251,13 +251,37 @@ async function handleDeliver(request, env, url, key) {
   })
 }
 
+// Byte ranges (2026-10-16): a browser plays an MP4 by asking for parts of it — Safari and iOS refuse
+// to play at all without a 206 answer, and seeking needs it everywhere. R2 reads the range itself
+// from the request's Range header; the answer carries Content-Range over the object's full size.
 async function serveObject(request, env, key) {
-  const obj = await env.PHOTOS_BUCKET.get(key)
+  const wantsRange = !!request.headers.get('range')
+  let obj
+  try {
+    obj = await env.PHOTOS_BUCKET.get(key, wantsRange ? { range: request.headers } : undefined)
+  } catch (err) {
+    // R2 refuses a range it cannot satisfy (e.g. past the end of the object).
+    const head = await env.PHOTOS_BUCKET.head(key)
+    if (!head) return json({ error: 'not found', key }, 404)
+    return new Response(null, { status: 416, headers: { 'content-range': `bytes */${head.size}`, 'accept-ranges': 'bytes' } })
+  }
   if (!obj) return json({ error: 'not found', key }, 404)
   const headers = new Headers()
   obj.writeHttpMetadata(headers)
   headers.set('etag', obj.httpEtag)
   headers.set('cache-control', 'public, max-age=31536000, immutable')
+  headers.set('accept-ranges', 'bytes')
+  headers.set('access-control-allow-origin', '*')
+  const size = obj.size
+  const r = wantsRange ? obj.range : null
+  if (r) {
+    const start = 'suffix' in r ? Math.max(0, size - r.suffix) : (r.offset || 0)
+    const length = 'suffix' in r ? Math.min(r.suffix, size) : (r.length ?? size - start)
+    headers.set('content-range', `bytes ${start}-${start + length - 1}/${size}`)
+    headers.set('content-length', String(length))
+    return new Response(request.method === 'HEAD' ? null : obj.body, { status: 206, headers })
+  }
+  headers.set('content-length', String(size))
   return new Response(request.method === 'HEAD' ? null : obj.body, { headers })
 }
 
