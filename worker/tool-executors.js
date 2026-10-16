@@ -2683,7 +2683,8 @@ async function executeFindPublishedPage(input, env) {
     if (g.ok) {
       const j = await g.json()
       title = j?.metadata?.title || null
-      world = j?.world || null
+      // The KG worker sends the World as a header (X-Graph-World); the body has no world field.
+      world = g.headers.get('X-Graph-World') || j?.world || null
       const node = (j?.nodes || []).find((n) => n.id === md.nodeId)
       if (node && !title) title = node.label || null
     }

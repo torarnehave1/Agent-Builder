@@ -35,7 +35,7 @@ const env = {
   KG_WORKER: { async fetch(url) {
     const id = new URL(url).searchParams.get('id')
     if (id === SHARED['sodesign.vegr.ai'].graphId) return json({ metadata: { title: 'Stine Oksvold Design – forslag' }, nodes: [{ id: 'forslag-html', label: 'Forslag' }] })
-    if (id === 'g-world') return json({ metadata: { title: 'Konsoll' }, world: 'sodesign.no', nodes: [] })
+    if (id === 'g-world') return new Response(JSON.stringify({ metadata: { title: 'Konsoll' }, nodes: [] }), { status: 200, headers: { 'X-Graph-World': 'sodesign.no' } })
     return json({ error: 'not found' }, 404)
   } },
 }
