@@ -7,6 +7,18 @@
   "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
   "glossary": "strikking",
   "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
   "source": {
     "system": "kajabi",
     "product_id": 503165,

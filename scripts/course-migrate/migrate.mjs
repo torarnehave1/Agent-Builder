@@ -11,7 +11,11 @@
 //   summarize a short overview of each video from its corrected transcript (anthropic.vegvisr.org,
 //             structured JSON, formatted here): what it covers, points with timestamps, keywords,
 //             hashtags — cached on the transcript text, so it is rewritten only when that changes
-//   graph     the course graph in the World: a course node, the text lessons, and per video lesson
+//   course    a course image (a frame of the first video, uploaded to the album) and «Om kurset» —
+//             what you make, who it is for, what you need, the steps — written from every lesson
+//   graph     the course graph in the World, built on the product template: a produkt node with
+//             metadata.product, the course image (portfolio-image), «Om kurset», then per lesson
+//             «Steg N av M»: for a video lesson
 //             its summary, the realtime-video node and its transcript, in that order,
 //             `next` edges; re-runs overwrite the same graph
 //
@@ -68,6 +72,8 @@ const statePath = path.join(here, 'state', `${m.slug}.json`)
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { uploads: {}, graphId: null }
 state.transcripts = state.transcripts || {}
 state.summaries = state.summaries || {}
+state.course = state.course || {}
+state.files = state.files || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
 
@@ -193,13 +199,25 @@ function transcriptMarkdown(t) {
   return paras.map((p) => `**[${stamp(p.start)}]** ${applyReplacements(p.text)}`).join('\n\n')
 }
 
+// ---- language model ---------------------------------------------------------------------------
+async function askJson(prompt, maxTokens, what) {
+  const r = await fetch(LLM, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Token': token },
+    body: JSON.stringify({ userId, model: SUMMARY_MODEL, max_tokens: maxTokens, temperature: 0.2, messages: [{ role: 'user', content: prompt }] }),
+  })
+  const j = await r.json().catch(() => ({}))
+  const raw = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim()
+  let data
+  try { data = JSON.parse(raw.replace(/^```(json)?|```$/g, '').trim()) } catch { data = null }
+  if (!r.ok || !data) throw new Error(`${what} failed (${r.status}): ${j.error || raw.slice(0, 200)}`)
+  return data
+}
+
 // ---- summarize --------------------------------------------------------------------------------
 async function summarize(lesson) {
   const t = state.transcripts[lesson.lesson_id]
   const text = transcriptMarkdown(t)
-  const sourceHash = crypto.createHash('sha256').update(`${SUMMARY_VERSION}|${SUMMARY_MODEL}|${text}`).digest('hex').slice(0, 16)
-  const have = state.summaries[lesson.lesson_id]
-  if (have && have.source_hash === sourceHash) { log(`summary cached: ${lesson.title}`); return have }
   const instruction = [
     `Du lager en kort oversikt som står OVER en kursvideo i «${m.title}» (${m.source.product}), så deltakeren vet hva videoen går gjennom før hun ser den.`,
     `Videoen heter «${lesson.title}». Under er den automatiske transkripsjonen med tidsstempler [mm:ss].`,
@@ -209,16 +227,11 @@ async function summarize(lesson) {
     '',
     text,
   ].join('\n')
-  const r = await fetch(LLM, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Token': token },
-    body: JSON.stringify({ userId, model: SUMMARY_MODEL, max_tokens: 900, temperature: 0.2, messages: [{ role: 'user', content: instruction }] }),
-  })
-  const j = await r.json().catch(() => ({}))
-  const raw = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim()
-  let data
-  try { data = JSON.parse(raw.replace(/^```(json)?|```$/g, '').trim()) } catch { data = null }
-  if (!r.ok || !data || !Array.isArray(data.points)) throw new Error(`summary of ${lesson.title} failed (${r.status}): ${j.error || raw.slice(0, 200)}`)
+  const sourceHash = crypto.createHash('sha256').update(`${SUMMARY_MODEL}|${instruction}`).digest('hex').slice(0, 16)
+  const have = state.summaries[lesson.lesson_id]
+  if (have && have.source_hash === sourceHash) { log(`summary cached: ${lesson.title}`); return have }
+  const data = await askJson(instruction, 900, `summary of ${lesson.title}`)
+  if (!Array.isArray(data.points)) throw new Error(`summary of ${lesson.title} has no points`)
   // Checked, not trusted: every point starts at a real moment of THIS video, in order, at most 8.
   const secs = (at) => { const mm = /^(\d{1,2}):(\d{2})$/.exec(String(at || '')); return mm ? Number(mm[1]) * 60 + Number(mm[2]) : NaN }
   data.points = data.points.filter((p) => p && p.text && secs(p.at) <= (t.duration_s || Infinity)).sort((a, b) => secs(a.at) - secs(b.at)).slice(0, 8)
@@ -227,6 +240,111 @@ async function summarize(lesson) {
   save()
   log(`summarized ${lesson.title}: ${data.points.length} points`)
   return state.summaries[lesson.lesson_id]
+}
+
+// ---- course: image and «Om kurset» -------------------------------------------------------------
+async function uploadFile(key, file, type, meta) {
+  const t = await mintToken()
+  const fd = new FormData()
+  fd.append('file', await fs.openAsBlob(file, { type }), path.basename(key))
+  fd.append('key', key)
+  fd.append('album', m.album)
+  fd.append('actor', actor)
+  if (t.owner) fd.append('owner', t.owner)
+  fd.append('meta', JSON.stringify(meta))
+  const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/photos/upload`, { method: 'POST', headers: { Authorization: `Bearer ${t.token}` }, body: fd })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) throw new Error(`upload of ${key} failed (${r.status}): ${j.error || 'unknown'}`)
+  return j
+}
+
+// The course image: from about 30 % into the first video (past title cards), ffmpeg's thumbnail
+// filter picks the most representative of the next 120 frames. A manifest can set imageAt (seconds).
+async function courseImage() {
+  const first = m.lessons.find((l) => l.type === 'video')
+  const video = path.join(m.videoDir, first.file)
+  const at = m.imageAt ?? Math.round(duration(video) * 0.3)
+  const key = `${m.folder}/kursbilde.jpg`
+  const have = state.course.image
+  const src = `${state.uploads[first.lesson_id].sha256}@${at}@thumb120`
+  if (have && have.src === src) { log('course image cached'); return have }
+  const jpg = path.join(here, 'state', `${m.slug}-kursbilde.jpg`)
+  execFileSync('ffmpeg', ['-nostdin', '-loglevel', 'error', '-y', '-ss', String(at), '-i', video, '-vf', 'thumbnail=120,scale=1280:-2', '-frames:v', '1', '-q:v', '3', jpg])
+  await uploadFile(key, jpg, 'image/jpeg', { course: m.slug, kind: 'course-image', from_lesson: first.lesson_id, at_s: at })
+  fs.unlinkSync(jpg)
+  state.course.image = { key, src }
+  save()
+  log(`course image uploaded: ${key}`)
+  return state.course.image
+}
+
+// «Om kurset»: one description for the shop, the product page and the course card (plan S2/S5/S6).
+async function describeCourse() {
+  const lessonsText = m.lessons.map((l, i) => {
+    const head = `### Steg ${i + 1}: ${l.title}`
+    if (l.type !== 'video') return `${head}\n${l.info || ''}`
+    const t = state.transcripts[l.lesson_id]
+    return `${head}\n${t ? transcriptMarkdown(t) : ''}`
+  }).join('\n\n')
+  const prompt = [
+    `Du skriver kursbeskrivelsen for «${m.title}» i ${m.source.product} (Stine Oksvold Design). Den brukes i nettbutikken, på produktsiden og på kurskortet.`,
+    'Under er alle stegene i kurset, med automatisk transkripsjon av videoene.',
+    'Svar BARE med JSON, uten forklaring og uten kodeblokk, på formen:',
+    '{"tagline": "én kort setning, maks 10 ord", "about": "2-3 setninger, du-form, varm og konkret", "you_make": "hva du har strikket når du er ferdig, én setning", "for_whom": "hvem kurset passer for, én setning", "level": "nybegynner | litt erfaren | erfaren", "you_need": ["utstyr og materialer du må ha klart: pinner med nummer og lengde, garn (type og mengde hvis nevnt), nål, saks — bare det som faktisk nevnes, ikke fremgangsmåte eller antall masker"], "keywords": ["3-6 stikkord, små bokstaver"], "hashtags": ["3-5 hashtags uten #, små bokstaver, ett ord hver"]}',
+    'Bare fakta som står i stegene. Ingen priser.',
+    '',
+    lessonsText,
+  ].join('\n')
+  // Keyed on the whole prompt: a changed instruction or transcript writes it again, nothing else does.
+  const hash = crypto.createHash('sha256').update(`${SUMMARY_MODEL}|${prompt}`).digest('hex').slice(0, 16)
+  if (state.course.about && state.course.about.hash === hash) { log('course description cached'); return state.course.about }
+  const data = await askJson(prompt, 1200, 'course description')
+  if (!data.about || !Array.isArray(data.you_need)) throw new Error('course description is missing about or you_need')
+  state.course.about = { hash, data, model: SUMMARY_MODEL, at: new Date().toISOString() }
+  save()
+  log('course description written')
+  return state.course.about
+}
+
+// PDFs (the recipe): looked up next to the originals (<videoDir>/..), uploaded once per checksum.
+async function uploadPdf(lesson) {
+  const file = path.join(path.dirname(m.videoDir), lesson.pdf)
+  if (!fs.existsSync(file)) { log(`PDF not downloaded yet: ${lesson.pdf}`); return null }
+  const digest = sha256(file)
+  const have = state.files[lesson.lesson_id]
+  if (have && have.sha256 === digest) { log(`PDF already uploaded: ${lesson.pdf}`); return have }
+  const key = `${m.folder}/${slugify(lesson.pdf.replace(/\.pdf$/i, ''))}.pdf`
+  await uploadFile(key, file, 'application/pdf', { course: m.slug, kind: 'pdf', lesson: lesson.title, lesson_id: lesson.lesson_id, sha256: digest, source: `${m.source.system}:${m.source.product_id}/${m.source.category_id}/${lesson.lesson_id}` })
+  state.files[lesson.lesson_id] = { key, sha256: digest, bytes: fs.statSync(file).size, name: lesson.pdf }
+  save()
+  log(`PDF uploaded: ${key}`)
+  return state.files[lesson.lesson_id]
+}
+
+const minutes = (s) => Math.max(1, Math.round(s / 60))
+function aboutMarkdown(d, steps, totalS) {
+  const tag = (h) => `#${String(h).replace(/^#/, '').replace(/\s+/g, '').toLowerCase()}`
+  return [
+    `**${d.tagline}**`,
+    '',
+    d.about,
+    '',
+    `**Du strikker:** ${d.you_make}`,
+    '',
+    `**Passer for:** ${d.for_whom}`,
+    '',
+    `**Nivå:** ${d.level} · **${steps.length} steg** · **ca. ${minutes(totalS)} min video**`,
+    '',
+    '**Dette trenger du**',
+    ...d.you_need.map((x) => `- ${x}`),
+    '',
+    '**Stegene**',
+    ...steps.map((st, i) => `${i + 1}. ${st.title}${st.duration_s ? ` (${minutes(st.duration_s)} min)` : ''}`),
+    '',
+    `**Stikkord:** ${(d.keywords || []).join(' · ')}`,
+    '',
+    (d.hashtags || []).map(tag).join(' '),
+  ].join('\n')
 }
 
 // One layout for every lesson: the sentence, the points with their start time, keywords, hashtags.
@@ -249,17 +367,47 @@ async function saveGraph() {
   const id = state.graphId || crypto.randomUUID()
   const urls = {}
   for (const [lid, u] of Object.entries(state.uploads)) urls[lid] = await urlFor(u)
+  const pdfUrls = {}
+  for (const [lid, f] of Object.entries(state.files)) pdfUrls[lid] = await urlFor(f)
+  // Product template (the same shape as The BOLD vest): produkt node with metadata.product, the
+  // course image, «Om kurset», then the steps.
+  const total = m.lessons.length
+  const steps = m.lessons.map((l) => ({ title: l.title, duration_s: l.type === 'video' && state.uploads[l.lesson_id] ? state.uploads[l.lesson_id].duration_s : 0 }))
+  const totalS = steps.reduce((a, st) => a + st.duration_s, 0)
+  const about = state.course.about && state.course.about.data
+  const image = state.course.image
+  const imageUrl = image ? await urlFor(image) : null
+  const p = m.product || {}
+  const product = {
+    kind: p.kind || 'course', slug: m.slug, status: p.status || 'draft',
+    access: p.access || null, prices: p.prices || [], category: p.category || [], level: (about && about.level) || p.level || null,
+    lessons: total, videos: m.lessons.filter((l) => l.type === 'video').length, duration_s: totalS,
+    image: image ? image.key : null,
+    grants: [{ type: 'course', ref: m.slug }, ...Object.values(state.files).map((f) => ({ type: 'file', ref: f.key }))],
+    folder: m.folder, album: m.album, source: m.source,
+  }
+  const accessText = product.access && product.access.type === 'membership' ? 'Inkludert i medlemskapet Den lille strikkeskolen' : (product.prices[0] ? `${product.prices[0].amount} kr` : '')
   const nodes = [{
-    id: 'kurs', label: m.title, type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 0 },
-    info: `${m.lessons.length} leksjoner · ${m.source.module}`,
-    metadata: { course: { slug: m.slug, folder: m.folder, album: m.album, lessons: m.lessons.length, source: m.source } },
+    id: 'produkt', label: 'Produkt', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 0 },
+    info: `**Kurs · ${total} steg · ca. ${minutes(totalS)} min video**${accessText ? `\n\n${accessText}` : ''}\n\nStatus: ${product.status}. Dette er produktnoden: metadata.product styrer tilgang, kort og nettbutikk.`,
+    metadata: { product },
   }]
   const edges = []
-  let prev = 'kurs'
+  let prev = 'produkt'
+  if (imageUrl) {
+    // path is what the catalogue card reads; info carries the same image so the viewer shows it.
+    nodes.push({ id: 'kursbilde', label: m.title, type: 'portfolio-image', path: imageUrl, info: `![${m.title}](${imageUrl})`, visible: true, bibl: [], position: { x: 0, y: 60 }, metadata: { image: { key: image.key, kind: 'course-image' } } })
+    edges.push({ source: prev, target: 'kursbilde', type: 'next', label: 'next' }); prev = 'kursbilde'
+  }
+  if (about) {
+    nodes.push({ id: 'om-kurset', label: 'Om kurset', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, steps, totalS), metadata: { about: { ...about, source: 'automatic' } } })
+    edges.push({ source: prev, target: 'om-kurset', type: 'next', label: 'next' }); prev = 'om-kurset'
+  }
   m.lessons.forEach((lesson, i) => {
     const order = i + 1
     const nid = `l${String(order).padStart(2, '0')}-${slugify(lesson.title)}`
-    const base = { id: nid, label: lesson.title, visible: true, bibl: [], position: { x: 0, y: order * 120 } }
+    const stepLabel = `Steg ${order} av ${total} – ${lesson.title}`
+    const base = { id: nid, label: stepLabel, visible: true, bibl: [], position: { x: 0, y: order * 120 } }
     const lessonMeta = { lesson_id: lesson.lesson_id, order, type: lesson.type }
     if (lesson.type === 'video') {
       const u = state.uploads[lesson.lesson_id]
@@ -267,7 +415,7 @@ async function saveGraph() {
       if (sm) {
         const sid = `${nid}-oppsummering`
         nodes.push({
-          id: sid, label: `Oppsummering – ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: -300, y: order * 120 },
+          id: sid, label: `Om steg ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: -300, y: order * 120 },
           info: summaryMarkdown(sm.data),
           metadata: { summary: { lesson_id: lesson.lesson_id, of: nid, model: sm.model, keywords: sm.data.keywords || [], hashtags: sm.data.hashtags || [], source: 'automatic' } },
         })
@@ -279,7 +427,7 @@ async function saveGraph() {
       if (t) {
         const tid = `${nid}-transkripsjon`
         nodes.push({
-          id: tid, label: `Transkripsjon – ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
+          id: tid, label: `Transkripsjon – steg ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
           info: `_Automatisk transkribert (Whisper). Kan inneholde feil._\n\n${transcriptMarkdown(t)}`,
           metadata: { transcript: { lesson_id: lesson.lesson_id, of: nid, model: t.model, language: t.language, segments: t.segments, duration_s: t.duration_s, source: 'automatic', glossary: m.glossary || null, prompt_hash: t.prompt_hash, replacements: Object.keys(glossary.replacements || {}).length } },
         })
@@ -289,15 +437,16 @@ async function saveGraph() {
         return
       }
     } else {
-      const pdfNote = lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : ''
-      nodes.push({ ...base, type: 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: lesson.pdf || null } } })
+      const f = state.files[lesson.lesson_id]
+      const pdfNote = f ? `\n\n**[Last ned oppskriften (PDF)](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
+      nodes.push({ ...base, type: 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null) } } })
     }
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
     prev = nid
   })
   const body = {
     id, override: !!state.graphId, world: m.world,
-    graphData: { metadata: { title: m.title, description: `Kurs i ${m.source.product} (${m.source.module}), migrert fra Kajabi.`, metaArea: m.metaArea, createdBy: actor, version: 0 }, nodes, edges },
+    graphData: { metadata: { title: m.title, description: (about && about.tagline) || `Kurs i ${m.source.product} (${m.source.module}).`, metaArea: m.metaArea, createdBy: actor, version: 0 }, nodes, edges },
   }
   const r = await fetch(`${KG}/saveGraphWithHistory`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': token }, body: JSON.stringify(body) })
   const j = await r.json().catch(() => ({}))
@@ -334,6 +483,9 @@ for (const lesson of m.lessons) {
   await transcribe(lesson, file)
   await summarize(lesson)
 }
+for (const lesson of m.lessons) if (lesson.pdf) await uploadPdf(lesson)
+await courseImage()
+await describeCourse()
 await ensureAlbumOwner()
 const graphId = await saveGraph()
 console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: await Promise.all(Object.values(state.uploads).map(urlFor)) }, null, 2))
