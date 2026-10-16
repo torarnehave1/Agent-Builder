@@ -105,17 +105,28 @@ async function upload(lesson, order, file) {
   return state.uploads[lesson.lesson_id]
 }
 
+// The World's delivery address can change (cdn.stineoksvolddesign.no -> cdn.sodesign.no,
+// 2026-10-16). The key is what was uploaded; the address is read fresh on every run.
+let deliveryBase = null
+async function currentBase() {
+  if (!deliveryBase) deliveryBase = (await mintToken()).deliveryBase.replace(/\/+$/, '')
+  return deliveryBase
+}
+const urlFor = async (u) => `${await currentBase()}/photos/${u.key}`
+
 async function verifyRange(u) {
-  const r = await fetch(u.url, { headers: { Range: 'bytes=0-1' } })
+  const r = await fetch(await urlFor(u), { headers: { Range: 'bytes=0-1' } })
   const ok = r.status === 206 && /^bytes 0-1\/\d+$/.test(r.headers.get('content-range') || '')
   await r.arrayBuffer().catch(() => null)
-  if (!ok) throw new Error(`${u.url} did not answer a byte range (status ${r.status}, ${r.headers.get('content-range')})`)
+  if (!ok) throw new Error(`${await urlFor(u)} did not answer a byte range (status ${r.status}, ${r.headers.get('content-range')})`)
   return true
 }
 
 // ---- graph ------------------------------------------------------------------------------------
 async function saveGraph() {
   const id = state.graphId || crypto.randomUUID()
+  const urls = {}
+  for (const [lid, u] of Object.entries(state.uploads)) urls[lid] = await urlFor(u)
   const nodes = [{
     id: 'kurs', label: m.title, type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 0 },
     info: `**${m.title}**\n\n${m.lessons.length} leksjoner · ${m.source.module}`,
@@ -130,7 +141,7 @@ async function saveGraph() {
     const lessonMeta = { lesson_id: lesson.lesson_id, order, type: lesson.type }
     if (lesson.type === 'video') {
       const u = state.uploads[lesson.lesson_id]
-      nodes.push({ ...base, type: 'realtime-video', path: u.url, info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
+      nodes.push({ ...base, type: 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
     } else {
       const pdfNote = lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : ''
       nodes.push({ ...base, type: 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: lesson.pdf || null } } })
@@ -162,4 +173,4 @@ for (const lesson of m.lessons) {
   log(`range ok: ${lesson.title}`)
 }
 const graphId = await saveGraph()
-console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: Object.values(state.uploads).map((u) => u.url) }, null, 2))
+console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: await Promise.all(Object.values(state.uploads).map(urlFor)) }, null, 2))
