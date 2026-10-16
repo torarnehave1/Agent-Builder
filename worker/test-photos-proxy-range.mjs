@@ -99,5 +99,23 @@ const get = (headers = {}, method = 'GET', key = KEY) => proxy.fetch(new Request
   check('an upload without meta works as before', none.status === 200 && puts.length === 2 && !puts[1].opts.customMetadata, String(none.status))
 }
 
+// Album owner (2026-10-16): files an album under the World's founder while the log keeps the actor.
+{
+  const kv = new Map()
+  const ALB = { async get(k) { return kv.get(k) ?? null }, async put(k, v) { kv.set(k, v) }, async delete(k) { kv.delete(k) }, async list() { return { keys: [...kv.keys()].map((name) => ({ name })) } } }
+  const aEnv = { PHOTOS_BUCKET: { async put() {} }, PHOTO_ALBUMS: ALB, PHOTOS_UPLOAD_SECRET: 'sek', DELIVERY_BASE: 'https://cdn.example' }
+  const up = (owner) => { const fd = new FormData(); fd.append('file', new File([new Uint8Array(4)], 'a.mp4', { type: 'video/mp4' })); fd.append('key', 'kurs/x/01.mp4'); fd.append('album', 'Kurs X'); fd.append('actor', 'sysowner@example.com'); if (owner) fd.append('owner', owner); return proxy.fetch(new Request('https://cdn.example/photos/upload', { method: 'POST', headers: { 'X-Upload-Secret': 'sek' }, body: fd }), aEnv) }
+  const albumGet = async () => JSON.parse(kv.get('album:Kurs X') || '{}')
+  await up(null)
+  check('without owner, the uploader owns a new album (unchanged behaviour)', (await albumGet()).createdBy === 'sysowner@example.com', JSON.stringify(await albumGet()))
+  const r = await proxy.fetch(new Request('https://cdn.example/albums/Kurs%20X', { method: 'POST', headers: { 'X-Upload-Secret': 'sek', 'Content-Type': 'application/json' }, body: JSON.stringify({ owner: 'founder@example.com', actor: 'sysowner@example.com' }) }), aEnv)
+  const a = await albumGet()
+  check('POST owner moves the album to the founder and keeps its files', r.status === 200 && a.createdBy === 'founder@example.com' && a.images.length === 1, JSON.stringify(a))
+  const last = (a.auditLog || [])[a.auditLog.length - 1] || {}
+  check('the audit entry keeps who did it and the previous owner', last.actor === 'sysowner@example.com' && last.details && last.details.owner === 'founder@example.com' && last.details.previousOwner === 'sysowner@example.com', JSON.stringify(last))
+  await up('founder@example.com')
+  check('an upload with owner keeps the founder as owner', (await albumGet()).createdBy === 'founder@example.com', JSON.stringify(await albumGet()))
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall photos-proxy range checks pass')

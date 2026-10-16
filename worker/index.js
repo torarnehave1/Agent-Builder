@@ -2252,6 +2252,9 @@ export default {
           exp,
           scope,
           deliveryBase: row.photos_delivery_base,
+          // Whose storage this is — the World's founder when `world` was asked for. A caller filing
+          // albums on the founder's behalf passes it as the album owner.
+          owner: storageEmail,
           bucket: row.photos_bucket_name || null,
           status: row.photos_status || null,
         }), { headers: corsHeaders })

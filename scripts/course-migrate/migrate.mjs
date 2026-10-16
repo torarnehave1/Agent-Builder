@@ -126,6 +126,7 @@ async function upload(lesson, order, file) {
   fd.append('key', key)
   fd.append('album', m.album)
   fd.append('actor', actor)
+  if (t.owner) fd.append('owner', t.owner)
   fd.append('meta', JSON.stringify(meta))
   const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/photos/upload`, { method: 'POST', headers: { Authorization: `Bearer ${t.token}` }, body: fd })
   const j = await r.json().catch(() => ({}))
@@ -307,6 +308,20 @@ async function saveGraph() {
   return id
 }
 
+// The album belongs to the World's founder (it shows under her «Mine album»); the audit log keeps
+// who ran the migration. Set on every run, so an album created earlier under the runner moves too.
+async function ensureAlbumOwner() {
+  const t = await mintToken()
+  if (!t.owner) { log('token carries no owner; album owner left as is'); return }
+  const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/albums/${encodeURIComponent(m.album)}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${t.token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ owner: t.owner, actor }),
+  })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || j.createdBy !== t.owner) throw new Error(`could not set the owner of album «${m.album}» (${r.status}): ${j.error || j.createdBy}`)
+  log(`album «${m.album}» owned by ${t.owner}, ${(j.images || []).length} files`)
+}
+
 // ---- run --------------------------------------------------------------------------------------
 let order = 0
 for (const lesson of m.lessons) {
@@ -319,5 +334,6 @@ for (const lesson of m.lessons) {
   await transcribe(lesson, file)
   await summarize(lesson)
 }
+await ensureAlbumOwner()
 const graphId = await saveGraph()
 console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: await Promise.all(Object.values(state.uploads).map(urlFor)) }, null, 2))

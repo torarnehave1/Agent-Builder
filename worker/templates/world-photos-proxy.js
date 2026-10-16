@@ -331,11 +331,12 @@ async function handleUpload(request, env) {
     const record = await readAlbum(env, album)
     const existing = record || { name: album, images: [] }
     const actor = String(form.get('actor') || '') || null
+    const owner = String(form.get('owner') || '') || null
     await writeAlbum(env, album, buildAlbumRecord({
       name: album,
       images: [...new Set([...(existing.images || []), key])],
       existing,
-      createdBy: existing.createdBy ?? actor,
+      createdBy: owner || (existing.createdBy ?? actor),
       auditEntry: auditEntryFor('add_images', actor, { added: 1 }),
     }))
   }
@@ -509,8 +510,11 @@ async function handleAlbumRoute(request, env, url, path, method) {
       name,
       images: [...new Set(images)],
       existing,
-      createdBy: existing.createdBy ?? actor,
-      auditEntry: auditEntryFor(existing.createdAt ? 'update_album' : 'create_album', actor, { imageCount: images.length }),
+      // `owner` (2026-10-16): whose album it is, set by someone allowed into this World (album scope)
+      // — a migration run by the system owner files albums under the founder, while the audit entry
+      // keeps who actually did it.
+      createdBy: body.owner ? String(body.owner) : (existing.createdBy ?? actor),
+      auditEntry: auditEntryFor(existing.createdAt ? 'update_album' : 'create_album', actor, { imageCount: images.length, ...(body.owner && body.owner !== existing.createdBy ? { owner: String(body.owner), previousOwner: existing.createdBy || null } : {}) }),
       seo: {
         title: body.seoTitle,
         description: body.seoDescription,
