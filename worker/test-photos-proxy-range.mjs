@@ -76,5 +76,28 @@ const get = (headers = {}, method = 'GET', key = KEY) => proxy.fetch(new Request
   check('a missing key is still 404', r.status === 404, String(r.status))
 }
 
+// Upload with metadata (2026-10-16): the course routine stores lesson facts on each object.
+{
+  const puts = []
+  const upEnv = { PHOTOS_BUCKET: { async put(k, body, opts) { puts.push({ k, opts }) } }, PHOTOS_UPLOAD_SECRET: 'sek', DELIVERY_BASE: 'https://cdn.example' }
+  const send = (meta) => {
+    const fd = new FormData()
+    fd.append('file', new File([new Uint8Array(10)], 'a.mp4', { type: 'video/mp4' }))
+    fd.append('key', 'kurs/enkel-hals/01-legg-opp.mp4')
+    if (meta !== undefined) fd.append('meta', meta)
+    return proxy.fetch(new Request('https://cdn.example/photos/upload', { method: 'POST', headers: { 'X-Upload-Secret': 'sek' }, body: fd }), upEnv)
+  }
+  const r = await send(JSON.stringify({ course: 'enkel-hals', lesson_id: 2155872188, order: 1, sha256: 'abc', skip: null }))
+  const j = await r.json()
+  const cm = puts[0] && puts[0].opts.customMetadata
+  check('meta is stored as string custom metadata, nulls dropped', r.status === 200 && cm && cm.course === 'enkel-hals' && cm.lesson_id === '2155872188' && cm.order === '1' && !('skip' in cm) && puts[0].opts.httpMetadata.contentType === 'video/mp4' && j.key === 'kurs/enkel-hals/01-legg-opp.mp4', JSON.stringify({ status: r.status, j, puts }))
+  const bad = await send('not json')
+  check('meta that is not a JSON object is refused before anything is stored', bad.status === 400 && puts.length === 1, String(bad.status))
+  const big = await send(JSON.stringify(Object.fromEntries(Array.from({ length: 20 }, (_, i) => ['k' + i, 'x'.repeat(200)]))))
+  check('meta over 2 KB is refused', big.status === 400 && puts.length === 1, String(big.status))
+  const none = await send()
+  check('an upload without meta works as before', none.status === 200 && puts.length === 2 && !puts[1].opts.customMetadata, String(none.status))
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall photos-proxy range checks pass')

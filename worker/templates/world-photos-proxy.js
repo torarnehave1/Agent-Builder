@@ -304,8 +304,26 @@ async function handleUpload(request, env) {
   const rawKey = form.get('key')
   const key = String(rawKey || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`).replace(/^\/+/, '')
 
+  // `meta` (2026-10-16): a small JSON object stored on the object itself as R2 custom metadata, so
+  // a file names its course, lesson and checksum even without the graph that lists it. Values
+  // become strings; the whole set is capped at 2 KB.
+  let customMetadata
+  const rawMeta = form.get('meta')
+  if (rawMeta) {
+    let parsed
+    try { parsed = JSON.parse(String(rawMeta)) } catch { return json({ error: 'meta must be a JSON object' }, 400) }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return json({ error: 'meta must be a JSON object' }, 400)
+    customMetadata = {}
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v === null || v === undefined) continue
+      customMetadata[String(k).slice(0, 64)] = String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, 512)
+    }
+    if (JSON.stringify(customMetadata).length > 2048) return json({ error: 'meta is larger than 2 KB' }, 400)
+  }
+
   await env.PHOTOS_BUCKET.put(key, file.stream(), {
     httpMetadata: { contentType: file.type || 'application/octet-stream' },
+    ...(customMetadata ? { customMetadata } : {}),
   })
 
   const album = normalizeName(form.get('album'))
@@ -322,7 +340,7 @@ async function handleUpload(request, env) {
     }))
   }
 
-  return json({ key, url: `${env.DELIVERY_BASE || ''}/photos/${key}`, album: album || null })
+  return json({ key, url: `${env.DELIVERY_BASE || ''}/photos/${key}`, album: album || null, meta: customMetadata || null })
 }
 
 async function handleList(request, env, url) {

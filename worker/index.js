@@ -2205,9 +2205,28 @@ export default {
         if (!secret) {
           return new Response(JSON.stringify({ error: 'agent-worker has no HTML_PUBLISH_SECRET' }), { status: 500, headers: corsHeaders })
         }
+        const body = await request.json().catch(() => ({}))
+        // `world` (2026-10-16): a token for ANOTHER World's storage — the migration routine uploads
+        // Stine's course videos as the system owner, logged as himself, instead of signing in as her.
+        // Allowed for that World's founder or account holder, a Superadmin, or a system owner (the
+        // same rule as World graphs). Without `world`, the caller's own storage, as before.
+        let storageEmail = caller.email
+        const worldDomain = String(body?.world || '').trim().toLowerCase()
+        if (worldDomain) {
+          const wf = await env.DB.prepare(
+            'SELECT founder_email, account_holder_email FROM world_founders WHERE LOWER(domain) = ? LIMIT 1'
+          ).bind(worldDomain).first().catch(() => null)
+          if (!wf) return new Response(JSON.stringify({ error: `no World ${worldDomain}` }), { status: 404, headers: corsHeaders })
+          const me = String(caller.email).toLowerCase()
+          const isMember = [wf.founder_email, wf.account_holder_email].some((e) => e && String(e).toLowerCase() === me)
+          const isSuper = String(caller.role || '').toLowerCase() === 'superadmin'
+          const isOwner = isMember || isSuper || Boolean(await env.DB.prepare('SELECT 1 AS ok FROM system_owners WHERE LOWER(email) = ? LIMIT 1').bind(me).first().catch(() => null))
+          if (!isOwner) return new Response(JSON.stringify({ error: `not allowed to use ${worldDomain}'s storage` }), { status: 403, headers: corsHeaders })
+          storageEmail = wf.founder_email
+        }
         const row = await env.DB.prepare(
           'SELECT photos_delivery_base, photos_bucket_name, photos_status FROM config WHERE email = ?'
-        ).bind(caller.email).first()
+        ).bind(storageEmail).first()
         if (!row?.photos_delivery_base) {
           // Not an error the caller can fix by retrying — this founder simply has no own storage,
           // and photos-worker should fall back to the shared bucket.
@@ -2219,7 +2238,6 @@ export default {
         } catch {
           return new Response(JSON.stringify({ error: `photos_delivery_base is not a URL: ${row.photos_delivery_base}` }), { status: 500, headers: corsHeaders })
         }
-        const body = await request.json().catch(() => ({}))
         const ALLOWED_SCOPES = ['read', 'upload', 'delete', 'album']
         const requested = Array.isArray(body?.scope) ? body.scope : []
         const scope = requested.filter((s) => ALLOWED_SCOPES.includes(s))
