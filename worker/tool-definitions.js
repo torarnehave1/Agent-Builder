@@ -352,6 +352,17 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'find_published_page',
+    description: "Which graph and html-node a live site serves. Give a host or URL (e.g. sodesign.vegr.ai, https://minside.nibi.no/). Asks the page store that actually serves the host and returns graphId, nodeId, publishedAt and the graph title. USE THIS — not search_graphs — for 'which graph is published on <host>': a published page is a stored snapshot, so the hostname is usually not in any graph's text. Read-only.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        host: { type: 'string', description: 'Hostname or full URL of the published site.' },
+      },
+      required: ['host'],
+    },
+  },
+  {
     name: 'publish_html_node',
     description: "Publish an html-node (or css-node) to a LIVE host so it actually serves on the web, e.g. fonemer.vegvisr.org or charlie.iamazing.page. This is the step AFTER editing: editing changes the node in the graph; publishing pushes that HTML to the live site. Reads the node's current HTML and writes html:<host> into the HTML_PAGES KV of the proxy that actually serves that host — the SAME key the viewer's Publish button writes. Works for BOTH kinds of host and picks the right path automatically: a vegvisr.org-family host (vegvisr.org, norsegong.com, xyzvibe.com, slowyou.training) goes to the shared Vegvisr brand-worker, and ANY other domain is treated as a World-Founder domain and published to that World's own brand-proxy in the founder's own Cloudflare account. You do NOT need to be the World Founder — Superadmin publishes to any host. After publishing it READS THE KEY BACK from the host and reports `verified`: only verified:true means the page is actually live; verified:false with the host reachable means the bytes landed in a store that does not serve this host, so report it as NOT live and follow the message. Use this whenever the user says 'publish', 'push it live', 'make it live', or 'update the live site' for a page whose html-node you edited. The host must already route to a brand proxy — for a vegvisr.org-family host run create_subdomain first; for a World domain the subdomain must be attached to that World's brand proxy (deploy_world_proxy). To refresh a live page after edits, just call this again (overwrite defaults true). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {

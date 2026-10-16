@@ -51,6 +51,8 @@ const READ_ONLY_TOOLS = new Set([
   'get_system_registry', 'get_secure_worker_template', 'read_worker',
   // Component registry (verified reusable UI components + page layouts)
   'list_components', 'get_component', 'list_layouts', 'get_layout',
+  // Which graph/node a live host serves (asks the serving page store; writes nothing)
+  'find_published_page',
   // Capability planning (classifies + returns a plan; mutates nothing)
   'create_capability_blueprint',
   // Calendar reads
@@ -202,7 +204,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'set_contact_route',
   // publish's prerequisite must ride along — a loop with publish but no create_subdomain
   // strands the user on an unroutable host (2026-07-24 themetest failure on the Grok path).
-  'publish_html_node', 'create_subdomain', 'list_graph_versions', 'get_graph_version',
+  'publish_html_node', 'create_subdomain', 'find_published_page', 'list_graph_versions', 'get_graph_version',
   'restore_graph_version', 'restore_html_node_version',
   // Search, media, albums, photos
   'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash', 'analyze_image',

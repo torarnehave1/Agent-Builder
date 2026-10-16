@@ -2652,6 +2652,50 @@ async function readPublishedKey(host, env, viaBinding) {
   }
 }
 
+// find_published_page: which graph/node a live host serves (2026-10-16). Searching graph text for
+// the hostname finds nothing — the page is a KV snapshot keyed html:<host>, and the store that
+// serves the host records {graphId, nodeId, publishedAt} beside it. Ask that store: the shared
+// brand-worker over the binding first (a public read of our own zones 522s), then the host itself
+// (a World host is served by the World's own proxy, which the binding cannot see).
+async function executeFindPublishedPage(input, env) {
+  let host = String(input.host || input.url || '').trim().toLowerCase()
+  try { if (/^https?:\/\//.test(host)) host = new URL(host).hostname } catch { /* keep as typed */ }
+  host = host.replace(/\/.*$/, '').replace(/\.$/, '')
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return { success: false, error: `host must be a hostname like sodesign.vegr.ai (got "${input.host || input.url || ''}").` }
+  let found = null
+  let via = null
+  if (env.BRAND_WORKER) {
+    const r = await readPublishedKey(host, env, true)
+    if (r.exists === true) { found = r; via = 'brand-worker' }
+  }
+  if (!found) {
+    const r = await readPublishedKey(host, env, false)
+    if (r.exists === true) { found = r; via = 'host' }
+    else if (!r.reachable) return { success: true, host, published: false, message: `${host} does not resolve to a Vegvisr page store (no DNS route or not a brand proxy). No graph serves it.` }
+  }
+  if (!found) return { success: true, host, published: false, message: `${host} is routed, but its page store holds no page for it (html:${host} is absent). No graph serves it; the host shows its fallback.` }
+  const md = found.metadata || {}
+  if (!md.graphId) return { success: true, host, published: true, via, metadata: md, message: `${host} serves a stored page, but the store did not record which graph it came from (published before graphId was recorded).` }
+  let title = null
+  let world = null
+  try {
+    const g = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(md.graphId)}`)
+    if (g.ok) {
+      const j = await g.json()
+      title = j?.metadata?.title || null
+      world = j?.world || null
+      const node = (j?.nodes || []).find((n) => n.id === md.nodeId)
+      if (node && !title) title = node.label || null
+    }
+  } catch { /* title is a nicety; the ids are the answer */ }
+  return {
+    success: true, host, published: true, via,
+    graphId: md.graphId, nodeId: md.nodeId || null, publishedAt: md.publishedAt || null, publishedBy: md.publishedBy || null,
+    title, world,
+    message: `${host} serves node "${md.nodeId || '?'}" of graph ${md.graphId}${title ? ` ("${title}")` : ''}, published ${md.publishedAt || 'at an unrecorded time'}${world ? `; the graph lives in the ${world} World` : ''}.`,
+  }
+}
+
 // Does `host` actually resolve to a worker? Only needed when the key was read over the service
 // binding (which bypasses DNS entirely and so says nothing about routing). 530/1016 or a thrown
 // fetch = not routed yet; a same-zone 522 loopback is a REAL routed host and counts as routed.
@@ -17170,6 +17214,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeCreateSubdomain(toolInput, env)
     case 'publish_html_node':
       return await executePublishHtmlNode(toolInput, env)
+    case 'find_published_page':
+      return await executeFindPublishedPage(toolInput, env)
     case 'replace_html_section':
       return await executeReplaceHtmlSection(toolInput, env)
     case 'set_contact_route':
