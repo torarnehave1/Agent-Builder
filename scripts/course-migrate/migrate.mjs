@@ -8,8 +8,11 @@
 //   verify    each uploaded video answers a byte range (206) — iPhone playback depends on it
 //   transcribe each video's audio (mono MP3) through openai.vegvisr.org/audio (Whisper), kept in
 //             state so a re-run never pays twice; timestamped paragraphs of about a minute
-//   graph     the course graph in the World: a course node, the text lessons, one realtime-video
-//             node per video lesson in order, each followed by its transcript as a fulltext node,
+//   summarize a short overview of each video from its corrected transcript (anthropic.vegvisr.org,
+//             structured JSON, formatted here): what it covers, points with timestamps, keywords,
+//             hashtags — cached on the transcript text, so it is rewritten only when that changes
+//   graph     the course graph in the World: a course node, the text lessons, and per video lesson
+//             its summary, the realtime-video node and its transcript, in that order,
 //             `next` edges; re-runs overwrite the same graph
 //
 // State per course in state/<slug>.json, so an interrupted run resumes where it stopped.
@@ -38,6 +41,9 @@ if (!token) { console.error('VEGVISR_TOKEN is not set'); process.exit(2) }
 const actor = process.env.VEGVISR_EMAIL || 'torarnehave@gmail.com'
 const userId = process.env.VEGVISR_USER_ID || ''
 const AUDIO = 'https://openai.vegvisr.org/audio'
+const LLM = 'https://anthropic.vegvisr.org/chat'
+const SUMMARY_MODEL = process.env.SUMMARY_MODEL || 'claude-sonnet-5-5'
+const SUMMARY_VERSION = 1
 const LANGUAGE = m.language || 'no'
 // Shared word file (2026-10-16): `terms` is Whisper's prompt, `replacements` fixes known misreadings.
 // Corrections are applied when the graph is built, from the stored raw segments — a new pair in the
@@ -61,6 +67,7 @@ fs.mkdirSync(path.join(here, 'state'), { recursive: true })
 const statePath = path.join(here, 'state', `${m.slug}.json`)
 const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : { uploads: {}, graphId: null }
 state.transcripts = state.transcripts || {}
+state.summaries = state.summaries || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
 
@@ -185,6 +192,57 @@ function transcriptMarkdown(t) {
   return paras.map((p) => `**[${stamp(p.start)}]** ${applyReplacements(p.text)}`).join('\n\n')
 }
 
+// ---- summarize --------------------------------------------------------------------------------
+async function summarize(lesson) {
+  const t = state.transcripts[lesson.lesson_id]
+  const text = transcriptMarkdown(t)
+  const sourceHash = crypto.createHash('sha256').update(`${SUMMARY_VERSION}|${SUMMARY_MODEL}|${text}`).digest('hex').slice(0, 16)
+  const have = state.summaries[lesson.lesson_id]
+  if (have && have.source_hash === sourceHash) { log(`summary cached: ${lesson.title}`); return have }
+  const instruction = [
+    `Du lager en kort oversikt som står OVER en kursvideo i «${m.title}» (${m.source.product}), så deltakeren vet hva videoen går gjennom før hun ser den.`,
+    `Videoen heter «${lesson.title}». Under er den automatiske transkripsjonen med tidsstempler [mm:ss].`,
+    'Svar BARE med JSON, uten forklaring og uten kodeblokk, på formen:',
+    '{"intro": "én setning på norsk, du-form, varm og konkret", "points": [{"at": "mm:ss", "text": "kort punkt, maks 12 ord"}], "keywords": ["3-6 stikkord, små bokstaver"], "hashtags": ["3-5 hashtags uten #, små bokstaver, ett ord hver, norsk"]}',
+    'Regler: 3-6 punkter i rekkefølgen de kommer i videoen, med tidsstempelet der temaet starter. Bare det som faktisk sies i videoen. Ingen hilsener eller "velkommen".',
+    '',
+    text,
+  ].join('\n')
+  const r = await fetch(LLM, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-API-Token': token },
+    body: JSON.stringify({ userId, model: SUMMARY_MODEL, max_tokens: 900, temperature: 0.2, messages: [{ role: 'user', content: instruction }] }),
+  })
+  const j = await r.json().catch(() => ({}))
+  const raw = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim()
+  let data
+  try { data = JSON.parse(raw.replace(/^```(json)?|```$/g, '').trim()) } catch { data = null }
+  if (!r.ok || !data || !Array.isArray(data.points)) throw new Error(`summary of ${lesson.title} failed (${r.status}): ${j.error || raw.slice(0, 200)}`)
+  // Checked, not trusted: every point starts at a real moment of THIS video, in order, at most 8.
+  const secs = (at) => { const mm = /^(\d{1,2}):(\d{2})$/.exec(String(at || '')); return mm ? Number(mm[1]) * 60 + Number(mm[2]) : NaN }
+  data.points = data.points.filter((p) => p && p.text && secs(p.at) <= (t.duration_s || Infinity)).sort((a, b) => secs(a.at) - secs(b.at)).slice(0, 8)
+  if (data.points.length < 2) throw new Error(`summary of ${lesson.title} has too few valid points`)
+  state.summaries[lesson.lesson_id] = { source_hash: sourceHash, model: SUMMARY_MODEL, data, at: new Date().toISOString() }
+  save()
+  log(`summarized ${lesson.title}: ${data.points.length} points`)
+  return state.summaries[lesson.lesson_id]
+}
+
+// One layout for every lesson: the sentence, the points with their start time, keywords, hashtags.
+function summaryMarkdown(d) {
+  const tag = (h) => `#${String(h).replace(/^#/, '').replace(/\s+/g, '').toLowerCase()}`
+  return [
+    d.intro,
+    '',
+    '**I denne videoen**',
+    ...d.points.map((p) => `- **${p.at}** – ${p.text}`),
+    '',
+    `**Stikkord:** ${(d.keywords || []).join(' · ')}`,
+    '',
+    (d.hashtags || []).map(tag).join(' '),
+  ].join('\n')
+}
+
 // ---- graph ------------------------------------------------------------------------------------
 async function saveGraph() {
   const id = state.graphId || crypto.randomUUID()
@@ -204,6 +262,17 @@ async function saveGraph() {
     const lessonMeta = { lesson_id: lesson.lesson_id, order, type: lesson.type }
     if (lesson.type === 'video') {
       const u = state.uploads[lesson.lesson_id]
+      const sm = state.summaries[lesson.lesson_id]
+      if (sm) {
+        const sid = `${nid}-oppsummering`
+        nodes.push({
+          id: sid, label: `Oppsummering – ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: -300, y: order * 120 },
+          info: summaryMarkdown(sm.data),
+          metadata: { summary: { lesson_id: lesson.lesson_id, of: nid, model: sm.model, keywords: sm.data.keywords || [], hashtags: sm.data.hashtags || [], source: 'automatic' } },
+        })
+        edges.push({ source: prev, target: sid, type: 'next', label: 'next' })
+        prev = sid
+      }
       nodes.push({ ...base, type: 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
       const t = state.transcripts[lesson.lesson_id]
       if (t) {
@@ -248,6 +317,7 @@ for (const lesson of m.lessons) {
   await verifyRange(u)
   log(`range ok: ${lesson.title}`)
   await transcribe(lesson, file)
+  await summarize(lesson)
 }
 const graphId = await saveGraph()
 console.log(JSON.stringify({ course: m.slug, world: m.world, graphId, editor: `https://editor.${m.world}/?graphId=${graphId}`, videos: await Promise.all(Object.values(state.uploads).map(urlFor)) }, null, 2))
