@@ -5,6 +5,8 @@
   "album": "Enkel hals",
   "folder": "kurs/enkel-hals",
   "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
   "source": {
     "system": "kajabi",
     "product_id": 503165,
@@ -14,12 +16,36 @@
   },
   "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/enkel-hals/Komprimert",
   "lessons": [
-    { "lesson_id": 2179837721, "title": "Oppskriften", "type": "text",
+    {
+      "lesson_id": 2179837721,
+      "title": "Oppskriften",
+      "type": "text",
       "info": "Her er oppskriften på Enkel hals. Last den ned og ha den foran deg når du følger kurset.",
-      "pdf": "Enkel_hals.pdf" },
-    { "lesson_id": 2155872188, "title": "Legg opp", "type": "video", "file": "2155872188-legg-opp.mp4" },
-    { "lesson_id": 2155872191, "title": "Strikk rette masker", "type": "video", "file": "2155872191-strikk-rette-masker.mp4" },
-    { "lesson_id": 2155872193, "title": "Fell av", "type": "video", "file": "2155872193-fell-av.mp4" },
-    { "lesson_id": 2155872197, "title": "Fest tråder og sy sammen", "type": "video", "file": "2155872197-fest-trader-og-sy-sammen.mp4" }
+      "pdf": "Enkel_hals.pdf"
+    },
+    {
+      "lesson_id": 2155872188,
+      "title": "Legg opp",
+      "type": "video",
+      "file": "2155872188-legg-opp.mp4"
+    },
+    {
+      "lesson_id": 2155872191,
+      "title": "Strikk rette masker",
+      "type": "video",
+      "file": "2155872191-strikk-rette-masker.mp4"
+    },
+    {
+      "lesson_id": 2155872193,
+      "title": "Fell av",
+      "type": "video",
+      "file": "2155872193-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2155872197,
+      "title": "Fest tråder og sy sammen",
+      "type": "video",
+      "file": "2155872197-fest-trader-og-sy-sammen.mp4"
+    }
   ]
 }

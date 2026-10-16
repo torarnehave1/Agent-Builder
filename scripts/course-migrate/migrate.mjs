@@ -39,6 +39,23 @@ const actor = process.env.VEGVISR_EMAIL || 'torarnehave@gmail.com'
 const userId = process.env.VEGVISR_USER_ID || ''
 const AUDIO = 'https://openai.vegvisr.org/audio'
 const LANGUAGE = m.language || 'no'
+// Shared word file (2026-10-16): `terms` is Whisper's prompt, `replacements` fixes known misreadings.
+// Corrections are applied when the graph is built, from the stored raw segments — a new pair in the
+// file reaches every course on its next run without transcribing again.
+const glossary = m.glossary ? JSON.parse(fs.readFileSync(path.join(here, 'glossary', `${m.glossary}.json`), 'utf8')) : { terms: [], replacements: {} }
+const whisperPrompt = (glossary.terms || []).join(', ')
+const promptHash = crypto.createHash('sha256').update(whisperPrompt).digest('hex').slice(0, 12)
+const escapeRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function applyReplacements(text) {
+  let out = text
+  for (const phrase of glossary.drop_phrases || []) out = out.split(phrase).join('')
+  out = out.replace(/\s{2,}/g, ' ').trim()
+  for (const [wrong, right] of Object.entries(glossary.replacements || {})) {
+    out = out.replace(new RegExp(`(?<![\\p{L}])${escapeRe(wrong)}(?![\\p{L}])`, 'giu'), (hit) =>
+      hit[0] === hit[0].toUpperCase() ? right[0].toUpperCase() + right.slice(1) : right)
+  }
+  return out
+}
 
 fs.mkdirSync(path.join(here, 'state'), { recursive: true })
 const statePath = path.join(here, 'state', `${m.slug}.json`)
@@ -134,7 +151,7 @@ const stamp = (t) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Ma
 async function transcribe(lesson, file) {
   const digest = state.uploads[lesson.lesson_id] && state.uploads[lesson.lesson_id].sha256
   const have = state.transcripts[lesson.lesson_id]
-  if (have && have.video_sha256 === digest) { log(`transcript cached: ${lesson.title}`); return have }
+  if (have && have.video_sha256 === digest && have.prompt_hash === promptHash && Array.isArray(have.raw)) { log(`transcript cached: ${lesson.title}`); return have }
   if (!userId) throw new Error('VEGVISR_USER_ID is not set (needed by the transcription service)')
   const mp3 = path.join(here, 'state', `${m.slug}-${lesson.lesson_id}.mp3`)
   execFileSync('ffmpeg', ['-nostdin', '-loglevel', 'error', '-y', '-i', file, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-b:a', '48k', mp3])
@@ -143,23 +160,29 @@ async function transcribe(lesson, file) {
   fd.append('model', 'whisper-1')
   fd.append('language', LANGUAGE)
   fd.append('response_format', 'verbose_json')
+  if (whisperPrompt) fd.append('prompt', whisperPrompt)
   fd.append('userId', userId)
   const r = await fetch(AUDIO, { method: 'POST', body: fd })
   const j = await r.json().catch(() => ({}))
   fs.unlinkSync(mp3)
   if (!r.ok || typeof j.text !== 'string') throw new Error(`transcription of ${lesson.title} failed (${r.status}): ${j.error || JSON.stringify(j).slice(0, 200)}`)
-  // Paragraphs of about a minute, each led by its start time, so the text can be followed in the video.
+  const raw = (j.segments || []).map((sg) => ({ start: sg.start, text: sg.text }))
+  if (!raw.length) raw.push({ start: 0, text: j.text })
+  state.transcripts[lesson.lesson_id] = { video_sha256: digest, prompt_hash: promptHash, model: 'whisper-1', language: LANGUAGE, segments: raw.length, duration_s: Math.round(j.duration || 0), raw, at: new Date().toISOString() }
+  save()
+  log(`transcribed ${lesson.title}: ${(j.segments || []).length} segments`)
+  return state.transcripts[lesson.lesson_id]
+}
+
+// Paragraphs of about a minute, each led by its start time, corrections applied.
+function transcriptMarkdown(t) {
   const paras = []
-  for (const seg of j.segments || []) {
+  for (const seg of t.raw) {
     const last = paras[paras.length - 1]
     if (!last || seg.start - last.start >= 60) paras.push({ start: seg.start, text: seg.text.trim() })
     else last.text += ` ${seg.text.trim()}`
   }
-  const markdown = paras.length ? paras.map((p) => `**[${stamp(p.start)}]** ${p.text}`).join('\n\n') : j.text.trim()
-  state.transcripts[lesson.lesson_id] = { video_sha256: digest, model: 'whisper-1', language: LANGUAGE, segments: (j.segments || []).length, duration_s: Math.round(j.duration || 0), markdown, at: new Date().toISOString() }
-  save()
-  log(`transcribed ${lesson.title}: ${(j.segments || []).length} segments`)
-  return state.transcripts[lesson.lesson_id]
+  return paras.map((p) => `**[${stamp(p.start)}]** ${applyReplacements(p.text)}`).join('\n\n')
 }
 
 // ---- graph ------------------------------------------------------------------------------------
@@ -187,8 +210,8 @@ async function saveGraph() {
         const tid = `${nid}-transkripsjon`
         nodes.push({
           id: tid, label: `Transkripsjon – ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
-          info: `_Automatisk transkribert (Whisper). Kan inneholde feil._\n\n${t.markdown}`,
-          metadata: { transcript: { lesson_id: lesson.lesson_id, of: nid, model: t.model, language: t.language, segments: t.segments, duration_s: t.duration_s, source: 'automatic' } },
+          info: `_Automatisk transkribert (Whisper). Kan inneholde feil._\n\n${transcriptMarkdown(t)}`,
+          metadata: { transcript: { lesson_id: lesson.lesson_id, of: nid, model: t.model, language: t.language, segments: t.segments, duration_s: t.duration_s, source: 'automatic', glossary: m.glossary || null, prompt_hash: t.prompt_hash, replacements: Object.keys(glossary.replacements || {}).length } },
         })
         edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
         edges.push({ source: nid, target: tid, type: 'next', label: 'next' })
