@@ -1,8 +1,12 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useDeferredValue } from 'react';
 import { kgAuthHeaders, kgJsonHeaders } from '../lib/kgAuth';
 
 const KG_API = 'https://knowledge.vegvisr.org';
-const PAGE_SIZE = 50; // larger pages for background loading
+// The server caps a page at 250. A page costs about a second whatever its size, so few large
+// pages fetched side by side beat many small ones fetched in turn (27 x 50 took ~27 s; 6 x 250 ~5 s).
+const PAGE_SIZE = 250;
+const RENDER_STEP = 120; // cards drawn at a time — 1350 cards made every keystroke lag
+const SEARCH_MIN = 3; // from this length the server is asked too (it also matches node content)
 
 type SortOrder = 'newest' | 'oldest' | 'az';
 
@@ -24,6 +28,11 @@ interface GraphSummary {
   edgeCount: number;
   nodeTypes: string[];
   portfolioImagePath: string | null;
+  // Hosts the graph's html-nodes are published to: the node stamp merged with the publish
+  // registry by /getknowgraphsummaries and /searchGraphs.
+  publishedDomains?: string[];
+  // Node types + up to 40 node labels + domains, assembled by the server for searching.
+  searchText?: string;
   metadata: GraphMetadata | null;
 }
 
@@ -37,8 +46,9 @@ interface Props {
 function timeAgo(iso: string | null | undefined): string {
   if (!iso || iso === 'Unknown') return '';
   const diff = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diff)) return '';
   const d = Math.floor(diff / 86400000);
-  if (d === 0) return 'today';
+  if (d <= 0) return 'today';
   if (d === 1) return 'yesterday';
   if (d < 30) return `${d}d ago`;
   const m = Math.floor(d / 30);
@@ -74,6 +84,28 @@ interface RawSummary extends GraphSummary {
   category?: string;
 }
 
+// "https://lipi.vegr.ai/x" and "lipi.vegr.ai" should find the same graph.
+function normaliseQuery(q: string): string {
+  return q.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').trim() || q.trim().toLowerCase();
+}
+
+function matchesLocal(g: GraphSummary, q: string, raw: string): boolean {
+  if (!q) return true;
+  const hay = [
+    g.metadata?.title || g.title || '',
+    g.metadata?.description || '',
+    g.metadata?.metaArea || '',
+    g.metadata?.category || '',
+    g.searchText || '',
+    (g.publishedDomains || []).join(' '),
+  ].join(' ').toLowerCase();
+  return hay.includes(q) || (raw !== q && hay.includes(raw));
+}
+
+// Fetched pages survive leaving the tab (the component unmounts), so coming back is instant;
+// a fresh copy is fetched behind it.
+let portfolioCache: { graphs: GraphSummary[]; total: number } | null = null;
+
 // Normalise a raw summary into a consistent shape (mirrors processGraphSummary in GraphPortfolio.vue)
 function processSummary(raw: RawSummary): GraphSummary {
   const meta = raw.metadata || {};
@@ -93,24 +125,36 @@ function processSummary(raw: RawSummary): GraphSummary {
 }
 
 export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateToChat, onGraphSelected }: Props) {
-  const [graphs, setGraphs] = useState<GraphSummary[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [hydrating, setHydrating] = useState(false); // background loading remaining pages
+  const [graphs, setGraphs] = useState<GraphSummary[]>(() => portfolioCache?.graphs || []);
+  const [total, setTotal] = useState(() => portfolioCache?.total || 0);
+  const [loading, setLoading] = useState(() => !portfolioCache);
+  const [hydrating, setHydrating] = useState(false); // remaining pages still loading
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [serverSearched, setServerSearched] = useState(false); // current list came from /searchGraphs
+  // Extra hits from /searchGraphs (node content matches the summaries cannot see).
+  const [serverHits, setServerHits] = useState<{ q: string; hits: GraphSummary[] } | null>(null);
+  const [searching, setSearching] = useState(false);
   const [selectedArea, setSelectedArea] = useState<string | null>(null);
   const [selectedCreator, setSelectedCreator] = useState<string | null>(null);
+  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
+  const [showDomains, setShowDomains] = useState(false);
   const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
   const [toast, setToast] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const runIdRef = useRef(0);
+  const loadRunRef = useRef(0);
+  const searchRunRef = useRef(0);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((text: string, ms = 2500) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast(text);
+    toastTimerRef.current = setTimeout(() => setToast(null), ms);
+  }, []);
+  useEffect(() => () => { if (toastTimerRef.current) clearTimeout(toastTimerRef.current); }, []);
 
   // MetaArea frequencies — sorted by count descending (matches portfolioStore.sortedMetaAreas)
-  const { metaAreas, metaAreaFreq } = (() => {
+  const { metaAreas, metaAreaFreq } = useMemo(() => {
     const freq: Record<string, number> = {};
     for (const g of graphs) {
       for (const area of parseMetaAreas(g.metadata?.metaArea)) {
@@ -119,125 +163,153 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
     }
     const sorted = Object.keys(freq).sort((a, b) => freq[b] - freq[a]);
     return { metaAreas: sorted, metaAreaFreq: freq };
-  })();
+  }, [graphs]);
+
+  // Published hosts, alphabetical, with how many graphs serve each
+  const { domains, domainFreq } = useMemo(() => {
+    const freq: Record<string, number> = {};
+    for (const g of graphs) for (const h of g.publishedDomains || []) freq[h] = (freq[h] || 0) + 1;
+    return { domains: Object.keys(freq).sort(), domainFreq: freq };
+  }, [graphs]);
 
   // Unique creators sorted alphabetically
-  const creators = Array.from(
+  const creators = useMemo(() => Array.from(
     new Set(
       graphs
         .map(g => g.metadata?.createdBy)
         .filter((c): c is string => !!c && c !== 'Unknown')
     )
-  ).sort();
+  ).sort(), [graphs]);
 
-  // Filtered + sorted view
-  const filtered = graphs
-    .filter(g => {
-      const q = search.toLowerCase();
-      const title = (g.metadata?.title || g.title || '').toLowerCase();
-      const desc = (g.metadata?.description || '').toLowerCase();
-      const area = (g.metadata?.metaArea || '').toLowerCase();
-      const cat = (g.metadata?.category || '').toLowerCase();
-      // The server matches node labels and node content too — re-applying the local
-      // title/description test to its results would throw away real hits.
-      const matchesSearch = serverSearched || !q || title.includes(q) || desc.includes(q) || area.includes(q) || cat.includes(q);
-      const graphAreas = parseMetaAreas(g.metadata?.metaArea);
-      const matchesArea = !selectedArea || graphAreas.includes(selectedArea);
-      // /searchGraphs rows carry no createdBy — don't filter search hits on a field they lack.
-      const matchesCreator = !selectedCreator || serverSearched || g.metadata?.createdBy === selectedCreator;
-      return matchesSearch && matchesArea && matchesCreator;
-    })
-    .sort((a, b) => {
-      if (sortOrder === 'newest') {
-        const ta = a.metadata?.updatedAt || a.updatedAt || '';
-        const tb = b.metadata?.updatedAt || b.updatedAt || '';
-        return new Date(tb || 0).getTime() - new Date(ta || 0).getTime();
-      }
-      if (sortOrder === 'oldest') {
-        const ta = a.metadata?.updatedAt || a.updatedAt || '';
-        const tb = b.metadata?.updatedAt || b.updatedAt || '';
-        return new Date(ta || 0).getTime() - new Date(tb || 0).getTime();
-      }
-      const ta = (a.metadata?.title || a.title || '').toLowerCase();
-      const tb = (b.metadata?.title || b.title || '').toLowerCase();
-      return ta.localeCompare(tb);
-    });
+  // Typing stays responsive: the grid filters against a deferred copy of the query.
+  const deferredSearch = useDeferredValue(search);
+  const rawQuery = deferredSearch.trim().toLowerCase();
+  const query = normaliseQuery(deferredSearch);
 
-  // Load all pages — first page fast, remaining pages in background (mirrors fetchGraphs in GraphPortfolio.vue)
+  // Filtered + sorted view. The local match runs over every loaded graph (title, description,
+  // areas, node labels, published domains); server hits for the same query are added on top.
+  const filtered = useMemo(() => {
+    const extra = serverHits && serverHits.q === deferredSearch.trim() ? serverHits.hits : [];
+    const extraIds = new Set(extra.map(h => h.id));
+    const byId = new Set<string>();
+    const pool: GraphSummary[] = [];
+    for (const g of graphs) {
+      if (!query || extraIds.has(g.id) || matchesLocal(g, query, rawQuery)) { pool.push(g); byId.add(g.id); }
+    }
+    for (const h of extra) if (!byId.has(h.id)) { pool.push(h); byId.add(h.id); }
+    return pool
+      .filter(g => {
+        const matchesArea = !selectedArea || parseMetaAreas(g.metadata?.metaArea).includes(selectedArea);
+        // /searchGraphs rows carry no createdBy — don't filter those on a field they lack.
+        const createdBy = g.metadata?.createdBy;
+        const matchesCreator = !selectedCreator || !createdBy || createdBy === 'Unknown' || createdBy === selectedCreator;
+        const matchesDomain = !selectedDomain || (g.publishedDomains || []).includes(selectedDomain);
+        return matchesArea && matchesCreator && matchesDomain;
+      })
+      .sort((a, b) => {
+        // A query that names a published host puts the graphs serving it first.
+        if (query) {
+          const da = (a.publishedDomains || []).some(h => h.includes(query)) ? 0 : 1;
+          const db = (b.publishedDomains || []).some(h => h.includes(query)) ? 0 : 1;
+          if (da !== db) return da - db;
+        }
+        if (sortOrder === 'az') {
+          const ta = (a.metadata?.title || a.title || '').toLowerCase();
+          const tb = (b.metadata?.title || b.title || '').toLowerCase();
+          return ta.localeCompare(tb);
+        }
+        const ta = new Date(a.metadata?.updatedAt || a.updatedAt || 0).getTime() || 0;
+        const tb = new Date(b.metadata?.updatedAt || b.updatedAt || 0).getTime() || 0;
+        return sortOrder === 'newest' ? tb - ta : ta - tb;
+      });
+  }, [graphs, serverHits, deferredSearch, query, rawQuery, selectedArea, selectedCreator, selectedDomain, sortOrder]);
+
+  // Draw the grid in steps; a sentinel below the last card asks for the next step.
+  const [renderCount, setRenderCount] = useState(RENDER_STEP);
+  useEffect(() => { setRenderCount(RENDER_STEP); }, [deferredSearch, selectedArea, selectedCreator, selectedDomain, sortOrder]);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(entries => {
+      if (entries.some(e => e.isIntersecting)) setRenderCount(n => n + RENDER_STEP);
+    }, { rootMargin: '600px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filtered.length, renderCount]);
+
+  // Load every page: the first one shows at once, the rest are fetched side by side.
+  // With a cached list on screen nothing is cleared — the fresh list replaces it in one step.
   const loadAllGraphs = useCallback(async () => {
-    const runId = ++runIdRef.current;
-    setLoading(true);
-    setHydrating(false);
-    setServerSearched(false);
-    setGraphs([]);
+    const runId = ++loadRunRef.current;
+    const live = () => runId === loadRunRef.current;
+    const hadCache = !!portfolioCache;
+    setLoadError(null);
+    if (!hadCache) setLoading(true);
+    setHydrating(true);
+
+    const fetchPage = async (offset: number) => {
+      const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: kgAuthHeaders() });
+      if (!res.ok) throw new Error(`Graph list failed (HTTP ${res.status}) at offset ${offset}`);
+      const data = await res.json();
+      return { total: Number(data.total || 0), rows: ((data.results as RawSummary[]) || []).map(processSummary) };
+    };
 
     try {
-      // First page — show results immediately
-      const firstRes = await fetch(`${KG_API}/getknowgraphsummaries?offset=0&limit=${PAGE_SIZE}`, { headers: kgAuthHeaders() });
-      if (!firstRes.ok) throw new Error('Failed');
-      const firstData = await firstRes.json();
-      const totalCount: number = firstData.total || 0;
-      setTotal(totalCount);
-
-      const firstBatch = (firstData.results as RawSummary[] || []).map(processSummary);
-      if (runId !== runIdRef.current) return;
-      setGraphs(firstBatch);
-      setLoading(false);
-
-      // Background: fetch remaining pages
-      let offset = firstBatch.length;
-      if (offset < totalCount) {
-        setHydrating(true);
-        while (offset < totalCount) {
-          if (runId !== runIdRef.current) return;
-          const res = await fetch(`${KG_API}/getknowgraphsummaries?offset=${offset}&limit=${PAGE_SIZE}`, { headers: kgAuthHeaders() });
-          if (!res.ok) break;
-          const data = await res.json();
-          const page = (data.results as RawSummary[] || []).map(processSummary);
-          if (!page.length) break;
-          if (runId !== runIdRef.current) return;
-          setGraphs(prev => [...prev, ...page]);
-          offset += page.length;
-          if (!data.hasMore) break;
-        }
-        if (runId === runIdRef.current) setHydrating(false);
+      const first = await fetchPage(0);
+      if (!live()) return;
+      if (!hadCache) {
+        setGraphs(first.rows);
+        setTotal(first.total);
+        setLoading(false);
       }
-    } catch {
-      setLoading(false);
-      setHydrating(false);
+      const offsets: number[] = [];
+      for (let o = PAGE_SIZE; o < first.total; o += PAGE_SIZE) offsets.push(o);
+      const pages = await Promise.all(offsets.map(fetchPage));
+      if (!live()) return;
+
+      // Offsets can shift if graphs change while pages load — keep each id once.
+      const seen = new Set<string>();
+      const all: GraphSummary[] = [];
+      for (const g of [first.rows, ...pages.map(p => p.rows)].flat()) {
+        if (!seen.has(g.id)) { seen.add(g.id); all.push(g); }
+      }
+      portfolioCache = { graphs: all, total: first.total };
+      setGraphs(all);
+      setTotal(first.total);
+    } catch (e) {
+      if (!live()) return;
+      setLoadError(e instanceof Error ? e.message : 'Graph list failed');
+    } finally {
+      if (live()) { setLoading(false); setHydrating(false); }
     }
   }, []);
 
   useEffect(() => { loadAllGraphs(); }, [loadAllGraphs]);
 
-  // Debounced server-search when search term is long enough
+  // Debounced server search, added to the local matches (never replaces the loaded list).
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (search.length >= 3) {
-      debounceRef.current = setTimeout(async () => {
-        const runId = ++runIdRef.current;
-        setLoading(true);
-        setHydrating(false); // a superseded background page-load must not leave the spinner on
-        try {
-          const params = new URLSearchParams({ q: search, limit: '50', offset: '0' });
-          // Without the role header the worker searches PUBLISHED graphs only — drafts vanish.
-          const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: kgAuthHeaders() });
-          if (res.ok && runId === runIdRef.current) {
-            const data = await res.json();
-            const hits = ((data.results as RawSummary[]) || []).map(processSummary);
-            setGraphs(hits);
-            setTotal(typeof data.total === 'number' ? data.total : hits.length);
-            setServerSearched(true);
-          }
-        } catch { /* silent */ } finally {
-          if (runId === runIdRef.current) setLoading(false);
-        }
-      }, 400);
-    } else if (search.length === 0) {
-      loadAllGraphs();
-    }
-    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
-  }, [search, loadAllGraphs]);
+    const q = search.trim();
+    const runId = ++searchRunRef.current;
+    if (q.length < SEARCH_MIN) { setServerHits(null); setSearching(false); return; }
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const params = new URLSearchParams({ q, limit: '50', offset: '0' });
+        // Without the role header the worker searches PUBLISHED graphs only — drafts vanish.
+        const res = await fetch(`${KG_API}/searchGraphs?${params}`, { headers: kgAuthHeaders() });
+        if (!res.ok) throw new Error(`Search failed (HTTP ${res.status})`);
+        const data = await res.json();
+        if (runId !== searchRunRef.current) return;
+        setServerHits({ q, hits: ((data.results as RawSummary[]) || []).map(processSummary) });
+      } catch (e) {
+        if (runId === searchRunRef.current) showToast(e instanceof Error ? e.message : 'Search failed', 3000);
+      } finally {
+        if (runId === searchRunRef.current) setSearching(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [search, showToast]);
 
   const deleteGraph = async (id: string) => {
     setDeleting(true);
@@ -248,14 +320,14 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
         body: JSON.stringify({ id }),
       });
       if (!res.ok) throw new Error('Delete failed');
-      setGraphs(prev => prev.filter(g => g.id !== id));
-      setTotal(prev => prev - 1);
       const title = graphs.find(g => g.id === id)?.metadata?.title || id;
-      setToast(`Deleted: ${title}`);
-      setTimeout(() => setToast(null), 2500);
+      setGraphs(prev => prev.filter(g => g.id !== id));
+      setServerHits(prev => prev && { ...prev, hits: prev.hits.filter(g => g.id !== id) });
+      setTotal(prev => prev - 1);
+      if (portfolioCache) portfolioCache = { graphs: portfolioCache.graphs.filter(g => g.id !== id), total: portfolioCache.total - 1 };
+      showToast(`Deleted: ${title}`);
     } catch {
-      setToast('Delete failed — please try again');
-      setTimeout(() => setToast(null), 3000);
+      showToast('Delete failed — please try again', 3000);
     } finally {
       setDeleting(false);
       setConfirmDeleteId(null);
@@ -265,8 +337,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
   const selectGraph = (g: GraphSummary) => {
     onGraphChange(g.id);
     const name = g.metadata?.title || g.title;
-    setToast(`Context set: ${name}`);
-    setTimeout(() => setToast(null), 2500);
+    showToast(`Context set: ${name}`);
     if (onGraphSelected) {
       onGraphSelected(g.id, name);
     } else {
@@ -279,6 +350,45 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
 
       {/* ── Left sidebar ── */}
       <aside className="w-[180px] flex-shrink-0 border-r border-white/10 flex flex-col py-3 overflow-y-auto gap-4">
+
+        {/* Published domains filter */}
+        {domains.length > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setShowDomains(v => !v)}
+              className="w-full text-left px-3 text-[10px] uppercase tracking-widest text-white/30 mb-2 hover:text-white/60"
+            >
+              {showDomains ? '▾' : '▸'} Domains <span className="normal-case tracking-normal">({domains.length})</span>
+            </button>
+            {selectedDomain && !showDomains && (
+              <button
+                type="button"
+                onClick={() => setSelectedDomain(null)}
+                className="w-full text-left px-3 py-1.5 text-xs truncate text-sky-300 font-semibold bg-sky-500/10 border-l-2 border-sky-400"
+                title="Clear domain filter"
+              >
+                {selectedDomain} ×
+              </button>
+            )}
+            {showDomains && domains.map(host => (
+              <button
+                type="button"
+                key={host}
+                onClick={() => setSelectedDomain(prev => prev === host ? null : host)}
+                className={`w-full text-left px-3 py-1.5 text-xs truncate transition-colors ${
+                  selectedDomain === host
+                    ? 'text-sky-300 font-semibold bg-sky-500/10 border-l-2 border-sky-400'
+                    : 'text-white/50 hover:text-white/80'
+                }`}
+                title={host}
+              >
+                {host}
+                {domainFreq[host] > 1 && <span className="ml-1 text-white/25 text-[10px]">({domainFreq[host]})</span>}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* MetaArea filter */}
         <div>
@@ -360,11 +470,10 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
             </svg>
             <input
-              ref={searchRef}
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search graphs…"
+              placeholder="Search graphs or domains…"
               className="w-full bg-white/5 border border-white/10 rounded-lg pl-8 pr-3 py-1.5 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-purple-500/50 focus:bg-white/8 transition-colors"
             />
             {search && (
@@ -392,8 +501,18 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
           </select>
 
           <span className="text-[11px] text-white/30 flex-shrink-0">
-            {loading ? 'Loading…' : hydrating ? `${filtered.length} of ${total}…` : `${filtered.length} of ${total}`}
+            {loading ? 'Loading…' : `${filtered.length} of ${total}${hydrating || searching ? '…' : ''}`}
           </span>
+          {loadError && (
+            <button
+              type="button"
+              onClick={() => loadAllGraphs()}
+              className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full hover:bg-red-500/20"
+              title={loadError}
+            >
+              Load failed — retry
+            </button>
+          )}
           {graphId && (
             <div className="ml-auto flex items-center gap-2 text-[11px] text-purple-300 bg-purple-600/10 px-2.5 py-1 rounded-full border border-purple-500/20">
               <span className="w-1.5 h-1.5 rounded-full bg-purple-400 flex-shrink-0" />
@@ -418,7 +537,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {filtered.map(g => {
+              {filtered.slice(0, renderCount).map(g => {
                 const isActive = g.id === graphId;
                 const title = g.metadata?.title || g.title || 'Untitled';
                 const desc = g.metadata?.description || '';
@@ -447,6 +566,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                           alt={title}
                           className="w-full h-full object-cover"
                           loading="lazy"
+                          onError={e => { e.currentTarget.style.display = 'none'; }}
                         />
                       </div>
                     ) : (
@@ -472,7 +592,7 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                     {/* Node type tags — html-node highlighted so it's spottable at a glance */}
                     {(g.nodeTypes?.length ?? 0) > 0 && (
                       <div className="flex flex-wrap gap-1">
-                        {g.nodeTypes.map(t => (
+                        {Array.from(new Set(g.nodeTypes)).map(t => (
                           <span
                             key={t}
                             className={`text-[9px] px-1.5 py-0.5 rounded font-mono truncate max-w-[110px] ${
@@ -483,6 +603,25 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                             title={t}
                           >
                             {t}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Published domains — click to filter on that host */}
+                    {(g.publishedDomains?.length ?? 0) > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {(g.publishedDomains || []).map(host => (
+                          <span
+                            key={host}
+                            role="button"
+                            tabIndex={0}
+                            onClick={e => { e.stopPropagation(); setSelectedDomain(prev => prev === host ? null : host); }}
+                            onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); setSelectedDomain(prev => prev === host ? null : host); } }}
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 hover:bg-sky-500/30 truncate max-w-full"
+                            title={`Show graphs published to ${host}`}
+                          >
+                            {host}
                           </span>
                         ))}
                       </div>
@@ -557,6 +696,17 @@ export default function GraphPortfolioTab({ graphId, onGraphChange, onNavigateTo
                   </div>
                 );
               })}
+            </div>
+          )}
+          {!loading && renderCount < filtered.length && (
+            <div ref={sentinelRef} className="py-4 text-center">
+              <button
+                type="button"
+                onClick={() => setRenderCount(n => n + RENDER_STEP)}
+                className="text-xs text-white/40 hover:text-white/70"
+              >
+                Show more ({filtered.length - renderCount} left)
+              </button>
             </div>
           )}
         </div>
