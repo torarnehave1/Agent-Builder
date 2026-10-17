@@ -4287,7 +4287,7 @@ const PROFF_TOOLS = [
   },
   {
     name: 'compose_image_from_references',
-    description: 'Compose a NEW image from one to four reference pictures you already have URLs for, using gpt-image-2.5. Use this when the point is a SPECIFIC thing rather than a described one — this exact product, mascot, person or logo, placed in a new scene, or two of them combined. generate_image is the right tool when a description is enough; this one is slower and costs real money per call. ORDER MATTERS: write the prompt referring to "the first reference image", "the second", and so on, matching the order of referenceImageUrls. List every feature that must survive (exact colours, markings, clothing) — what you do not name may change. Returns a base64 image; upload it if it should be kept. Reference URLs must be on a VEGR.AI host such as vegvisr.imgix.net.',
+    description: 'Compose a NEW image from one to four reference pictures you already have URLs for, using gpt-image-2.5. Use this when the point is a SPECIFIC thing rather than a described one — this exact product, mascot, person or logo, placed in a new scene, or two of them combined. generate_image is the right tool when a description is enough; this one is slower and costs real money per call. ORDER MATTERS: write the prompt referring to "the first reference image", "the second", and so on, matching the order of referenceImageUrls. List every feature that must survive (exact colours, markings, clothing) — what you do not name may change. Returns a base64 image; upload it if it should be kept. Reference URLs must be images stored in VEGR.AI (vegvisr.imgix.net, *.vegvisr.org, *.vegr.ai) or in a World\'s own image storage (cdn.<the World\'s domain>, e.g. https://cdn.sodesign.no/photos/...); any other host is refused.',
     input_schema: {
       type: 'object',
       properties: {
@@ -4298,7 +4298,7 @@ const PROFF_TOOLS = [
         referenceImageUrls: {
           type: 'array',
           items: { type: 'string' },
-          description: 'One to four https image URLs on a VEGR.AI host, in the order the prompt refers to them.'
+          description: 'One to four https image URLs stored in VEGR.AI or in a World\'s own image storage (cdn.<domain>), in the order the prompt refers to them.'
         },
         quality: {
           type: 'string',
