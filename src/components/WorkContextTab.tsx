@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Flag, Network, LayoutGrid, Film, Users, Building2, Square, ArrowRight,
-  Mail, UserCog, Sparkles, CreditCard,
+  Mail, UserCog, Sparkles, CreditCard, Cloud, Plug,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -20,6 +20,8 @@ const ICONS: Record<string, LucideIcon> = {
   'ti-user-cog': UserCog,
   'ti-sparkles': Sparkles,
   'ti-credit-card': CreditCard,
+  'ti-cloud': Cloud,
+  'ti-plug': Plug,
 };
 
 export interface Capability {
