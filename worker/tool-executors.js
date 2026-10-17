@@ -15857,16 +15857,47 @@ async function executeMcpCall(input, env) {
 
   const toolName = (input.tool_name || '').trim()
 
+  // describe_tool → one tool's full description and input schema. The companion of the compact
+  // discovery below: the model reads the short list, then asks for the schema it needs.
+  const describeTool = (input.describe_tool || '').trim()
+  if (!toolName && describeTool) {
+    const result = await mcpRpc(server, 'tools/list', {}, authToken, env)
+    const t = (result.tools || []).find((x) => x.name === describeTool)
+    if (!t) {
+      return { success: false, server: serverName, error: `No tool "${describeTool}" on ${serverName}. Available: ${(result.tools || []).map((x) => x.name).join(', ')}` }
+    }
+    return {
+      server: serverName,
+      tool: { name: t.name, description: t.description, input_schema: t.inputSchema },
+      message: `${serverName}: ${t.name} — input schema`,
+    }
+  }
+
   // No tool_name → discovery. Lets the model find out what a server offers before calling it.
   if (!toolName) {
     const result = await mcpRpc(server, 'tools/list', {}, authToken, env)
-    const tools = (result.tools || []).map((t) => ({
+    let tools = (result.tools || []).map((t) => ({
       name: t.name,
       description: t.description,
       input_schema: t.inputSchema, // MCP spells it inputSchema; normalize for the model
     }))
+    // agent-loop cuts every tool result at 12,000 chars. vegr's 42 tools with schemas are far over
+    // that, and the model saw only the first 7 and reported the server had truncated the list
+    // (2026-10-17). Over the budget, every tool keeps its name and a short description, and the
+    // schemas move behind describe_tool.
+    let compact = false
+    if (JSON.stringify(tools).length > 9000) {
+      compact = true
+      tools = tools.map((t) => {
+        const d = String(t.description || '')
+        const first = d.split(/(?<=[a-z0-9)]\.)\s(?=[A-Z])/)[0]
+        return { name: t.name, description: first.length > 160 ? first.slice(0, 157) + '…' : first }
+      })
+    }
     return {
       server: serverName,
+      tool_count: tools.length,
+      ...(compact ? { note: `All ${tools.length} tools are listed; descriptions are shortened and input schemas left out to fit. Call mcp_call with server "${serverName}" and describe_tool "<name>" to get one tool's full description and input schema before calling it.` } : {}),
       tools,
       // agent-loop surfaces result.message as the SSE summary line — without it the UI shows
       // a bare "mcp_call completed" and the user can't see what came back.
