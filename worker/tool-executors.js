@@ -15703,6 +15703,10 @@ const MCP_SERVERS = {
   // The server enforces every permission itself, so the Cloudflare owner gate does not apply.
   'vegr': {
     url: 'https://knowledge.vegvisr.org/mcp',
+    // Through the service binding, never the public URL: a Worker fetching another Worker's
+    // custom domain on the same zone gets 522 (measured 2026-10-17). The URL stays the public
+    // one because the MCP server checks the token's audience against the request URL.
+    binding: 'KG_WORKER',
     authMode: 'user-login',
     description: 'VEGR.AI\'s own MCP server (knowledge graphs, images, chat, contacts) — runs as the signed-in user, with the same tools and permissions their own Claude connection has',
   },
@@ -15761,7 +15765,7 @@ function parseMcpResponse(text) {
   throw new Error(`Could not parse MCP response: ${trimmed.slice(0, 300)}`)
 }
 
-async function mcpRpc(server, method, params, authToken) {
+async function mcpRpc(server, method, params, authToken, env) {
   const headers = {
     'Content-Type': 'application/json',
     // Streamable HTTP servers require BOTH, and reject the request without the SSE type.
@@ -15769,7 +15773,8 @@ async function mcpRpc(server, method, params, authToken) {
   }
   if (authToken) headers.Authorization = `Bearer ${authToken}`
 
-  const res = await fetch(server.url, {
+  const fetcher = server.binding && env?.[server.binding]?.fetch ? env[server.binding] : null
+  const res = await (fetcher ? fetcher.fetch.bind(fetcher) : fetch)(server.url, {
     method: 'POST',
     headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: params || {} }),
@@ -15854,7 +15859,7 @@ async function executeMcpCall(input, env) {
 
   // No tool_name → discovery. Lets the model find out what a server offers before calling it.
   if (!toolName) {
-    const result = await mcpRpc(server, 'tools/list', {}, authToken)
+    const result = await mcpRpc(server, 'tools/list', {}, authToken, env)
     const tools = (result.tools || []).map((t) => ({
       name: t.name,
       description: t.description,
@@ -15906,7 +15911,7 @@ async function executeMcpCall(input, env) {
   const result = await mcpRpc(server, 'tools/call', {
     name: toolName,
     arguments: effectiveArguments,
-  }, authToken)
+  }, authToken, env)
 
   // MCP returns content as an array of typed blocks — flatten the text for the model.
   const textOut = (result.content || [])
