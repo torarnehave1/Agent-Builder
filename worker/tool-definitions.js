@@ -61,8 +61,7 @@ const TOOL_DEFINITIONS = [
         },
         nodeType: {
           type: 'string',
-          enum: ['fulltext', 'markdown-image', 'image', 'link', 'video', 'audio', 'css-node', 'html-node', 'mermaid-diagram', 'youtube-video', 'cloudflare-video', 'cloudflare-live', 'chart', 'linechart', 'bubblechart', 'notes', 'worknote', 'map', 'agent-contract', 'agent-config', 'agent-run', 'data-node'],
-          description: 'Node type. Prefer "markdown-image" for normal images. Call get_node_types_reference for data format details.'
+          description: 'Node type — the exact string selects the renderer. Common: fulltext, markdown-image (prefer for normal images), html-node (not "html"), css-node, mermaid-diagram, youtube-video, cloudflare-video, chart, worknote, map, data-node, agent-contract. Data types registered in graph_system_registry (e.g. work-context) are accepted too; an unknown type is refused with the full list. Call get_node_types_reference for data format details.'
         },
         content: {
           type: 'string',

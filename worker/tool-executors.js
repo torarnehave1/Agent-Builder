@@ -372,6 +372,9 @@ async function executePatchNode(input, env) {
     throw new Error(`patch_node: "fields" must be an object of node fields (info, label, path, color, metadata). Received arguments: [${Object.keys(input).join(', ')}]. Correct call: { graphId: "...", nodeId: "...", fields: { "info": "..." } }.`)
   }
 
+  // A type change goes through the same list create_node and the MCP server use.
+  if (typeof fields.type === 'string') await assertNodeType(env, fields.type, 'patch_node')
+
   // A whole-info write must not smuggle in a hand-written copy of a registry component, nor damage a
   // block insert_component owns (L105). Only pays the read when the write carries page markup.
   if (typeof fields.info === 'string' && /<script[\s>]|<html/i.test(fields.info)) {
@@ -3629,6 +3632,32 @@ async function executeCreateHtmlNode(input, env) {
   }
 }
 
+// ── Node types: one list for both doors into the graphs ───────────────
+// The KG worker's GET /node-types = the renderable types + the data types registered in
+// graph_system_registry (e.g. work-context). create_node and patch_node check against it, so
+// Agent-Builder and the MCP server accept exactly the same types (2026-10-17). Cached a minute;
+// if the list cannot be read the write goes ahead rather than blocking every node.
+let nodeTypeCache = { at: 0, types: null }
+async function allowedNodeTypes(env) {
+  if (nodeTypeCache.types && Date.now() - nodeTypeCache.at < 60000) return nodeTypeCache.types
+  try {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/node-types')
+    if (!res.ok) return nodeTypeCache.types
+    const data = await res.json()
+    if (Array.isArray(data.all) && data.all.length) nodeTypeCache = { at: Date.now(), types: data.all }
+  } catch (e) {
+    console.error('[node-types] could not read the list:', e.message)
+  }
+  return nodeTypeCache.types
+}
+
+async function assertNodeType(env, type, tool) {
+  const types = await allowedNodeTypes(env)
+  if (!types || types.includes(type)) return
+  const near = types.find((t) => t === `${type}-node` || t === String(type).replace(/-node$/, ''))
+  throw new Error(`${tool}: "${type}" is not a node type.${near ? ` Did you mean "${near}"?` : ''} Allowed: ${types.join(', ')}. A new data type is registered with the MCP tool register_node_type (Superadmin).`)
+}
+
 async function executeCreateNode(input, env) {
   const parseMaybeJsonObject = (value) => {
     if (!value) return null
@@ -3669,6 +3698,7 @@ async function executeCreateNode(input, env) {
     const providedKeys = Object.keys(input || {}).join(', ')
     throw new Error(`create_node requires graphId. Received keys: [${providedKeys}]`)
   }
+  await assertNodeType(env, nodeType, 'create_node')
 
   const node = {
     id: nodeId,
