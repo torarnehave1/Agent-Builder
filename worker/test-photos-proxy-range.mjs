@@ -117,5 +117,14 @@ const get = (headers = {}, method = 'GET', key = KEY) => proxy.fetch(new Request
   check('an upload with owner keeps the founder as owner', (await albumGet()).createdBy === 'founder@example.com', JSON.stringify(await albumGet()))
 }
 
+// Resize parameters (2026-10-17): without IMAGE_TRANSFORMS=on the original is served, not a 302 to a 404.
+{
+  const r = await proxy.fetch(new Request(`https://cdn.example/photos/${KEY}?w=1200&h=630&fit=crop`), env)
+  check('?w= without IMAGE_TRANSFORMS serves the file itself (200), not a redirect', r.status === 200 && (await r.arrayBuffer()).byteLength === 1000, String(r.status))
+  const on = await proxy.fetch(new Request(`https://cdn.example/photos/${KEY}?w=1200`), { ...env, IMAGE_TRANSFORMS: 'on', DELIVERY_BASE: 'https://cdn.example' })
+  const loc = on.headers.get('location') || ''
+  check('with IMAGE_TRANSFORMS=on it redirects, slashes kept in the path', on.status === 302 && loc.includes('/photos/lessons/legg-opp.mp4') && !loc.includes('%2F'), loc)
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall photos-proxy range checks pass')

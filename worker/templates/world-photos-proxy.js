@@ -222,8 +222,11 @@ async function handleDeliver(request, env, url, key) {
     if (!opts.some((o) => o.startsWith(`${mapped}=`))) opts.push(`${mapped}=${value}`)
   }
 
-  // No parameters: byte-for-byte v1 behaviour.
-  if (!opts.length) return await serveObject(request, env, key)
+  // No parameters: byte-for-byte v1 behaviour. Resizing is redirected to /cdn-cgi/image/ only where
+  // the zone has Image Transformations switched on (IMAGE_TRANSFORMS=on). Without it that path is a
+  // 404, and every sized request — an album cover, a card thumbnail — showed a broken image
+  // (cdn.sodesign.no, 2026-10-17). Off: the original is served, unsized but present.
+  if (!opts.length || String(env.IMAGE_TRANSFORMS || '').toLowerCase() !== 'on') return await serveObject(request, env, key)
 
   // `format=auto` matters more than any other option — the same 1200x630 crop measured 392 623
   // bytes as PNG and 3 849 bytes as AVIF on a real founder bucket. Add it unless asked otherwise.
@@ -240,7 +243,7 @@ async function handleDeliver(request, env, url, key) {
   // later revision resizes in-process after all, a permanent redirect would sit in browser caches
   // long after the code changed.
   const base = (env.DELIVERY_BASE || url.origin).replace(/\/+$/, '')
-  const target = `${base}/cdn-cgi/image/${opts.join(',')}/photos/${encodeURIComponent(key)}`
+  const target = `${base}/cdn-cgi/image/${opts.join(',')}/photos/${key.split('/').map(encodeURIComponent).join('/')}`
   return new Response(null, {
     status: 302,
     headers: {
