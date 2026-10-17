@@ -15697,6 +15697,15 @@ const MCP_SERVERS = {
     description: 'Cloudflare API "Code Mode" — tools: docs, search (OpenAPI spec), and execute (run JS via cloudflare.request against ANY endpoint). This is the only server that can reach zones/domains, e.g. GET /zones or GET /accounts/<id>/workers/domains. OWNER ONLY.',
   },
   'cloudflare-builds': { url: 'https://builds.mcp.cloudflare.com/mcp', requiresToken: true, description: 'Workers build status and logs — untested' },
+  // Our own MCP server — the one World Founders connect from Claude. Reached AS THE SIGNED-IN USER
+  // with their own login token (knowledge.vegvisr.org accepts it since 2026-10-17, scopes mirroring
+  // that user's own Claude connection), so under "Login as" this is that user's MCP experience.
+  // The server enforces every permission itself, so the Cloudflare owner gate does not apply.
+  'vegr': {
+    url: 'https://knowledge.vegvisr.org/mcp',
+    authMode: 'user-login',
+    description: 'VEGR.AI\'s own MCP server (knowledge graphs, images, chat, contacts) — runs as the signed-in user, with the same tools and permissions their own Claude connection has',
+  },
 }
 
 // ── Owner gate ────────────────────────────────────────────────────
@@ -15781,7 +15790,7 @@ async function executeMcpCall(input, env) {
     return {
       error: 'server is required',
       available_servers: Object.entries(MCP_SERVERS).map(([name, s]) => ({
-        name, description: s.description, needs_token: Boolean(s.requiresToken),
+        name, description: s.description, needs_token: Boolean(s.requiresToken || s.authMode),
       })),
     }
   }
@@ -15795,7 +15804,9 @@ async function executeMcpCall(input, env) {
   // Two independent conditions: the whole server (core "cloudflare" carries `execute`), or an
   // individual tool that is not provably read-shaped.
   const requestedTool = (input.tool_name || '').trim()
-  if (server.ownerOnly) {
+  if (server.authMode === 'user-login') {
+    // No owner gate: the call carries the caller's own credential and the server decides.
+  } else if (server.ownerOnly) {
     await assertMcpOwner(input, env, `The "${serverName}" MCP server (it exposes \`execute\`, arbitrary Cloudflare API access)`)
   } else if (requestedTool && !isReadOnlyMcpTool(requestedTool)) {
     await assertMcpOwner(input, env, `The MCP tool "${requestedTool}" (it can modify or delete resources)`)
@@ -15806,7 +15817,19 @@ async function executeMcpCall(input, env) {
   // credential and multi-tenant model as the cloudflare_api tool. Omitting it falls back to
   // this worker's own CF_API_TOKEN (the platform admin's account).
   let authToken = null
-  if (server.requiresToken) {
+  if (server.authMode === 'user-login') {
+    // The signed-in user's OWN login token, looked up from the authenticated chat user — never
+    // from a field the model fills in, and never founder_email: no way to act as someone else.
+    // Only a VERIFIED identity (authContext, set from the request's own credential) — never a
+    // bare input.userId, which some routes take from the request body.
+    const callerUserId = input?.authContext?.authenticated
+      ? (input.authContext.userId || input.authContext.email || null)
+      : null
+    if (!callerUserId) throw new Error(`The "${serverName}" MCP server runs as the signed-in user, and no verified sign-in was available. Sign in and retry.`)
+    const row = await env.DB.prepare('SELECT emailVerificationToken FROM config WHERE email = ? OR user_id = ? LIMIT 1').bind(callerUserId, callerUserId).first()
+    authToken = (row && row.emailVerificationToken) || null
+    if (!authToken) throw new Error('No login token on the signed-in account — log in again to refresh it.')
+  } else if (server.requiresToken) {
     const founderEmail = (input.founder_email || '').trim().toLowerCase()
     if (founderEmail) {
       const row = await env.DB.prepare('SELECT cf_api_token, cf_account_id FROM config WHERE email = ?').bind(founderEmail).first()
