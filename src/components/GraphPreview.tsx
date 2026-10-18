@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { RegisteredTypeNode, useApprovedTypes } from '../lib/vegvisrNode'
 
 const KG_API = 'https://knowledge.vegvisr.org'
 
@@ -12,6 +13,7 @@ interface KgNode {
   path?: string
   color?: string
   bibl?: string[]
+  metadata?: Record<string, unknown>
 }
 
 interface Props {
@@ -67,6 +69,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
   }, [graphId, title])
 
   const renderNodes = nodes
+  const approvedTypes = useApprovedTypes()
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -97,7 +100,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
             <p className="text-sm text-gray-500 text-center py-12">No renderable nodes</p>
           )}
           {renderNodes.map(node => (
-            <NodeBlock key={node.id} node={node} />
+            <NodeBlock key={node.id} node={node} approvedTypes={approvedTypes} />
           ))}
         </div>
       </div>
@@ -116,7 +119,7 @@ function processFancyBlocks(content: string): string {
   })
 }
 
-function NodeBlock({ node }: { node: KgNode }) {
+function NodeBlock({ node, approvedTypes }: { node: KgNode; approvedTypes: Set<string> }) {
   const type = node.type || 'unknown'
   const label = node.label?.startsWith('#') ? node.label.slice(1).trim() : node.label
 
@@ -222,6 +225,11 @@ function NodeBlock({ node }: { node: KgNode }) {
         <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-500">{type}</span>
       </div>
     )
+  }
+
+  // ── Registered type with an approved renderer — the rendering engine ────
+  if (approvedTypes.has(type)) {
+    return <RegisteredTypeNode node={node} theme="dark" />
   }
 
   // ── Fallback ──────────────────────────────────────────────────────────────
