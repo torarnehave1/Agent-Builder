@@ -10,7 +10,8 @@ type VegvisrNodeCtor = { approvedTypes: (api?: string, world?: string) => Promis
 let loading: Promise<void> | null = null
 const approved = new Map<string, Promise<Set<string>>>() // world ('' = platform) -> types
 
-function loadEngine(): Promise<void> {
+/** Load the engine script once (no type list) — for a draft preview that fetches nothing. */
+export function loadEngine(): Promise<void> {
   if (!loading) {
     loading = new Promise<void>((resolve, reject) => {
       if (customElements.get('vegvisr-node')) return resolve()
@@ -65,13 +66,15 @@ export interface RenderableNode {
  * One node drawn by its registered renderer. `node` is set as a property, not an attribute; `world`
  * (the graph's World, or null) is set before it, so the engine asks for that World's renderer.
  */
-export function RegisteredTypeNode({ node, theme = 'dark', world = null }: { node: RenderableNode; theme?: 'light' | 'dark'; world?: string | null }) {
-  const ref = useRef<HTMLElement & { node?: unknown; theme?: string; world?: string }>(null)
+export function RegisteredTypeNode({ node, theme = 'dark', world = null, previewImpl = null }: { node: RenderableNode; theme?: 'light' | 'dark'; world?: string | null; previewImpl?: string | null }) {
+  const ref = useRef<HTMLElement & { node?: unknown; theme?: string; world?: string; previewImpl?: string | null }>(null)
   useEffect(() => {
     if (!ref.current) return
+    // previewImpl (engine v4): a DRAFT look, run in the same sandbox, never fetched or served.
+    ref.current.previewImpl = previewImpl || null
     ref.current.world = world || ''
     ref.current.theme = theme
     ref.current.node = node
-  }, [node, theme, world])
+  }, [node, theme, world, previewImpl])
   return createElement('vegvisr-node', { ref, style: { display: 'block' } })
 }

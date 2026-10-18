@@ -2431,6 +2431,21 @@ export default {
           // VEGR.AI's own MCP server, as the signed-in user (or the "Login as" user): the same
           // tools and scopes their Claude connection has, with no Agent-Builder tool mixed in.
           'VEGR.AI MCP Server': ['mcp_call'],
+          // A World founder's own node types (PLAN-nodetyper-chat.md, V2 A, 2026-10-18): nothing
+          // else can be started here by accident. Putting a type to use is the card's button.
+          'Nodetyper': ['create_node_type', 'change_node_type_look', 'list_my_node_types', 'read_graph'],
+        }
+        // A locked context that is NOT an mcp_call surface gets its own guidance instead of the
+        // mcp_call paragraph below.
+        const EXCLUSIVE_CONTEXT_GUIDES = {
+          'Nodetyper': `You help a World founder make their OWN kinds of content cards ("node types") — no code, no JSON, no technical words.\n` +
+            `Flow: (1) understand what they want a card for and which fields it needs (ask at most one short question when it is unclear); ` +
+            `(2) create_node_type with a short title, one-sentence description and the fields; ` +
+            `(3) immediately change_node_type_look with a clean, readable look you write from the fields, plus realistic sample values for every field; ` +
+            `(4) tell them to look at the preview card and press "Ta i bruk" when it looks right, or tell you what to change — then call change_node_type_look again.\n` +
+            `You can NOT put a type to use yourself: that is only the founder's button on the card. Never claim a type is in use unless list_my_node_types says so.\n` +
+            `Words to use with the founder: type, fields, look, draft, in use, "Ta i bruk". Never say renderer, approve, register, slug, metadata, impl, JSON or version numbers unless asked.\n` +
+            `Write to the founder in the language they write in.`,
         }
         // What mcp_call reaches in each locked context — the lock prompt below names it, so the
         // model neither calls the wrong server nor describes this one as documentation-only.
@@ -2483,8 +2498,10 @@ export default {
             (workContext.description ? `Focus: ${workContext.description}\n` : '') +
             (capLines ? `\nThe ONLY tools you have here:\n${capLines}\n` : '') +
             `\nThis context is a RESTRICTION, not orientation. You have been given ONLY the tools listed above — the rest of the toolbox (graphs, email, video, GitHub, account changes) is not loaded and cannot be called.\n` +
-            `\`mcp_call\` itself is NOT limited to documentation lookup. It is a full proxy to the connected MCP server's tools (${EXCLUSIVE_CONTEXT_NOTES[workContext.title] || 'see the server list in its description'}). Never tell the user you are "limited to documentation" or "cannot access the account" while \`mcp_call\` is in your toolbox — that is false. If a request is answerable via \`mcp_call\`, attempt the call and report its real result — success or the actual error — instead of pre-emptively declining.\n` +
-            `Only say a request is out of scope for this context when it needs a tool that is NOT \`mcp_call\` at all (e.g. reading a graph, sending email, GitHub repo actions) — then say plainly that this context is limited to ${workContext.title}, and tell them to pick another work context from the start screen for that request.\n` +
+            (EXCLUSIVE_CONTEXT_GUIDES[workContext.title]
+              ? EXCLUSIVE_CONTEXT_GUIDES[workContext.title] + `\nFor anything else, say plainly that this work context is only for ${workContext.title}, and tell them to pick another work context from the start screen.\n`
+              : `\`mcp_call\` itself is NOT limited to documentation lookup. It is a full proxy to the connected MCP server's tools (${EXCLUSIVE_CONTEXT_NOTES[workContext.title] || 'see the server list in its description'}). Never tell the user you are "limited to documentation" or "cannot access the account" while \`mcp_call\` is in your toolbox — that is false. If a request is answerable via \`mcp_call\`, attempt the call and report its real result — success or the actual error — instead of pre-emptively declining.\n` +
+                `Only say a request is out of scope for this context when it needs a tool that is NOT \`mcp_call\` at all (e.g. reading a graph, sending email, GitHub repo actions) — then say plainly that this context is limited to ${workContext.title}, and tell them to pick another work context from the start screen for that request.\n`) +
             `Answer "what can I do here" immediately from the list above, in the same turn, with no tool call.\n` +
             `When you DO call a tool, report its result to the user in full — quote the returned content and include any source URLs. Never end a turn having called a tool without telling the user what came back.`
         } else if (workContext && typeof workContext === 'object' && workContext.title) {

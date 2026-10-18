@@ -8,6 +8,7 @@ import remarkGfm from 'remark-gfm';
 import SessionAnalysisPanel from './SessionAnalysisPanel';
 import RecordingsPanel from './RecordingsPanel';
 import JsonViewerModal from './JsonViewerModal';
+import { NodeTypeCard, type NodeTypeCardData } from './NodeTypeCard';
 import { providerOf } from '../lib/modelProvider';
 import { kgAuthHeaders, kgJsonHeaders } from '../lib/kgAuth';
 // rehype-sanitize removed: agent-generated content is trusted,
@@ -486,6 +487,8 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
   const vemotionEmbedUrl = vemotionCompositionId ? `https://vemotion.vegvisr.org/?compositionId=${encodeURIComponent(vemotionCompositionId)}&embed=1` : '';
 
   const isTemplatePicker = tc.tool === 'list_challenge_templates' && tc.status === 'success';
+  // Nodetyper (2026-10-18): create_node_type / change_node_type_look carry a preview card.
+  const nodeTypeCard = tc.status === 'success' ? ((tc.result as Record<string, unknown> | undefined)?.nodeTypeCard as NodeTypeCardData | undefined) : undefined;
   const templatePickerItems = isTemplatePicker
     ? ((tc.result as Record<string, unknown>)?.templates as Array<{ key: string; name: string; description: string; preview_html: string }> | undefined) ?? []
     : [];
@@ -644,6 +647,7 @@ function ToolCallCard({ tc, userId, onPreview, onActiveHtmlNode, onSend }: { tc:
           )}
         </div>
       )}
+      {nodeTypeCard && <NodeTypeCard card={nodeTypeCard} onSend={onSend} />}
       {isTemplatePicker && templatePickerItems.length > 0 && (
         <div className="mx-3 my-3">
           <div className="text-[11px] font-semibold app-text-soft uppercase tracking-wide mb-2">Choose a template</div>

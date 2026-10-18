@@ -3632,6 +3632,77 @@ async function executeCreateHtmlNode(input, env) {
   }
 }
 
+// ── Nodetyper: a founder's own node types (PLAN-nodetyper-chat.md, 2026-10-18) ─────────
+// Thin calls to the KG worker's /node-types/world/* routes, which hold the rules
+// (node-type-service.js). KG_WORKER carries x-acting-user-email (see envActingFor), so the KG
+// worker decides as the signed-in user — founder of that World or refused. The result carries
+// `nodeTypeCard` for Agent-Builder's preview card; putting a type to use is the card's button,
+// not a tool (V1 A).
+async function nodeTypeCall(env, op, body) {
+  const init = op === 'mine'
+    ? { method: 'GET' }
+    : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+  const q = op === 'mine' && body.world ? `?world=${encodeURIComponent(body.world)}` : ''
+  const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/node-types/world/${op}${q}`, init)
+  let data = null
+  try { data = await res.json() } catch { data = null }
+  if (!res.ok || !data?.success) return { ok: false, error: data?.error || `The node-type service answered HTTP ${res.status}.`, code: data?.code || null, worlds: data?.worlds }
+  return { ok: true, data }
+}
+
+function nodeTypeCardOf(t, extra = {}) {
+  return {
+    type: t.type, title: t.title, description: t.description, fields: t.fields || [], world: t.world,
+    look: t.look ? { version: t.look.version, status: t.look.status, impl: t.look.impl } : null,
+    ...extra,
+  }
+}
+
+const lookWord = (look) => (!look ? 'no look yet' : look.status === 'approved' ? `in use (version ${look.version})` : `draft (version ${look.version}), not in use yet`)
+
+async function executeCreateNodeType(input, env) {
+  const r = await nodeTypeCall(env, 'create', { title: input.title, description: input.description, fields: input.fields || [], world: input.world || undefined })
+  if (!r.ok) return { success: false, error: r.error, ...(r.worlds ? { worlds: r.worlds } : {}) }
+  const t = r.data
+  return {
+    success: true,
+    message: t.alreadyExisted
+      ? `"${t.title}" already exists in ${t.world} (${lookWord(t.look)}).`
+      : `Created the type "${t.title}" in ${t.world} with ${t.fields.length} field(s). It has no look yet — give it one with change_node_type_look (type "${t.type}").`,
+    type: t.type, world: t.world,
+    nodeTypeCard: nodeTypeCardOf(t),
+  }
+}
+
+async function executeChangeNodeTypeLook(input, env) {
+  if (!input.type || !input.impl) return { success: false, error: 'change_node_type_look needs type and impl.' }
+  const r = await nodeTypeCall(env, 'look', { type: input.type, impl: input.impl, fields: input.fields, title: input.title, world: input.world || undefined })
+  if (!r.ok) return { success: false, error: r.error }
+  const t = r.data
+  const sample = input.sample && typeof input.sample === 'object' ? input.sample : null
+  return {
+    success: true,
+    message: `New look for "${t.title}" saved as a draft (version ${t.look.version}). It is not in use until ${t.world}'s founder presses "Ta i bruk" on the preview card.`,
+    type: t.type, world: t.world, version: t.look.version,
+    nodeTypeCard: nodeTypeCardOf(t, { sample, sampleLabel: input.sample_label || null }),
+  }
+}
+
+async function executeListMyNodeTypes(input, env) {
+  const r = await nodeTypeCall(env, 'mine', { world: input.world || undefined })
+  if (!r.ok) return { success: false, error: r.error, ...(r.worlds ? { worlds: r.worlds } : {}) }
+  const { world, types } = r.data
+  return {
+    success: true,
+    message: types.length
+      ? `${types.length} node type(s) in ${world}: ` + types.map((t) => `${t.title} — ${lookWord(t.look)}`).join('; ') + '.'
+      : `${world} has no node types of its own yet.`,
+    world,
+    // No code here: the list is for the model and the overview, the preview is per type.
+    types: types.map((t) => ({ type: t.type, title: t.title, description: t.description, fields: t.fields, look: t.look ? { version: t.look.version, status: t.look.status } : null })),
+  }
+}
+
 // ── Node types: one list for both doors into the graphs ───────────────
 // The KG worker's GET /node-types = the renderable types + the data types registered in
 // graph_system_registry (e.g. work-context). create_node and patch_node check against it, so
@@ -17834,6 +17905,12 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeOnboardingStatus(toolInput, env)
     case 'cloudflare_api':
       return await executeCloudflareApi(toolInput, env)
+    case 'create_node_type':
+      return await executeCreateNodeType(toolInput, env)
+    case 'change_node_type_look':
+      return await executeChangeNodeTypeLook(toolInput, env)
+    case 'list_my_node_types':
+      return await executeListMyNodeTypes(toolInput, env)
     case 'mcp_call':
       return await executeMcpCall(toolInput, env)
     case 'calendar_list_tables':

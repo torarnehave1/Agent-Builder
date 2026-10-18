@@ -66,6 +66,32 @@ check('patch_node: World type accepted in its World', !(patchWorld.error || '').
 const patchPlatform = await attempt('patch_node', { graphId: 'p1', nodeId: 'n1', fields: { type: 'test-card' } })
 check('patch_node: refused on the platform', !patchPlatform.ok && /not a node type/.test(patchPlatform.error), JSON.stringify(patchPlatform))
 
+// ── Nodetyper tools → /node-types/world/* (2026-10-18) ──
+{
+  const seen = []
+  const t = { type: 'kursmodul', title: 'Kursmodul', description: 'One module.', world: WORLD, fields: [{ key: 'tittel', label: 'Tittel', kind: 'text' }] }
+  const nenv = { DB: env.DB, KG_WORKER: { async fetch(input, init = {}) {
+    const req = input instanceof Request ? input : new Request(input, init)
+    const u = new URL(req.url)
+    const body = req.method === 'POST' ? JSON.parse(await req.text()) : null
+    seen.push({ path: u.pathname + u.search, method: req.method, body })
+    const json = (o, status = 200) => new Response(JSON.stringify(o), { status })
+    if (u.pathname === '/node-types/world/create') return json({ success: true, alreadyExisted: false, ...t, look: null })
+    if (u.pathname === '/node-types/world/look') return body.type === 'nope' ? json({ success: false, error: '"nope" is not a node type of test-world.example. Create it first.' }, 400) : json({ success: true, ...t, look: { version: 1, status: 'pending', impl: body.impl } })
+    if (u.pathname === '/node-types/world/mine') return json({ success: true, world: WORLD, types: [{ ...t, look: { version: 1, status: 'approved', impl: '<p>secret draft code</p>' } }] })
+    return json({})
+  } } }
+  const c = await executeTool('create_node_type', { title: 'Kursmodul', description: 'One module.', fields: [{ label: 'Tittel', kind: 'text' }] }, nenv)
+  check('create_node_type posts title/fields, no world when none is given', seen[0].method === 'POST' && seen[0].path === '/node-types/world/create' && !('world' in seen[0].body) && seen[0].body.fields.length === 1, JSON.stringify(seen[0]))
+  check('create_node_type returns a card with no look', c.success && c.nodeTypeCard?.type === 'kursmodul' && c.nodeTypeCard.look === null, JSON.stringify(c))
+  const l = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<div>x</div>', sample: { tittel: 'Stillhet' }, sample_label: 'Modul 1' }, nenv)
+  check('change_node_type_look returns a draft card with the code and the sample', l.success && l.nodeTypeCard.look.status === 'pending' && l.nodeTypeCard.look.impl === '<div>x</div>' && l.nodeTypeCard.sample.tittel === 'Stillhet', JSON.stringify(l))
+  const bad = await executeTool('change_node_type_look', { type: 'nope', impl: '<div>x</div>' }, nenv)
+  check('a refused look is reported, not thrown', bad.success === false && /Create it first/.test(bad.error), JSON.stringify(bad))
+  const m = await executeTool('list_my_node_types', {}, nenv)
+  check('list_my_node_types leaves the code out', m.success && m.types.length === 1 && !JSON.stringify(m).includes('secret draft code') && /in use/.test(m.message), JSON.stringify(m))
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} failure(s)` : '\nall passed')
 process.exit(failures ? 1 : 0)

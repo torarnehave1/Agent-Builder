@@ -3421,6 +3421,75 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── Nodetyper: a World founder's own node types, without MCP or JSON (PLAN-nodetyper-chat.md,
+  // 2026-10-18). The rules live in the KG worker's node-type-service.js; these call its
+  // /node-types/world/* routes as the signed-in user. There is deliberately NO tool to put a type to
+  // use: that is the founder's own click on the card (V1 A), so a model can never make unseen code live.
+  {
+    name: 'create_node_type',
+    description:
+      "Create a new node TYPE for the signed-in founder's own World — e.g. a 'Kursmodul' card with fields title, summary, duration, image. " +
+      "Use when the user describes a kind of card/content they want in their World. The type name is made from the title; the World is the one they founded (pass world only if they have several). " +
+      "fields: what each node of this type holds, as [{label, kind}] with kind one of text, longtext, number, date, link, image (image = an https image URL). " +
+      "The type starts with NO look: call change_node_type_look right after to give it one, then the user sees a preview card and puts it to use themselves. " +
+      "Talk to the user in plain words: say 'type', 'fields', 'look', 'put to use' — never renderer, approve, slug, metadata or JSON. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: "The name the founder sees, e.g. 'Kursmodul'." },
+        description: { type: 'string', description: 'One sentence: what a node of this type holds.' },
+        fields: {
+          type: 'array',
+          description: 'The fields, in the order they are shown.',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: "Field name as the founder says it, e.g. 'Varighet'." },
+              kind: { type: 'string', enum: ['text', 'longtext', 'number', 'date', 'link', 'image'] },
+              key: { type: 'string', description: 'Optional data key; made from the label when omitted.' },
+            },
+            required: ['label', 'kind'],
+          },
+        },
+        world: { type: 'string', description: 'Only if the founder has several Worlds: which one, e.g. universi.no.' },
+      },
+      required: ['title', 'description', 'fields'],
+    },
+  },
+  {
+    name: 'change_node_type_look',
+    description:
+      "Give a node type of the founder's World a new LOOK (or change its fields/title) — saved as a DRAFT; it shows nowhere until the founder presses 'Ta i bruk' on the preview card. " +
+      "Write impl yourself from the type's fields: an HTML fragment with inline <style> and <script>. The script MUST listen for the message " +
+      "`addEventListener('message', e => { const d = e.data; if (d.vegvisrNode !== 'render') return; /* d.node = {id,label,type,info,metadata}, d.theme = 'light'|'dark' */ })` " +
+      "and draw into document.body. Field values are in d.node.metadata[<field key>]; d.node.label is the node's name; style both themes (d.theme). Escape text (use textContent). " +
+      "It runs isolated: NO network (no fetch, no external CSS/fonts/scripts), images only from data: or *.vegvisr.org / *.vegr.ai / vegvisr.imgix.net. Height is reported automatically. " +
+      "Also pass sample: realistic example values for every field key, so the preview card looks real. After each change, tell the user to look at the card and press 'Ta i bruk' when it looks right. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        type: { type: 'string', description: 'The type name returned by create_node_type or list_my_node_types.' },
+        impl: { type: 'string', description: 'The full look: HTML fragment with inline <style> and <script>.' },
+        sample: { type: 'object', description: 'Example values per field key for the preview, e.g. {"tittel":"Stillhet som metode","varighet":45}.' },
+        sample_label: { type: 'string', description: 'Example node name for the preview.' },
+        fields: { type: 'array', description: 'Only when the fields change: the full new list [{label, kind, key?}].', items: { type: 'object' } },
+        title: { type: 'string', description: 'Only when the shown name changes.' },
+        world: { type: 'string', description: 'Only if the founder has several Worlds.' },
+      },
+      required: ['type', 'impl'],
+    },
+  },
+  {
+    name: 'list_my_node_types',
+    description:
+      "List the node types of the signed-in founder's own World: each with its title, fields and whether its look is a draft or in use. Use for 'which types do I have', and before changing one. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        world: { type: 'string', description: 'Only if the founder has several Worlds.' },
+      },
+    },
+  },
   {
     name: 'register_world_founder',
     description:

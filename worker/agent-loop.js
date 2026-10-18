@@ -1437,9 +1437,12 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           if (toolName === 'list_challenge_templates' && Array.isArray(result.templates)) {
             ssePayload.templates = result.templates
           }
+          // Nodetyper: the preview card (draft code + sample) — for the browser only.
+          if (result.nodeTypeCard) ssePayload.nodeTypeCard = result.nodeTypeCard
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
           const resultForOpenAI = { ...result }
           delete resultForOpenAI.updatedHtml
+          delete resultForOpenAI.nodeTypeCard
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: truncateResult(resultForOpenAI) })
         } catch (error) {
           const toolDuration = Date.now() - toolStart
@@ -2125,10 +2128,13 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             if (toolUse.name === 'list_challenge_templates' && Array.isArray(result.templates)) {
               ssePayload.templates = result.templates
             }
+            // Nodetyper: the preview card (draft code + sample) — for the browser only.
+            if (result.nodeTypeCard) ssePayload.nodeTypeCard = result.nodeTypeCard
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
             // Strip large fields that are only for the frontend (not needed by Claude)
             const resultForClaude = { ...result }
             delete resultForClaude.updatedHtml
+            delete resultForClaude.nodeTypeCard
             const resultStr = truncateResult(resultForClaude)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: resultStr }
           } catch (error) {
