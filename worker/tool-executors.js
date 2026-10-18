@@ -373,7 +373,7 @@ async function executePatchNode(input, env) {
   }
 
   // A type change goes through the same list create_node and the MCP server use.
-  if (typeof fields.type === 'string') await assertNodeType(env, fields.type, 'patch_node')
+  if (typeof fields.type === 'string') await assertNodeType(env, fields.type, 'patch_node', input.graphId || input.graph_id)
 
   // A whole-info write must not smuggle in a hand-written copy of a registry component, nor damage a
   // block insert_component owns (L105). Only pays the read when the write carries page markup.
@@ -3651,11 +3651,34 @@ async function allowedNodeTypes(env) {
   return nodeTypeCache.types
 }
 
-async function assertNodeType(env, type, tool) {
+// A World's own node types (phase 2, 2026-10-18) are valid only in that World's graphs. Only a
+// type that is NOT a platform type pays for this: one read for the graph's World (getknowgraph's
+// X-Graph-World), one for that World's list. Not cached — it is the rare path.
+async function worldTypesForGraph(env, graphId) {
+  if (!graphId) return { world: null, types: [] }
+  try {
+    const g = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(graphId)}`)
+    const world = g.headers.get('X-Graph-World')
+    if (!world) return { world: null, types: [] }
+    const res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/node-types?world=${encodeURIComponent(world)}`)
+    const data = res.ok ? await res.json() : {}
+    return { world, types: Array.isArray(data.worldTypes) ? data.worldTypes : [] }
+  } catch (e) {
+    console.error('[node-types] world lookup failed:', e.message)
+    return { world: null, types: [] }
+  }
+}
+
+async function assertNodeType(env, type, tool, graphId = null) {
   const types = await allowedNodeTypes(env)
   if (!types || types.includes(type)) return
+  const own = await worldTypesForGraph(env, graphId)
+  if (own.types.includes(type)) return
   const near = types.find((t) => t === `${type}-node` || t === String(type).replace(/-node$/, ''))
-  throw new Error(`${tool}: "${type}" is not a node type.${near ? ` Did you mean "${near}"?` : ''} Allowed: ${types.join(', ')}. A new data type is registered with the MCP tool register_node_type (Superadmin).`)
+  const worldNote = own.world
+    ? ` This graph lives in ${own.world}, whose own types are: ${own.types.join(', ') || 'none'}.`
+    : ''
+  throw new Error(`${tool}: "${type}" is not a node type.${near ? ` Did you mean "${near}"?` : ''} Allowed: ${types.join(', ')}.${worldNote} A new data type is registered with the MCP tool register_node_type (platform: Superadmin; with world: that World's founder).`)
 }
 
 async function executeCreateNode(input, env) {
@@ -3698,7 +3721,7 @@ async function executeCreateNode(input, env) {
     const providedKeys = Object.keys(input || {}).join(', ')
     throw new Error(`create_node requires graphId. Received keys: [${providedKeys}]`)
   }
-  await assertNodeType(env, nodeType, 'create_node')
+  await assertNodeType(env, nodeType, 'create_node', graphId)
 
   const node = {
     id: nodeId,

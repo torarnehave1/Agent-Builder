@@ -55,11 +55,19 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
   const [nodes, setNodes] = useState<KgNode[]>([])
   const [graphTitle, setGraphTitle] = useState(title)
   const [loading, setLoading] = useState(true)
+  // The World the graph lives in (getknowgraph's X-Graph-World), so its own node types render.
+  const [world, setWorld] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
-    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
-      .then(r => r.json())
+    // Signed in: a graph stored in a World is served only to that World's founder or a Superadmin.
+    let token = ''
+    try { token = JSON.parse(localStorage.getItem('user') || '{}').emailVerificationToken || '' } catch { token = '' }
+    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`, token ? { headers: { 'X-API-Token': token } } : undefined)
+      .then(r => {
+        setWorld(r.headers.get('X-Graph-World'))
+        return r.json()
+      })
       .then(data => {
         setGraphTitle(data.metadata?.title || title)
         setNodes(data.nodes || [])
@@ -69,7 +77,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
   }, [graphId, title])
 
   const renderNodes = nodes
-  const approvedTypes = useApprovedTypes()
+  const approvedTypes = useApprovedTypes(world)
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -100,7 +108,7 @@ export default function GraphPreview({ graphId, title, onClose }: Props) {
             <p className="text-sm text-gray-500 text-center py-12">No renderable nodes</p>
           )}
           {renderNodes.map(node => (
-            <NodeBlock key={node.id} node={node} approvedTypes={approvedTypes} />
+            <NodeBlock key={node.id} node={node} approvedTypes={approvedTypes} world={world} />
           ))}
         </div>
       </div>
@@ -119,7 +127,7 @@ function processFancyBlocks(content: string): string {
   })
 }
 
-function NodeBlock({ node, approvedTypes }: { node: KgNode; approvedTypes: Set<string> }) {
+function NodeBlock({ node, approvedTypes, world }: { node: KgNode; approvedTypes: Set<string>; world: string | null }) {
   const type = node.type || 'unknown'
   const label = node.label?.startsWith('#') ? node.label.slice(1).trim() : node.label
 
@@ -229,7 +237,7 @@ function NodeBlock({ node, approvedTypes }: { node: KgNode; approvedTypes: Set<s
 
   // ── Registered type with an approved renderer — the rendering engine ────
   if (approvedTypes.has(type)) {
-    return <RegisteredTypeNode node={node} theme="dark" />
+    return <RegisteredTypeNode node={node} theme="dark" world={world} />
   }
 
   // ── Fallback ──────────────────────────────────────────────────────────────

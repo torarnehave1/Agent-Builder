@@ -6,11 +6,11 @@ import { createElement, useEffect, useRef, useState } from 'react'
 // Component Registry component served from api.vegvisr.org — loaded once, on first need.
 const SCRIPT_URL = 'https://api.vegvisr.org/components/vegvisr-node.js'
 
-type VegvisrNodeCtor = { approvedTypes: () => Promise<Set<string>> }
-let loading: Promise<Set<string>> | null = null
+type VegvisrNodeCtor = { approvedTypes: (api?: string, world?: string) => Promise<Set<string>> }
+let loading: Promise<void> | null = null
+const approved = new Map<string, Promise<Set<string>>>() // world ('' = platform) -> types
 
-/** Types with an approved renderer. An empty set if the engine cannot load — callers fall back. */
-export function loadApprovedTypes(): Promise<Set<string>> {
+function loadEngine(): Promise<void> {
   if (!loading) {
     loading = new Promise<void>((resolve, reject) => {
       if (customElements.get('vegvisr-node')) return resolve()
@@ -22,19 +22,33 @@ export function loadApprovedTypes(): Promise<Set<string>> {
       document.head.appendChild(s)
     })
       .then(() => customElements.whenDefined('vegvisr-node'))
-      .then(() => (window as unknown as { VegvisrNode: VegvisrNodeCtor }).VegvisrNode.approvedTypes())
-      .catch(() => new Set<string>())
+      .then(() => undefined)
   }
   return loading
 }
 
-export function useApprovedTypes(): Set<string> {
+/**
+ * Types with an approved renderer — the platform's, plus `world`'s own types when the graph lives
+ * in a World (phase 2: the World comes from getknowgraph's X-Graph-World header). An empty set if
+ * the engine cannot load — callers fall back.
+ */
+export function loadApprovedTypes(world: string | null = null): Promise<Set<string>> {
+  const key = world || ''
+  if (!approved.has(key)) {
+    approved.set(key, loadEngine()
+      .then(() => (window as unknown as { VegvisrNode: VegvisrNodeCtor }).VegvisrNode.approvedTypes(undefined, key))
+      .catch(() => new Set<string>()))
+  }
+  return approved.get(key)!
+}
+
+export function useApprovedTypes(world: string | null = null): Set<string> {
   const [types, setTypes] = useState<Set<string>>(() => new Set())
   useEffect(() => {
     let live = true
-    loadApprovedTypes().then((t) => { if (live) setTypes(t) })
+    loadApprovedTypes(world).then((t) => { if (live) setTypes(t) })
     return () => { live = false }
-  }, [])
+  }, [world])
   return types
 }
 
@@ -47,13 +61,17 @@ export interface RenderableNode {
   metadata?: Record<string, unknown>
 }
 
-/** One node drawn by its registered renderer. `node` is set as a property, not an attribute. */
-export function RegisteredTypeNode({ node, theme = 'dark' }: { node: RenderableNode; theme?: 'light' | 'dark' }) {
-  const ref = useRef<HTMLElement & { node?: unknown; theme?: string }>(null)
+/**
+ * One node drawn by its registered renderer. `node` is set as a property, not an attribute; `world`
+ * (the graph's World, or null) is set before it, so the engine asks for that World's renderer.
+ */
+export function RegisteredTypeNode({ node, theme = 'dark', world = null }: { node: RenderableNode; theme?: 'light' | 'dark'; world?: string | null }) {
+  const ref = useRef<HTMLElement & { node?: unknown; theme?: string; world?: string }>(null)
   useEffect(() => {
     if (!ref.current) return
+    ref.current.world = world || ''
     ref.current.theme = theme
     ref.current.node = node
-  }, [node, theme])
+  }, [node, theme, world])
   return createElement('vegvisr-node', { ref, style: { display: 'block' } })
 }
