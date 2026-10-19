@@ -1151,7 +1151,7 @@ for (let i = 0; i < N; i++) {
 
 ## Parametric curve library (for mandalas, rosettes, stars, decorative borders)
 
-When the user asks for a mandala / rosette / star / floral / decorative line-art pattern, **reach for these named curves first** — do not invent formulas. Each entry below names a curve, gives its parametric form in \`(x0, y0, w, h)\`-relative coordinates with \`R\` as the size parameter, and notes the visual outcome. Layer them on a math-shape (\`fill: null\`, \`stroke: '<color>'\`, \`closePath: true\` unless noted) and use \`drawProgress\` to trace them in.
+When the user asks for a mandala / rosette / star / floral / decorative line-art pattern, **reach for a named curve from the curve library first** — do not invent formulas. The library is the graph \`vemotion-curves\` (one node per curve, the same list the app's Math-Shape Preset menu shows); the current list with each curve's formulas is appended at the end of this reference, and through MCP it is \`list_vemotion_library { kind: "curves" }\` + \`get_vemotion_library_item\`. Every curve is written in the layer box (\`x0\`, \`y0\`, \`w\`, \`h\`, sized by \`min(w,h)\`), so resizing the box resizes the curve. Put it on a math-shape (\`fill: null\`, \`stroke: '<color>'\`) and use \`drawProgress\` to trace it in. To vary one: change the multiplier inside \`cos(k*t)\` (petals, points, lobes) or the amplitude terms, then keep the result inside the box.
 
 ### The eight building blocks (recognise these to pick the right family)
 
@@ -1168,97 +1168,9 @@ Almost every closed parametric curve worth using is one of eight patterns. Recog
 
 When proposing variants, name the building block: *"this is a rolling-circle (n-cusp hypocycloid)"*, *"this is a Fourier sum (smooth heart)"*. Lets the user see what knobs are available.
 
-### Roses (k-petal floral curves)
+### The curves themselves
 
-For \`r = cos(k·θ)\`: when **k is odd** the rose has **k petals**; when **k is even** the rose has **2k petals**. So \`cos(4·θ)\` gives 8 petals, \`cos(3·θ)\` gives 3 petals, \`cos(6·θ)\` gives 12 petals.
-
-- **Rose smooth** (rounded petals). For 8 petals:
-  - \`xFormula: x0 + w/2 + R*cos(4*t)*cos(t)\`
-  - \`yFormula: y0 + h/2 + R*cos(4*t)*sin(t)\`
-- **Rose sharpened** — replace \`cos(k·t)\` with \`cos(k·t)^3\` (sign-preserving cube). Petals get sharper tips and narrower bases. Sample count ≥ 600.
-  - \`xFormula: x0 + w/2 + R*cos(4*t)^3*cos(t)\`
-  - \`yFormula: y0 + h/2 + R*cos(4*t)^3*sin(t)\`
-- **Rose intertwined** — two layers: one with \`cos(k·t)\`, one with \`sin(k·t)\`. The sin version is the cos version rotated by π/(2k). Result: 2× the petal positions, interleaved (8 cos + 8 sin = 16 visible).
-- **Rose at smaller radius for inner detail** — same formulas with smaller \`R\`, layered inside a larger rose for a lace/web effect.
-
-### Cycloids (curves with mathematical cusps — true sharp points)
-
-- **Hypocycloid** (n-cusp star, cusps point **outward**) — small circle of radius \`R/n\` rolling inside a circle of radius \`R\`. Generates n cusps at the outer radius; concave arcs between cusps.
-  - \`xFormula: x0 + w/2 + ((n-1)*R/n)*cos(t) + (R/n)*cos((n-1)*t)\`
-  - \`yFormula: y0 + h/2 + ((n-1)*R/n)*sin(t) - (R/n)*sin((n-1)*t)\`
-  - For 8-cusp star (n=8): \`(7*R/8)*cos(t) + (R/8)*cos(7*t)\` etc.
-  - Sample count ≥ 720 for crisp cusps.
-- **Epicycloid** (n-cusp lobed shape, cusps point **inward**) — small circle rolling OUTSIDE. Bulges outward between cusps. Flower-shape rather than star-shape.
-  - \`xFormula: x0 + w/2 + ((n+1)*R/n)*cos(t) - (R/n)*cos((n+1)*t)\`
-  - \`yFormula: y0 + h/2 + ((n+1)*R/n)*sin(t) - (R/n)*sin((n+1)*t)\`
-- **Astroid** (4-cusp special case of hypocycloid; classic star). Simplest cusp formula:
-  - \`xFormula: x0 + w/2 + R*cos(t)^3\`
-  - \`yFormula: y0 + h/2 + R*sin(t)^3\`
-- **Deltoid** (3-cusp hypocycloid; the smallest cusp star):
-  - \`xFormula: x0 + w/2 + (2*R/3)*cos(t) + (R/3)*cos(2*t)\`
-  - \`yFormula: y0 + h/2 + (2*R/3)*sin(t) - (R/3)*sin(2*t)\`
-- **Nephroid** (2-cusp epicycloid; the coffee-cup caustic / kidney shape). Cusps point inward, bulges outward:
-  - \`xFormula: x0 + w/2 + 3*R*cos(t) - R*cos(3*t)\`
-  - \`yFormula: y0 + h/2 + 3*R*sin(t) - R*sin(3*t)\`
-
-### Drops, hearts, eggs, lemniscates, bells (single-formula iconic shapes)
-
-- **Cardioid** (heart-shape / drop with cusp at one end; bilateral symmetry):
-  - \`xFormula: x0 + w/2 + R*(1-cos(t))*cos(t)\`
-  - \`yFormula: y0 + h/2 + R*(1-cos(t))*sin(t)\`
-- **Limacon family** (one polar formula, four personalities — parameterised by \`a, b\`):
-  - \`xFormula: x0 + w/2 + (a + b*cos(t))*cos(t)\`
-  - \`yFormula: y0 + h/2 + (a + b*cos(t))*sin(t)\`
-  - **Regimes**: \`a > 2b\` → convex oval. \`b < a < 2b\` → dimpled limacon (notch on one side). \`a = b\` → **cardioid** (cusp appears). \`a < b\` → inner-loop limacon (self-intersecting). One formula, four distinct shapes — useful when proposing variants in a single family.
-- **Lemniscate of Bernoulli** (figure-8 / infinity sign):
-  - \`xFormula: x0 + w/2 + R*cos(t)/(1 + sin(t)^2)\`
-  - \`yFormula: y0 + h/2 + R*cos(t)*sin(t)/(1 + sin(t)^2)\`
-- **Heart curve** (smooth iconic heart, no cusp — Fourier sum):
-  - \`xFormula: x0 + w/2 + R*sin(t)^3\`
-  - \`yFormula: y0 + h/2 - (R/16)*(13*cos(t) - 5*cos(2*t) - 2*cos(3*t) - cos(4*t))\`
-  - The negation on yFormula points the heart upward (canvas y grows downward).
-- **Egg (Hügelschäffer)** — asymmetric oval, smooth at both ends (no cusp):
-  - \`xFormula: x0 + w/2 + a*cos(t)\`
-  - \`yFormula: y0 + h/2 + b*sin(t)*sqrt(1 - k*cos(t))\`
-  - \`k = 0\` → regular ellipse; \`0 < k < 1\` → pointier at one end. \`k ≈ 0.5\` for a clean egg.
-- **Witch of Agnesi** (single-bump bell curve — open):
-  - \`xFormula: x0 + w/2 + 2*a*tan(t)\`
-  - \`yFormula: y0 + h/2 - 2*a*cos(t)^2\`
-  - \`tStart\` near \`-pi/2\`, \`tEnd\` near \`pi/2\` (avoid the endpoints — tan blows up). \`closePath: false\`. Rational-function bell that does NOT need exp.
-- **Cassini oval** (product-of-distances family; lemniscate generalisation):
-  - \`r(t) = sqrt(a*a*cos(2*t) + sqrt(b^4 - a^4*sin(2*t)^2))\`
-  - Then \`xFormula: x0 + w/2 + r*cos(t)\`, \`yFormula: y0 + h/2 + r*sin(t)\` (inline r expansion).
-  - At \`b = a\` → lemniscate. \`b > a*sqrt(2)\` → single oval. In between → peanut / dumbbell.
-
-### Scalloped rings (decorative borders)
-
-Sinusoidal radius variation: \`r = R + amp·sin(N·θ)\`. \`N\` = scallop count, \`amp\` = scallop depth. Looks like a fluted ring or a cog.
-
-- \`xFormula: x0 + w/2 + (R + amp*sin(N*t))*cos(t)\`
-- \`yFormula: y0 + h/2 + (R + amp*sin(N*t))*sin(t)\`
-- Sample count ≥ 480 (scallops need density).
-
-### Lissajous (woven figures)
-
-Two perpendicular sinusoids at different frequencies — produces braided, woven, or knot-like patterns. \`a:b\` frequency ratio controls weave; \`phase\` controls how lines cross.
-
-- \`xFormula: x0 + w/2 + R*sin(a*t + phase)\`
-- \`yFormula: y0 + h/2 + R*sin(b*t)\`
-- Try (a, b) = (3, 2), (3, 4), (5, 4) for distinct weaves. \`phase\` of π/2 = perpendicular start.
-
-### Spirals
-
-- **Archimedean** (even-spaced arms): \`r = a·θ\`, so:
-  - \`xFormula: x0 + w/2 + a*t*cos(t)\`, \`yFormula: y0 + h/2 + a*t*sin(t)\`
-  - Use a non-zero \`tStart\` to avoid the spiral converging to a point; e.g. \`tStart: 0.5, tEnd: 6*pi\` for ~3 turns.
-- **Logarithmic** (exponential growth — galaxy / nautilus): \`r = a·exp(b·t)\`. Requires \`exp\` in the formula vocabulary; if not available, sample with explicit \`pow(e, …)\`.
-
-### Plain ring (degenerate parametric — a circle outline)
-
-A static ring is simpler as \`shape: 'circle'\` with \`filled: false\` + \`strokeColor\` + \`strokeWidth\`. Use this math-shape form when the ring must trace in with \`drawProgress\` or be combined with other formulas.
-
-- \`xFormula: x0 + w/2 + R*cos(t)\`
-- \`yFormula: y0 + h/2 + R*sin(t)\`
+Live in the graph \`vemotion-curves\` — roses (5/8/12 petals, sharp, offset for intertwining), stars and flowers (hypocycloids, astroid, deltoid, epicycloid, nephroid), drops (cardioid, limaçon, heart, egg, lemniscate, Cassini, bell), scalloped rings, Lissajous weaves, spirals (Archimedean, logarithmic), butterfly, circle, ellipse, sine wave. Each was checked to evaluate at every sample and stay inside its box. Adding a curve = adding a node there; it then appears in the app's preset menu and in this reference.
 
 ### Formula evaluator vocabulary (CRITICAL — know the limits)
 

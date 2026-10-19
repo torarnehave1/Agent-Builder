@@ -32,7 +32,7 @@ import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
 import { checkVemotionComposition, formatVemotionGateError } from './vemotion-composition-gate.js'
 import { buildVemotionCatalog } from './vemotion-catalog.js'
-import { listVemotionLibrary, getVemotionLibraryItem } from './vemotion-library.js'
+import { listVemotionLibrary, getVemotionLibraryItem, vemotionCurveAppendix } from './vemotion-library.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -17702,7 +17702,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     case 'get_html_builder_reference':
       return { reference: HTML_BUILDER_REFERENCE }
     case 'get_vemotion_reference':
-      return { reference: VEMOTION_REFERENCE }
+      // The curve formulas come from the graph vemotion-curves, the same list the app shows.
+      return { reference: VEMOTION_REFERENCE + await vemotionCurveAppendix(env) }
     case 'get_vemotion_catalog': {
       const catalog = buildVemotionCatalog()
       return { message: `VEmotion catalog: ${Object.keys(catalog.layerTypes).length} layer types with their properties, ${Object.keys(catalog.animationKinds).length} animation kinds, easings, formula vocabulary, canvas presets, fonts and libraries`, catalog }

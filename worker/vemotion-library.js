@@ -150,3 +150,21 @@ export async function getVemotionLibraryItem(input, env) {
     ...spec.item(node, graphId),
   }
 }
+
+// The curve section of get_vemotion_reference, built from the same graph (2026-10-19). The cookbook
+// used to carry its own copy of every formula — and several used `^`, which the renderer's
+// evaluator rejects, so those curves drew nothing. Now there is one list.
+export async function vemotionCurveAppendix(env) {
+  try {
+    const { items } = await listVemotionLibrary({ kind: 'curves' }, env)
+    const { nodes } = await readLibraryGraph('curves', env)
+    const byId = Object.fromEntries(nodes.map((n) => [n.id, n]))
+    const lines = items.map((it) => {
+      const c = meta(byId[it.id]).curve
+      return `- **${it.name}** (\`${it.id}\`, ${it.family}) — ${it.summary} ${it.use || ''}\n  xFormula: \`${c.xFormula}\`\n  yFormula: \`${c.yFormula}\`\n  tStart ${c.tStart}, tEnd ${c.tEnd}, samples ${c.samples}, closePath ${c.closePath}`
+    })
+    return `\n\n## Curve library (live from graph vemotion-curves, ${items.length} curves)\n\nCopy a curve's fields into a math-shape layer's properties as they are.\n\n${lines.join('\n')}\n`
+  } catch (e) {
+    return `\n\n## Curve library\n\nThe curve list could not be read just now (${e.message}). It lives in the graph vemotion-curves.\n`
+  }
+}
