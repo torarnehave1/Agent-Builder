@@ -189,14 +189,14 @@ export const LAYER_TYPES = {
     note: 'A path is drawn at its anchors: offsetX/offsetY and motionScenes do not move it — edit the anchors, or animate opacity/scale/rotation.',
   },
   'knitting-chart': {
-    summary: 'A stitch grid (cells of palette colours) with optional grid lines, row/column numbers and a legend. Animate it with kind "pixel-reveal".',
+    summary: 'A stitch grid (cells of palette colours) with optional grid lines, row/column numbers and a legend. Animate it with kind "pixel-reveal". Draw one cell by cell (cells[r] is a string, one base-36 palette index per column), or turn a photo into one with the MCP tool pixelate_image_for_vemotion.',
     gated: false,
     properties: {
       ...COMMON,
       cols: p('number'),
       rows: p('number'),
       palette: p('color[]'),
-      cells: p('string[]', { note: 'rows × cols entries, each a palette colour.' }),
+      cells: p('string[]', { note: 'One string per row, `cols` characters long; each character is a base-36 index into `palette` (0-9, a-z).' }),
       drawOrder: p('number[]', { note: 'Paint order of the cells for the pixel-reveal animation.' }),
       background: p('color', { default: '#ffffff' }),
       gridColor: p('color', { default: '#999999' }),
@@ -275,6 +275,29 @@ export const ANIMATION_KINDS = {
   'pixel-reveal': { appliesTo: ['knitting-chart'], fields: ['keyframes'], note: 'Keyframes drive 0 → 1; cells appear in drawOrder.' },
 }
 
+// The editor's animation presets (AddLayerModal.tsx buildAnimation), so an agent writes the same
+// animation the dropdown would. Times are seconds on the LAYER clock; in the expressions D is the
+// composition duration, W/H the canvas size, w/h the layer box. test-vemotion-catalog.mjs pins the
+// names to the app's AnimationPreset type.
+export const ANIMATION_PRESETS = {
+  'fade-in': { label: 'Fade in', animation: { property: 'opacity', keyframes: [['0', 0], ['min(1.5, D)', 1]] } },
+  'fade-out': { label: 'Fade out', animation: { property: 'opacity', keyframes: [['0', 1], ['D', 0]] } },
+  'fade-in-out': { label: 'Fade in & out', animation: { property: 'opacity', keyframes: [['0', 0], ['min(1, 0.3*D)', 1], ['max(D-1, 0.7*D)', 1], ['D', 0]] } },
+  'slide-left': { label: 'Slide in from left', animation: { property: 'offsetX', keyframes: [['0', '-(w+100)'], ['min(1, 0.4*D)', 0]] } },
+  'slide-right': { label: 'Slide in from right', animation: { property: 'offsetX', keyframes: [['0', 'W+100'], ['min(1, 0.4*D)', 0]] } },
+  'slide-top': { label: 'Slide in from top', animation: { property: 'offsetY', keyframes: [['0', '-(h+100)'], ['min(1, 0.4*D)', 0]] } },
+  'slide-bottom': { label: 'Slide in from bottom', animation: { property: 'offsetY', keyframes: [['0', 'H+100'], ['min(1, 0.4*D)', 0]] } },
+  bounce: { label: 'Bounce in', animation: { property: 'offsetY', keyframes: [['0', '-(h+60)'], ['0.5*T', 10], ['0.7*T', -20], ['0.85*T', 5], ['T', 0]] }, note: 'T = min(1.2, D)' },
+  'scale-up': { label: 'Scale up', animation: { property: 'scale', keyframes: [['0', 0.05], ['min(1, 0.4*D)', 1]] } },
+  'staggered-reveal': { label: 'Staggered reveal', animation: { property: 'opacity', keyframes: [['0', 0], ['0.2', 0], ['0.8', 1], ['min(2.1, D)', 1]] } },
+  'type-on': { label: 'Type-on (per character)', textOnly: true, animation: { kind: 'char-stagger', property: 'opacity', stagger: 0.05, keyframes: [['0', 0], ['0.15', 1]] } },
+  'wipe-from-left': { label: 'Wipe in from left', animation: { kind: 'mask-wipe', direction: 'ltr', keyframes: [['0', 0], ['min(1.2, 0.4*D)', 1]] } },
+  'wipe-from-right': { label: 'Wipe in from right', animation: { kind: 'mask-wipe', direction: 'rtl', keyframes: [['0', 0], ['min(1.2, 0.4*D)', 1]] } },
+  'wipe-from-top': { label: 'Wipe in from top', animation: { kind: 'mask-wipe', direction: 'ttb', keyframes: [['0', 0], ['min(1.2, 0.4*D)', 1]] } },
+  'wipe-from-bottom': { label: 'Wipe in from bottom', animation: { kind: 'mask-wipe', direction: 'btt', keyframes: [['0', 0], ['min(1.2, 0.4*D)', 1]] } },
+  'iris-reveal': { label: 'Iris reveal (radial)', animation: { kind: 'mask-wipe', direction: 'radial', keyframes: [['0', 0], ['min(1.2, 0.4*D)', 1]] } },
+}
+
 export const EASINGS = {
   linear: 'constant speed',
   easeIn: 'starts slow (t²)',
@@ -316,6 +339,7 @@ export const LIBRARY_GRAPHS = {
   shapes: { graphId: 'vemotion-shapes', use: 'kg-shape layers — svgPath + viewBox' },
   cards: { graphId: 'vemotion-cards', use: 'card layers — the style fields' },
   animations: { graphId: 'vemotion-animations', use: 'the app\'s animation previews (editor Animations tab)' },
+  elements: { graphId: 'ccac94c7-9902-4ecb-a377-f9ac83b92a9d', title: 'vemotion-elements', use: 'animated elements from the Animations tab (water drop, pulse, orbit, word scramble): a group of ready layers' },
   recipes: { graphId: null, use: 'worked examples: goal, steps, why it looks good, and a full example composition' },
 }
 
@@ -326,6 +350,7 @@ export function buildVemotionCatalog() {
     layer: LAYER_FIELDS,
     layerTypes: LAYER_TYPES,
     animationKinds: ANIMATION_KINDS,
+    animationPresets: ANIMATION_PRESETS,
     easings: EASINGS,
     formula: FORMULA,
     canvasPresets: CANVAS_PRESETS,

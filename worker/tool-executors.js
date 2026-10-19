@@ -33,6 +33,7 @@ import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './gi
 import { checkVemotionComposition, formatVemotionGateError } from './vemotion-composition-gate.js'
 import { buildVemotionCatalog } from './vemotion-catalog.js'
 import { listVemotionLibrary, getVemotionLibraryItem, vemotionCurveAppendix } from './vemotion-library.js'
+import { getVemotionMediaInfo, listVemotionVideos, importVemotionVideo } from './vemotion-media.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -9646,6 +9647,36 @@ async function executeCheckVemotionComposition(input, env) {
   }
 }
 
+// The caller's audio-portfolio recordings for an audio layer (vemotion_list_audio, 2026-10-19) —
+// what the Audio tab's "pick" mode offers. Deliberately NOT list_recordings, which also returns
+// contact-log recordings (conversations), and not the shared Sonic Wisdom library.
+async function executeVemotionListAudio(input, env) {
+  let email = typeof input?.userEmail === 'string' && input.userEmail.includes('@') ? input.userEmail : ''
+  if (!email && input?.userId) email = (await resolveUserProfile(input.userId, env))?.email || ''
+  if (!email) throw new Error('You must be logged in to list your recordings.')
+  let recordings = await fetchAllPortfolioRecordings(env, email)
+  if (input?.vemotionOnly) recordings = recordings.filter((r) => Array.isArray(r.tags) && r.tags.includes('vemotion'))
+  const q = String(input?.query || '').trim().toLowerCase()
+  if (q) recordings = recordings.filter((r) => `${r.displayName || ''} ${r.fileName || ''} ${(r.tags || []).join(' ')}`.toLowerCase().includes(q))
+  recordings.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+  const limit = Math.min(Math.max(Number(input?.limit) || 50, 1), 200)
+  const items = recordings.slice(0, limit).map((r) => ({
+    name: r.displayName || r.fileName || 'recording',
+    r2Url: r.r2Url || null,
+    r2Key: r.r2Key || null,
+    duration: typeof r.duration === 'number' ? r.duration : null,
+    format: r.audioFormat || null,
+    tags: r.tags || [],
+    createdAt: r.createdAt || null,
+  })).filter((r) => r.r2Url)
+  return {
+    message: `${recordings.length} recording(s)${q ? ` matching "${input.query}"` : ''}${recordings.length > items.length ? `, the ${items.length} newest listed` : ''}. An audio layer takes r2Url, and layerDuration = duration.`,
+    count: items.length,
+    total: recordings.length,
+    recordings: items,
+  }
+}
+
 async function executeVemotionSaveComposition(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
   if (!authToken) {
@@ -17726,6 +17757,20 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await getVemotionLibraryItem(toolInput, env)
     case 'check_vemotion_composition':
       return await executeCheckVemotionComposition(toolInput, env)
+    case 'get_vemotion_media_info':
+      return await getVemotionMediaInfo(toolInput)
+    case 'vemotion_list_videos': {
+      const token = getAuthTokenFromToolInput(toolInput)
+      if (!token) throw new Error('You must be logged in to list your videos.')
+      return await listVemotionVideos(toolInput, env, token)
+    }
+    case 'vemotion_import_video': {
+      const token = getAuthTokenFromToolInput(toolInput)
+      if (!token) throw new Error('You must be logged in to import a video.')
+      return await importVemotionVideo(toolInput, env, token)
+    }
+    case 'vemotion_list_audio':
+      return await executeVemotionListAudio(toolInput, env)
     case 'who_am_i':
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':

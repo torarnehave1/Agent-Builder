@@ -3260,6 +3260,18 @@ export default {
           'list_vemotion_library',
           'get_vemotion_library_item',
           'check_vemotion_composition',
+          // 2026-10-19: the Add Layer tabs' media — images (albums, stock, import, generate), video
+          // clips, audio recordings, and the facts a layer needs about a file
+          'album_list',
+          'get_album_images',
+          'search_unsplash',
+          'search_pexels',
+          'photos_upload_from_url',
+          'generate_image',
+          'vemotion_list_videos',
+          'vemotion_import_video',
+          'vemotion_list_audio',
+          'get_vemotion_media_info',
         ])
         const callerAuth = await resolveCallerAuth(request, env)
         if (!callerAuth.token) {
@@ -3275,8 +3287,9 @@ export default {
         delete input.authToken
         delete input.authContext
         delete input.userId
+        delete input.userEmail
         try {
-          const result = await executeTool(tool, { ...input, authToken: callerAuth.token, userId: callerAuth.userId }, env, {})
+          const result = await executeTool(tool, { ...input, authToken: callerAuth.token, userId: callerAuth.userId, ...(callerAuth.email ? { userEmail: callerAuth.email } : {}) }, env, {})
           return new Response(JSON.stringify({ success: true, result }), { headers: corsHeaders })
         } catch (e) {
           return new Response(JSON.stringify({ success: false, error: e.message }), { status: 400, headers: corsHeaders })

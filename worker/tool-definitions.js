@@ -1212,11 +1212,11 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'list_vemotion_library',
-    description: 'List ready-made VEmotion parts by kind: curves (math-shape presets — roses, stars, spirals, hearts, Lissajous…), shapes (SVG icons for kg-shape layers), cards (card styles), animations (the editor\'s animation previews) or recipes (worked examples with a full composition). The same graphs the VEmotion app\'s pickers read. Returns id, name and a one-line summary per item. Omit kind to list the kinds. Get one with get_vemotion_library_item.',
+    description: 'List ready-made VEmotion parts by kind: curves (math-shape presets — roses, stars, spirals, hearts, Lissajous…), shapes (SVG icons for kg-shape layers), cards (card styles), animations (the editor\'s animation previews), elements (animated element groups: water drop, pulse, orbit, word scramble) or recipes (worked examples with a full composition). The same graphs the VEmotion app\'s pickers read. Returns id, name and a one-line summary per item. Omit kind to list the kinds. Get one with get_vemotion_library_item.',
     input_schema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'recipes'], description: 'Which library. Omit to list the kinds.' }
+        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'elements', 'recipes'], description: 'Which library. Omit to list the kinds.' }
       }
     }
   },
@@ -1226,11 +1226,31 @@ const TOOL_DEFINITIONS = [
     input_schema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'recipes'], description: 'The library, as in list_vemotion_library.' },
+        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'elements', 'recipes'], description: 'The library, as in list_vemotion_library.' },
         id: { type: 'string', description: 'The item id from list_vemotion_library, e.g. "curve-rose-8".' }
       },
       required: ['kind', 'id']
     }
+  },
+  {
+    name: 'get_vemotion_media_info',
+    description: 'Read the facts a VEmotion layer needs about a media file from its own header, without downloading it: width and height of a PNG/JPEG/GIF/WebP image, duration (seconds) and frame size of an MP4/MOV video (phone rotation applied). Use it to size an image layer to its picture, or to set a video layer\'s layerDuration to the clip length.',
+    input_schema: { type: 'object', properties: { url: { type: 'string', description: 'https URL of the image or video.' } }, required: ['url'] }
+  },
+  {
+    name: 'vemotion_list_videos',
+    description: 'List the user\'s own VEmotion video clips (uploaded in the app\'s Video tab or imported): url (use it as a video layer\'s src), name, size, uploaded, and duration/width/height when known. Newest first. `query` filters by name.',
+    input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Part of the clip name.' } } }
+  },
+  {
+    name: 'vemotion_import_video',
+    description: 'Copy a video from a public https URL (MP4/MOV/WebM, up to 100 MB) into the user\'s VEmotion clips, measuring its length and size first. Returns the clip url to use as a video layer\'s src. The source must be a direct video file URL, not a web page.',
+    input_schema: { type: 'object', properties: { url: { type: 'string', description: 'Direct https URL of the video file.' }, name: { type: 'string', description: 'Name for the clip.' } }, required: ['url'] }
+  },
+  {
+    name: 'vemotion_list_audio',
+    description: 'List the user\'s own audio recordings from their audio portfolio, for a VEmotion audio layer: name, r2Url (the audio layer\'s r2Url), duration (use as layerDuration), format, tags. Newest first. `vemotionOnly` keeps those tagged "vemotion" (the app\'s Audio tab pick list). Does not include contact-log conversations.',
+    input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Part of the name or a tag.' }, vemotionOnly: { type: 'boolean', description: 'Only recordings tagged "vemotion".' }, limit: { type: 'number', description: 'Max listed (default 50).' } } }
   },
   {
     name: 'check_vemotion_composition',

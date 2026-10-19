@@ -87,6 +87,20 @@ const KINDS = {
       }
     },
   },
+  elements: {
+    isItem: (n) => Array.isArray(meta(n).element?.layers),
+    order: (n) => meta(n).element.order ?? 999,
+    entry: (n) => ({ summary: meta(n).element.summary, layerCount: meta(n).element.layers.length, canvas: meta(n).element.canvas }),
+    item: (n) => {
+      const e = meta(n).element
+      return {
+        group: e.group,
+        layers: e.layers,
+        canvas: e.canvas,
+        notes: `Add \`group\` to the composition's groups[] and append \`layers\` (they carry its groupId). Built by the app's own generator for a ${e.canvas?.width}×${e.canvas?.height} canvas, ${e.canvas?.duration}s — move it with each layer's position, recolour with color/strokeColor, retime with startTime. Give the layers new ids if you add the element twice.`,
+      }
+    },
+  },
   recipes: {
     isItem: (n) => typeof meta(n).recipe === 'object' && meta(n).recipe !== null,
     order: (n) => meta(n).recipe.order ?? 999,

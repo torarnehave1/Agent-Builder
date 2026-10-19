@@ -22,7 +22,7 @@ const APP = '/Volumes/T7/video-generator/src'
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vemotion-catalog-'))
 for (const f of ['vemotion-catalog.js', 'vemotion-composition-gate.js']) fs.copyFileSync(path.join(dir, f), path.join(tmp, f))
 fs.writeFileSync(path.join(tmp, 'package.json'), '{"type":"module"}')
-const { buildVemotionCatalog, LAYER_TYPES, ANIMATION_KINDS, EASINGS, CANVAS_PRESETS, FONTS } = await import(path.join(tmp, 'vemotion-catalog.js'))
+const { buildVemotionCatalog, LAYER_TYPES, ANIMATION_KINDS, ANIMATION_PRESETS, EASINGS, CANVAS_PRESETS, FONTS } = await import(path.join(tmp, 'vemotion-catalog.js'))
 const { VOCABULARY, ANIMATABLE } = await import(path.join(tmp, 'vemotion-composition-gate.js'))
 fs.rmSync(tmp, { recursive: true, force: true })
 
@@ -93,6 +93,11 @@ if (!fs.existsSync(`${APP}/lib/renderer.ts`)) {
   sameSet('layer types = api.ts Layer.type', Object.keys(LAYER_TYPES), union(/^\s*type: ('text'[^;]+);/m))
   sameSet('animation kinds = api.ts Animation.kind', Object.keys(ANIMATION_KINDS), union(/kind\?: ('layer'[^;]+);/))
   sameSet('easings = api.ts Animation.easing', Object.keys(EASINGS), union(/easing\?: ('linear'[^;]+);/))
+
+  // 4b. The animation presets = the editor's AnimationPreset type (minus 'none').
+  const modal = fs.readFileSync(`${APP}/components/AddLayerModal.tsx`, 'utf8')
+  const presetUnion = [...(modal.match(/type AnimationPreset =([^;]+);/)?.[1] ?? '').matchAll(/'([\w-]+)'/g)].map((m) => m[1]).filter((n) => n !== 'none')
+  sameSet('animation presets = AddLayerModal.tsx AnimationPreset', Object.keys(ANIMATION_PRESETS), presetUnion)
 
   // 5. Canvas presets and fonts = the app's menus.
   const editor = fs.readFileSync(`${APP}/components/CompositionEditor.tsx`, 'utf8')
