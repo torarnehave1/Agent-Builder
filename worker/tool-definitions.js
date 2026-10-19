@@ -3464,7 +3464,7 @@ const TOOL_DEFINITIONS = [
       "`addEventListener('message', e => { const d = e.data; if (d.vegvisrNode !== 'render') return; /* d.node = {id,label,type,info,metadata}, d.theme = 'light'|'dark' */ })` " +
       "and draw into document.body. Field values are in d.node.metadata[<field key>]; d.node.label is the node's name; style both themes (d.theme). Escape text (use textContent). " +
       "The card's height follows its content: never use vh/vmin/vmax units or a height/min-height on html/body. It runs isolated: NO network (no fetch, no external CSS/fonts/scripts), images only from data: or *.vegvisr.org / *.vegr.ai / vegvisr.imgix.net. Height is reported automatically. " +
-      "Also pass sample: realistic example values for every field key, so the preview card looks real. After each change, tell the user to look at the card and press 'Ta i bruk' when it looks right. Code-hardcoded (not in registry).",
+      "Also pass sample: realistic example values for every field key, so the preview card looks real — but leave image fields empty ('') unless the founder gave a real image URL, and make the look hide the image area when the value is empty or the image fails to load (img onerror). After each change, tell the user to look at the card and press 'Ta i bruk' when it looks right. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {
