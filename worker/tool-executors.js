@@ -9947,24 +9947,35 @@ async function executeVemotionListCompositions(input, env) {
   if (!authToken) throw new Error('You must be logged in to list your Vemotion compositions.')
   if (!env.VEMOTION_WORKER) throw new Error('VEMOTION_WORKER service binding is not configured')
 
+  // GET /vemotion/compositions pages through the KV keys of EVERY user in id order and keeps the
+  // caller's, so one page of 50 held only old ids and a composition saved today was never listed
+  // or found by name (2026-10-19). Follow the cursor to the end, then sort newest first.
   const limit = Math.min(Math.max(Number(input?.limit) || 50, 1), 200)
-  const res = await env.VEMOTION_WORKER.fetch(
-    `https://vemotion-worker/vemotion/compositions?limit=${limit}`,
-    { headers: { 'X-API-Token': authToken } }
-  )
-  const text = await res.text()
-  let data = {}
-  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
-  if (res.status !== 200) {
-    throw new Error(`vemotion list ${res.status}: ${data.error || text.slice(0, 300)}`)
+  let compositions = []
+  let cursor = null
+  for (let page = 0; page < 50; page++) {
+    const res = await env.VEMOTION_WORKER.fetch(
+      `https://vemotion-worker/vemotion/compositions?limit=200${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
+      { headers: { 'X-API-Token': authToken } }
+    )
+    const text = await res.text()
+    let data = {}
+    try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+    if (res.status !== 200) {
+      throw new Error(`vemotion list ${res.status}: ${data.error || text.slice(0, 300)}`)
+    }
+    if (Array.isArray(data?.compositions)) compositions.push(...data.compositions)
+    cursor = data?.cursor || null
+    if (!cursor) break
   }
-
-  let compositions = Array.isArray(data?.compositions) ? data.compositions : []
+  compositions.sort((a, b) => new Date(b?.updatedAt || 0).getTime() - new Date(a?.updatedAt || 0).getTime())
   const query = (typeof input?.query === 'string' && input.query.trim()) ? input.query.trim().toLowerCase() : ''
   if (query) {
     compositions = compositions.filter(c => String(c?.name || '').toLowerCase().includes(query))
   }
 
+  const total = compositions.length
+  compositions = compositions.slice(0, limit)
   const items = compositions.map(c => ({
     compositionId: c.id || c.compositionId || null,
     name: c.name || '(untitled)',
@@ -9979,9 +9990,10 @@ async function executeVemotionListCompositions(input, env) {
   const scope = query ? ` matching "${input.query.trim()}"` : ''
   return {
     message: items.length
-      ? `Found ${items.length} composition(s)${scope}.`
+      ? `Found ${total} composition(s)${scope}${total > items.length ? ` — the ${items.length} most recently changed are listed` : ''}.`
       : `No compositions${scope} in your Vemotion library.`,
     count: items.length,
+    total,
     query: input?.query || null,
     compositions: items,
   }
