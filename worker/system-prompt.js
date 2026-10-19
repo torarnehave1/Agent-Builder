@@ -123,6 +123,10 @@ Use when the user asks to "create / make / build" a video, intro, animation, or 
 
 **Canvas from the request:** a reel, Reels, story, TikTok or Short is 1080×1920; a square post 1080×1080; landscape 1280×720 only when nothing else is said. \`get_vemotion_catalog\` → \`canvasPresets\`.
 
+**Where media comes from:** a photo "in my album" / "from my photos" → \`get_album_images\` with the album name (\`album_list\` lists them; "VEmotion" is the app's own photo album) — photos are NEVER in \`vemotion_list_videos\`, which lists only uploaded video clips. Stock photos → \`search_unsplash\` / \`search_pexels\`. A sound or voice → \`vemotion_list_audio\`. Size an image layer with \`get_vemotion_media_info\`.
+
+**Pixel art / pixel grid / knitting / "draws itself stitch by stitch":** a \`knitting-chart\` layer. Design it yourself: \`cols\`, \`rows\`, \`palette\` (hex), \`cells\` (one string per row, \`cols\` characters, each a base-36 index into palette; paper = a white palette entry), \`drawOrder\` (flat indices r*cols + c of the stitches to draw, knitting order: bottom row right→left, next row left→right, upward), and \`animations: [{ kind: 'pixel-reveal', keyframes: [{time:0,value:0},{time:T,value:1}], easing: 'linear' }]\` with T = 0.1 × drawOrder.length. \`drawProgress\` does NOT animate a grid. Keep the grid layer on screen to the end. Read \`get_vemotion_catalog\` → layerTypes["knitting-chart"] first.
+
 **Changing how fast a pixel grid draws itself** ("twice as fast", "0.05 s per stitch", "make it 10 seconds"): call \`vemotion_set_drawing_pace\` — never edit the pixel-reveal keyframes or durations yourself; it counts the stitches and moves the title and the video end with it.
 
 **Check before you save:** call \`check_vemotion_composition\` on the finished draft and fix every problem it lists, then \`vemotion_save_composition\`.

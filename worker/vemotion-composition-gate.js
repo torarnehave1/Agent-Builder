@@ -54,6 +54,9 @@ const HINTS = {
 
 const SHAPES = ['rect', 'rectangle', 'circle', 'ellipse']
 
+// The fields of a Layer itself (video-generator src/lib/api.ts `Layer`).
+export const LAYER_FIELDS = ['id', 'type', 'name', 'groupId', 'position', 'size', 'visible', 'startTime', 'layerDuration', 'animation', 'animations', 'properties']
+
 export const ANIMATABLE = {
   text: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'fontSize', 'letterSpacing'],
   shape: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'borderRadius', 'strokeWidth'],
@@ -96,6 +99,15 @@ export function checkVemotionComposition(composition) {
     }
     const where = `layer "${layer.id ?? `#${index + 1}`}" (${layer.type})`
     const props = layer.properties && typeof layer.properties === 'object' ? layer.properties : {}
+
+    // A layer's own fields are few; everything the renderer draws lives in `properties`. An agent
+    // wrote src/text/color straight on the layer (2026-10-19, "Hello autumn"): it saved, and the
+    // photo and title drew blank.
+    const stray = Object.keys(layer).filter((k) => !LAYER_FIELDS.includes(k))
+    if (stray.length) {
+      const one = stray.length === 1
+      problems.push(`${where}: ${stray.map((k) => `\`${k}\``).join(', ')} ${one ? 'is not a layer field' : 'are not layer fields'} and ${one ? 'is' : 'are'} ignored — what the renderer draws goes inside \`properties\` (e.g. properties.src, properties.text, properties.color); remove anything that is not a property. A layer itself has only ${LAYER_FIELDS.join(', ')}.`)
+    }
     const vocab = VOCABULARY[layer.type]
 
     if (vocab) {
@@ -117,6 +129,10 @@ export function checkVemotionComposition(composition) {
         const bad = a.keyframes.find((k) => isNum(k?.value) && (k.value < LETTER_SPACING_MIN || k.value > LETTER_SPACING_MAX))
         if (bad) problems.push(letterSpacingProblem(where, bad.value, fs, 'a letterSpacing keyframe value'))
       }
+    }
+    if (layer.type === 'knitting-chart') {
+      const p = knittingChartProblem(where, props, layer)
+      if (p) problems.push(p)
     }
     if (layer.type === 'shape' && props.shape !== undefined && !SHAPES.includes(props.shape)) {
       problems.push(`${where}: shape "${props.shape}" is not drawn (it renders as a rectangle) — use "rect" or "circle", or a \`path\` layer with corner anchors / a \`math-shape\` for any other outline`)
@@ -524,6 +540,38 @@ function checkTextPlacement(layer, props, anims, where, canvasW, canvasH) {
   }
   if (centreY < 0 || centreY > canvasH) {
     return `${where}: \`position.y\` is the TOP of the text box. With y=${round(y)} and height ${round(h)} the text is drawn at y=${round(centreY)}, outside the ${canvasH}px-tall canvas.`
+  }
+  return null
+}
+
+// A knitting-chart (pixel grid) draws nothing without its grid, and only a pixel-reveal animates it
+// (2026-10-19: an agent saved a "pixel-art cat" with no cells and a drawProgress animation — the
+// save passed and the layer was empty). The renderer reads cols, rows, palette and cells (one
+// base-36 index per column per row) and, for the reveal, drawOrder (flat indices r*cols + c).
+function knittingChartProblem(where, props, layer) {
+  const { cols, rows, palette, cells, drawOrder } = props
+  const fix = 'A knitting-chart needs cols, rows, palette (hex colours, at most 36) and cells (rows strings, each cols characters; each character a base-36 index into palette, 0-9 then a-z). get_vemotion_catalog → layerTypes["knitting-chart"].'
+  if (!Number.isInteger(cols) || cols < 1 || !Number.isInteger(rows) || rows < 1) return `${where}: cols and rows must be whole numbers above 0. ${fix}`
+  if (!Array.isArray(palette) || palette.length === 0 || palette.length > 36) return `${where}: palette must list 1-36 colours. ${fix}`
+  if (!Array.isArray(cells) || cells.length !== rows) return `${where}: cells must have one string per row (${rows}), got ${Array.isArray(cells) ? cells.length : 'none'}. ${fix}`
+  for (let r = 0; r < cells.length; r++) {
+    const row = cells[r]
+    if (typeof row !== 'string' || row.length !== cols) return `${where}: cells[${r}] must be a string of ${cols} characters, got ${typeof row === 'string' ? row.length : typeof row}. ${fix}`
+    for (const ch of row) {
+      const idx = parseInt(ch, 36)
+      if (!(idx >= 0 && idx < palette.length)) return `${where}: cells[${r}] uses "${ch}", which is not an index into the ${palette.length}-colour palette. ${fix}`
+    }
+  }
+  const anims = [layer.animation, ...(Array.isArray(layer.animations) ? layer.animations : [])].filter((a) => a && typeof a === 'object')
+  const wrong = anims.find((a) => (a.kind ?? 'layer') === 'layer' && a.property === 'drawProgress')
+  if (wrong) return `${where}: drawProgress does not animate a knitting-chart (it is a math-shape property). To draw the grid stitch by stitch use { kind: "pixel-reveal", keyframes: [{time:0,value:0},{time:T,value:1}], easing: "linear" } with properties.drawOrder — and vemotion_set_drawing_pace to set its speed.`
+  const reveal = anims.find((a) => a.kind === 'pixel-reveal')
+  if (reveal || drawOrder !== undefined) {
+    const max = cols * rows
+    if (!Array.isArray(drawOrder) || drawOrder.length === 0) return `${where}: a pixel-reveal needs properties.drawOrder — the flat cell indices (r*cols + c) in the order the stitches appear; list every stitch that should be drawn.`
+    const bad = drawOrder.find((i) => !Number.isInteger(i) || i < 0 || i >= max)
+    if (bad !== undefined) return `${where}: drawOrder contains ${bad}, but cell indices run 0-${max - 1} (r*cols + c).`
+    if (!reveal) return `${where}: drawOrder is set but no animation uses it — add { kind: "pixel-reveal", keyframes: [{time:0,value:0},{time:T,value:1}], easing: "linear" }.`
   }
   return null
 }

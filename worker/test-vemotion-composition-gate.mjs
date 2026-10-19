@@ -128,6 +128,27 @@ expectProblems('an animated letterSpacing in pixels is refused', spaced({}, { pr
   expectProblems('an animation property the renderer ignores is refused', c, ['animation property `translateY` is not read'])
 }
 
+// Pixel grids (knitting-chart), 2026-10-19: an empty grid with a drawProgress animation saved.
+{
+  const grid = (props, anims) => ({ width: 1080, height: 1920, duration: 5, layers: [{ id: 'g', type: 'knitting-chart', position: { x: 0, y: 0 }, size: { width: 400, height: 400 }, properties: props, ...(anims ? { animations: anims } : {}) }] })
+  const ok = { cols: 3, rows: 2, palette: ['#ffffff', '#000000'], cells: ['010', '101'] }
+  const reveal = [{ kind: 'pixel-reveal', keyframes: [{ time: 0, value: 0 }, { time: 1, value: 1 }], easing: 'linear' }]
+  expectClean('a complete knitting-chart passes', grid(ok))
+  expectClean('a knitting-chart with drawOrder + pixel-reveal passes', grid({ ...ok, drawOrder: [5, 4, 3, 0, 1, 2] }, reveal))
+  expectProblems('an empty knitting-chart is refused', grid({ drawOrder: [0, 1] }, [{ property: 'drawProgress', keyframes: [{ time: 0, value: 0 }, { time: 5, value: 1 }] }]), ['cols and rows must be whole numbers'])
+  expectProblems('drawProgress on a knitting-chart is refused with the pixel-reveal fix', grid({ ...ok, drawOrder: [0] }, [{ property: 'drawProgress', keyframes: [{ time: 0, value: 0 }, { time: 5, value: 1 }] }]), ['drawProgress does not animate a knitting-chart'])
+  expectProblems('a cell outside the palette is refused', grid({ ...ok, cells: ['012', '101'] }), ['cells[0] uses "2"'])
+  expectProblems('a short row is refused', grid({ ...ok, cells: ['01', '101'] }), ['cells[0] must be a string of 3 characters'])
+  expectProblems('a pixel-reveal without drawOrder is refused', grid(ok, reveal), ['a pixel-reveal needs properties.drawOrder'])
+  expectProblems('a drawOrder index past the grid is refused', grid({ ...ok, drawOrder: [6] }, reveal), ['drawOrder contains 6'])
+}
+
+// Fields outside `properties` (2026-10-19, "Hello autumn": src and text on the layer drew blank).
+expectProblems('src and text written on the layer are refused', { width: 1080, height: 1920, layers: [
+  { id: 'bg-image', type: 'image', src: 'https://x/y.png', position: { x: 0, y: 0 }, size: { width: 1080, height: 1920 } },
+  { id: 't', type: 'text', text: 'Hello', color: '#fff', position: { x: 0, y: 800 }, size: { width: 1080, height: 200 }, properties: {} },
+] }, ['layer "bg-image" (image): `src` is not a layer field', 'layer "t" (text): `text`, `color` are not layer fields'])
+
 // 6–9. The real executors: a refused composition never reaches the Vemotion worker.
 function fakeVemotion() {
   const calls = []
