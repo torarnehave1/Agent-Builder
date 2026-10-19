@@ -91,6 +91,8 @@ check('patch_node: refused on the platform', !patchPlatform.ok && /not a node ty
   // 2026-10-19 live bug 2: an HTML-escaped look drew its own source as text → decoded before saving.
   const esc = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<![CDATA[&lt;div id=&quot;t&quot;&gt;&lt;/div&gt;&lt;script&gt;addEventListener(&#39;message&#39;,e=&gt;{if(e.data.vegvisrNode!==&#39;render&#39;)return;t.textContent=e.data.node.metadata.tittel})&lt;/script&gt;]]>' }, nenv)
   check('an escaped, CDATA-wrapped look is decoded to real HTML before it is saved', esc.success && /^<div id="t"><\/div><script>addEventListener\('message'/.test(esc.nodeTypeCard.look.impl), JSON.stringify(esc.nodeTypeCard?.look?.impl))
+  const tall = await executeTool('change_node_type_look', { type: 'kursmodul', impl: "<style>.c{min-height:100vh}</style><script>addEventListener('message',e=>{if(e.data.vegvisrNode!=='render')return;m.tittel})</script>" }, nenv)
+  check('a look with viewport units is refused (it would grow without end)', tall.success === false && /viewport units/.test(tall.error), JSON.stringify(tall))
   const deaf = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<div>metadata.tittel</div>' }, nenv)
   check('a look that never listens for the render message is refused', deaf.success === false && /addEventListener/.test(deaf.error), JSON.stringify(deaf))
   // 2026-10-19 live bug: the look read the LABEL, not the key → refused before anything is saved.

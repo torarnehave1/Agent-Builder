@@ -3714,6 +3714,14 @@ async function executeCreateNodeType(input, env) {
 async function executeChangeNodeTypeLook(input, env) {
   if (!input.type || !input.impl) return { success: false, error: 'change_node_type_look needs type and impl.' }
   input = { ...input, impl: normalizeLookImpl(input.impl) }
+  // The frame's height follows the look's content, so a height tied to the frame (100vh) grows without
+  // end — on 2026-10-19 a card reached 6000px and covered the "Ta i bruk" button.
+  if (/\b\d*\.?\d+\s*(?:[sdl]?vh|vmin|vmax)\b/i.test(input.impl)) {
+    return {
+      success: false,
+      error: 'The look uses viewport units (vh/vmin/vmax). The card\'s height follows its content, so these make it grow without end. Use px, rem or %-of-width instead, and no min-height/height on html or body. Nothing was saved.',
+    }
+  }
   // A look that never listens for the render message draws nothing — or, as text, its own code.
   if (!/<script[\s>]/i.test(input.impl) || !/addEventListener\(\s*['"]message['"]/.test(input.impl) || !/vegvisrNode/.test(input.impl)) {
     return {
