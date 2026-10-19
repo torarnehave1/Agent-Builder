@@ -3669,6 +3669,20 @@ function keysMissingFromLook(impl, fields) {
   return (fields || []).filter((f) => f.key && !new RegExp(`(\\.${f.key}\\b|['"\`]${f.key}['"\`])`).test(code)).map((f) => f.key)
 }
 
+/**
+ * The look as the browser must receive it. Models wrap it in <![CDATA[ … ]]> or send it HTML-escaped
+ * (&lt;div …) — on 2026-10-19 an escaped look reached the card and drew its own source as text, and a
+ * click put it to use. Escaped markup with no real tag is decoded once; the wrapper is dropped.
+ */
+function normalizeLookImpl(impl) {
+  let code = String(impl || '').trim()
+  code = code.replace(/^<!\[CDATA\[/, '').replace(/\]\]>$/, '').trim()
+  if (!/<[a-zA-Z!\/]/.test(code) && /&lt;[a-zA-Z!\/]/.test(code)) {
+    code = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#0*39;|&#x0*27;|&apos;/gi, "'").replace(/&amp;/g, '&')
+  }
+  return code
+}
+
 /** Sample values given under a field's label (or any case) moved to the field's key. */
 function sampleByKey(sample, fields) {
   if (!sample || typeof sample !== 'object') return null
@@ -3699,6 +3713,14 @@ async function executeCreateNodeType(input, env) {
 
 async function executeChangeNodeTypeLook(input, env) {
   if (!input.type || !input.impl) return { success: false, error: 'change_node_type_look needs type and impl.' }
+  input = { ...input, impl: normalizeLookImpl(input.impl) }
+  // A look that never listens for the render message draws nothing — or, as text, its own code.
+  if (!/<script[\s>]/i.test(input.impl) || !/addEventListener\(\s*['"]message['"]/.test(input.impl) || !/vegvisrNode/.test(input.impl)) {
+    return {
+      success: false,
+      error: 'The look must be real HTML (not escaped) with a <script> that does addEventListener("message", e => { const d = e.data; if (d.vegvisrNode !== "render") return; … }) and draws from d.node. Nothing was saved — send the look again as plain HTML.',
+    }
+  }
   // Check the look against the type's real field keys BEFORE saving a draft that would never show
   // a field. New fields passed in this call are checked when they carry their key.
   let fields = Array.isArray(input.fields) ? input.fields.filter((f) => f && f.key) : null
