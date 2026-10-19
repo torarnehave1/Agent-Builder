@@ -1177,8 +1177,8 @@ Live in the graph \`vemotion-curves\` — roses (5/8/12 petals, sharp, offset fo
 The math-shape formula evaluator supports a **finite** set of functions and operators. Step outside this list and the evaluator silently produces NaN or 0 — the layer looks fine in the JSON but nothing renders.
 
 - **Functions available**: \`sin, cos, tan, abs, min, max, pow, sqrt, pi\`
-- **Operators available**: \`+ - * /\` only
-- **Context variables**: \`t, p, x0, y0, w, h, start, end, duration\`
+- **Operators available**: \`+ - * / %\` and parentheses
+- **Context variables**: \`t, p, x0, y0, w, h, start, end, duration, amp, ampL, ampR, time\`
 
 **NO \`^\` (caret) operator.** The evaluator's safety regex (\`renderer.ts\` line 136) rejects \`^\` outright — a formula containing \`^\` produces a \`null\` result for every sample, the points array stays empty, and the layer silently renders nothing. Always use \`pow(base, exponent)\` for powers:
 
@@ -1200,7 +1200,7 @@ The math-shape formula evaluator supports a **finite** set of functions and oper
 | Integrals (Fresnel, error function, Cornu spiral, …) | Taylor-approximate inside the formula, OR sample numerically and use \`type: 'path'\` with explicit anchors |
 | Conditional \`if t < 0 then ... else ...\` | Approximate with smooth sigmoid, e.g. \`1 / (1 + pow(2.71828, -k*x))\` for large k mimics a step. Or split into two layers. |
 
-Test any complex formula on a small composition before committing — the silent-NaN failure mode is the largest watchpoint.
+The save gate (vemotion_save_composition, vemotion_refit_composition) evaluates every xFormula / yFormula / scaleFormula the way the renderer does and refuses the save when one uses \`^\`, a name outside this vocabulary, or never yields a finite number — the refusal names the layer, the formula and the fix. A formula that passes can still look wrong: check a still before posting.
 
 ### Rules for proposing curve variants to the user
 

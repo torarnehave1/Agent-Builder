@@ -28,7 +28,7 @@ for (const f of fs.readdirSync(dir)) {
 }
 fs.writeFileSync(path.join(tmp, 'package.json'), '{"type":"module"}')
 fs.symlinkSync(path.join(dir, 'node_modules'), path.join(tmp, 'node_modules'))
-const { checkVemotionComposition, VOCABULARY } = await import(path.join(tmp, 'vemotion-composition-gate.js'))
+const { checkVemotionComposition, VOCABULARY, FORMULA_SAFE, FORMULA_ARGS } = await import(path.join(tmp, 'vemotion-composition-gate.js'))
 const { executeTool } = await import(path.join(tmp, 'tool-executors.js'))
 
 const fixtures = JSON.parse(fs.readFileSync(path.join(dir, 'test-fixtures', 'vemotion-gate-fixtures.json'), 'utf8'))
@@ -192,6 +192,41 @@ const AUTH = { authToken: 'test-token' }
   else pass(t)
 }
 
+// 11. Formulas (2026-10-19). renderer.ts evaluateFormula returns null for a formula its safety regex
+//     refuses, that uses a name it does not pass in, or that is never finite — the math-shape draws
+//     nothing and a motion scene is ignored, silently. Cookbook curves shipped with `^`.
+{
+  const curve = (xFormula, yFormula, extra = {}) => ({
+    width: 1080, height: 1080, duration: 4,
+    layers: [{ id: 'heart', type: 'math-shape', position: { x: 140, y: 140 }, size: { width: 800, height: 800 }, startTime: 0, layerDuration: 4,
+      properties: { mathKind: 'parametric', xFormula, yFormula, stroke: '#e11d48', strokeWidth: 6, tStart: 0, tEnd: 6.283, samples: 240, ...extra } }],
+  })
+  const HEART_Y = 'y0 + h/2 - (13*cos(t) - 5*cos(2*t) - 2*cos(3*t) - cos(4*t)) * h/40'
+  expectProblems('a math-shape with `^` is refused with the pow() fix', curve('x0 + w/2 + 16*sin(t)^3 * w/40', HEART_Y),
+    ['layer "heart" (math-shape): xFormula "x0 + w/2 + 16*sin(t)^3 * w/40" contains `^`', 'write pow(a, b)', 'the curve draws nothing'])
+  expectClean('the same heart written with pow() passes', curve('x0 + w/2 + 16*pow(sin(t), 3) * w/40', HEART_Y))
+  expectClean('`**` (which the renderer evaluates) passes', curve('x0 + w/2 + 16*sin(t)**3 * w/40', HEART_Y))
+  expectProblems('exp / log / Math.* are named with their fix', curve('x0 + w/2 + exp(-t)*cos(t)*w/2', 'y0 + h/2 + Math.sin(t)*log(2)*h/2'), [
+    'xFormula "x0 + w/2 + exp(-t)*cos(t)*w/2" uses `exp`, which the renderer does not provide — use pow(2.71828, x)',
+    'yFormula "y0 + h/2 + Math.sin(t)*log(2)*h/2" uses `Math.`, which is outside the formula vocabulary — drop the `Math.` prefix',
+  ])
+  expectProblems('log is named', curve('x0 + w/2', 'y0 + log(t+1)*h'), ['uses `log`, which the renderer does not provide — the only functions are sin, cos, tan, abs, min, max, pow, sqrt'])
+  expectProblems('implicit multiplication is a syntax error', curve('x0 + 2t', 'y0'), ['`2t` is not valid — write the multiplication: 2*t'])
+  expectProblems('a curve with no finite sample is refused', curve('x0 + w/2 + sqrt(-1 - t)*w', 'y0 + h/2'),
+    ['xFormula "x0 + w/2 + sqrt(-1 - t)*w" gives no finite number over t = 0…6.28 (241 samples)'])
+  expectClean('a curve finite only once the clock moves passes', curve('x0 + w/2 + w/4*cos(t) * time/time', 'y0 + h/2 + h/4*sin(t)'))
+  expectClean('a curve finite only with audio passes', curve('x0 + w/2 + w/4*cos(t) * amp/amp', 'y0 + h/2 + h/4*sin(t)'))
+  expectClean('pi, min, max, abs, tan, % and comma args pass', curve('x0 + w/2 + min(w, h)*0.4*cos(t + pi/2) % w', 'y0 + h/2 + max(abs(tan(t/4)), 0)*0 + h/3*sin(t)'))
+
+  const scene = (scene) => ({ width: 1080, height: 1080, duration: 4,
+    layers: [{ id: 'dot', type: 'shape', position: { x: 500, y: 500 }, size: { width: 80, height: 80 }, properties: { shape: 'circle', color: '#fff', motionScenes: [scene] } }] })
+  expectProblems('a motion scene formula with `^` is refused', scene({ start: 0, end: 2, xFormula: 'x0 + 200*p^2', yFormula: 'y0' }),
+    ['layer "dot" (shape): motionScenes[0].xFormula "x0 + 200*p^2" contains `^`', 'the layer keeps its own x during this scene'])
+  expectProblems('a never-finite scaleFormula is refused', scene({ start: 0, end: 2, scaleFormula: '1/(t - t)' }),
+    ['motionScenes[0].scaleFormula "1/(t - t)" gives no finite number for t = 0…2s — the layer keeps its own scale'])
+  expectClean('a valid motion scene passes', scene({ start: 0, end: 2, xFormula: 'x0 + 200*pow(p, 2)', yFormula: 'y0 - 100*sin(pi*p)', scaleFormula: '1 + 0.2*sin(t*4)' }))
+}
+
 // 10. The gate's vocabulary is the renderer's. A renderer change that adds or drops a property
 //     must be mirrored in VOCABULARY, or the gate refuses valid compositions / passes dead fields.
 if (!fs.existsSync(RENDERER)) {
@@ -227,6 +262,21 @@ if (!fs.existsSync(RENDERER)) {
     if (added.length || removed.length) {
       fail(t, `renderer.ts reads [${added.join(', ')}] missing from VOCABULARY; VOCABULARY lists [${removed.join(', ')}] the renderer no longer reads`)
     } else pass(t)
+  }
+  // The formula evaluator's safety regex and argument list must be the renderer's.
+  {
+    const src = body('evaluateFormula')
+    const t1 = 'FORMULA_SAFE matches renderer.ts evaluateFormula'
+    const re = src.match(/if \(!(\/\^.*\$\/)\.test\(safe\)\)/)
+    if (!re) fail(t1, 'evaluateFormula has no `if (!/^…$/.test(safe))` — update the drift check')
+    else if (re[1] !== String(FORMULA_SAFE)) fail(t1, `renderer ${re[1]} vs gate ${FORMULA_SAFE}`)
+    else pass(t1)
+    const t2 = 'FORMULA_ARGS match renderer.ts evaluateFormula new Function(...) parameters'
+    const fnArgs = src.match(/new Function\(([\s\S]*?)`"use strict"/)
+    const args = fnArgs ? [...fnArgs[1].matchAll(/'(\w+)'/g)].map((m) => m[1]) : []
+    if (!args.length) fail(t2, 'evaluateFormula has no new Function(\'t\', …) — update the drift check')
+    else if (args.join(',') !== FORMULA_ARGS.join(',')) fail(t2, `renderer [${args.join(', ')}] vs gate [${FORMULA_ARGS.join(', ')}]`)
+    else pass(t2)
   }
 }
 
