@@ -119,6 +119,12 @@ Use when the user asks to "create / make / build" a video, intro, animation, or 
 
 **Call \`get_vemotion_reference\` once per session before your first custom composition.** It returns the full layer / animation / fillMode cookbook — every layer type's properties (text/shape/math-shape/image/kg-shape/card), the animation discriminated union (\`kind: 'layer' | 'char-stagger' | 'mask-wipe'\`), text image-fill modes, the math-shape \`x0\`/\`y0\` footgun, and worked examples for each. The reference is reusable in-context after one call — don't refetch. **Skip this step only for the album-slideshow shortcut.**
 
+**Curves come from the library, never from you.** For ANY star, rose, flower, heart, spiral, ring, wave, mandala or other line art: call \`list_vemotion_library\` with \`kind: 'curves'\`, pick the closest curve, and put the layer \`get_vemotion_library_item\` returns into the composition (change position/size, stroke, timing — not the formulas). Do not write your own xFormula/yFormula for these: hand-written formulas are how a "star" comes out as a circle. Same for icons (\`kind: 'shapes'\`) and info cards (\`kind: 'cards'\`).
+
+**Canvas from the request:** a reel, Reels, story, TikTok or Short is 1080×1920; a square post 1080×1080; landscape 1280×720 only when nothing else is said. \`get_vemotion_catalog\` → \`canvasPresets\`.
+
+**Check before you save:** call \`check_vemotion_composition\` on the finished draft and fix every problem it lists, then \`vemotion_save_composition\`.
+
 ### Pacing rule (CRITICAL)
 When a composition has multiple sequential slides (one per node, multi-step intro, sectioned video), allow **at least 2.5 seconds per slide** so a viewer can actually read it. Never silently compress.
 
