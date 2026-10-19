@@ -9,8 +9,17 @@
 const HEAD_BYTES = 256 * 1024
 const TAIL_BYTES = 2 * 1024 * 1024
 
-async function fetchRange(url, range) {
-  const res = await fetch(url, { headers: { Range: range } })
+// A VEmotion clip lives on api.vegvisr.org — the same Cloudflare zone as this worker, which cannot
+// fetch it by its public URL (HTTP 522). Those go through the vemotion-worker service binding.
+function fetcherFor(url, env) {
+  if (env?.VEMOTION_WORKER && /^https:\/\/api\.vegvisr\.org\/vemotion\//.test(url)) {
+    return (u, init) => env.VEMOTION_WORKER.fetch(u.replace('https://api.vegvisr.org', 'https://vemotion-worker'), init)
+  }
+  return fetch
+}
+
+async function fetchRange(url, range, env) {
+  const res = await fetcherFor(url, env)(url, { headers: { Range: range } })
   if (!res.ok && res.status !== 206) throw new Error(`Could not read ${url} (HTTP ${res.status})`)
   const total = Number((res.headers.get('content-range') || '').split('/')[1]) || Number(res.headers.get('content-length')) || null
   const type = (res.headers.get('content-type') || '').split(';')[0] || null
@@ -109,10 +118,10 @@ function moovIn(b) {
   return null
 }
 
-export async function getVemotionMediaInfo(input) {
+export async function getVemotionMediaInfo(input, env) {
   const url = String(input?.url || '').trim()
   if (!/^https:\/\//.test(url)) throw new Error('url must be an https URL of an image, video or audio file.')
-  const head = await fetchRange(url, `bytes=0-${HEAD_BYTES - 1}`)
+  const head = await fetchRange(url, `bytes=0-${HEAD_BYTES - 1}`, env)
   const img = imageSize(head.buf)
   if (img) {
     return { message: `${img.format} image, ${img.width}×${img.height}`, url, kind: 'image', ...img, bytes: head.total, contentType: head.type }
@@ -120,7 +129,7 @@ export async function getVemotionMediaInfo(input) {
   let video = mp4Info(head.buf)
   if (!video && head.ranged && head.total && head.total > HEAD_BYTES) {
     // moov at the end (not "fast-start"): read the tail.
-    const tail = await fetchRange(url, `bytes=-${TAIL_BYTES}`)
+    const tail = await fetchRange(url, `bytes=-${TAIL_BYTES}`, env)
     video = moovIn(tail.buf)
   }
   if (video) {
@@ -154,7 +163,7 @@ export async function importVemotionVideo(input, env, authToken) {
   if (!/^https:\/\//.test(url)) throw new Error('url must be an https URL of a video.')
   // Measure first, so the stored clip carries its length and size like an app upload does.
   let info = null
-  try { info = await getVemotionMediaInfo({ url }) } catch { /* the import itself reports the real error */ }
+  try { info = await getVemotionMediaInfo({ url }, env) } catch { /* the import itself reports the real error */ }
   const body = { url, ...(input?.name ? { name: String(input.name) } : {}) }
   if (info?.kind === 'video') Object.assign(body, { duration: info.duration, width: info.width, height: info.height })
   const res = await env.VEMOTION_WORKER.fetch('https://vemotion-worker/vemotion/video/import', {

@@ -9654,7 +9654,10 @@ async function executeVemotionListAudio(input, env) {
   let email = typeof input?.userEmail === 'string' && input.userEmail.includes('@') ? input.userEmail : ''
   if (!email && input?.userId) email = (await resolveUserProfile(input.userId, env))?.email || ''
   if (!email) throw new Error('You must be logged in to list your recordings.')
-  let recordings = await fetchAllPortfolioRecordings(env, email)
+  // Contact-log recordings (conversations) are saved to the same portfolio, tagged "contacts" —
+  // never offered as soundtrack material.
+  let recordings = (await fetchAllPortfolioRecordings(env, email))
+    .filter((r) => !(Array.isArray(r.tags) && r.tags.includes('contacts')) && !String(r.fileName || r.r2Key || '').includes('contact-log'))
   if (input?.vemotionOnly) recordings = recordings.filter((r) => Array.isArray(r.tags) && r.tags.includes('vemotion'))
   const q = String(input?.query || '').trim().toLowerCase()
   if (q) recordings = recordings.filter((r) => `${r.displayName || ''} ${r.fileName || ''} ${(r.tags || []).join(' ')}`.toLowerCase().includes(q))
@@ -9664,7 +9667,7 @@ async function executeVemotionListAudio(input, env) {
     name: r.displayName || r.fileName || 'recording',
     r2Url: r.r2Url || null,
     r2Key: r.r2Key || null,
-    duration: typeof r.duration === 'number' ? r.duration : null,
+    duration: typeof r.duration === 'number' && r.duration > 0 ? r.duration : null,
     format: r.audioFormat || null,
     tags: r.tags || [],
     createdAt: r.createdAt || null,
@@ -17758,7 +17761,7 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     case 'check_vemotion_composition':
       return await executeCheckVemotionComposition(toolInput, env)
     case 'get_vemotion_media_info':
-      return await getVemotionMediaInfo(toolInput)
+      return await getVemotionMediaInfo(toolInput, env)
     case 'vemotion_list_videos': {
       const token = getAuthTokenFromToolInput(toolInput)
       if (!token) throw new Error('You must be logged in to list your videos.')
