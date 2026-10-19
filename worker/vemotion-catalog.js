@@ -197,7 +197,7 @@ export const LAYER_TYPES = {
       rows: p('number'),
       palette: p('color[]'),
       cells: p('string[]', { note: 'One string per row, `cols` characters long; each character is a base-36 index into `palette` (0-9, a-z).' }),
-      drawOrder: p('number[]', { note: 'Paint order of the cells for the pixel-reveal animation.' }),
+      drawOrder: p('number[]', { note: 'The order stitches appear in a pixel-reveal: flat cell indices r*cols + c. Cells NOT listed always show, so list every cell (rows*cols) for a full build-up. Any order works — row by row, a sweep, darkest colour first, random.' }),
       background: p('color', { default: '#ffffff' }),
       gridColor: p('color', { default: '#999999' }),
       showGrid: p('boolean', { default: true }),
@@ -272,7 +272,7 @@ export const ANIMATION_KINDS = {
   'char-stagger': { appliesTo: ['text'], fields: ['property', 'keyframes', 'easing', 'stagger'], properties: ['opacity', 'offsetX', 'offsetY', 'scale'], note: 'Runs the keyframes per character, each `stagger` seconds after the previous — opacity = type-on.' },
   'mask-wipe': { appliesTo: 'every type', fields: ['direction', 'keyframes', 'easing'], directions: ['ltr', 'rtl', 'ttb', 'btt', 'radial'], note: 'Keyframes drive a 0 → 1 reveal; radial = iris. Reverse the values to wipe out. `property` is unused.' },
   'char-scramble': { appliesTo: ['text'], fields: ['stagger', 'settleDuration'], note: 'Each character shows random letters until it settles at i·stagger + settleDuration. keyframes may be [].' },
-  'pixel-reveal': { appliesTo: ['knitting-chart'], fields: ['keyframes'], note: 'Keyframes drive 0 → 1; cells appear in drawOrder.' },
+  'pixel-reveal': { appliesTo: ['knitting-chart'], fields: ['keyframes', 'easing'], note: 'Keyframes drive 0 → 1 (use easing "linear"); cells appear in properties.drawOrder, which must be set — without it nothing animates. E.g. { kind: "pixel-reveal", keyframes: [{time:0,value:0},{time:4,value:1}], easing: "linear" }.' },
 }
 
 // The editor's animation presets (AddLayerModal.tsx buildAnimation), so an agent writes the same
