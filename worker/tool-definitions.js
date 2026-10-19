@@ -1206,6 +1206,44 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_vemotion_catalog',
+    description: 'What VEmotion can draw, as structured data: every layer type (text, shape, math-shape, image, video, audio, kg-shape, card, path, knitting-chart, telemetry-track) with each property\'s type, unit, default, range and whether it can be animated; the layer and composition fields; animation kinds and their fields; easings; the formula vocabulary for math-shapes and motion scenes; canvas presets; fonts; and which part libraries exist. Generated from the same rules vemotion_save_composition enforces. Use it to know WHAT exists (e.g. "which properties does a card layer read?"); get_vemotion_reference teaches technique.',
+    input_schema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'list_vemotion_library',
+    description: 'List ready-made VEmotion parts by kind: curves (math-shape presets — roses, stars, spirals, hearts, Lissajous…), shapes (SVG icons for kg-shape layers), cards (card styles), animations (the editor\'s animation previews) or recipes (worked examples with a full composition). The same graphs the VEmotion app\'s pickers read. Returns id, name and a one-line summary per item. Omit kind to list the kinds. Get one with get_vemotion_library_item.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'recipes'], description: 'Which library. Omit to list the kinds.' }
+      }
+    }
+  },
+  {
+    name: 'get_vemotion_library_item',
+    description: 'Return one VEmotion library part as a ready layer to put in a composition as is — the same layer the app\'s picker builds (a curve as a math-shape with its formulas, a shape as a kg-shape with its svgPath, a card with its style) — or, for a recipe, its steps and full example composition. Set position/size, then save with vemotion_save_composition.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        kind: { type: 'string', enum: ['curves', 'shapes', 'cards', 'animations', 'recipes'], description: 'The library, as in list_vemotion_library.' },
+        id: { type: 'string', description: 'The item id from list_vemotion_library, e.g. "curve-rose-8".' }
+      },
+      required: ['kind', 'id']
+    }
+  },
+  {
+    name: 'check_vemotion_composition',
+    description: 'Run the exact gate vemotion_save_composition runs — wrong property names, keyframes on the video clock, text off the canvas, letterSpacing in pixels, formulas the renderer cannot evaluate — and return { ok, problems } WITHOUT saving anything. Pass `composition`, or `compositionId` to check a stored one. Use it to iterate on a draft before saving.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        composition: { type: 'object', description: 'The CompositionData to check: { duration, fps, width, height, layers: [...] }.' },
+        compositionId: { type: 'string', description: 'Check this saved composition instead.' }
+      }
+    }
+  },
+  {
     name: 'list_recordings',
     description: 'List audio recordings from the current user\'s audio portfolio AND their Contact-app recordings. The Contact-app entries here are ONLY the logged interactions that carry an audio file — for a contact\'s full interaction history use search_contacts then get_contact_logs, never this tool. Automatically uses the logged-in user\'s email. Returns recording metadata including titles, durations, tags, transcription status, `recordingId`, and `audioUrl`. Use this to find recordings before transcribing them. IMPORTANT: to transcribe or otherwise act on a recording returned here, pass its `audioUrl` field to transcribe_audio EXACTLY as returned — this always works. Use the returned `recordingId` verbatim if you use it at all; NEVER construct, guess, or derive a recordingId from a filename or timestamp. ALWAYS show the user the returned list (name, date, length, transcription status, recordingId) rather than only reporting how many were found — they need it to pick one. To transcribe several, make ONE transcribe_audio call per recording in the same turn, each with that recording\'s `audioUrl` and its `displayName` as `title`; they are transcribed one after another in the browser.',
     input_schema: {

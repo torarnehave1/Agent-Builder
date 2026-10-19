@@ -37,6 +37,7 @@ const READ_ONLY_TOOLS = new Set([
   // Reference docs (pure reads)
   'get_formatting_reference', 'get_node_types_reference',
   'get_html_builder_reference', 'get_vemotion_reference', 'get_contract',
+  'get_vemotion_catalog', 'list_vemotion_library', 'get_vemotion_library_item', 'check_vemotion_composition',
   // Web / media lookups
   'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash',
   'get_album_images', 'album_list', 'album_get', 'photos_list', 'analyze_image',
@@ -218,6 +219,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // Vemotion
   'vemotion_list_compositions', 'vemotion_get_composition', 'vemotion_save_composition',
   'vemotion_refit_composition', 'vemotion_generate_structure', 'vemotion_create_carousel',
+  'get_vemotion_catalog', 'list_vemotion_library', 'get_vemotion_library_item', 'check_vemotion_composition',
   // Data/app tables
   'query_data_nodes', 'get_app_table_schema', 'query_app_table',
   'create_app_table', 'insert_app_record', 'delete_app_records', 'add_app_table_column',

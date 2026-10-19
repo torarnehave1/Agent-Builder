@@ -137,8 +137,8 @@ Wait for the user to pick before calling \`vemotion_save_composition\`. The prop
    - Source is an album + user just wants a slideshow → call \`vemotion_save_composition\` with \`albumName\` (shortcut). Done.
    - Anything else → call the matching read tool first (\`photos_list\` for an album, \`read_graph_content\` for a graph), then continue with the steps below.
 2. **Decide whether to propose alternatives first.** If the request is specific about look (colors, layout, typography, motion all named or strongly implied), build directly. If vague ("make me an intro", "build a Vemotion video about X"), propose 2–3 numbered alternatives first; wait for the pick.
-3. **Call \`get_vemotion_reference\`** if you haven't yet this session and you'll be in custom mode.
-4. Build the chosen layer array. Pacing rule applies to multi-slide compositions.
+3. **Call \`get_vemotion_reference\`** if you haven't yet this session and you'll be in custom mode. For exact property names, units, defaults and what animates on any layer type, \`get_vemotion_catalog\`; for ready-made parts (curves, SVG shapes, card styles, recipes), \`list_vemotion_library\` + \`get_vemotion_library_item\` — use a part instead of inventing it.
+4. Build the chosen layer array. Pacing rule applies to multi-slide compositions. Run \`check_vemotion_composition\` on the draft and fix every problem it lists — it is the save gate without the save.
 5. Call **vemotion_save_composition** with \`name\` and \`composition\`.
 6. Show the user the \`editorUrl\` returned by the tool.
 7. **STOP.** Do NOT auto-document the composition in the current graph (no \`delegate_to_kg\` to add fulltext nodes about what you just made, no \`create_node\` to log the editorUrl). The user asked for a composition, not for graph entries. Only document in a graph if the user explicitly asks ("save a node for this", "add to the graph", "record it in my notes"). The same applies after \`vemotion_refit_composition\` — return the new editorUrl, do not auto-document.
