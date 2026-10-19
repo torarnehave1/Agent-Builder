@@ -3658,6 +3658,28 @@ function nodeTypeCardOf(t, extra = {}) {
   }
 }
 
+// The keys a look must read, said so the model cannot mistake a label for a key: on 2026-10-19 the
+// first live run wrote metadata['varighet (minutter)'] (the label) while the form writes
+// metadata.varighetMinutter (the key) — the duration would never have shown on a real node.
+const fieldKeyList = (fields) => (fields || []).map((f) => `${f.key} (${f.label}, ${f.kind})`).join(', ')
+
+/** Field keys the look's code never mentions — `metadata.key`, `['key']`, `"key"`. */
+function keysMissingFromLook(impl, fields) {
+  const code = String(impl || '')
+  return (fields || []).filter((f) => f.key && !new RegExp(`(\\.${f.key}\\b|['"\`]${f.key}['"\`])`).test(code)).map((f) => f.key)
+}
+
+/** Sample values given under a field's label (or any case) moved to the field's key. */
+function sampleByKey(sample, fields) {
+  if (!sample || typeof sample !== 'object') return null
+  const out = {}
+  for (const [k, v] of Object.entries(sample)) {
+    const f = (fields || []).find((x) => x.key === k) || (fields || []).find((x) => x.label.toLowerCase() === String(k).toLowerCase() || x.key.toLowerCase() === String(k).toLowerCase())
+    out[f ? f.key : k] = v
+  }
+  return out
+}
+
 const lookWord = (look) => (!look ? 'no look yet' : look.status === 'approved' ? `in use (version ${look.version})` : `draft (version ${look.version}), not in use yet`)
 
 async function executeCreateNodeType(input, env) {
@@ -3668,7 +3690,8 @@ async function executeCreateNodeType(input, env) {
     success: true,
     message: t.alreadyExisted
       ? `"${t.title}" already exists in ${t.world} (${lookWord(t.look)}).`
-      : `Created the type "${t.title}" in ${t.world} with ${t.fields.length} field(s). It has no look yet — give it one with change_node_type_look (type "${t.type}").`,
+      : `Created the type "${t.title}" in ${t.world} with ${t.fields.length} field(s). It has no look yet — give it one with change_node_type_look (type "${t.type}"). ` +
+        `In the look read EXACTLY these keys from d.node.metadata, and use them as the sample keys: ${fieldKeyList(t.fields)}.`,
     type: t.type, world: t.world,
     nodeTypeCard: nodeTypeCardOf(t),
   }
@@ -3676,10 +3699,26 @@ async function executeCreateNodeType(input, env) {
 
 async function executeChangeNodeTypeLook(input, env) {
   if (!input.type || !input.impl) return { success: false, error: 'change_node_type_look needs type and impl.' }
+  // Check the look against the type's real field keys BEFORE saving a draft that would never show
+  // a field. New fields passed in this call are checked when they carry their key.
+  let fields = Array.isArray(input.fields) ? input.fields.filter((f) => f && f.key) : null
+  if (!fields || !fields.length) {
+    const mine = await nodeTypeCall(env, 'mine', { world: input.world || undefined })
+    const current = mine.ok ? (mine.data.types || []).find((x) => x.type === input.type) : null
+    fields = current ? current.fields : []
+  }
+  const missing = keysMissingFromLook(input.impl, fields)
+  if (missing.length) {
+    return {
+      success: false,
+      error: `The look never reads the field key(s) ${missing.join(', ')}. Field values are in d.node.metadata under their KEY, not their label. ` +
+        `Keys: ${fieldKeyList(fields)}. Call change_node_type_look again reading every key (and use the same keys in sample). Nothing was saved.`,
+    }
+  }
   const r = await nodeTypeCall(env, 'look', { type: input.type, impl: input.impl, fields: input.fields, title: input.title, world: input.world || undefined })
   if (!r.ok) return { success: false, error: r.error }
   const t = r.data
-  const sample = input.sample && typeof input.sample === 'object' ? input.sample : null
+  const sample = sampleByKey(input.sample, t.fields)
   return {
     success: true,
     message: `New look for "${t.title}" saved as a draft (version ${t.look.version}). It is not in use until ${t.world}'s founder presses "Ta i bruk" on the preview card.`,

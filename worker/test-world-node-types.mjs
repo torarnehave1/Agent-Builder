@@ -84,10 +84,16 @@ check('patch_node: refused on the platform', !patchPlatform.ok && /not a node ty
   const c = await executeTool('create_node_type', { title: 'Kursmodul', description: 'One module.', fields: [{ label: 'Tittel', kind: 'text' }] }, nenv)
   check('create_node_type posts title/fields, no world when none is given', seen[0].method === 'POST' && seen[0].path === '/node-types/world/create' && !('world' in seen[0].body) && seen[0].body.fields.length === 1, JSON.stringify(seen[0]))
   check('create_node_type returns a card with no look', c.success && c.nodeTypeCard?.type === 'kursmodul' && c.nodeTypeCard.look === null, JSON.stringify(c))
-  const l = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<div>x</div>', sample: { tittel: 'Stillhet' }, sample_label: 'Modul 1' }, nenv)
-  check('change_node_type_look returns a draft card with the code and the sample', l.success && l.nodeTypeCard.look.status === 'pending' && l.nodeTypeCard.look.impl === '<div>x</div>' && l.nodeTypeCard.sample.tittel === 'Stillhet', JSON.stringify(l))
-  const bad = await executeTool('change_node_type_look', { type: 'nope', impl: '<div>x</div>' }, nenv)
+  const l = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<div>x</div><script>m.tittel</script>', sample: { tittel: 'Stillhet' }, sample_label: 'Modul 1' }, nenv)
+  check('change_node_type_look returns a draft card with the code and the sample', l.success && l.nodeTypeCard.look.status === 'pending' && /m\.tittel/.test(l.nodeTypeCard.look.impl) && l.nodeTypeCard.sample.tittel === 'Stillhet', JSON.stringify(l))
+  const bad = await executeTool('change_node_type_look', { type: 'nope', impl: '<div>x</div><script>m.tittel</script>' }, nenv)
   check('a refused look is reported, not thrown', bad.success === false && /Create it first/.test(bad.error), JSON.stringify(bad))
+  // 2026-10-19 live bug: the look read the LABEL, not the key → refused before anything is saved.
+  const before = seen.length
+  const labelLook = await executeTool('change_node_type_look', { type: 'kursmodul', impl: "<script>x=d.node.metadata['Tittel']</script>" }, nenv)
+  check('a look that never reads a field key is refused, naming the key', labelLook.success === false && /tittel/.test(labelLook.error) && !seen.slice(before).some((c) => c.path === '/node-types/world/look'), JSON.stringify(labelLook))
+  const keyed = await executeTool('change_node_type_look', { type: 'kursmodul', impl: '<script>x=d.node.metadata.tittel</script>', sample: { Tittel: 'Stillhet' } }, nenv)
+  check('sample given under the label is moved to the key', keyed.success && keyed.nodeTypeCard.sample.tittel === 'Stillhet' && !('Tittel' in keyed.nodeTypeCard.sample), JSON.stringify(keyed.nodeTypeCard?.sample))
   const m = await executeTool('list_my_node_types', {}, nenv)
   check('list_my_node_types leaves the code out', m.success && m.types.length === 1 && !JSON.stringify(m).includes('secret draft code') && /in use/.test(m.message), JSON.stringify(m))
 }
