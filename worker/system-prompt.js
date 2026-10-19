@@ -947,9 +947,11 @@ Same convention for ellipses (subtract half of each axis), rectangles (top-left 
 
 **text**
 \`\`\`
-{ text, fontSize, color, align: 'left'|'center'|'right', fontWeight, fontFamily?,
-  fillMode?: 'solid'|'image', fillSource?: <URL>, fillFit?: 'cover'|'contain'|'fill' }
+{ text, fontSize, color, align: 'left'|'center'|'right', fontWeight, fontFamily?, lineHeight?,
+  letterSpacing?, fillMode?: 'solid'|'image', fillSource?: <URL>, fillFit?: 'cover'|'contain'|'fill' }
 \`\`\`
+
+\`letterSpacing\` is in **em** — a fraction of \`fontSize\`, never pixels: \`0.05\` puts 5% of the font size between letters, \`0\` is the font's own spacing, range −0.2 to 1. It scales with the font, so refit leaves it alone. It is animatable — a tracking-in: \`{ property: 'letterSpacing', keyframes: [{ time: 0, value: 0.4 }, { time: 1.2, value: 0.02 }], easing: 'easeOut' }\`. A pixel value (e.g. \`8\`) is refused with the em to use.
 
 **shape**
 \`\`\`

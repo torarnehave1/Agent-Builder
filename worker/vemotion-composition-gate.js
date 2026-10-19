@@ -19,7 +19,7 @@
 // fails on drift.
 
 export const VOCABULARY = {
-  text: ['align', 'anchors', 'closed', 'color', 'fill', 'fillFit', 'fillMode', 'fillSource', 'fontFamily', 'fontSize', 'fontWeight', 'lineHeight', 'motionScenes', 'offsetX', 'offsetY', 'opacity', 'rotation', 'scale', 'shadow', 'shape', 'strokeWidth', 'text', 'textAlign'],
+  text: ['align', 'anchors', 'closed', 'color', 'fill', 'fillFit', 'fillMode', 'fillSource', 'fontFamily', 'fontSize', 'fontWeight', 'letterSpacing', 'lineHeight', 'motionScenes', 'offsetX', 'offsetY', 'opacity', 'rotation', 'scale', 'shadow', 'shape', 'strokeWidth', 'text', 'textAlign'],
   shape: ['anchors', 'borderRadius', 'closed', 'color', 'fill', 'fillMode', 'filled', 'motionScenes', 'offsetX', 'offsetY', 'opacity', 'rotation', 'scale', 'shape', 'strokeColor', 'strokeWidth'],
   'math-shape': ['anchors', 'closePath', 'closed', 'color', 'drawProgress', 'fill', 'mathKind', 'motionScenes', 'offsetX', 'offsetY', 'opacity', 'samples', 'scale', 'shape', 'stroke', 'strokeWidth', 'tEnd', 'tStart', 'xFormula', 'yFormula'],
 }
@@ -30,7 +30,6 @@ const HINTS = {
   text: {
     fillColor: 'use `color`',
     verticalAlign: 'not supported — text is always centred vertically in its box; place the box with position.y and size.height',
-    letterSpacing: 'not supported by the renderer — remove it',
     textColor: 'use `color`',
     fontColor: 'use `color`',
     font: 'use `fontFamily`',
@@ -56,7 +55,7 @@ const HINTS = {
 const SHAPES = ['rect', 'rectangle', 'circle', 'ellipse']
 
 const ANIMATABLE = {
-  text: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'fontSize'],
+  text: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'fontSize', 'letterSpacing'],
   shape: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'borderRadius', 'strokeWidth'],
   'math-shape': ['opacity', 'offsetX', 'offsetY', 'scale', 'drawProgress', 'strokeWidth'],
 }
@@ -69,6 +68,18 @@ const EPS = 1e-6
 const MAX_LISTED = 30
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
+
+// letterSpacing is in em — a fraction of fontSize (decision-vemotion-letterspacing-em,
+// 2026-10-19). Models write CSS/canvas pixels by habit (`8` meaning 8px), which in em is eight
+// font-sizes between letters. Anything outside this range is refused with the em value to use.
+const LETTER_SPACING_MIN = -0.2
+const LETTER_SPACING_MAX = 1
+function letterSpacingProblem(where, value, fontSize, label = '`letterSpacing`') {
+  if (!isNum(value)) return `${where}: ${label} must be a number in em (a fraction of fontSize), e.g. 0.05`
+  if (value >= LETTER_SPACING_MIN && value <= LETTER_SPACING_MAX) return null
+  const asEm = round(value / (fontSize || 48))
+  return `${where}: ${label} is ${value}, but letterSpacing is in em (a fraction of fontSize), not pixels — ${value}px at fontSize ${fontSize || 48} is ${asEm}. Use a value between ${LETTER_SPACING_MIN} and ${LETTER_SPACING_MAX}.`
+}
 const round = (v) => Math.round(v * 100) / 100
 
 export function checkVemotionComposition(composition) {
@@ -95,6 +106,18 @@ export function checkVemotionComposition(composition) {
       }
     }
 
+    if (layer.type === 'text') {
+      const fs = isNum(props.fontSize) ? props.fontSize : 48
+      if (props.letterSpacing !== undefined) {
+        const p = letterSpacingProblem(where, props.letterSpacing, fs)
+        if (p) problems.push(p)
+      }
+      for (const a of [layer.animation, ...(Array.isArray(layer.animations) ? layer.animations : [])]) {
+        if (!a || a.property !== 'letterSpacing' || !Array.isArray(a.keyframes)) continue
+        const bad = a.keyframes.find((k) => isNum(k?.value) && (k.value < LETTER_SPACING_MIN || k.value > LETTER_SPACING_MAX))
+        if (bad) problems.push(letterSpacingProblem(where, bad.value, fs, 'a letterSpacing keyframe value'))
+      }
+    }
     if (layer.type === 'shape' && props.shape !== undefined && !SHAPES.includes(props.shape)) {
       problems.push(`${where}: shape "${props.shape}" is not drawn (it renders as a rectangle) — use "rect" or "circle", or a \`path\` layer with corner anchors / a \`math-shape\` for any other outline`)
     }
@@ -155,7 +178,9 @@ function checkTextPlacement(layer, props, anims, where, canvasW, canvasH) {
   const align = props.align ?? props.textAlign ?? 'left'
 
   // Word-wrap to the box width the way the renderer does, with estimated glyph widths.
-  const charW = CHAR_WIDTH * fontSize
+  // letterSpacing (em) widens every glyph advance; negative spacing never makes a glyph narrower than 0.
+  const spacing = isNum(props.letterSpacing) ? props.letterSpacing * fontSize : 0
+  const charW = Math.max(0, CHAR_WIDTH * fontSize + spacing)
   const lines = []
   let current = ''
   for (const word of text.split(' ')) {
@@ -195,6 +220,6 @@ export function formatVemotionGateError(problems, toolName) {
     `Vemotion would draw this composition wrong, so ${toolName} did NOT save it. Fix ${problems.length === 1 ? 'this problem' : `these ${problems.length} problems`} and call ${toolName} again with the corrected composition:`,
     ...shown.map((p, i) => `${i + 1}. ${p}`),
     ...(more > 0 ? [`…and ${more} more of the same kinds.`] : []),
-    'Renderer vocabulary — text: text, fontSize, fontFamily, fontWeight, color, align, lineHeight. shape: shape ("rect" | "circle"), color, borderRadius, strokeColor + strokeWidth, filled. math-shape: xFormula, yFormula, stroke, strokeWidth, fill, tStart, tEnd, samples, closePath. Keyframe times are relative to the layer\'s startTime. `position` is the top-left of the layer box.',
+    'Renderer vocabulary — text: text, fontSize, fontFamily, fontWeight, color, align, lineHeight, letterSpacing (em: a fraction of fontSize, e.g. 0.05). shape: shape ("rect" | "circle"), color, borderRadius, strokeColor + strokeWidth, filled. math-shape: xFormula, yFormula, stroke, strokeWidth, fill, tStart, tEnd, samples, closePath. Keyframe times are relative to the layer\'s startTime. `position` is the top-left of the layer box.',
   ].join('\n')
 }

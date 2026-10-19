@@ -58,7 +58,8 @@ function repair(composition) {
     const p = layer.properties
     if ('fillColor' in p) { p.color = p.fillColor; delete p.fillColor }
     if ('shapeType' in p) { p.shape = p.shapeType; delete p.shapeType }
-    delete p.letterSpacing
+    // letterSpacing is in em (2026-10-19): the post's 8 meant 8px.
+    if (typeof p.letterSpacing === 'number' && p.letterSpacing > 1) p.letterSpacing = p.letterSpacing / (p.fontSize ?? 48)
     const start = layer.startTime ?? 0
     for (const a of [layer.animation, ...(layer.animations ?? [])].filter(Boolean)) {
       if (start > 0 && Math.min(...a.keyframes.map((k) => k.time)) >= start) {
@@ -81,7 +82,7 @@ expectProblems('Sidrat al-Muntaha post (as saved) is refused', fixtures.broken.s
   'layer "text-arabic" (text): `position` is the TOP-LEFT',
 ])
 expectProblems('Bodhi-treet post (as saved) is refused', fixtures.broken.bodhiTreet, [
-  'layer "title" (text): property `letterSpacing`',
+  'layer "title" (text): `letterSpacing` is 8, but letterSpacing is in em',
   'layer "leaf-center" (shape): property `shapeType`',
   'layer "subtitle" (text): keyframe times run 3.2–6s',
   'layer "title" (text): `position` is the TOP-LEFT',
@@ -95,6 +96,20 @@ expectClean('Bodhi-treet post (repaired) passes', repair(fixtures.broken.bodhiTr
 //    layer that starts above the canvas on purpose.
 expectClean('real composition "Venn + dots example" passes', fixtures.clean.vennDots)
 expectClean('real composition "Mountain Ridge with Rising Moon" passes', fixtures.clean.mountainRidge)
+
+// letterSpacing in em, animatable (decision-vemotion-letterspacing-em, 2026-10-19).
+const spaced = (props, animation) => ({
+  width: 1080, height: 1920, duration: 4, fps: 30,
+  layers: [{ id: 't', type: 'text', position: { x: 90, y: 860 }, size: { width: 900, height: 200 },
+    properties: { text: 'NAMAHA', fontSize: 96, color: '#ffffff', align: 'center', ...props }, ...(animation ? { animation } : {}) }],
+})
+expectClean('letterSpacing in em passes', spaced({ letterSpacing: 0.05 }))
+expectClean('a tracking-in (animated letterSpacing) passes',
+  spaced({ letterSpacing: 0.02 }, { property: 'letterSpacing', keyframes: [{ time: 0, value: 0.4 }, { time: 1.2, value: 0.02 }] }))
+expectProblems('letterSpacing written in pixels is refused with the em to use', spaced({ letterSpacing: 8 }),
+  ['layer "t" (text): `letterSpacing` is 8, but letterSpacing is in em (a fraction of fontSize), not pixels — 8px at fontSize 96 is 0.08'])
+expectProblems('an animated letterSpacing in pixels is refused', spaced({}, { property: 'letterSpacing', keyframes: [{ time: 0, value: 20 }, { time: 1, value: 2 }] }),
+  ['layer "t" (text): a letterSpacing keyframe value is 20, but letterSpacing is in em'])
 
 // 5. Shapes observed in stored compositions that the renderer silently mis-draws.
 {
