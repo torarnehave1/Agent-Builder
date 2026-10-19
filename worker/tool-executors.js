@@ -34,6 +34,7 @@ import { checkVemotionComposition, formatVemotionGateError } from './vemotion-co
 import { buildVemotionCatalog } from './vemotion-catalog.js'
 import { listVemotionLibrary, getVemotionLibraryItem, vemotionCurveAppendix } from './vemotion-library.js'
 import { getVemotionMediaInfo, listVemotionVideos, importVemotionVideo } from './vemotion-media.js'
+import { setDrawingPace } from './vemotion-timing.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -17774,6 +17775,19 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     }
     case 'vemotion_list_audio':
       return await executeVemotionListAudio(toolInput, env)
+    case 'vemotion_set_drawing_pace': {
+      // Load → recompute every timing deterministically (vemotion-timing.js) → save in place.
+      const loaded = await executeVemotionGetComposition(toolInput, env)
+      const { composition, report } = setDrawingPace(loaded.composition, toolInput)
+      const saved = await executeVemotionSaveComposition({ ...toolInput, compositionId: loaded.compositionId, name: loaded.name || undefined, composition }, env)
+      return {
+        message: `"${report.layerId}" now draws ${report.stitches} stitches at ${report.secondsPerStitch} s each (${report.drawingSeconds} s); the last stitch is at ${report.lastStitchAt} s, then a ${report.holdSeconds} s hold — the video is ${report.duration} s.` +
+          (report.movedLayers.length ? ` Moved to follow the drawing: ${report.movedLayers.join(', ')}.` : '') + ' Saved in place.',
+        ...report,
+        compositionId: saved.compositionId,
+        editorUrl: saved.editorUrl,
+      }
+    }
     case 'who_am_i':
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':

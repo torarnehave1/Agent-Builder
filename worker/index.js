@@ -3272,6 +3272,7 @@ export default {
           'vemotion_import_video',
           'vemotion_list_audio',
           'get_vemotion_media_info',
+          'vemotion_set_drawing_pace', // 2026-10-19: the server does the timing arithmetic
         ])
         const callerAuth = await resolveCallerAuth(request, env)
         if (!callerAuth.token) {

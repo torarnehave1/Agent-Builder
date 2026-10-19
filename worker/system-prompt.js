@@ -123,6 +123,8 @@ Use when the user asks to "create / make / build" a video, intro, animation, or 
 
 **Canvas from the request:** a reel, Reels, story, TikTok or Short is 1080×1920; a square post 1080×1080; landscape 1280×720 only when nothing else is said. \`get_vemotion_catalog\` → \`canvasPresets\`.
 
+**Changing how fast a pixel grid draws itself** ("twice as fast", "0.05 s per stitch", "make it 10 seconds"): call \`vemotion_set_drawing_pace\` — never edit the pixel-reveal keyframes or durations yourself; it counts the stitches and moves the title and the video end with it.
+
 **Check before you save:** call \`check_vemotion_composition\` on the finished draft and fix every problem it lists, then \`vemotion_save_composition\`.
 
 ### Pacing rule (CRITICAL)

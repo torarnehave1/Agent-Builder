@@ -1253,6 +1253,22 @@ const TOOL_DEFINITIONS = [
     input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Part of the name or a tag.' }, vemotionOnly: { type: 'boolean', description: 'Only recordings tagged "vemotion".' }, limit: { type: 'number', description: 'Max listed (default 50).' } } }
   },
   {
+    name: 'vemotion_set_drawing_pace',
+    description: 'Change how fast a pixel grid (knitting-chart) draws itself stitch by stitch, and keep the composition in step — USE THIS instead of editing keyframes yourself. The server counts the stitches in drawOrder, sets the drawing time, keeps the grid on screen to the end, moves the layers that followed the drawing (e.g. a title) so they start at the last stitch, keeps the hold at the end (or sets holdSeconds), sets the video length, and saves in place. Give ONE of speedFactor (2 = twice as fast, 0.5 = half speed), secondsPerStitch (e.g. 0.05) or totalSeconds.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        compositionId: { type: 'string', description: 'The composition, from vemotion_list_compositions.' },
+        layerId: { type: 'string', description: 'The grid layer — only needed when several grids draw themselves.' },
+        speedFactor: { type: 'number', description: '2 = twice as fast, 0.5 = half as fast.' },
+        secondsPerStitch: { type: 'number', description: 'e.g. 0.1 (the app\'s fastest) or 0.05.' },
+        totalSeconds: { type: 'number', description: 'How long the whole drawing should take.' },
+        holdSeconds: { type: 'number', description: 'Seconds after the last stitch before the video ends. Default: keep the current hold.' }
+      },
+      required: ['compositionId']
+    }
+  },
+  {
     name: 'check_vemotion_composition',
     description: 'Run the exact gate vemotion_save_composition runs — wrong property names, keyframes on the video clock, text off the canvas, letterSpacing in pixels, formulas the renderer cannot evaluate — and return { ok, problems } WITHOUT saving anything. Pass `composition`, or `compositionId` to check a stored one. Use it to iterate on a draft before saving.',
     input_schema: {
