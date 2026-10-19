@@ -31,6 +31,8 @@ import { runYoutubeGraphSubagent } from './youtube-graph-subagent.js'
 import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { githubApiRequest, githubPaginate, assertGithubWriteAllowed } from './github.js'
 import { checkVemotionComposition, formatVemotionGateError } from './vemotion-composition-gate.js'
+import { buildVemotionCatalog } from './vemotion-catalog.js'
+import { listVemotionLibrary, getVemotionLibraryItem } from './vemotion-library.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
 
 // ── Graph operations ──────────────────────────────────────────────
@@ -9590,6 +9592,60 @@ async function fetchAlbumImageKeys({ env, authToken, albumName }) {
   return images.map(img => img?.key).filter(k => typeof k === 'string' && k.length > 0)
 }
 
+// The composition exactly as vemotion_save_composition stores it — defaults filled in, duration
+// derived from the layers. check_vemotion_composition runs the gate on this same object, so
+// "check" and "save" can never disagree about what is wrong.
+function normalizeVemotionComposition(inputComp, layers) {
+  // Derive duration from layers (max of startTime + layerDuration) if not provided.
+  let derivedDuration = 5
+  for (const layer of layers) {
+    const start = typeof layer?.startTime === 'number' ? layer.startTime : 0
+    const dur = typeof layer?.layerDuration === 'number' ? layer.layerDuration : null
+    if (dur !== null) {
+      const candidate = start + dur
+      if (candidate > derivedDuration) derivedDuration = candidate
+    }
+  }
+
+  // Spread first, then set the fields that have defaults. Rebuilding from named fields dropped
+  // everything else the caller sent — `meta` above all (carousel slide markers, audioTrack,
+  // description/tags, guides, mm scale), which 70 of 176 stored compositions carry (L92 v2).
+  const composition = {
+    ...inputComp,
+    duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
+    fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
+    width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
+    height: typeof inputComp.height === 'number' ? inputComp.height : 720,
+    layers,
+  }
+  if (composition.fontFamily !== undefined && typeof composition.fontFamily !== 'string') delete composition.fontFamily
+  if (composition.groups !== undefined && !Array.isArray(composition.groups)) delete composition.groups
+  return composition
+}
+
+// Check a composition against the gate WITHOUT saving it (check_vemotion_composition, 2026-10-19).
+// Same normalisation and the same checkVemotionComposition as vemotion_save_composition, so a
+// composition that checks clean saves clean. Pass `composition`, or `compositionId` to check a
+// stored one.
+async function executeCheckVemotionComposition(input, env) {
+  let inputComp = input?.composition && typeof input.composition === 'object' ? input.composition : null
+  if (!inputComp && typeof input?.compositionId === 'string' && input.compositionId.trim()) {
+    inputComp = (await executeVemotionGetComposition({ ...input, compositionId: input.compositionId.trim() }, env)).composition
+  }
+  const layers = Array.isArray(inputComp?.layers) ? inputComp.layers : []
+  if (layers.length === 0) throw new Error('Provide `composition` with a non-empty layers array (or `compositionId`).')
+  const composition = normalizeVemotionComposition(inputComp, layers)
+  const problems = checkVemotionComposition(composition)
+  return {
+    message: problems.length === 0
+      ? `No problems — vemotion_save_composition would accept this composition (${layers.length} layer(s), ${composition.width}×${composition.height}, ${composition.duration}s). Nothing was saved.`
+      : `${problems.length} problem(s) — vemotion_save_composition would refuse this composition. Nothing was saved.`,
+    ok: problems.length === 0,
+    problems,
+    checked: { width: composition.width, height: composition.height, duration: composition.duration, fps: composition.fps, layers: layers.length },
+  }
+}
+
 async function executeVemotionSaveComposition(input, env) {
   const authToken = getAuthTokenFromToolInput(input)
   if (!authToken) {
@@ -9638,30 +9694,7 @@ async function executeVemotionSaveComposition(input, env) {
       throw new Error('Provide either `composition` (with non-empty layers) OR `albumName` (shortcut for a slideshow).')
     }
 
-    // Derive duration from layers (max of startTime + layerDuration) if not provided.
-    let derivedDuration = 5
-    for (const layer of layers) {
-      const start = typeof layer?.startTime === 'number' ? layer.startTime : 0
-      const dur = typeof layer?.layerDuration === 'number' ? layer.layerDuration : null
-      if (dur !== null) {
-        const candidate = start + dur
-        if (candidate > derivedDuration) derivedDuration = candidate
-      }
-    }
-
-    // Spread first, then set the fields that have defaults. Rebuilding from named fields dropped
-    // everything else the caller sent — `meta` above all (carousel slide markers, audioTrack,
-    // description/tags, guides, mm scale), which 70 of 176 stored compositions carry (L92 v2).
-    composition = {
-      ...inputComp,
-      duration: typeof inputComp.duration === 'number' ? inputComp.duration : derivedDuration,
-      fps: typeof inputComp.fps === 'number' ? inputComp.fps : 30,
-      width: typeof inputComp.width === 'number' ? inputComp.width : 1280,
-      height: typeof inputComp.height === 'number' ? inputComp.height : 720,
-      layers,
-    }
-    if (composition.fontFamily !== undefined && typeof composition.fontFamily !== 'string') delete composition.fontFamily
-    if (composition.groups !== undefined && !Array.isArray(composition.groups)) delete composition.groups
+    composition = normalizeVemotionComposition(inputComp, layers)
 
     // The save endpoint accepts any `properties`, so a composition in the wrong vocabulary saves
     // "successfully" and renders blank (2026-09-11). Refuse it here, naming each field to fix.
@@ -17670,6 +17703,16 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return { reference: HTML_BUILDER_REFERENCE }
     case 'get_vemotion_reference':
       return { reference: VEMOTION_REFERENCE }
+    case 'get_vemotion_catalog': {
+      const catalog = buildVemotionCatalog()
+      return { message: `VEmotion catalog: ${Object.keys(catalog.layerTypes).length} layer types with their properties, ${Object.keys(catalog.animationKinds).length} animation kinds, easings, formula vocabulary, canvas presets, fonts and libraries`, catalog }
+    }
+    case 'list_vemotion_library':
+      return await listVemotionLibrary(toolInput, env)
+    case 'get_vemotion_library_item':
+      return await getVemotionLibraryItem(toolInput, env)
+    case 'check_vemotion_composition':
+      return await executeCheckVemotionComposition(toolInput, env)
     case 'who_am_i':
       return await executeWhoAmI(toolInput, env)
     case 'list_recordings':

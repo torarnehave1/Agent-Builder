@@ -3247,7 +3247,7 @@ export default {
       // Same shape as /publish/html-node: the caller's own credential, the executors untouched.
       // The MCP server forwards here instead of keeping a second copy, so checkVemotionComposition
       // (the gate that refuses blank-canvas compositions) and the meta merge on update stay ONE
-      // implementation. Only these five tools are reachable; anything else is refused.
+      // implementation. Only these tools are reachable; anything else is refused.
       if (pathname === '/vemotion/tool' && request.method === 'POST') {
         const VEMOTION_MCP_TOOLS = new Set([
           'vemotion_list_compositions',
@@ -3255,6 +3255,11 @@ export default {
           'vemotion_save_composition',
           'get_vemotion_reference',
           'vemotion_refit_composition', // 2026-10-19: reformat for Reels/Square from Claude via MCP
+          // 2026-10-19: discover / check — read-only, the vocabulary and libraries as data
+          'get_vemotion_catalog',
+          'list_vemotion_library',
+          'get_vemotion_library_item',
+          'check_vemotion_composition',
         ])
         const callerAuth = await resolveCallerAuth(request, env)
         if (!callerAuth.token) {

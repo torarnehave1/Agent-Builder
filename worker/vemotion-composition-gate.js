@@ -54,7 +54,7 @@ const HINTS = {
 
 const SHAPES = ['rect', 'rectangle', 'circle', 'ellipse']
 
-const ANIMATABLE = {
+export const ANIMATABLE = {
   text: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'fontSize', 'letterSpacing'],
   shape: ['opacity', 'offsetX', 'offsetY', 'scale', 'rotation', 'borderRadius', 'strokeWidth'],
   'math-shape': ['opacity', 'offsetX', 'offsetY', 'scale', 'drawProgress', 'strokeWidth'],
