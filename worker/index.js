@@ -3242,6 +3242,41 @@ export default {
         })
       }
 
+      // VEmotion composition tools, for the MCP server (dev-worker) — 2026-10-19.
+      //
+      // Same shape as /publish/html-node: the caller's own credential, the executors untouched.
+      // The MCP server forwards here instead of keeping a second copy, so checkVemotionComposition
+      // (the gate that refuses blank-canvas compositions) and the meta merge on update stay ONE
+      // implementation. Only these four tools are reachable; anything else is refused.
+      if (pathname === '/vemotion/tool' && request.method === 'POST') {
+        const VEMOTION_MCP_TOOLS = new Set([
+          'vemotion_list_compositions',
+          'vemotion_get_composition',
+          'vemotion_save_composition',
+          'get_vemotion_reference',
+        ])
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const tool = String(body.tool || '')
+        if (!VEMOTION_MCP_TOOLS.has(tool)) {
+          return new Response(JSON.stringify({ error: `Not a VEmotion tool reachable here: ${tool || '(none)'}` }), { status: 400, headers: corsHeaders })
+        }
+        const input = body.input && typeof body.input === 'object' && !Array.isArray(body.input) ? body.input : {}
+        // Identity comes from the credential only; whatever the input says about it is dropped.
+        delete input.authToken
+        delete input.authContext
+        delete input.userId
+        try {
+          const result = await executeTool(tool, { ...input, authToken: callerAuth.token, userId: callerAuth.userId }, env, {})
+          return new Response(JSON.stringify({ success: true, result }), { headers: corsHeaders })
+        } catch (e) {
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status: 400, headers: corsHeaders })
+        }
+      }
+
       // Set a World's email template / brand / signature, for a caller outside this app.
       //
       // Built 2026-10-03 so the MCP server has one implementation to reach rather than a fourth
