@@ -9264,7 +9264,7 @@ async function executeGetWorldEmailTemplates(input, env) {
       ? `Templates: ${templates.map((t) => `${t.purpose}/${t.language} — "${t.subject}"`).join('; ')}.`
       : 'No templates.',
     `Login e-mail: ${hasLogin ? "uses this World's login template" : 'no login template — the built-in Vegvisr default is sent'}` +
-      (login.applies ? `, sent from ${login.sender}.` : `. ${login.reason}`),
+      (login.applies ? ` (sender: ${login.sender}).` : `. ${login.reason}`),
     brand ? `Brand: ${brand.name || '(no name)'}${brand.logo ? ', has logo' : ', no logo'}, accent ${brand.accent || 'none'}${brand.fromEmail ? `, from ${brand.fromEmail}` : ''}.` : 'No brand.',
     signatures.length ? `Signatures: ${signatures.map((s) => s.name + (s.isDefault ? ' (default)' : '')).join(', ')}.` : 'No signatures.',
   ].filter(Boolean)
