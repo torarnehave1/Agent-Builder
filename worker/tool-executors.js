@@ -4498,7 +4498,11 @@ async function executeTagAlbumImages(input, env) {
   const listed = await photosApiFetch({ env, authToken, path: `/list-r2-images?album=${encodeURIComponent(album)}` })
   const all = listed?.images || []
   // Photos first (the vision model reads them); SVGs after (described from their source).
-  const todo = all.filter((img) => input?.retag || !(Array.isArray(img.tags) && img.tags.length))
+  // Albums also hold videos (reels, clips); a vision model cannot read them and loading one ran
+  // photos-worker out of memory (2026-10-20 all-albums run). They are skipped, not failed.
+  const isVideo = (k) => /\.(mp4|mov|webm|m4v|avi)$/i.test(k)
+  const skipped = all.filter((img) => isVideo(img.key)).length
+  const todo = all.filter((img) => !isVideo(img.key) && (input?.retag || !(Array.isArray(img.tags) && img.tags.length)))
     .sort((a, b) => Number(/\.svg$/i.test(a.key)) - Number(/\.svg$/i.test(b.key)))
   const limit = Math.min(Math.max(Number(input?.limit) || 10, 1), 25)
   const tagged = [], failed = []
@@ -4515,11 +4519,12 @@ async function executeTagAlbumImages(input, env) {
   }
   const left = todo.length - tagged.length - failed.length
   return {
-    message: `Tagged ${tagged.length} image(s) in "${album}"${failed.length ? `, ${failed.length} failed` : ''}; ${left} still without tags${left ? ' — call again to continue' : ''}.`,
+    message: `Tagged ${tagged.length} image(s) in "${album}"${failed.length ? `, ${failed.length} failed` : ''}; ${left} still without tags${left ? ' — call again to continue' : ''}${skipped ? ` (${skipped} video file(s) skipped)` : ''}.`,
     album,
     tagged,
     failed,
     remaining: left,
+    skippedVideos: skipped,
   }
 }
 
