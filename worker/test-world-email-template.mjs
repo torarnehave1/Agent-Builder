@@ -260,6 +260,46 @@ const sigNamed = (graphs, name) => sigs(graphs).find((n) => n.metadata.name === 
   check('an agent@vegvisr.org stamp is replaced, not preserved', repaired.owner === 'post@nibi.no', JSON.stringify(repaired.owner))
 }
 
+// 11. Read, preview, remove (2026-10-20). A Superadmin serving a new founder changed a login
+//     e-mail blind: there was no way to see what a World had, preview it, or go back to default.
+{
+  const { env, graphs } = makeEnv()
+  const tool = async (name, input) => { try { return await executeTool(name, input, env) } catch (e) { return { thrown: e.message } } }
+
+  const empty = await tool('get_world_email_templates', { userId: 'owner-uuid', domain: 'nibi.no' })
+  check('a World with no graph reads as empty, and says the default is sent', empty.success === true && empty.graphId === null && /built-in Vegvisr default/.test(empty.message), JSON.stringify(empty))
+
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'login', language: 'no', brand: { name: 'Nibi', accent: '#1f3a5f', footer: 'Nibi · nibi.no' } })
+  await run(env, { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'velkommen', language: 'no', subject: 'Velkommen {name}', body: '<p>Hei {name}</p>' })
+
+  const got = await tool('get_world_email_templates', { userId: 'owner-uuid', domain: 'nibi.no' })
+  check('lists both templates with subject and brand', got.success === true && got.templates.length === 2 && got.templates.some((t) => t.purpose === 'login' && t.subject === 'Logg inn hos {brandName}') && got.brand?.name === 'Nibi', JSON.stringify(got.templates))
+  check('listed HTML has no edit markers', got.templates.every((t) => !/edit:[a-z-]+:start/.test(t.html)), got.templates[0]?.html)
+  check('a founder with no stored sender credential is told the login e-mail does not use it', got.loginUsesWorldTemplate === false && /no sender account/.test(got.message), got.message)
+
+  const stranger = await tool('get_world_email_templates', { userId: 'other', domain: 'nibi.no' })
+  check('a stranger cannot read another World\'s templates', stranger.success === false && /Only a Superadmin or the World Founder/.test(stranger.error), JSON.stringify(stranger))
+  const founder = await tool('get_world_email_templates', { userId: 'b8e7', domain: 'nibi.no' })
+  check('the founder can read their own', founder.success === true, JSON.stringify(founder))
+
+  const pv = await tool('preview_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no' })
+  check('preview fills brand and an example link, sends nothing', pv.success === true && pv.sent === false && pv.subject === 'Logg inn hos Nibi' && /https:\/\/nibi\.no\/\?magic=EKSEMPEL-LENKE/.test(pv.html) && /#1f3a5f/.test(pv.html) && !/\{brandName\}|\{magicLink\}/.test(pv.html), JSON.stringify({ subject: pv.subject, err: pv.error }))
+  const pvEn = await tool('preview_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no', language: 'en' })
+  check('a missing language falls back to the one actually sent, and says so', pvEn.success === true && pvEn.language === 'no' && /no "en" version/.test(pvEn.message), pvEn.message)
+  const pvV = await tool('preview_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'velkommen' })
+  check('an unfilled placeholder is reported', pvV.success === true && pvV.unresolvedPlaceholders.includes('name'), JSON.stringify(pvV.unresolvedPlaceholders))
+  const pvNone = await tool('preview_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'meeting' })
+  check('previewing a purpose that does not exist names what does', pvNone.success === false && /login/.test(pvNone.error) && /velkommen/.test(pvNone.error), JSON.stringify(pvNone))
+
+  const rmStranger = await tool('remove_world_email_template', { userId: 'other', domain: 'nibi.no', purpose: 'login' })
+  check('a stranger cannot remove', rmStranger.success === false && [...graphs.values()][0].nodes.some((n) => n.metadata?.purpose === 'login'), JSON.stringify(rmStranger))
+  const rm = await tool('remove_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'velkommen' })
+  const g = [...graphs.values()][0]
+  check('remove drops only that template, keeps login, brand', rm.success === true && !g.nodes.some((n) => n.metadata?.purpose === 'velkommen') && g.nodes.some((n) => n.metadata?.purpose === 'login') && g.nodes.some((n) => n.type === 'email-brand'), JSON.stringify(rm))
+  const rmAgain = await tool('remove_world_email_template', { userId: 'owner-uuid', domain: 'nibi.no', purpose: 'velkommen' })
+  check('removing what is not there is refused, naming what is', rmAgain.success === false && /login\/no/.test(rmAgain.error), JSON.stringify(rmAgain))
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — World email template: built-in body, accent from logo, caller gate, signatures, ownership.')
 process.exit(failures ? 1 : 0)

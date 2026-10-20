@@ -349,12 +349,15 @@ Show:
 - Do NOT call \`set_world_email_template\` until the summary is confirmed.
 
 **Step 1 — World**: "Hvilken World gjelder det? (f.eks. nibi.no)". Confirm it is a registered World (\`onboarding_status\` / world_founders). Store \`domain\`.
+Then call \`get_world_email_templates(domain)\` and tell the user what the World has NOW (its templates, brand, and whether the login e-mail uses them) before asking anything else. A Superadmin may do all of this for any World.
 **Step 2 — Language**: "Norsk, engelsk eller begge?" Default norsk. Store the list (\`no\`, \`en\`).
 **Step 3 — Name**: "Hvilket navn skal stå i e-posten?" Default: the World name (capitalised domain stem, e.g. "Nibi"). Store \`brand.name\` and use it for \`brand.fromName\` too.
 **Step 4 — Logo**: "Har du en logo? Lim inn bildelenken eller slipp bildet her — eller si 'hopp over'." A dropped/pasted image is already on imgix: use its imgix URL and append \`?h=96\` (sharp at 48 px). Store \`brand.logo\`, or leave it empty (the template then has no logo row).
 **Step 5 — Colour**: with a logo, recommend \`accent: "auto"\` ("Jeg velger en farge fra logoen som hvit knappetekst er lesbar på") and accept a hex instead if the user gives one. Without a logo, ask for a hex; default \`#1f3a5f\`.
 **Step 6 — Footer**: default "<name> · <domain>". Store \`brand.footer\`.
 **Step 7 — Sender**: default \`post@<domain>\` when that sender exists for the World (\`list_email_accounts\` with the founder's email, or it was set up earlier). Store \`brand.fromEmail\`. If no sender exists on the domain, say so — the email-worker then falls back to another sender — and continue.
+
+**Other template jobs**: "vis e-postmalene for X" → \`get_world_email_templates\`. "forhåndsvis" → \`preview_world_email_template\` (sends nothing). "fjern / tilbakestill login-malen" → confirm first, then \`remove_world_email_template(domain, purpose, language)\`; the World falls back to the built-in Vegvisr e-mail.
 
 **Summary** (after step 7):
 > World: **{domain}** · språk: {languages}
@@ -363,7 +366,7 @@ Show:
 >
 > Skal jeg lagre innloggings-e-posten?
 
-**On confirm**: call \`set_world_email_template(domain, purpose "login", language, brand)\` once per language — pass \`brand\` on the first call only. Report the accent actually stored (\`accent_pick\` when "auto") and the subject. Then tell the user how to see it: log in at \`https://me.<domain>\` and open the email — sent from {fromEmail}, subject "Logg inn hos {name}" / "Sign in to {name}".
+**On confirm**: call \`set_world_email_template(domain, purpose "login", language, brand)\` once per language — pass \`brand\` on the first call only. Report the accent actually stored (\`accent_pick\` when "auto") and the subject. Then call \`preview_world_email_template(domain, "login", language)\` and show the subject and what the e-mail says. Then tell the user how to see it for real: log in at \`https://me.<domain>\` and open the email — sent from {fromEmail}, subject "Logg inn hos {name}" / "Sign in to {name}".
 
 ## Building a World's Public Homepage — registry-driven wizard
 

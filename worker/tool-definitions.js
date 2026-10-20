@@ -1826,6 +1826,43 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'get_world_email_templates',
+    description: 'Show a World\'s e-mail setup as it is NOW: every template (purpose, language, subject, HTML), the brand, the signatures, and whether the login e-mail actually uses the World\'s template — it only does when the World Founder has a sender account with a stored credential; otherwise members get the built-in Vegvisr login e-mail. Read this before changing a World\'s templates. Reads the graph tagged #EMAIL-<domain>, the same one email-worker reads. Superadmin, or the World Founder of that domain.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "sodesign.no".' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'preview_world_email_template',
+    description: 'Render one of a World\'s e-mail templates exactly as email-worker would deliver it — brand values filled in, an example link in place of {magicLink} — and send NOTHING. Defaults to the login e-mail. Use after set_world_email_template, or before removing one, so the user sees the real text. Reports unfilled placeholders and whether the login e-mail is in use. Superadmin, or the World Founder of that domain.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "sodesign.no".' },
+        purpose: { type: 'string', description: 'Template purpose. Default "login".' },
+        language: { type: 'string', description: 'ISO code. Default "no"; falls back the way the login e-mail does.' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'remove_world_email_template',
+    description: 'Remove one of a World\'s e-mail templates (purpose, optionally one language), so that e-mail falls back to the built-in Vegvisr version. The graph history keeps the old version. Confirm with the user first — removing "login" changes what every member of that World receives when signing in. Superadmin, or the World Founder of that domain.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "sodesign.no".' },
+        purpose: { type: 'string', description: 'Template purpose, e.g. "login".' },
+        language: { type: 'string', description: 'ISO code. Omit to remove every language of that purpose.' }
+      },
+      required: ['domain', 'purpose']
+    }
+  },
+  {
     name: 'set_mailbox_password',
     description: "Store the IMAP password for a mailbox, so that mail sent from that address can also be filed in its own Sent folder. Cloudflare Email Sending delivers straight to the recipient and never touches the sender's mailbox, which is why a sent copy does not appear there on its own. The password is encrypted (AES-256-GCM) in the same store the AI provider keys use, is never returned by any tool, and is read only by the send path. It is a far more powerful credential than an API key — it grants read and write access to every message in the mailbox — so confirm with the user before calling this, and never guess a value. By default it is stored for the caller's own account; a Superadmin may pass targetEmail to store it for somebody else. Find the host in the mail client under incoming mail server.",
     input_schema: {

@@ -3362,6 +3362,32 @@ export default {
         })
       }
 
+      // Read, preview and remove a World's email templates, for the MCP server. Same shape as
+      // /email/world-template above: the caller's own credential, the executor's own gate.
+      const WORLD_EMAIL_READ_ROUTES = {
+        '/email/world-templates': 'get_world_email_templates',
+        '/email/world-template/preview': 'preview_world_email_template',
+        '/email/world-template/remove': 'remove_world_email_template',
+      }
+      if (WORLD_EMAIL_READ_ROUTES[pathname] && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        if (!body.domain) {
+          return new Response(JSON.stringify({ success: false, error: 'domain is required' }), { status: 400, headers: corsHeaders })
+        }
+        const result = await executeTool(WORLD_EMAIL_READ_ROUTES[pathname], {
+          domain: body.domain,
+          ...(body.purpose ? { purpose: body.purpose } : {}),
+          ...(body.language ? { language: body.language } : {}),
+          userId: callerAuth.userId,
+        }, env, {}).catch((e) => ({ success: false, error: e.message }))
+        const status = result?.success === false ? (/Only a Superadmin/.test(result.error || '') ? 403 : 400) : 200
+        return new Response(JSON.stringify(result), { status, headers: corsHeaders })
+      }
+
       // Store a mailbox password without a model in the loop.
       //
       // The reason this route exists is L154: on 2026-10-04 the same job was handed to the chat,

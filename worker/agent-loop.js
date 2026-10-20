@@ -243,6 +243,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'provision_world_kv', 'provision_world_photos', 'provision_world_graphs', 'move_graph_to_world', 'set_world_graph_store_status', 'set_world_brand', 'set_world_redirect', 'provision_world_email', 'set_world_dns_records',
   'deploy_world_proxy', 'set_world_publish_secret', 'check_world_publish', 'setup_world_homepage',
   'publish_world_page', 'publish_all_world_pages', 'upload_world_image', 'set_world_email_template',
+  'get_world_email_templates', 'preview_world_email_template', 'remove_world_email_template',
   'list_world_founder_templates', 'save_world_founder_template',
   'backup_world_founder_templates_to_kg', 'restore_world_founder_template_from_kg',
   'set_realtime_recordings_domain', 'cloudflare_api',
@@ -305,7 +306,7 @@ export const SEQUENTIAL_TOOLS = new Set([
   // Other KG-writing tools (registry writes, analysis-node writes, suggestions, publish/reorder,
   // learnings, world email template) — all patch/add/save a node or graph and therefore race on
   // concurrent same-target execution. Surfaced by test-sequential-tools.mjs (Lesson 65).
-  'save_learning', 'reorder_nodes', 'publish_html_node', 'set_world_email_template',
+  'save_learning', 'reorder_nodes', 'publish_html_node', 'set_world_email_template', 'remove_world_email_template',
   'add_user_suggestion', 'update_suggestion_status', 'add_whats_new', 'generate_app_showcase',
   'analyze_node', 'analyze_graph', 'analyze_transcription',
   'deploy_worker', 'delete_worker', 'register_capability_worker', 'register_deployed_worker',

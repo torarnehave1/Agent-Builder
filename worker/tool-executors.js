@@ -9165,6 +9165,238 @@ async function executeSetWorldEmailTemplate(input, env) {
   }
 }
 
+// ── Reading, previewing and removing a World's e-mail templates ──────────────────────────────
+//
+// set_world_email_template could write a World's templates but nothing could show them, so a
+// Superadmin serving a new founder (sodesign.no, 2026-10-20) changed a login e-mail blind. These
+// three share its gate (Superadmin or that World's founder/account holder) and its lookup (the
+// graph tagged #EMAIL-<domain>), and read exactly what email-worker reads at send time.
+
+async function worldEmailGate(input, env, domain) {
+  const callerProfile = input.userId ? await resolveUserProfile(input.userId, env) : null
+  const callerRole = String(callerProfile?.role || callerProfile?.Role || '').trim().toLowerCase()
+  const callerEmail = String(callerProfile?.email || '').trim().toLowerCase()
+  if (callerRole === 'superadmin') return null
+  const own = callerEmail
+    ? await env.DB.prepare('SELECT 1 AS ok FROM world_founders WHERE domain = ? AND (lower(founder_email) = ? OR lower(account_holder_email) = ?) LIMIT 1').bind(domain, callerEmail, callerEmail).first()
+    : null
+  return own ? null : `Only a Superadmin or the World Founder of ${domain} can see or change its email templates.`
+}
+
+function worldEmailDomain(input) {
+  const domain = (input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "sodesign.no")')
+  return domain
+}
+
+// The same lookup email-worker's loadWorldEmailNodes does: summaries by marker, first hit.
+async function loadWorldEmailGraph(env, domain) {
+  const marker = `EMAIL-${domain}`
+  const sr = await env.KG_WORKER.fetch(
+    `https://knowledge-graph-worker/getknowgraphsummaries?metaArea=${encodeURIComponent(marker)}&limit=10`,
+    { headers: { 'x-user-role': 'Superadmin' } },
+  )
+  if (!sr.ok) throw new Error(`Could not look up the email graph for ${domain} (status ${sr.status})`)
+  const sj = await sr.json().catch(() => ({}))
+  const results = sj.results || sj.graphs || []
+  if (!results[0]?.id) return { graphId: null, graph: null, marker, count: 0 }
+  const gr = await env.KG_WORKER.fetch(`https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(results[0].id)}`)
+  if (!gr.ok) throw new Error(`Could not read email graph ${results[0].id} (status ${gr.status})`)
+  const graph = await gr.json().catch(() => null)
+  return { graphId: results[0].id, graph, marker, count: results.length }
+}
+
+const stripEditMarkers = (html) =>
+  String(html || '').replace(/[ \t]*<!--\s*edit:[a-z0-9-]+:(?:start|end)\s*-->[ \t]*\n?/gi, '')
+const typeIs = (n, t) => String(n?.type || '').toLowerCase() === t
+
+// Whether the login e-mail will use this World's templates at all. email-worker only applies a
+// World template when it can resolve a World SENDER (resolveWhiteLabelSender): a world_founders
+// row for the domain and a sender account WITH a stored credential on the founder's profile.
+// Without one, a perfect template is silently ignored — which is worth saying out loud.
+async function worldLoginSenderStatus(env, domain, brandFromEmail) {
+  const row = await env.DB.prepare('SELECT founder_email FROM world_founders WHERE domain = ? LIMIT 1').bind(domain).first().catch(() => null)
+  if (!row?.founder_email) return { applies: false, reason: `${domain} has no World Founder row, so the login e-mail never uses its templates.` }
+  const profile = await resolveUserProfile(row.founder_email, env).catch(() => null)
+  let data = {}
+  try { data = JSON.parse(profile?.data || '{}') } catch { /* ignore */ }
+  const accounts = data?.settings?.emailAccounts || []
+  const passwords = data?.settings?.emailAccountPasswords || {}
+  const usable = accounts.filter((a) => a.email && passwords[a.id])
+  if (!usable.length) return { applies: false, founder: row.founder_email, reason: `The founder ${row.founder_email} has no sender account with a stored credential, so the login e-mail falls back to the platform default.` }
+  const want = String(brandFromEmail || '').trim().toLowerCase()
+  const pick = (want && usable.find((a) => a.email.toLowerCase() === want))
+    || usable.find((a) => a.email.toLowerCase().endsWith('@' + domain))
+    || usable.find((a) => a.isDefault) || usable[0]
+  return { applies: true, founder: row.founder_email, sender: pick.email }
+}
+
+async function executeGetWorldEmailTemplates(input, env) {
+  const domain = worldEmailDomain(input)
+  const denied = await worldEmailGate(input, env, domain)
+  if (denied) return { success: false, error: denied }
+
+  const { graphId, graph, count } = await loadWorldEmailGraph(env, domain)
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
+  const brand = (nodes.find((n) => typeIs(n, 'email-brand')) || {}).metadata || null
+  const templates = nodes.filter((n) => typeIs(n, 'email-template')).map((n) => ({
+    nodeId: n.id,
+    purpose: String(n.metadata?.purpose || ''),
+    language: String(n.metadata?.language || ''),
+    subject: String(n.metadata?.subject || ''),
+    html: stripEditMarkers(n.info),
+  }))
+  const signatures = nodes.filter((n) => typeIs(n, 'email-signature')).map((n) => ({
+    nodeId: n.id,
+    name: String(n.metadata?.name || ''),
+    language: n.metadata?.language || null,
+    isDefault: !!n.metadata?.isDefault,
+    senderEmail: n.metadata?.senderEmail || null,
+    html: stripEditMarkers(n.info),
+  }))
+  const login = await worldLoginSenderStatus(env, domain, brand?.fromEmail)
+  const hasLogin = templates.some((t) => t.purpose.toLowerCase() === 'login')
+
+  const lines = [
+    graphId ? `${domain}: email graph ${graphId}.` : `${domain} has no email graph yet (nothing tagged #EMAIL-${domain}).`,
+    count > 1 ? `WARNING: ${count} graphs carry #EMAIL-${domain}; email-worker reads only the first.` : null,
+    templates.length
+      ? `Templates: ${templates.map((t) => `${t.purpose}/${t.language} — "${t.subject}"`).join('; ')}.`
+      : 'No templates.',
+    `Login e-mail: ${hasLogin ? "uses this World's login template" : 'no login template — the built-in Vegvisr default is sent'}` +
+      (login.applies ? `, sent from ${login.sender}.` : `. ${login.reason}`),
+    brand ? `Brand: ${brand.name || '(no name)'}${brand.logo ? ', has logo' : ', no logo'}, accent ${brand.accent || 'none'}${brand.fromEmail ? `, from ${brand.fromEmail}` : ''}.` : 'No brand.',
+    signatures.length ? `Signatures: ${signatures.map((s) => s.name + (s.isDefault ? ' (default)' : '')).join(', ')}.` : 'No signatures.',
+  ].filter(Boolean)
+
+  return {
+    success: true,
+    domain,
+    graphId,
+    owner: graph?.metadata?.createdBy || null,
+    brand,
+    templates,
+    signatures,
+    loginUsesWorldTemplate: hasLogin && login.applies,
+    loginSender: login,
+    message: lines.join(' '),
+  }
+}
+
+// Mirrors email-worker's renderTemplate exactly — single braces first, then double — so the
+// preview shows what a member receives, including that a {{x}} placeholder arrives as {value}.
+function renderLikeEmailWorker(text, vars) {
+  let out = String(text || '')
+  for (const [key, value] of Object.entries(vars)) {
+    out = out.split(`{${key}}`).join(value)
+    out = out.split(`{{${key}}}`).join(value)
+  }
+  return out
+}
+
+async function executePreviewWorldEmailTemplate(input, env) {
+  const domain = worldEmailDomain(input)
+  const denied = await worldEmailGate(input, env, domain)
+  if (denied) return { success: false, error: denied }
+  const purpose = (input.purpose || 'login').trim().toLowerCase()
+  const language = (input.language || 'no').trim().toLowerCase()
+
+  const { graphId, graph } = await loadWorldEmailGraph(env, domain)
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : []
+  const candidates = nodes.filter((n) => typeIs(n, 'email-template') && String(n.metadata?.purpose || '').toLowerCase() === purpose)
+  if (!candidates.length) {
+    const have = [...new Set(nodes.filter((n) => typeIs(n, 'email-template')).map((n) => n.metadata?.purpose).filter(Boolean))]
+    return {
+      success: false,
+      error: `${domain} has no "${purpose}" email template${have.length ? ` (it has: ${have.join(', ')})` : ''}.` +
+        (purpose === 'login' ? ' Its members get the built-in Vegvisr login e-mail.' : ''),
+    }
+  }
+  // Same choice email-worker makes for the login mail: the requested language, then no/en, then first.
+  const chosen = candidates.find((n) => String(n.metadata?.language || '').toLowerCase() === language)
+    || candidates.find((n) => String(n.metadata?.language || '').toLowerCase() === 'no')
+    || candidates.find((n) => String(n.metadata?.language || '').toLowerCase() === 'en')
+    || candidates[0]
+  const brand = (nodes.find((n) => typeIs(n, 'email-brand')) || {}).metadata || {}
+  const vars = {
+    magicLink: `https://${domain}/?magic=EKSEMPEL-LENKE`,
+    expiryMinutes: '30',
+    meetingId: input.meetingId || '',
+    brandName: brand.name || '',
+    brandLogo: brand.logo || '',
+    brandAccent: brand.accent || '',
+    brandFromName: brand.fromName || '',
+    brandFooter: brand.footer || '',
+  }
+  const subject = renderLikeEmailWorker(chosen.metadata?.subject || '', vars)
+  const html = renderLikeEmailWorker(stripEditMarkers(chosen.info), vars)
+  const unresolved = [...new Set((`${subject} ${html}`.match(/\{\{?([a-zA-Z][a-zA-Z0-9_]*)\}?\}/g) || []).map((m) => m.replace(/[{}]/g, '')))]
+  const login = purpose === 'login' ? await worldLoginSenderStatus(env, domain, brand.fromEmail) : null
+  const usedLanguage = String(chosen.metadata?.language || '')
+
+  return {
+    success: true,
+    sent: false,
+    domain,
+    graphId,
+    nodeId: chosen.id,
+    purpose,
+    language: usedLanguage,
+    subject,
+    html,
+    unresolvedPlaceholders: unresolved,
+    ...(login ? { loginSender: login } : {}),
+    message:
+      `Preview of ${domain} ${purpose}/${usedLanguage}${usedLanguage !== language ? ` (no "${language}" version; this is the one sent)` : ''}: "${subject}". Nothing was sent; the link is an example. ` +
+      (unresolved.length ? `Unfilled placeholders that a member would see literally: ${unresolved.map((u) => `{${u}}`).join(', ')}. ` : '') +
+      (login ? (login.applies ? `Members receive it from ${login.sender}.` : `NOT in use: ${login.reason}`) : ''),
+  }
+}
+
+async function executeRemoveWorldEmailTemplate(input, env) {
+  const domain = worldEmailDomain(input)
+  const denied = await worldEmailGate(input, env, domain)
+  if (denied) return { success: false, error: denied }
+  const purpose = (input.purpose || '').trim().toLowerCase()
+  if (!purpose) throw new Error('purpose is required (e.g. "login")')
+  const language = (input.language || '').trim().toLowerCase()
+
+  const { graphId, graph } = await loadWorldEmailGraph(env, domain)
+  if (!graphId || !graph) return { success: false, error: `${domain} has no email graph, so there is nothing to remove.` }
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : []
+  const matches = (n) => typeIs(n, 'email-template') &&
+    String(n.metadata?.purpose || '').toLowerCase() === purpose &&
+    (!language || String(n.metadata?.language || '').toLowerCase() === language)
+  const removed = nodes.filter(matches)
+  if (!removed.length) {
+    const have = nodes.filter((n) => typeIs(n, 'email-template')).map((n) => `${n.metadata?.purpose}/${n.metadata?.language}`)
+    return { success: false, error: `${domain} has no "${purpose}${language ? '/' + language : ''}" template. It has: ${have.join(', ') || 'none'}.` }
+  }
+  const removedIds = new Set(removed.map((n) => n.id))
+  const graphData = {
+    metadata: graph.metadata,
+    nodes: nodes.filter((n) => !removedIds.has(n.id)),
+    edges: (Array.isArray(graph.edges) ? graph.edges : []).filter((e) => !removedIds.has(e.source) && !removedIds.has(e.target)),
+  }
+  const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: graphId, graphData, override: true }),
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) throw new Error(data.error || `Failed to save email template graph (status ${res.status})`)
+  const what = removed.map((n) => `${n.metadata?.purpose}/${n.metadata?.language}`).join(', ')
+  return {
+    success: true,
+    domain,
+    graphId,
+    removed: removed.map((n) => ({ nodeId: n.id, purpose: n.metadata?.purpose, language: n.metadata?.language })),
+    newVersion: data.newVersion ?? null,
+    message: `Removed ${what} from ${domain} (graph ${graphId}, version ${data.newVersion ?? '?'}; the old version stays in the graph history). ` +
+      (purpose === 'login' ? 'Members now get the built-in Vegvisr login e-mail unless another language version remains.' : ''),
+  }
+}
+
 async function executeSendEmail(input, env) {
   const callerUserId = input.userId
   if (!callerUserId) throw new Error('No user context available')
@@ -18049,6 +18281,12 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAddEmailAccount(toolInput, env)
     case 'set_email_password':
       return await executeSetEmailPassword(toolInput, env)
+    case 'get_world_email_templates':
+      return await executeGetWorldEmailTemplates(toolInput, env)
+    case 'preview_world_email_template':
+      return await executePreviewWorldEmailTemplate(toolInput, env)
+    case 'remove_world_email_template':
+      return await executeRemoveWorldEmailTemplate(toolInput, env)
     case 'set_world_email_template':
       return await executeSetWorldEmailTemplate(toolInput, env)
     case 'list_email_accounts':
