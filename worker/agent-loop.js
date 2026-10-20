@@ -38,7 +38,7 @@ const READ_ONLY_TOOLS = new Set([
   'get_formatting_reference', 'get_node_types_reference',
   'get_html_builder_reference', 'get_vemotion_reference', 'get_contract',
   'get_vemotion_catalog', 'list_vemotion_library', 'get_vemotion_library_item', 'check_vemotion_composition',
-  'get_vemotion_media_info', 'vemotion_list_videos', 'vemotion_list_audio',
+  'get_vemotion_media_info', 'vemotion_list_videos', 'vemotion_list_audio', 'search_album_images',
   // Web / media lookups
   'perplexity_search', 'fetch_url', 'search_pexels', 'search_unsplash',
   'get_album_images', 'album_list', 'album_get', 'photos_list', 'analyze_image',
@@ -221,7 +221,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'vemotion_list_compositions', 'vemotion_get_composition', 'vemotion_save_composition',
   'vemotion_refit_composition', 'vemotion_generate_structure', 'vemotion_create_carousel',
   'get_vemotion_catalog', 'list_vemotion_library', 'get_vemotion_library_item', 'check_vemotion_composition',
-  'get_vemotion_media_info', 'vemotion_list_videos', 'vemotion_list_audio', 'vemotion_import_video', 'vemotion_set_drawing_pace',
+  'get_vemotion_media_info', 'vemotion_list_videos', 'vemotion_list_audio', 'vemotion_import_video', 'vemotion_set_drawing_pace', 'search_album_images', 'tag_album_images',
   // Data/app tables
   'query_data_nodes', 'get_app_table_schema', 'query_app_table',
   'create_app_table', 'insert_app_record', 'delete_app_records', 'add_app_table_column',

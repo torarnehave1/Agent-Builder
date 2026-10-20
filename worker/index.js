@@ -3273,6 +3273,8 @@ export default {
           'vemotion_list_audio',
           'get_vemotion_media_info',
           'vemotion_set_drawing_pace', // 2026-10-19: the server does the timing arithmetic
+          'search_album_images', // 2026-10-19: find photos by their tags
+          'tag_album_images',
         ])
         const callerAuth = await resolveCallerAuth(request, env)
         if (!callerAuth.token) {

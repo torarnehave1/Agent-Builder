@@ -4417,17 +4417,134 @@ async function executeGetAlbumImages(input, env) {
   const data = await res.json()
   if (!res.ok) throw new Error(data.error || `Albums API error (${res.status})`)
 
-  const images = (data.images || []).map(key => ({
-    key,
-    url: `https://vegvisr.imgix.net/${key}`,
-  }))
+  // Each image's name and tags (photos-worker image metadata), so a caller can pick by content.
+  // Best-effort: without them the list is still the album (2026-10-19).
+  const meta = new Map()
+  try {
+    const listed = await photosApiFetch({ env, authToken: userRecord.emailVerificationToken, path: `/list-r2-images?album=${encodeURIComponent(albumName)}` })
+    for (const img of listed?.images || []) meta.set(img.key, img)
+  } catch { /* names and tags are optional */ }
+  const images = (data.images || []).map(key => {
+    const m = meta.get(key)
+    return {
+      key,
+      url: `https://vegvisr.imgix.net/${key}`,
+      ...(m?.displayName || m?.name ? { name: m.displayName || m.name } : {}),
+      ...(Array.isArray(m?.tags) && m.tags.length ? { tags: m.tags } : {}),
+    }
+  })
+  const untagged = images.filter((i) => !i.tags).length
 
   return {
-    message: `Album "${albumName}" has ${images.length} images`,
+    message: `Album "${albumName}" has ${images.length} images${untagged ? ` (${untagged} without tags — tag_album_images can describe them)` : ''}`,
     albumName,
     imageCount: images.length,
     images,
   }
+}
+
+// Search the caller's photos by what they show (search_album_images, 2026-10-19): words matched
+// against each image's name and tags (photos-worker image metadata), across one album or all of
+// the caller's albums. Only as good as the tags — tag_album_images fills them.
+async function executeSearchAlbumImages(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to search your photos.')
+  const STOP = new Set(['a', 'an', 'the', 'of', 'with', 'and', 'or', 'in', 'on', 'at', 'to', 'for', 'my', 'photo', 'image', 'picture', 'en', 'et', 'ei', 'og', 'med', 'av', 'på', 'i', 'til', 'min', 'mitt', 'mine', 'bilde', 'foto'])
+  const words = String(input?.query || '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1 && !STOP.has(w))
+  if (!words.length) throw new Error('query is required, e.g. "purple circle" or "autumn forest".')
+  let albums = []
+  if (typeof input?.album === 'string' && input.album.trim()) albums = [input.album.trim()]
+  else {
+    const data = await albumsApiFetch({ env, authToken, path: '/photo-albums' })
+    albums = (data?.albums || data?.names || []).map((a) => (typeof a === 'string' ? a : a?.name)).filter(Boolean)
+  }
+  const matches = []
+  let searched = 0, untagged = 0
+  for (const album of albums) {
+    let listed
+    try { listed = await photosApiFetch({ env, authToken, path: `/list-r2-images?album=${encodeURIComponent(album)}` }) } catch { continue }
+    for (const img of listed?.images || []) {
+      searched++
+      const tags = Array.isArray(img.tags) ? img.tags : []
+      if (!tags.length) untagged++
+      const hay = [img.displayName, img.name, ...tags].filter(Boolean).join(' ').toLowerCase()
+      const hits = words.filter((w) => hay.includes(w)).length
+      if (hits) matches.push({ url: img.url || `https://vegvisr.imgix.net/${img.key}`, key: img.key, album, name: img.displayName || img.name || null, tags, score: hits / words.length })
+    }
+  }
+  matches.sort((a, b) => b.score - a.score)
+  const limit = Math.min(Math.max(Number(input?.limit) || 20, 1), 100)
+  return {
+    message: `${matches.length} image(s) match "${input.query}" in ${albums.length} album(s) (${searched} images searched, ${untagged} without tags${untagged ? ' — tag_album_images can describe them so they become searchable' : ''}).`,
+    count: Math.min(matches.length, limit),
+    total: matches.length,
+    images: matches.slice(0, limit),
+    untagged,
+  }
+}
+
+// Describe untagged photos so they can be searched (tag_album_images, 2026-10-19): for each image
+// in one of the caller's own albums, photos-worker's /suggest-image-metadata (GPT-4o looks at it)
+// proposes a label and up to 6 tags, saved with /image-metadata. One model call per image, so it
+// runs `limit` images per call and says how many are left.
+async function executeTagAlbumImages(input, env) {
+  const authToken = getAuthTokenFromToolInput(input)
+  if (!authToken) throw new Error('You must be logged in to tag your photos.')
+  const album = typeof input?.album === 'string' ? input.album.trim() : ''
+  if (!album) throw new Error('album is required — album_list gives the names.')
+  const mine = await albumsApiFetch({ env, authToken, path: '/photo-albums' })
+  const names = (mine?.albums || mine?.names || []).map((a) => (typeof a === 'string' ? a : a?.name))
+  if (!names.includes(album)) throw new Error(`"${album}" is not one of your albums. Yours: ${names.slice(0, 20).join(', ')}`)
+  const listed = await photosApiFetch({ env, authToken, path: `/list-r2-images?album=${encodeURIComponent(album)}` })
+  const all = listed?.images || []
+  // Photos first (the vision model reads them); SVGs after (described from their source).
+  const todo = all.filter((img) => input?.retag || !(Array.isArray(img.tags) && img.tags.length))
+    .sort((a, b) => Number(/\.svg$/i.test(a.key)) - Number(/\.svg$/i.test(b.key)))
+  const limit = Math.min(Math.max(Number(input?.limit) || 10, 1), 25)
+  const tagged = [], failed = []
+  for (const img of todo.slice(0, limit)) {
+    try {
+      const suggestion = /\.svg$/i.test(img.key)
+        ? await suggestSvgMetadata(img.key, env)
+        : await photosApiFetch({ env, authToken, method: 'POST', path: '/suggest-image-metadata', body: { key: img.key } })
+      const saved = await photosApiFetch({ env, authToken, method: 'POST', path: '/image-metadata', body: { key: img.key, name: suggestion.name, displayName: suggestion.displayName, tags: suggestion.tags } })
+      tagged.push({ key: img.key, url: `https://vegvisr.imgix.net/${img.key}`, name: saved.displayName || saved.name, tags: saved.tags })
+    } catch (e) {
+      failed.push({ key: img.key, error: e.message })
+    }
+  }
+  const left = todo.length - tagged.length - failed.length
+  return {
+    message: `Tagged ${tagged.length} image(s) in "${album}"${failed.length ? `, ${failed.length} failed` : ''}; ${left} still without tags${left ? ' — call again to continue' : ''}.`,
+    album,
+    tagged,
+    failed,
+    remaining: left,
+  }
+}
+
+// The vision model only takes PNG/JPEG/GIF/WebP, and imgix serves an SVG unchanged whatever format
+// is asked for. An SVG is text that says what it draws, so a text model labels it from its source.
+async function suggestSvgMetadata(key, env) {
+  if (!env.AI) throw new Error('Workers AI binding (AI) is not configured')
+  const res = await fetch(`https://vegvisr.imgix.net/${key}`)
+  if (!res.ok) throw new Error(`Could not read the SVG (HTTP ${res.status})`)
+  const svg = (await res.text()).slice(0, 6000)
+  const out = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
+    max_tokens: 200,
+    messages: [
+      { role: 'system', content: 'You label vector graphics. Reply with JSON only.' },
+      { role: 'user', content: `This is the source of an SVG image. Say what it shows. Return only {"label":"lowercase-kebab-case-label","tags":["tag","tag"]} — a short specific label; at most 6 short lowercase tags about what it is visually (shape, colour, style, icon, outline, solid).\n\n${svg}` },
+    ],
+  })
+  const text = String(out?.response || '')
+  const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
+  let parsed
+  try { parsed = JSON.parse(json) } catch { throw new Error('Could not read a label for this SVG') }
+  const label = String(parsed.label || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60)
+  const tags = (Array.isArray(parsed.tags) ? parsed.tags : []).map((t) => String(t).toLowerCase().trim()).filter(Boolean).slice(0, 6)
+  if (!label && !tags.length) throw new Error('No label for this SVG')
+  return { name: label || null, displayName: label || null, tags }
 }
 
 // ── album & photo subagent tool implementations ──────────────────
@@ -17775,6 +17892,10 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     }
     case 'vemotion_list_audio':
       return await executeVemotionListAudio(toolInput, env)
+    case 'search_album_images':
+      return await executeSearchAlbumImages(toolInput, env)
+    case 'tag_album_images':
+      return await executeTagAlbumImages(toolInput, env)
     case 'vemotion_set_drawing_pace': {
       // Load → recompute every timing deterministically (vemotion-timing.js) → save in place.
       const loaded = await executeVemotionGetComposition(toolInput, env)

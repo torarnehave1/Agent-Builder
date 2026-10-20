@@ -1253,6 +1253,16 @@ const TOOL_DEFINITIONS = [
     input_schema: { type: 'object', properties: { query: { type: 'string', description: 'Part of the name or a tag.' }, vemotionOnly: { type: 'boolean', description: 'Only recordings tagged "vemotion".' }, limit: { type: 'number', description: 'Max listed (default 50).' } } }
   },
   {
+    name: 'search_album_images',
+    description: 'Search the user\'s photos by what they show: words matched against each image\'s name and tags, across one album or all of the user\'s albums. Returns url (usable as an image layer src), album, name, tags, best matches first. Untagged images cannot match — the result says how many there are; tag_album_images describes them.',
+    input_schema: { type: 'object', properties: { query: { type: 'string', description: 'What the photo shows, e.g. "autumn forest" or "purple circle".' }, album: { type: 'string', description: 'Search only this album.' }, limit: { type: 'number', description: 'Max results (default 20).' } }, required: ['query'] }
+  },
+  {
+    name: 'tag_album_images',
+    description: 'Make photos searchable: for images in one of the user\'s own albums that have no tags, an AI vision model (GPT-4o) looks at each and saves a short label and up to 6 tags. One model call per image, `limit` images per call (default 10, max 25); call again until remaining is 0. Only run when the user asks to tag/describe an album.',
+    input_schema: { type: 'object', properties: { album: { type: 'string', description: 'Album name from album_list.' }, limit: { type: 'number', description: 'Images this call (default 10, max 25).' }, retag: { type: 'boolean', description: 'Also re-describe images that already have tags.' } }, required: ['album'] }
+  },
+  {
     name: 'vemotion_set_drawing_pace',
     description: 'Change how fast a pixel grid (knitting-chart) draws itself stitch by stitch, and keep the composition in step — USE THIS instead of editing keyframes yourself. The server counts the stitches in drawOrder, sets the drawing time, keeps the grid on screen to the end, moves the layers that followed the drawing (e.g. a title) so they start at the last stitch, keeps the hold at the end (or sets holdSeconds), sets the video length, and saves in place. Give ONE of speedFactor (2 = twice as fast, 0.5 = half speed), secondsPerStitch (e.g. 0.05) or totalSeconds.',
     input_schema: {
