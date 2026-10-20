@@ -3197,6 +3197,34 @@ export default {
         }
       }
 
+      // POST /contacts/create — add one person to the caller's OWN ContactHub address book.
+      //
+      // The MCP server's create_contact reaches this, so the table lookup and the duplicate
+      // refusal stay in the one executor the Agent-Builder chat also uses. Whose book is written
+      // is decided by the verified caller, never a body field. Only the fields below are passed.
+      if (pathname === '/contacts/create' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const pick = (k) => (typeof body[k] === 'string' && body[k].trim() ? body[k].trim() : undefined)
+        try {
+          const r = await executeTool('create_contact', {
+            userId: callerAuth.userId,
+            name: pick('name'), email: pick('email'), phone: pick('phone'),
+            company: pick('company'), job_title: pick('job_title'),
+            labels: pick('labels'), notes: pick('notes'),
+          }, env, {})
+          const status = r?.duplicate ? 409 : 200
+          return new Response(JSON.stringify(r), { status, headers: corsHeaders })
+        } catch (e) {
+          const status = /requires name, email, and phone/.test(e.message) ? 400
+            : /contacts table/i.test(e.message) ? 404 : 500
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /publish/html-node — publish one html-node to a live host.
       //
       // Exists so the MCP server on knowledge.vegvisr.org can publish WITHOUT a second copy of

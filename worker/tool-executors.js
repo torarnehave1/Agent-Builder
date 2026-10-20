@@ -11363,6 +11363,29 @@ async function executeCreateContact(input, env) {
     throw new Error('A complete contact requires name, email, and phone. Nothing was created.')
   }
   const { contactsTableId } = await resolveContactTableIds(userId, env)
+
+  // Refuse a duplicate. Compared on normalised values over the WHOLE table, not with the text
+  // search: stored phones carry spaces ("+47 952 56 324") that a search for "95256324" misses,
+  // and a model re-running a create after a timeout must not produce a second row.
+  const normEmail = (v) => String(v || '').trim().toLowerCase()
+  const phoneKey = (v) => String(v || '').replace(/\D/g, '').slice(-8)
+  const parseList = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+  const wantEmail = normEmail(email)
+  const wantPhone = phoneKey(phone)
+  const all = await drizzleFetch(env, '/query', { tableId: contactsTableId, limit: 10000 })
+  const existing = (all.records || all.rows || []).find(c =>
+    parseList(c.emails).some(e => normEmail(e?.value) === wantEmail) ||
+    (wantPhone.length === 8 && parseList(c.phones).some(p => phoneKey(p?.value) === wantPhone)))
+  if (existing) {
+    return {
+      success: false,
+      duplicate: true,
+      contactId: existing._id,
+      name: existing.full_name || null,
+      message: `Not created: "${existing.full_name || 'a contact'}" already has this e-mail or phone number (contactId ${existing._id}).`,
+    }
+  }
+
   const record = { full_name: name }
   if (email) record.emails = JSON.stringify([{ label: 'home', value: email }])
   if (phone) record.phones = JSON.stringify([{ label: 'mobile', value: phone }])
