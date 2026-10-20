@@ -4530,14 +4530,16 @@ async function suggestSvgMetadata(key, env) {
   const res = await fetch(`https://vegvisr.imgix.net/${key}`)
   if (!res.ok) throw new Error(`Could not read the SVG (HTTP ${res.status})`)
   const svg = (await res.text()).slice(0, 6000)
-  const out = await env.AI.run('@cf/meta/llama-3.1-8b-instruct', {
-    max_tokens: 200,
+  // Gemma 4 — the text model element-builders.js already uses (llama-3.1-8b was retired 2026-05-30).
+  // A reasoning model: give it room, read the answer from choices[0].message.content.
+  const out = await env.AI.run('@cf/google/gemma-4-26b-a4b-it', {
+    max_tokens: 4096,
     messages: [
       { role: 'system', content: 'You label vector graphics. Reply with JSON only.' },
       { role: 'user', content: `This is the source of an SVG image. Say what it shows. Return only {"label":"lowercase-kebab-case-label","tags":["tag","tag"]} — a short specific label; at most 6 short lowercase tags about what it is visually (shape, colour, style, icon, outline, solid).\n\n${svg}` },
     ],
   })
-  const text = String(out?.response || '')
+  const text = String(out?.choices?.[0]?.message?.content || out?.response || '')
   const json = text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)
   let parsed
   try { parsed = JSON.parse(json) } catch { throw new Error('Could not read a label for this SVG') }
