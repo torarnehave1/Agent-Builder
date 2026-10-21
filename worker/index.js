@@ -3225,6 +3225,37 @@ export default {
         }
       }
 
+      // POST /contacts/report/{set,preview,send} — ContactHub meeting reports → Enkel endring CMS.
+      //
+      // The MCP server's set_meeting_report / preview_meeting_report / send_meeting_report reach
+      // these. Whose book is used comes from the verified caller; the CMS allowlist
+      // (COACHING_REPORT_SENDERS) is checked on the verified e-mail inside the executors, never on
+      // a body field. Only the fields below are passed through.
+      const reportRoute = { '/contacts/report/set': 'set_meeting_report', '/contacts/report/preview': 'preview_meeting_report', '/contacts/report/send': 'send_meeting_report' }[pathname]
+      if (reportRoute && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const input = { userId: callerAuth.userId, email: callerAuth.email, contactId: typeof body.contactId === 'string' ? body.contactId.trim() : undefined }
+        if (reportRoute === 'set_meeting_report') {
+          input.meetingQuality = body.meetingQuality
+          input.meetingDate = body.meetingDate
+          input.criticalNote = body.criticalNote
+        }
+        if (reportRoute === 'send_meeting_report') input.coachingId = body.coachingId
+        try {
+          const r = await executeTool(reportRoute, input, env, {})
+          return new Response(JSON.stringify(r), { headers: corsHeaders })
+        } catch (e) {
+          const status = e.code === 'FORBIDDEN' ? 403
+            : /No contact with id|contacts table/i.test(e.message) ? 404
+            : /required|must be|Give at least|Nothing was sent|Nothing was saved/.test(e.message) ? 400 : 502
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /publish/html-node — publish one html-node to a live host.
       //
       // Exists so the MCP server on knowledge.vegvisr.org can publish WITHOUT a second copy of

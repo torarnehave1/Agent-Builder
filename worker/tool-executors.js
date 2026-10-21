@@ -11741,6 +11741,224 @@ async function executeCreateContact(input, env) {
   return { success: true, contactId: data._id || data.id, name, message: `Contact "${name}" created` }
 }
 
+// ── ContactHub meeting reports → Enkel endring CMS ───────────────
+//
+// The same flow as the Contacts app's "Save report fields" / "Send rapport" (Contacts repo,
+// src/lib/coaching.ts), so a report sent from MCP is indistinguishable from one sent in the app:
+// the three fields live on the contact row, the CMS samtale is matched on e-mail + date, and a
+// sent report leaves a `Report` entry in contact_logs with the same metadata columns.
+//
+// meeting quality -> CMS status/utfall. Mirrors QUALITY_MAP in Contacts/src/lib/coaching.ts
+// (agreed 2026-06-17, confirmed 2026-10-06). Change both together.
+const MEETING_QUALITY_MAP = {
+  0: { status: 'Ikke møtt', utfall: null, label: 'Ikke møtt' },
+  1: { status: 'Gjennomført', utfall: 'Rådføring', label: 'Rådføring' },
+  2: { status: 'Gjennomført', utfall: 'Håndterbart', label: 'Håndterbart' },
+  3: { status: 'Gjennomført', utfall: 'OK', label: 'OK' },
+  4: { status: 'Gjennomført', utfall: 'Feiring/Gjennombrudd', label: 'Feiring/Gjennombrudd' },
+  5: { status: 'Avlyst', utfall: null, label: 'Avlyst' },
+  6: { status: 'Gjennomført', utfall: 'Krise', label: 'Krise' },
+}
+
+// Who may reach the CMS. One shared secret belongs to one coaching business, so having a
+// contacts table is not enough (architect's decision 2026-10-21: explicit allowlist).
+function assertCoachingSender(env, email) {
+  const allowed = String(env.COACHING_REPORT_SENDERS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+  const me = String(email || '').trim().toLowerCase()
+  if (!me || !allowed.includes(me)) {
+    const e = new Error('You are not on the list of people allowed to send coaching reports to the Enkel endring CMS. Nothing was sent.')
+    e.code = 'FORBIDDEN'
+    throw e
+  }
+}
+
+async function coachingFetch(env, path, init) {
+  if (!env.COACHING_WORKER?.fetch) throw new Error('The COACHING_WORKER service binding is not configured on agent-worker.')
+  const res = await env.COACHING_WORKER.fetch(`https://coaching-report-worker/coaching/${path}`, init)
+  const text = await res.text()
+  let data
+  try { data = JSON.parse(text) } catch {
+    throw new Error(`The CMS did not answer with JSON (${text.includes('sgcaptcha') ? 'captcha block' : `HTTP ${res.status}`}).`)
+  }
+  return { res, data }
+}
+
+async function loadReportContact(env, userId, contactId) {
+  if (!contactId) throw new Error('contactId is required')
+  const { contactsTableId, logsTableId } = await resolveContactTableIds(userId, env)
+  const page = await drizzleFetch(env, '/query', { tableId: contactsTableId, where: { _id: contactId }, limit: 1 })
+  const row = (page.records || page.rows || []).find(r => String(r._id) === String(contactId))
+  if (!row) throw new Error(`No contact with id ${contactId} in your ContactHub.`)
+  return { row, contactsTableId, logsTableId }
+}
+
+function reportFieldsOf(row) {
+  const q = row.meeting_quality
+  return {
+    meetingQuality: q === null || q === undefined || q === '' ? null : Number(q),
+    meetingDate: String(row.reminder_sent_at || '').slice(0, 10) || null,
+    criticalNote: String(row.critical_note || ''),
+  }
+}
+
+function emailsOf(row) {
+  try { return JSON.parse(row.emails || '[]').map(e => String(e?.value || '').trim().toLowerCase()).filter(Boolean) } catch { return [] }
+}
+
+// Build the CMS report from the stored fields, or say exactly which field is missing.
+function buildMeetingReport(fields) {
+  if (fields.meetingQuality === null || Number.isNaN(fields.meetingQuality)) return { error: 'Meeting quality is not set.' }
+  const mapped = MEETING_QUALITY_MAP[fields.meetingQuality]
+  if (!mapped) return { error: `Meeting quality ${fields.meetingQuality} has no CMS status.` }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.meetingDate || '')) return { error: 'The meeting date (Reminder sent) is not set.' }
+  const notater = fields.criticalNote.trim()
+  if (!notater) return { error: 'Critical note is empty — the CMS requires notes.' }
+  return { report: { status: mapped.status, utfall: mapped.utfall, notater, dato: fields.meetingDate } }
+}
+
+async function executeSetMeetingReport(input, env) {
+  const { userId, contactId, meetingQuality, meetingDate, criticalNote } = input
+  const { row, contactsTableId } = await loadReportContact(env, userId, contactId)
+  const record = {}
+  if (meetingQuality !== undefined && meetingQuality !== null) {
+    const q = Number(meetingQuality)
+    if (!Number.isInteger(q) || !MEETING_QUALITY_MAP[q]) throw new Error('meetingQuality must be an integer 0–6. Nothing was saved.')
+    record.meeting_quality = q
+  }
+  if (meetingDate !== undefined && meetingDate !== null) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(meetingDate))) throw new Error('meetingDate must be YYYY-MM-DD. Nothing was saved.')
+    record.reminder_sent_at = String(meetingDate)
+  }
+  if (criticalNote !== undefined && criticalNote !== null) record.critical_note = String(criticalNote)
+  if (Object.keys(record).length === 0) throw new Error('Give at least one of meetingQuality, meetingDate, criticalNote. Nothing was saved.')
+
+  await drizzleFetch(env, '/update', { tableId: contactsTableId, id: row._id, record })
+  // Read back: drizzle skips unknown columns silently, so "success" alone proves nothing.
+  const after = (await loadReportContact(env, userId, contactId)).row
+  const fields = reportFieldsOf(after)
+  const notSaved = Object.keys(record).filter(k => String(after[k] ?? '') !== String(record[k]))
+  if (notSaved.length) throw new Error(`Saved, but the read-back does not show: ${notSaved.join(', ')}.`)
+  const q = fields.meetingQuality
+  const built = buildMeetingReport(fields)
+  return {
+    success: true,
+    contactId: String(row._id),
+    name: after.full_name || null,
+    ...fields,
+    meetingQualityLabel: q === null ? null : MEETING_QUALITY_MAP[q]?.label || null,
+    readyToSend: !('error' in built),
+    missing: 'error' in built ? built.error : null,
+    message: `Report fields saved for ${after.full_name || 'the contact'}: quality ${q ?? '—'}${q !== null ? ` (${MEETING_QUALITY_MAP[q]?.label})` : ''}, date ${fields.meetingDate || '—'}, note ${fields.criticalNote ? `"${fields.criticalNote.slice(0, 80)}"` : '—'}.`
+      + ('error' in built ? ` Not ready to send: ${built.error}` : ' Ready for preview_meeting_report.'),
+  }
+}
+
+async function executePreviewMeetingReport(input, env) {
+  const { userId, email, contactId } = input
+  assertCoachingSender(env, email)
+  const { row, logsTableId } = await loadReportContact(env, userId, contactId)
+  const fields = reportFieldsOf(row)
+  const built = buildMeetingReport(fields)
+  const base = { contactId: String(row._id), name: row.full_name || null, ...fields }
+  if ('error' in built) return { success: false, ready: false, ...base, reason: built.error, message: `Cannot send: ${built.error}` }
+  const { report } = built
+
+  const { res, data } = await coachingFetch(env, 'samtaler', { method: 'GET' })
+  if (!res.ok || data.ok !== true || !Array.isArray(data.samtaler)) {
+    throw new Error(String(data.feil || `Could not read samtaler from the CMS (HTTP ${res.status}).`))
+  }
+  const emails = new Set(emailsOf(row))
+  const matches = data.samtaler.filter(s => s.dato === report.dato && emails.has(String(s.kontakt_epost || '').trim().toLowerCase()))
+  const samtaler = matches.map(s => ({ coachingId: Number(s.id), dato: s.dato, tidspunkt: s.tidspunkt || null, type: s.type || null, status: s.status, utfall: s.utfall || null }))
+
+  let lastSent = null
+  if (logsTableId) {
+    const logs = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { contact_id: String(row._id), contact_type: 'Report' }, limit: 1, orderBy: 'logged_at', order: 'desc' }).catch(() => null)
+    const l = logs ? (logs.records || logs.rows || [])[0] : null
+    if (l) lastSent = { at: l.rapport_sendt_at || l.logged_at || null, coachingId: l.coaching_id ? Number(l.coaching_id) : null }
+  }
+
+  const reason = matches.length === 0
+    ? `No samtale in the CMS with e-mail (${[...emails].join(', ') || 'none'}) on ${report.dato}.`
+    : matches.length > 1 ? `Several samtaler on the same date (${matches.map(m => '#' + m.id).join(', ')}) — cannot pick one automatically.` : null
+  const one = matches.length === 1 ? samtaler[0] : null
+  const alreadyReported = one ? one.status !== 'Planlagt' : false
+  return {
+    success: true,
+    ready: !reason,
+    ...base,
+    report: { status: report.status, utfall: report.utfall, notater: report.notater, dato: report.dato },
+    coachingId: one ? one.coachingId : null,
+    samtaler,
+    alreadyReported,
+    lastSent,
+    reason,
+    message: reason
+      ? `Cannot send: ${reason}`
+      : `Ready to send for ${row.full_name}: samtale #${one.coachingId} · ${report.dato}${one.tidspunkt ? ' ' + one.tidspunkt : ''} → ${report.status}${report.utfall ? ' · ' + report.utfall : ''}. Notes: "${report.notater}".`
+        + (alreadyReported ? ` WARNING: this samtale is already reported (${one.status}); sending overwrites the samtale and the note in the customer's kontaktlogg.` : '')
+        + ` Call send_meeting_report with coachingId ${one.coachingId} after the user confirms.`,
+  }
+}
+
+async function executeSendMeetingReport(input, env) {
+  const { userId, email, contactId, coachingId } = input
+  if (!coachingId) throw new Error('coachingId is required — take it from preview_meeting_report. Nothing was sent.')
+  // Re-run the whole preview: the fields or the CMS may have changed since it was shown, and the
+  // id the caller passes must still be THE one samtale that matches this contact.
+  const p = await executePreviewMeetingReport({ userId, email, contactId }, env)
+  if (!p.ready) throw new Error(`${p.reason} Nothing was sent.`)
+  if (Number(coachingId) !== p.coachingId) {
+    throw new Error(`coachingId ${coachingId} is not the samtale that matches this contact (#${p.coachingId}). Nothing was sent.`)
+  }
+  const body = { coaching_id: p.coachingId, status: p.report.status, notater: p.report.notater }
+  if (p.report.utfall) body.utfall = p.report.utfall
+  const { res, data } = await coachingFetch(env, 'rapport', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (res.status === 202) throw new Error('The samtale was not found in the CMS (HTTP 202) — nothing was saved as a report.')
+  if (!(res.status === 200 && data.ok === true)) throw new Error(String(data.feil || `Sending failed (HTTP ${res.status}).`))
+  const sentId = Number(data.coaching_id)
+
+  // The same contact_logs entry the Contacts app writes, so the app's "Rapport sist sendt" shows it.
+  let logged = false
+  let logError = null
+  const { logsTableId } = await resolveContactTableIds(userId, env)
+  if (logsTableId) {
+    try {
+      const sentAt = new Date().toISOString()
+      const tid = p.samtaler[0]?.tidspunkt
+      const notes = `Rapport sendt til Enkel endring CMS\nSamtale #${sentId} · ${p.report.dato}${tid ? ' ' + tid : ''}\nStatus: ${p.report.status}${p.report.utfall ? ' · ' + p.report.utfall : ''}\n\n${p.report.notater}`
+      await drizzleFetch(env, '/insert', {
+        tableId: logsTableId,
+        record: {
+          contact_id: p.contactId, contact_name: p.name || '', contact_type: 'Report', notes, logged_at: sentAt,
+          coaching_id: String(sentId), status: p.report.status, utfall: p.report.utfall ?? '', rapport_sendt_at: sentAt,
+        },
+      })
+      logged = true
+    } catch (e) {
+      logError = `The report reached the CMS, but the ContactHub log entry failed: ${e.message}`
+    }
+  }
+  return {
+    success: true,
+    contactId: p.contactId,
+    name: p.name,
+    coachingId: sentId,
+    status: p.report.status,
+    utfall: p.report.utfall,
+    dato: p.report.dato,
+    logged,
+    logError,
+    message: `Report sent to Enkel endring CMS for ${p.name}: samtale #${sentId} · ${p.report.dato} → ${p.report.status}${p.report.utfall ? ' · ' + p.report.utfall : ''}.`
+      + (logged ? ' Logged in ContactHub.' : logError ? ` ${logError}` : ''),
+  }
+}
+
 // ── AI content generation (multi-provider) ───────────────────────
 
 async function executeSaveLearning(input, env) {
@@ -18433,6 +18651,12 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAddContactLog(toolInput, env)
     case 'create_contact':
       return await executeCreateContact(toolInput, env)
+    case 'set_meeting_report':
+      return await executeSetMeetingReport(toolInput, env)
+    case 'preview_meeting_report':
+      return await executePreviewMeetingReport(toolInput, env)
+    case 'send_meeting_report':
+      return await executeSendMeetingReport(toolInput, env)
     case 'get_app_table_schema':
       return await executeGetAppTableSchema(toolInput, env)
     case 'add_app_table_column':
