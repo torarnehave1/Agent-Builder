@@ -3238,7 +3238,8 @@ export default {
           return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
         }
         const body = await request.json().catch(() => ({}))
-        const input = { userId: callerAuth.userId, email: callerAuth.email, contactId: typeof body.contactId === 'string' ? body.contactId.trim() : undefined }
+        // callerToken is forwarded to coaching-report-worker, which checks it and its own allowlist too.
+        const input = { userId: callerAuth.userId, email: callerAuth.email, callerToken: callerAuth.token, contactId: typeof body.contactId === 'string' ? body.contactId.trim() : undefined }
         if (reportRoute === 'set_meeting_report') {
           input.meetingQuality = body.meetingQuality
           input.meetingDate = body.meetingDate

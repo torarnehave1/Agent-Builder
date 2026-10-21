@@ -11773,9 +11773,15 @@ function assertCoachingSender(env, email) {
   }
 }
 
-async function coachingFetch(env, path, init) {
+// coaching-report-worker authenticates every call (X-API-Token + its own allowlist, 2026-10-21),
+// so the caller's own token travels with the request — the binding grants no access by itself.
+async function coachingFetch(env, path, init, callerToken) {
   if (!env.COACHING_WORKER?.fetch) throw new Error('The COACHING_WORKER service binding is not configured on agent-worker.')
-  const res = await env.COACHING_WORKER.fetch(`https://coaching-report-worker/coaching/${path}`, init)
+  if (!callerToken) throw new Error('No caller token to present to the CMS proxy. Nothing was sent.')
+  const res = await env.COACHING_WORKER.fetch(`https://coaching-report-worker/coaching/${path}`, {
+    ...init,
+    headers: { ...(init?.headers || {}), 'X-API-Token': callerToken },
+  })
   const text = await res.text()
   let data
   try { data = JSON.parse(text) } catch {
@@ -11855,7 +11861,7 @@ async function executeSetMeetingReport(input, env) {
 }
 
 async function executePreviewMeetingReport(input, env) {
-  const { userId, email, contactId } = input
+  const { userId, email, contactId, callerToken } = input
   assertCoachingSender(env, email)
   const { row, logsTableId } = await loadReportContact(env, userId, contactId)
   const fields = reportFieldsOf(row)
@@ -11864,7 +11870,7 @@ async function executePreviewMeetingReport(input, env) {
   if ('error' in built) return { success: false, ready: false, ...base, reason: built.error, message: `Cannot send: ${built.error}` }
   const { report } = built
 
-  const { res, data } = await coachingFetch(env, 'samtaler', { method: 'GET' })
+  const { res, data } = await coachingFetch(env, 'samtaler', { method: 'GET' }, callerToken)
   if (!res.ok || data.ok !== true || !Array.isArray(data.samtaler)) {
     throw new Error(String(data.feil || `Could not read samtaler from the CMS (HTTP ${res.status}).`))
   }
@@ -11903,11 +11909,11 @@ async function executePreviewMeetingReport(input, env) {
 }
 
 async function executeSendMeetingReport(input, env) {
-  const { userId, email, contactId, coachingId } = input
+  const { userId, email, contactId, coachingId, callerToken } = input
   if (!coachingId) throw new Error('coachingId is required — take it from preview_meeting_report. Nothing was sent.')
   // Re-run the whole preview: the fields or the CMS may have changed since it was shown, and the
   // id the caller passes must still be THE one samtale that matches this contact.
-  const p = await executePreviewMeetingReport({ userId, email, contactId }, env)
+  const p = await executePreviewMeetingReport({ userId, email, contactId, callerToken }, env)
   if (!p.ready) throw new Error(`${p.reason} Nothing was sent.`)
   if (Number(coachingId) !== p.coachingId) {
     throw new Error(`coachingId ${coachingId} is not the samtale that matches this contact (#${p.coachingId}). Nothing was sent.`)
@@ -11918,7 +11924,7 @@ async function executeSendMeetingReport(input, env) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  })
+  }, callerToken)
   if (res.status === 202) throw new Error('The samtale was not found in the CMS (HTTP 202) — nothing was saved as a report.')
   if (!(res.status === 200 && data.ok === true)) throw new Error(String(data.feil || `Sending failed (HTTP ${res.status}).`))
   const sentId = Number(data.coaching_id)
