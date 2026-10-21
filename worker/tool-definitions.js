@@ -3913,6 +3913,18 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'provision_world_commerce',
+    description: "Create a World's CUSTOMER database in the founder's OWN Cloudflare account (D1, EU jurisdiction): tables customers, orders, grants (who may open which product), memberships and progress, schema version 1. Idempotent: finds an existing database, applies only missing tables, reads the tables back, refuses an existing database outside the EU. Registers ONLY where the database is (platform table world_commerce_stores) — the platform never stores the World's customers. Step 14 of the World setup guide (graph b7f3a1d0). Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's primary domain, e.g. sodesign.no." },
+        database_name: { type: 'string', description: 'Optional. Default world-commerce-<first label of domain>.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
     name: 'provision_world_graphs',
     description:
       "Provision a World Founder's OWN knowledge-graph storage inside the founder's OWN Cloudflare account (Superadmin only), idempotent: (1) find-or-create D1 database world-graphs-<stem> with EU jurisdiction, (2) deploy the <stem>-graphs-proxy worker from WORLD_TEMPLATES template:world-graphs-proxy, bound to that database, the World's domain and the platform's PUBLIC signing key (no secret goes into the founder's account), (3) attach graphs.<domain>, (4) create the graph tables through the proxy from the platform's live schema, (5) read the proxy back, (6) record world_graph_stores with status 'provisioned'. It never sets the store active: graphs keep living on the platform until the architect switches the row to active. Needs the World token to carry D1 edit, Workers Scripts edit, Workers Routes edit and Zone Read. Pass force:true to redeploy the proxy after a template update.",

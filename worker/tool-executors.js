@@ -7717,6 +7717,118 @@ async function executeProvisionWorldGraphs(input, env) {
   }
 }
 
+// ---- provision_world_commerce (2026-10-21) ------------------------------------------------------
+// A World's CUSTOMER database, in the founder's own Cloudflare account (EU): who the customers are,
+// what they bought, what they may open, their memberships and their progress. The platform keeps only
+// the register row below — never the customer list (same principle as the graph store).
+// The founder is the data controller. Workers that read and write it (checkout/webhook, Min side,
+// locked delivery on cdn.<domain>) come in later steps and bind this database.
+const WORLD_COMMERCE_SCHEMA_VERSION = 1
+const WORLD_COMMERCE_SCHEMA = [
+  `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS customers (
+     email TEXT PRIMARY KEY, name TEXT, source TEXT, marketing_consent INTEGER NOT NULL DEFAULT 0,
+     created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS orders (
+     id TEXT PRIMARY KEY, email TEXT NOT NULL, product_ref TEXT NOT NULL, amount INTEGER, currency TEXT,
+     provider TEXT NOT NULL, provider_ref TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+     UNIQUE(provider, provider_ref))`,
+  `CREATE TABLE IF NOT EXISTS grants (
+     id TEXT PRIMARY KEY, email TEXT NOT NULL, product_ref TEXT NOT NULL, kind TEXT NOT NULL,
+     source TEXT NOT NULL, source_ref TEXT, starts_at TEXT NOT NULL, ends_at TEXT, revoked_at TEXT,
+     created_at TEXT NOT NULL, created_by TEXT, UNIQUE(email, product_ref, source, source_ref))`,
+  `CREATE TABLE IF NOT EXISTS memberships (
+     id TEXT PRIMARY KEY, email TEXT NOT NULL, plan TEXT NOT NULL, status TEXT NOT NULL, provider TEXT NOT NULL,
+     provider_ref TEXT, current_period_end TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+     UNIQUE(provider, provider_ref))`,
+  `CREATE TABLE IF NOT EXISTS progress (
+     email TEXT NOT NULL, course_ref TEXT NOT NULL, lesson_ref TEXT NOT NULL, done_at TEXT NOT NULL,
+     PRIMARY KEY (email, course_ref, lesson_ref))`,
+  `CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email)`,
+  `CREATE INDEX IF NOT EXISTS idx_grants_email ON grants(email)`,
+  `CREATE INDEX IF NOT EXISTS idx_memberships_email ON memberships(email)`,
+]
+const WORLD_COMMERCE_TABLES = ['customers', 'orders', 'grants', 'memberships', 'progress', 'schema_version']
+
+async function ensureWorldCommerceRegistry(env) {
+  await env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS world_commerce_stores (
+       domain TEXT PRIMARY KEY, cf_account_id TEXT NOT NULL, d1_database_id TEXT NOT NULL, d1_database_name TEXT NOT NULL,
+       schema_version INTEGER NOT NULL, status TEXT NOT NULL, provisioned_at TEXT NOT NULL, updated_at TEXT NOT NULL)`
+  ).run()
+}
+
+async function executeProvisionWorldCommerce(input, env) {
+  const ctx = await resolveWorldInfraContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const { cfAccount, cfToken, domain } = ctx
+  if (!domain) return { success: false, error: 'domain is required, e.g. sodesign.no.' }
+  const stem = domain.split('.')[0]
+  const dbName = String(input.database_name || `world-commerce-${stem}`).trim()
+  const steps = []
+
+  // 1. D1, find-or-create, EU jurisdiction. Customer data is personal data; the jurisdiction is fixed
+  //    at creation and cannot be changed later, so an existing database outside the EU is refused.
+  let db
+  const list = await cfApi(`/accounts/${cfAccount}/d1/database?name=${encodeURIComponent(dbName)}`, cfToken)
+  if (!list.ok) return { success: false, error: `Could not list D1 databases in ${cfAccount} (${list.status}): ${list.error || 'unknown'}. The token needs Account → D1 → Edit.` }
+  db = (list.json.result || []).find((d) => d.name === dbName)
+  if (db) {
+    const info = await cfApi(`/accounts/${cfAccount}/d1/database/${db.uuid}`, cfToken)
+    const jur = info.ok ? (info.json.result && (info.json.result.jurisdiction || null)) : null
+    if (jur && jur !== 'eu') return { success: false, error: `${dbName} exists but is in jurisdiction "${jur}", not EU. Customer data must stay in the EU; pass another database_name.` }
+    steps.push(`HAD  d1 — ${dbName} (${db.uuid})`)
+  } else {
+    const mk = await cfApi(`/accounts/${cfAccount}/d1/database`, cfToken, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: dbName, jurisdiction: 'eu' }),
+    })
+    if (!mk.ok) return { success: false, error: `Could not create D1 database ${dbName} (${mk.status}): ${mk.error || 'unknown'}` }
+    db = mk.json.result
+    steps.push(`DID  d1 — ${dbName} created (${db.uuid}, jurisdiction eu)`)
+  }
+
+  // 2. Schema, one statement per call (idempotent: IF NOT EXISTS everywhere).
+  const query = (sql, params = []) => cfApi(`/accounts/${cfAccount}/d1/database/${db.uuid}/query`, cfToken, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql, params }),
+  })
+  for (const sql of WORLD_COMMERCE_SCHEMA) {
+    const r = await query(sql)
+    if (!r.ok) return { success: false, error: `Schema statement failed (${r.status}): ${r.error || 'unknown'} — ${sql.slice(0, 80)}`, steps, d1_database_id: db.uuid }
+  }
+  const have = await query('SELECT MAX(version) AS v FROM schema_version')
+  const current = have.ok ? Number(((have.json.result || [])[0]?.results || [])[0]?.v || 0) : 0
+  if (current < WORLD_COMMERCE_SCHEMA_VERSION) {
+    await query('INSERT INTO schema_version (version, applied_at) VALUES (?, ?)', [WORLD_COMMERCE_SCHEMA_VERSION, new Date().toISOString()])
+  }
+  steps.push(`DID  schema — version ${WORLD_COMMERCE_SCHEMA_VERSION}`)
+
+  // 3. Read it back — the evidence, not the calls above.
+  const back = await query(`SELECT name FROM sqlite_master WHERE type = 'table'`)
+  const tables = back.ok ? ((back.json.result || [])[0]?.results || []).map((r) => r.name) : []
+  const missing = WORLD_COMMERCE_TABLES.filter((t) => !tables.includes(t))
+  if (missing.length) return { success: false, error: `Read-back is missing tables: ${missing.join(', ')}`, steps, tables }
+  steps.push(`DID  read-back — ${WORLD_COMMERCE_TABLES.length} tables present`)
+
+  // 4. Register row on the platform: where this World's customer database is. Nothing else.
+  await ensureWorldCommerceRegistry(env)
+  const now = new Date().toISOString()
+  await env.DB.prepare(
+    `INSERT INTO world_commerce_stores (domain, cf_account_id, d1_database_id, d1_database_name, schema_version, status, provisioned_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, 'provisioned', ?, ?)
+     ON CONFLICT(domain) DO UPDATE SET cf_account_id = excluded.cf_account_id, d1_database_id = excluded.d1_database_id,
+       d1_database_name = excluded.d1_database_name, schema_version = excluded.schema_version, updated_at = excluded.updated_at`
+  ).bind(domain, cfAccount, db.uuid, dbName, WORLD_COMMERCE_SCHEMA_VERSION, now, now).run()
+  const row = await env.DB.prepare('SELECT status, schema_version FROM world_commerce_stores WHERE domain = ?').bind(domain).first()
+  steps.push(`DID  registry — world_commerce_stores ${domain} status ${row?.status}`)
+
+  return {
+    success: true,
+    message: `Customer database for ${domain} ready: D1 ${dbName} (EU) in the founder's account ${cfAccount}, schema ${WORLD_COMMERCE_SCHEMA_VERSION}, tables ${WORLD_COMMERCE_TABLES.join(', ')}. The platform keeps only the register row (status "${row?.status}"); no customer data is stored on the platform.`,
+    domain, cf_account_id: cfAccount, d1_database_id: db.uuid, d1_database_name: dbName,
+    schema_version: WORLD_COMMERCE_SCHEMA_VERSION, tables, registry_status: row?.status, steps,
+  }
+}
+
 // Make one host of a World answer with a redirect (e.g. stineoksvolddesign.no → www, whose DNS
 // pointed unproxied at Cloudflare IPs and answered Error 1000). A tiny worker in the World's OWN
 // account, attached to the host as a Workers custom domain. The host's existing A/AAAA/CNAME
@@ -18231,6 +18343,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldKv(toolInput, env)
     case 'provision_world_photos':
       return await executeProvisionWorldPhotos(toolInput, env)
+    case 'provision_world_commerce':
+      return await executeProvisionWorldCommerce(toolInput, env)
     case 'provision_world_graphs':
       return await executeProvisionWorldGraphs(toolInput, env)
     case 'move_graph_to_world':
