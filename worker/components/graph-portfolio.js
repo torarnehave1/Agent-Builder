@@ -86,6 +86,11 @@
   var GRAPH_ENDPOINT = 'https://knowledge.vegvisr.org/getknowgraph?id='
   var VIEWER = 'https://www.vegvisr.org/gnew-viewer?graphId='
   var FULLTEXT_URL = 'https://api.vegvisr.org/components/vegvisr-fulltext.js'
+  // The rendering engine for REGISTERED node types (micro-story, work-context, …): the
+  // <vegvisr-node> element runs a type's APPROVED renderer in an isolated frame — the same
+  // element GNewViewer uses, so the dialog and the viewer show such a node alike. Loaded
+  // with the first opened card, like vegvisr-fulltext.
+  var NODE_URL = 'https://api.vegvisr.org/components/vegvisr-node.js'
   // mermaid 11.9.0, the same version the Vue viewer bundles, served from OUR OWN
   // origin (the web-components R2 bucket) — not a third-party CDN, which a
   // component running on a customer's page must never pull in. It is 2.7MB, so it
@@ -323,10 +328,20 @@
   // What the dialog should do with one node. Kept pure so the mapping is testable
   // without a DOM, and so an unknown node type degrades to something visible
   // rather than vanishing silently.
-  function nodeRenderPlan (node) {
+  //
+  // `registered` is the Set of types with an approved renderer (VegvisrNode.approvedTypes).
+  // Such a node is a DATA type — its meaning lives in metadata as much as in info — so it
+  // goes to <vegvisr-node>. Before this branch a micro-story fell through to markdown and
+  // the reader got its bare text: no date, no participants, none of its look (2026-10-22,
+  // iiba.vegr.ai). Without the Set (vegvisr-node did not load) it still falls through, so
+  // the text stays visible.
+  function nodeRenderPlan (node, registered) {
     var type = String((node && node.type) || '').toLowerCase()
     var info = String((node && node.info) || '')
     var label = String((node && node.label) || '')
+    if (registered && typeof registered.has === 'function' && registered.has(type)) {
+      return { kind: 'registered', text: info, label: label }
+    }
     if (type === 'mermaid-diagram') {
       return { kind: info.trim() ? 'mermaid' : 'skip', text: info, label: label }
     }
@@ -959,6 +974,33 @@
     return fulltextPromise
   }
 
+  // The types <vegvisr-node> can show, per World. NEVER rejects: if the element or
+  // /node-types cannot be reached, the answer is an empty Set and every node renders as
+  // it did before this existed.
+  var nodeTypesPromises = {}
+  function ensureNodeTypes (world) {
+    var key = world || ''
+    if (nodeTypesPromises[key]) return nodeTypesPromises[key]
+    nodeTypesPromises[key] = new Promise(function (resolve, reject) {
+      if (window.VegvisrNode) return resolve(window.VegvisrNode)
+      var existing = document.querySelector('script[src="' + NODE_URL + '"]')
+      var s = existing || document.createElement('script')
+      s.addEventListener('load', function () { resolve(window.VegvisrNode) })
+      s.addEventListener('error', function () { reject(new Error('could not load ' + NODE_URL)) })
+      if (!existing) {
+        s.src = NODE_URL
+        document.head.appendChild(s)
+      }
+    }).then(function (VN) {
+      if (!VN || typeof VN.approvedTypes !== 'function') throw new Error('vegvisr-node loaded but exposed no VegvisrNode')
+      return VN.approvedTypes(undefined, key)
+    }).catch(function (e) {
+      console.warn('[graph-portfolio] registered node types unavailable, showing them as text:', e && e.message)
+      return new Set()
+    })
+    return nodeTypesPromises[key]
+  }
+
   var mermaidPromise = null
 
   function ensureMermaid () {
@@ -1236,11 +1278,13 @@
       fetch(GRAPH_ENDPOINT + encodeURIComponent(card.id), { headers: withAccept(opts.headers) })
         .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json() }),
       ensureFulltext(),
+      ensureNodeTypes(opts.world),
     ]).then(function (both) {
       if (!d.open || d.token !== token) return // closed, or another card opened meanwhile
       var withTitle = {}
       for (var k in opts) withTitle[k] = opts[k]
       withTitle.dialogTitle = card.title
+      withTitle.registeredTypes = both[2]
       if (isPasswordProtected(both[0]) && !passwordRemembered(card.id)) {
         renderPasswordGate(d, both[0], both[1], withTitle, card.id, token)
         return
@@ -1364,8 +1408,19 @@
     }
     var rendered = 0
     visibleNodes(graph).forEach(function (node) {
-      var plan = nodeRenderPlan(node)
+      var plan = nodeRenderPlan(node, opts.registeredTypes)
       if (plan.kind === 'skip') return
+      if (plan.kind === 'registered') {
+        var el = document.createElement('vegvisr-node')
+        el.className = 'vgp-node'
+        el.style.display = 'block'
+        if (opts.world) el.world = opts.world
+        // A plain copy: the element posts it into a frame, and the graph object stays ours.
+        el.node = { id: node.id, label: node.label, type: node.type, info: node.info, metadata: node.metadata || {} }
+        body.appendChild(el)
+        rendered += 1
+        return
+      }
       if (plan.kind === 'mermaid') {
         body.appendChild(diagramEl(plan, opts))
         rendered += 1
@@ -1705,7 +1760,7 @@
     var open = (root.getAttribute('data-open') || 'modal').trim().toLowerCase()
     if (open !== 'page' && open !== 'self') open = 'modal'
     var shareUrl = (root.getAttribute('data-share-url') || '').trim()
-    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open, shareUrl: shareUrl, headers: headers }
+    var opts = { lang: lang, t: t, viewer: viewer, target: target, limit: limit, descMax: DESC_MAX, open: open, shareUrl: shareUrl, headers: headers, world: world }
 
     injectStyle()
     root.classList.add('vgp')

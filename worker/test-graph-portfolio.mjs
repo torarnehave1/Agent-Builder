@@ -184,6 +184,22 @@ check('an audio node whose path is not http(s) falls back to its note',
   api.nodeRenderPlan({ type: 'audio', info: 'Audio file: x.webm', path: 'javascript:alert(1)' }).kind === 'markdown')
 check('an audio node with no path and no note is skipped',
   api.nodeRenderPlan({ type: 'audio', info: '', path: null }).kind === 'skip')
+// Registered data types (2026-10-22): a micro-story on iiba.vegr.ai showed as bare text.
+{
+  const approved = new Set(['micro-story', 'work-context'])
+  const ms = { type: 'micro-story', label: 'Micro-story: X', info: 'What happened.', metadata: { date: '2026-10-21' } }
+  check('a type with an approved renderer goes to <vegvisr-node>',
+    api.nodeRenderPlan(ms, approved).kind === 'registered')
+  check('the same node without the Set (vegvisr-node did not load) still shows its text',
+    (p => p.kind === 'markdown' && p.text === 'What happened.')(api.nodeRenderPlan(ms)))
+  check('a registered type that is not approved (empty Set) still shows its text',
+    api.nodeRenderPlan(ms, new Set()).kind === 'markdown')
+  check('built-in types are untouched by the Set',
+    api.nodeRenderPlan({ type: 'fulltext', info: '## Hei' }, approved).kind === 'markdown' &&
+    api.nodeRenderPlan({ type: 'mermaid-diagram', info: 'graph TD' }, approved).kind === 'mermaid')
+  check('a type name is matched case-insensitively, as the switch above does',
+    api.nodeRenderPlan({ type: 'Micro-Story', info: 'x' }, approved).kind === 'registered')
+}
 // youtube-video: the viewer's url rules. The values below are REAL node fields from
 // published graphs (surveyed 2026-09-14: 20 label-format, 16 path urls over 37 nodes).
 const yt = (node) => api.nodeRenderPlan(Object.assign({ type: 'youtube-video', info: '' }, node))
