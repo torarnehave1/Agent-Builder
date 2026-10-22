@@ -17308,8 +17308,19 @@ async function executeCalendarCheckAvailability(input, env) {
   }
 }
 
+// The calendar these admin routes act on is the VERIFIED caller's (2026-10-22). They reach
+// calendar-worker over the binding, which trusts X-User-Email — so a model-supplied userEmail
+// must never be what goes in it, or any signed-in user could read or delete anyone's bookings.
+async function calendarOwnerFor(input, env) {
+  const me = await actingEmailFor(input, env)
+  if (!me) throw new Error('No verified user on this request — cannot open a calendar.')
+  const asked = String(input.userEmail || '').trim().toLowerCase()
+  if (asked && asked !== me) throw new Error(`You can only read or change your own calendar (${me}), not ${asked}.`)
+  return me
+}
+
 async function executeCalendarListBookings(input, env) {
-  const userEmail = (input.userEmail || '').trim()
+  const userEmail = await calendarOwnerFor(input, env)
   const date = (input.date || '').trim()
   if (!userEmail) throw new Error('userEmail is required')
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('date must be YYYY-MM-DD if provided')
@@ -17409,7 +17420,7 @@ async function executeCalendarCreateBooking(input, env) {
 }
 
 async function executeCalendarRescheduleBooking(input, env) {
-  const userEmail = (input.userEmail || '').trim()
+  const userEmail = await calendarOwnerFor(input, env)
   const bookingId = input.bookingId
   const newStartTime = (input.newStartTime || '').trim()
   const newEndTime = (input.newEndTime || '').trim()
@@ -17460,7 +17471,7 @@ async function executeCalendarRescheduleBooking(input, env) {
 }
 
 async function executeCalendarDeleteBooking(input, env) {
-  const userEmail = (input.userEmail || '').trim()
+  const userEmail = await calendarOwnerFor(input, env)
   const bookingId = input.bookingId
 
   if (!userEmail) throw new Error('userEmail is required')
@@ -17491,7 +17502,7 @@ async function executeCalendarDeleteBooking(input, env) {
 }
 
 async function executeCalendarGetStatus(input, env) {
-  const userEmail = (input.userEmail || '').trim()
+  const userEmail = await calendarOwnerFor(input, env)
   if (!userEmail) throw new Error('userEmail is required')
 
   const res = await env.CALENDAR_WORKER.fetch(
