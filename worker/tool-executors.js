@@ -2483,6 +2483,8 @@ function buildGateElement(opts) {
   // The component defaults to Norwegian; lang="en" switches its text (vegvisr-auth lang table).
   if (String(opts.gateLang || '').toLowerCase().startsWith('en')) attrs += ' lang="en"'
   if (String(opts.gateRegisterMode || '').toLowerCase() === 'open') attrs += ' register-mode="open"'
+  // A World's own host: the card takes the World's look from that host's /branding.json (2026-10-23).
+  if (opts.gateBrand) attrs += ' brand="auto"'
   return `<vegvisr-auth${attrs}></vegvisr-auth>`
 }
 
@@ -2863,7 +2865,9 @@ async function executePublishHtmlNode(input, env) {
   // Inject the runtime auth bridge so in-page saves (window.vegvisrPatchNode) work on the
   // live domain, same as in preview. Injected into the SERVED copy only — node.info in the
   // graph stays clean, so republish never accumulates bridges.
-  let htmlToPublish = injectPublishedAuthBridge(html, input.graphId, gateOpts || { gate: false })
+  // On a World's own host the gate wears the World's design (brand="auto" → /branding.json); decided
+  // on every publish from where the host is served, never stored, so it follows a host's move.
+  let htmlToPublish = injectPublishedAuthBridge(html, input.graphId, gateOpts ? { ...gateOpts, gateBrand: !sharedHost } : { gate: false })
   // VERSION PILL — remembered per host like the gate: version_pill:true stores it, false clears
   // it, omitted reuses what is stored, so a plain republish keeps (or keeps out) the pill.
   const storedPills = (node.metadata && typeof node.metadata.publishVersionPill === 'object' && node.metadata.publishVersionPill) || {}
