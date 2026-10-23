@@ -3913,6 +3913,36 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'grant_world_access',
+    description: "Give (or with revoke:true take back) one person's access to one product in a World — e.g. a test customer, or a purchase made outside the shop. Writes customers + grants in the World's OWN customer database (provision_world_commerce first) and reads the row back. product_ref is the product graph's id (a course graph). Customer pages decide access from grants only, never from role. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. sodesign.no." },
+        email: { type: 'string', description: "The customer's e-mail (their Vegvisr login)." },
+        product_ref: { type: 'string', description: 'The product graph id, e.g. the course graph.' },
+        kind: { type: 'string', description: 'course (default), file or membership.' },
+        name: { type: 'string', description: 'Optional customer name.' },
+        ends_at: { type: 'string', description: 'Optional ISO time when access ends.' },
+        note: { type: 'string', description: 'Optional reason, e.g. "test customer".' },
+        revoke: { type: 'boolean', description: 'true = take the access away.' },
+      },
+      required: ['domain', 'email', 'product_ref'],
+    },
+  },
+  {
+    name: 'list_world_grants',
+    description: "List who has access to what in a World, read from the World's own customer database. Optional email filter. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain." },
+        email: { type: 'string', description: 'Optional: only this customer.' },
+      },
+      required: ['domain'],
+    },
+  },
+  {
     name: 'provision_world_commerce',
     description: "Create a World's CUSTOMER database in the founder's OWN Cloudflare account (D1, EU jurisdiction): tables customers, orders, grants (who may open which product), memberships and progress, schema version 1. Idempotent: finds an existing database, applies only missing tables, reads the tables back, refuses an existing database outside the EU. Registers ONLY where the database is (platform table world_commerce_stores) — the platform never stores the World's customers. Step 14 of the World setup guide (graph b7f3a1d0). Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {

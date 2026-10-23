@@ -5,6 +5,7 @@
  * and returns a result object. The executeTool() dispatcher routes by name.
  */
 
+import { commerceContext, commerceQuery } from './world-customer.js'
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE } from './system-prompt.js'
@@ -7827,6 +7828,50 @@ async function executeProvisionWorldCommerce(input, env) {
     domain, cf_account_id: cfAccount, d1_database_id: db.uuid, d1_database_name: dbName,
     schema_version: WORLD_COMMERCE_SCHEMA_VERSION, tables, registry_status: row?.status, steps,
   }
+}
+
+// ---- grant_world_access / list_world_grants (2026-10-23) -----------------------------------------
+// Give one person access to one product in a World — by hand, for testing or for a purchase made
+// outside the shop (the «Mangler du en oppskrift?» case). Written to the World's own customer
+// database; the platform stores nothing. Superadmin only.
+async function executeGrantWorldAccess(input, env) {
+  const gate = await resolveWorldInfraContext(input, env)
+  if (gate.error) return { success: false, error: gate.error }
+  const ctx = await commerceContext(env, input.domain)
+  if (ctx.error) return { success: false, error: `${ctx.error}. Run provision_world_commerce for ${input.domain} first.` }
+  const email = String(input.email || '').trim().toLowerCase()
+  const productRef = String(input.product_ref || '').trim()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return { success: false, error: 'email must be an e-mail address.' }
+  if (!productRef) return { success: false, error: 'product_ref is required — the product graph id (e.g. the course graph).' }
+  const now = new Date().toISOString()
+  const revoke = input.revoke === true
+  if (revoke) {
+    await commerceQuery(ctx, 'UPDATE grants SET revoked_at = ? WHERE LOWER(email) = ? AND product_ref = ? AND revoked_at IS NULL', [now, email, productRef])
+  } else {
+    await commerceQuery(ctx, `INSERT INTO customers (email, name, source, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET name = COALESCE(excluded.name, customers.name), updated_at = excluded.updated_at`,
+      [email, input.name || null, input.source || 'manual', now, now])
+    await commerceQuery(ctx, `INSERT INTO grants (id, email, product_ref, kind, source, source_ref, starts_at, ends_at, created_at, created_by)
+      VALUES (?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?)
+      ON CONFLICT(email, product_ref, source, source_ref) DO UPDATE SET revoked_at = NULL, ends_at = excluded.ends_at`,
+      [crypto.randomUUID(), email, productRef, input.kind || 'course', input.note || 'manual', now, input.ends_at || null, now, gate.founderEmail ? 'superadmin' : null])
+  }
+  const rows = await commerceQuery(ctx, 'SELECT product_ref, kind, source, starts_at, ends_at, revoked_at FROM grants WHERE LOWER(email) = ? AND product_ref = ?', [email, productRef])
+  const active = rows.some((r) => !r.revoked_at)
+  return {
+    success: true, domain: ctx.domain, email, product_ref: productRef, active, grants: rows,
+    message: `${email} ${active ? 'now has' : 'no longer has'} access to ${productRef} in ${ctx.domain} (read back from the World's customer database).`,
+  }
+}
+
+async function executeListWorldGrants(input, env) {
+  const gate = await resolveWorldInfraContext(input, env)
+  if (gate.error) return { success: false, error: gate.error }
+  const ctx = await commerceContext(env, input.domain)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const where = input.email ? 'WHERE LOWER(email) = ?' : ''
+  const rows = await commerceQuery(ctx, `SELECT email, product_ref, kind, source, starts_at, ends_at, revoked_at FROM grants ${where} ORDER BY created_at DESC LIMIT 200`, input.email ? [String(input.email).toLowerCase()] : [])
+  return { success: true, domain: ctx.domain, count: rows.length, grants: rows, message: `${rows.length} grant(s) in ${ctx.domain}${input.email ? ` for ${input.email}` : ''}.` }
 }
 
 // Make one host of a World answer with a redirect (e.g. stineoksvolddesign.no → www, whose DNS
@@ -18578,6 +18623,10 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldKv(toolInput, env)
     case 'provision_world_photos':
       return await executeProvisionWorldPhotos(toolInput, env)
+    case 'grant_world_access':
+      return await executeGrantWorldAccess(toolInput, env)
+    case 'list_world_grants':
+      return await executeListWorldGrants(toolInput, env)
     case 'provision_world_commerce':
       return await executeProvisionWorldCommerce(toolInput, env)
     case 'provision_world_graphs':

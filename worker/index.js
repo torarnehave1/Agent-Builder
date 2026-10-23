@@ -26,6 +26,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { handleWorldCustomer } from './world-customer.js'
 import { buildImageInput, DEFAULT_IMAGE_MODEL } from './image-models.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
 import { affiliationEdges, interactionEdges, buildNetwork, resolveNames, loadLayout, saveLayout } from './network-analysis.js'
@@ -2188,6 +2189,13 @@ export default {
           mail: mailError ? null : { sentTo: email, from: mail.from || null, whiteLabel: !!mail.whiteLabel, expiresAt: mail.expiresAt || null },
           error: mailError,
         }), { status: mailError ? 502 : 200, headers: corsHeaders })
+      }
+
+      // World customer side (2026-10-23): what a signed-in customer owns in a World, read from the
+      // World's own customer database; access by grants only. See world-customer.js.
+      if (pathname.startsWith('/world-customer/')) {
+        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders })
+        return handleWorldCustomer(request, env, url, corsHeaders, resolveAuthorizedCaller)
       }
 
       // POST /world-photos/token — mint a short-lived, scoped credential for ONE founder's photos
