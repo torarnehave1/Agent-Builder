@@ -1,25 +1,45 @@
 #!/usr/bin/env bash
-# VEmotion orientation: the VEmotion layer graph (contracts, decisions) + the live state of the
-# four codebases and three surfaces. Read-only. Prints no secret (no wrangler.toml, no .env, no
-# CLAUDE.md token lines).
+# Orientation for one system: its layer graph (contracts, decisions) + the live state of its
+# codebases and surfaces. Read-only. Prints no secret (no wrangler.toml, no .env, no CLAUDE.md
+# token lines).
 #
-#   orient.sh             contracts + decisions + live state
-#   orient.sh --observed  only the live state, formatted as the info of observed-vemotion-surfaces
-#                         (write it with the MCP tool update_node; never by hand, never by curl)
+#   orient.sh <system>             contracts + decisions + live state
+#   orient.sh <system> --observed  only the live state, formatted as the info of the system's
+#                                  observed node (write it with the MCP tool update_node; never by
+#                                  hand, never by curl)
+#   orient.sh --list               the systems that have a config in orient/systems/
+#
+# What differs per system lives in orient/systems/<system>.conf. This file holds only the parts
+# every system shares.
+#
+# Repo paths: each config names a repo by its GitHub name and its path on Tor Arne's Mac. Set
+# ORIENT_ROOT to a folder holding fresh clones (named as on GitHub) to run it elsewhere, e.g.
+#   ORIENT_ROOT=/home/claude orient.sh vemotion --observed
 set -u
-MODE="${1:-}"
-LAYER=b8527fde-96e7-4c68-b1fe-d97b82c2e13b
-
-APP=/Volumes/T7/video-generator
-MONO=/Volumes/T7/vegvisr-frontend
-AB=/Users/torarnehave/Documents/GitHub/Agent-Builder
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KG=https://knowledge.vegvisr.org
 H=(-H "x-user-email: torarnehave@gmail.com" -H "x-user-role: Superadmin")
 
+if [ "${1:-}" = "--list" ] || [ -z "${1:-}" ]; then
+  echo "systems:"; for f in "$HERE"/systems/*.conf; do printf '  %s\n' "$(basename "$f" .conf)"; done
+  [ -z "${1:-}" ] && echo "usage: orient.sh <system> [--observed]"
+  exit 0
+fi
+SYSTEM="$1"; MODE="${2:-}"
+CONF="$HERE/systems/$SYSTEM.conf"
+[ -f "$CONF" ] || { echo "no config for '$SYSTEM' — expected $CONF"; exit 1; }
+
 section() { printf '\n=== %s ===\n' "$1"; }
 
-if [ "$MODE" != "--observed" ]; then
-  section "VEmotion layer graph $LAYER — contracts in full, decisions, observed"
+# repo_path <github-name> — the folder that holds that repo, honouring ORIENT_ROOT.
+declare -A REPO_PATH
+repo_path() { printf '%s' "${REPO_PATH[$1]:-}"; }
+
+# ---- shared sections; a config calls these from run_sections ----
+
+# The layer graph: contracts in full, decisions as one line each, the observed node's stamp.
+section_layer() {
+  section "$LAYER_TITLE $LAYER — contracts in full, decisions, observed"
   curl -s "$KG/getknowgraph?id=$LAYER" "${H[@]}" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
@@ -34,71 +54,94 @@ print("\n----- DECISIONS (read the node when one matters) -----")
 for n in nodes:
     if role(n) == "decision":
         m = n.get("metadata") or {}
-        print(" ", n["id"], "|", n.get("label"), "|", m.get("status"), m.get("decidedOn"))
-for n in nodes:
-    if role(n) == "observed":
-        print("\n----- OBSERVED", n["id"], "measuredOn", (n.get("metadata") or {}).get("measuredOn"),
-              "— compare with the live state below; if they differ, regenerate it with --observed -----")
+        print(" ", n["id"], "|", n.get("label"), "|", m.get("status"), m.get("decidedOn") or m.get("foundOn"))
+obs = [n for n in nodes if role(n) == "observed"]
+for n in obs:
+    print("\n----- OBSERVED", n["id"], "measuredOn", (n.get("metadata") or {}).get("measuredOn"),
+          "— compare with the live state below; if they differ, regenerate it with --observed -----")
+if not obs:
+    print("\n----- NO OBSERVED NODE YET — the live state below is what one would hold -----")
 ' 2>/dev/null || echo "(layer graph not readable — stop and ask)"
-fi
+}
 
-section "Repos (path → remote, branch, last commit, uncommitted files)"
-for d in "$APP" "$MONO" "$AB"; do
-  if [ -d "$d/.git" ]; then
-    remote=$(git -C "$d" remote get-url origin 2>/dev/null)
-    branch=$(git -C "$d" branch --show-current 2>/dev/null)
-    last=$(git -C "$d" log --oneline -1 2>/dev/null)
-    dirty=$(git -C "$d" status --short 2>/dev/null | wc -l | tr -d ' ')
-    printf '%s\n  %s  [%s]  %s  (%s uncommitted)\n' "$d" "$remote" "$branch" "$last" "$dirty"
-  else
-    printf '%s  MISSING — paths have moved before; ask the user where it is now\n' "$d"
-  fi
-done
-for w in vemotion-worker dev-worker; do
-  [ -f "$MONO/$w/index.js" ] && printf '  %s: last commit touching it: %s\n' "$w" "$(git -C "$MONO" log --oneline -1 -- "$w" 2>/dev/null)"
-done
+# section_repos — every repo in REPOS: remote, branch, last commit, uncommitted files.
+section_repos() {
+  section "Repos (path → remote, branch, last commit, uncommitted files)"
+  local spec name d
+  for spec in "${REPOS[@]}"; do
+    name="${spec%%|*}"; d="$(repo_path "$name")"
+    if [ -d "$d/.git" ]; then
+      printf '%s\n  %s  [%s]  %s  (%s uncommitted)\n' "$d" \
+        "$(git -C "$d" remote get-url origin 2>/dev/null)" "$(git -C "$d" branch --show-current 2>/dev/null)" \
+        "$(git -C "$d" log --oneline -1 2>/dev/null)" "$(git -C "$d" status --short 2>/dev/null | wc -l | tr -d ' ')"
+    else
+      printf '%s  MISSING — paths have moved before; ask the user where it is now\n' "$d"
+    fi
+  done
+}
 
-section "Work context ctx-vemotion (what the Agent-Builder agent gets)"
-curl -s "$KG/getknowgraph?id=0b61898c-c892-4dbc-9e35-2980e274a5d8" "${H[@]}" | python3 -c '
+# section_worker_commits <repo> <dir>... — last commit touching each worker folder (printed
+# under the repos, so no header of its own).
+section_worker_commits() {
+  local d; d="$(repo_path "$1")"; shift
+  local w
+  for w in "$@"; do
+    [ -e "$d/$w" ] && printf '  %s: last commit touching it: %s\n' "$w" "$(git -C "$d" log --oneline -1 -- "$w" 2>/dev/null)"
+  done
+}
+
+# section_graph_node <title> <graphId> <nodeId> [line...] — one node's info plus metadata.
+# Each line is "label:key" pairs joined by '|', printed on one line as "label: value | ...";
+# a list value is joined with ", " — or printed as-is when the key ends in "~".
+section_graph_node() {
+  section "$1"
+  local g="$2" id="$3"; shift 3
+  curl -s "$KG/getknowgraph?id=$g" "${H[@]}" | python3 -c '
 import sys, json
+nid, lines = sys.argv[1], sys.argv[2:]
 d = json.load(sys.stdin)
 for n in d.get("nodes", []):
-    if n.get("id") == "ctx-vemotion":
-        m = n.get("metadata", {})
+    if n.get("id") == nid:
+        m = n.get("metadata") or {}
         print("info:", n.get("info"))
-        print("tools:", ", ".join(m.get("tools", [])))
-        print("starterPrompts:", m.get("starterPrompts"))
-' 2>/dev/null || echo "(could not read graph 0b61898c)"
+        def val(key):
+            raw = key.endswith("~"); v = m.get(key.rstrip("~"))
+            return ", ".join(map(str, v)) if isinstance(v, list) and not raw else v
+        for line in lines:
+            parts = [p.split(":", 1) for p in line.split("|")]
+            print(" | ".join("%s: %s" % (label, val(key)) for label, key in parts))
+        break
+else:
+    print("(node", nid, "not found)")
+' "$id" "$@" 2>/dev/null || echo "(could not read graph $g)"
+}
 
-section "Registry node sysworker-vemotion (graph_system_registry)"
-curl -s "$KG/getknowgraph?id=graph_system_registry" "${H[@]}" | python3 -c '
-import sys, json
-d = json.load(sys.stdin)
-for n in d.get("nodes", []):
-    if n.get("id") == "sysworker-vemotion":
-        m = n.get("metadata", {})
-        print("info:", n.get("info"))
-        print("binding:", m.get("binding"), "| openapi:", m.get("openapi_url"), "| prefix:", m.get("tool_prefix"))
-        print("blocklist:", ", ".join(m.get("tool_blocklist", [])))
-' 2>/dev/null || echo "(could not read graph_system_registry)"
-
-section "vemotion-worker live routes (api.vegvisr.org/vemotion/openapi.json)"
-curl -s https://api.vegvisr.org/vemotion/openapi.json | python3 -c '
+# section_openapi <title> <url> — the routes a live worker says it serves.
+section_openapi() {
+  section "$1"
+  curl -s -m 20 "$2" | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
 for p, ops in sorted(d.get("paths", {}).items()):
-    print(" ", ",".join(m.upper() for m in ops), p)
+    print(" ", ",".join(m.upper() for m in ops if m in ("get","post","put","patch","delete","head","options")), p)
 ' 2>/dev/null || echo "(openapi.json not reachable)"
+}
 
-section "Agent-Builder vemotion tools (tool-definitions.js) and MCP forward allow-list"
-grep -oE "name: '(vemotion_[a-z_]+|get_vemotion_reference|get_carousel_reference)'" "$AB/worker/tool-definitions.js" 2>/dev/null | sed "s/name: /  /"
-sed -n '/VEMOTION_MCP_TOOLS = new Set/,/\])/p' "$AB/worker/index.js" 2>/dev/null | grep -oE "^ *'[a-z_]+'" | tr -d ' ' | tr '\n' ' ' | sed 's/^/  forwarded to MCP: /'; echo
+# section_mcp_tools <title> <regex> — MCP server tools (dev-worker/mcp/tools.js TOOL_NAMES)
+# whose name matches the regex.
+section_mcp_tools() {
+  section "$1"
+  sed -n '/export const TOOL_NAMES/,/^]/p' "$(repo_path vegvisr-frontend)/dev-worker/mcp/tools.js" 2>/dev/null \
+    | grep -oE "'[a-z_]+'" | grep -E "$2" | tr '\n' ' '; echo
+}
 
-section "MCP server VEmotion / Instagram tools (dev-worker/mcp/tools.js TOOL_NAMES)"
-sed -n '/export const TOOL_NAMES/,/^]/p' "$MONO/dev-worker/mcp/tools.js" 2>/dev/null | grep -oE "'[a-z_]*(vemotion|instagram|media)[a-z_]*'" | tr '\n' ' '; echo
+# ---- load the system's config, resolve paths, run ----
+# shellcheck source=/dev/null
+. "$CONF"
+for spec in "${REPOS[@]}"; do
+  name="${spec%%|*}"; local_path="${spec#*|}"
+  REPO_PATH[$name]="${ORIENT_ROOT:+$ORIENT_ROOT/$name}"; REPO_PATH[$name]="${REPO_PATH[$name]:-$local_path}"
+done
 
-section "App query parameters handled (src/App.tsx, cloud-compositions.ts, auth.ts)"
-grep -hoE "searchParams\.get\('[a-zA-Z]+'\)|\.get\('(embed|renderJob|magic|dev|compositionId)'\)" "$APP/src/App.tsx" "$APP/src/lib/cloud-compositions.ts" "$APP/src/lib/auth.ts" 2>/dev/null | sort -u | sed 's/^/  /'
-
-section "App build marker (bump on every push)"
-grep -oE "Build marker [A-Z]{2}\"" "$APP/src/components/Dashboard.tsx" 2>/dev/null | head -1 | sed 's/^/  /'
+[ "$MODE" != "--observed" ] && section_layer
+run_sections
