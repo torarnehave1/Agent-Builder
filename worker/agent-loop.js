@@ -1132,14 +1132,44 @@ export function missingGuideText(reply, guides) {
 }
 // Every ending of a run — normal, turn limit, provider error, crash — goes through here, so a guide
 // a tool returned is never lost because the run stopped early. Never throws: it runs inside catch.
+// Records every text event's content as it goes out, so an early ending can see a guide line the
+// model already wrote in an EARLIER turn — not only the last reply (no second copy on turn limit,
+// error or crash). Everything else passes straight through to the real writer.
+export function trackSentText(writer) {
+  if (writer && writer.__tracksText) return writer
+  const decoder = new TextDecoder()
+  let sent = ''
+  return new Proxy(writer, {
+    get(target, prop) {
+      if (prop === '__tracksText') return true
+      if (prop === 'sentText') return sent
+      if (prop === 'write') {
+        return (chunk) => {
+          try {
+            const raw = typeof chunk === 'string' ? chunk : decoder.decode(chunk)
+            if (raw.startsWith('event: text\n')) {
+              const m = raw.match(/\ndata: (.*)\n\n$/s)
+              if (m) sent += (JSON.parse(m[1]).content || '') + '\n'
+            }
+          } catch {}
+          return target.write(chunk)
+        }
+      }
+      const value = target[prop]
+      return typeof value === 'function' ? value.bind(target) : value
+    },
+  })
+}
+
 export function writeGuideTail(writer, encoder, reply, guides) {
   try {
-    const tail = missingGuideText(reply, guides)
+    const tail = missingGuideText(`${writer?.sentText || ''}\n${reply || ''}`, guides)
     if (tail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: tail })}\n\n`))
   } catch {}
 }
 
 async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
+  writer = trackSentText(writer)
   const maxTurns = options.maxTurns || 6
   const guideLines = []
   const selectedModel = options.model || `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
@@ -1547,6 +1577,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   if (isOpenAICompatibleModel(model)) {
     return streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options)
   }
+  writer = trackSentText(writer)
   const authContext = options?.authContext || null
   const planMode = options.mode === 'plan'
   let turn = 0

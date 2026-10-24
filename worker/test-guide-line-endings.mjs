@@ -55,6 +55,24 @@ for (const [name, opts] of cases) {
   check(`${name}: the line is written before the run closes`, r.beforeClose, r.events.map(e => e.type).join(','))
 }
 
+// The model already wrote the line in an EARLIER turn (here as a markdown link, its usual form),
+// then the run stops early: no second copy.
+const MD = 'Guide: [12 · Editoren i World-ens uttrykk](https://www.vegvisr.org/gnew-viewer?graphId=b7f3a1d0-9c52-4e18-a6b4-3f5d8e2c7a91)'
+const claudeSaysAndCalls = (n) => json({ stop_reason: 'tool_use', content: [{ type: 'text', text: `Refused, retrying.\n${MD}` }, { type: 'tool_use', id: 't' + n, name: 'set_world_brand', input: INPUT }], usage: { input_tokens: 1, output_tokens: 1 } })
+const openaiSaysAndCalls = (n) => json({ choices: [{ message: { content: `Refused, retrying.\n${MD}`, tool_calls: [{ id: 'c' + n, type: 'function', function: { name: 'set_world_brand', arguments: JSON.stringify(INPUT) } }] } }], usage: {} })
+const earlier = [
+  ['Claude, line written earlier, then turn limit', { model: 'claude-sonnet-4-5', maxTurns: 2, then: (n) => claudeSaysAndCalls(n) }],
+  ['Claude, line written earlier, then provider error', { model: 'claude-sonnet-4-5', maxTurns: 4, then: (n) => n === 2 ? claudeSaysAndCalls(n) : json({ error: 'overloaded' }, 529) }],
+  ['Claude, line written earlier, then crash', { model: 'claude-sonnet-4-5', maxTurns: 4, then: (n) => { if (n === 2) return claudeSaysAndCalls(n); throw new Error('network gone') } }],
+  ['OpenAI, line written earlier, then turn limit', { model: 'openai/gpt-5.6-luna', maxTurns: 2, then: (n) => openaiSaysAndCalls(n) }],
+  ['OpenAI, line written earlier, then crash', { model: 'openai/gpt-5.6-luna', maxTurns: 4, then: (n) => { if (n === 2) return openaiSaysAndCalls(n); throw new Error('network gone') } }],
+]
+for (const [name, opts] of earlier) {
+  const r = await run(opts)
+  check(`${name}: the model's line is in the reply`, r.text.includes(MD), JSON.stringify(r.text.slice(-300)))
+  check(`${name}: no second copy appended`, !r.text.includes(LINE), JSON.stringify(r.text.slice(-300)))
+}
+
 // The normal ending is unchanged: a reply that already has the line gets no second copy.
 {
   const r = await run({ model: 'claude-sonnet-4-5', then: () => json({ stop_reason: 'end_turn', content: [{ type: 'text', text: `Refused.\nGuide: [12 · Editoren i World-ens uttrykk](https://www.vegvisr.org/gnew-viewer?graphId=b7f3a1d0-9c52-4e18-a6b4-3f5d8e2c7a91)` }], usage: {} }) })
