@@ -38,7 +38,8 @@ check('the bare link alone does not count as the line', missingGuideText(`see ${
 const loop = fs.readFileSync(new URL('./agent-loop.js', import.meta.url), 'utf8')
 check('both loops collect from tool results', (loop.match(/collectGuideLines\(result\?\.message, guideLines\)/g) || []).length === 2)
 check('both loops collect from thrown errors', (loop.match(/collectGuideLines\(error\.message, guideLines\)/g) || []).length === 2)
-check('both loops append at the end of the reply', (loop.match(/missingGuideText\(/g) || []).length === 3)
+// Each loop's normal ending (the other endings are driven for real in test-guide-line-endings.mjs).
+check('both loops append at the end of the reply', /writeGuideTail\(writer, encoder, assistantText, guideLines\)/.test(loop) && /writeGuideTail\(writer, encoder, textBlocks\.map/.test(loop))
 const prompt = fs.readFileSync(new URL('./system-prompt.js', import.meta.url), 'utf8')
 check('the system prompt tells the model to repeat it', /starting \\`Guide: \\`[^\n]*VERBATIM/.test(prompt))
 
