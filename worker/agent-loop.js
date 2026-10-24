@@ -1130,6 +1130,14 @@ export function missingGuideText(reply, guides) {
   const missing = guides.filter(g => !(text.includes(g.step) && text.includes(g.url)))
   return missing.length ? `\n\n${missing.map(g => g.line).join('\n')}` : ''
 }
+// Every ending of a run — normal, turn limit, provider error, crash — goes through here, so a guide
+// a tool returned is never lost because the run stopped early. Never throws: it runs inside catch.
+export function writeGuideTail(writer, encoder, reply, guides) {
+  try {
+    const tail = missingGuideText(reply, guides)
+    if (tail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: tail })}\n\n`))
+  } catch {}
+}
 
 async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 6
@@ -1292,6 +1300,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         stats.success = false
         stats.error = detail || `${provider.label} API error`
         writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: `The ${provider.label} provider returned an error: ${stats.error}` })}\n\n`))
+        writeGuideTail(writer, encoder, '', guideLines)
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: stats.error })}\n\n`))
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, error: true })}\n\n`))
         break
@@ -1313,8 +1322,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       })
 
       if (!toolCalls.length) {
-        const guideTail = missingGuideText(assistantText, guideLines)
-        if (guideTail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: guideTail })}\n\n`))
+        writeGuideTail(writer, encoder, assistantText, guideLines)
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn })}\n\n`))
         break
       }
@@ -1493,12 +1501,14 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       stats.maxTurnsReached = true
       const stopMsg = `Stopped after ${turn} turns (the limit for this request) — the task may not be finished. Reply "continue" to resume, or tell me what to do differently.`
       writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: stopMsg })}\n\n`))
+      writeGuideTail(writer, encoder, '', guideLines)
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
     stats.success = false
     stats.error = err.message
     log(`FATAL ERROR: ${err.message}`)
+    writeGuideTail(writer, encoder, '', guideLines)
     writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
   } finally {
     const durationMs = Date.now() - startTime
@@ -1738,6 +1748,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           ? '⚠️ API Refund needed — the Anthropic API credit balance is too low to run the agent. Top up at console.anthropic.com (Plans & Billing), then retry. This is a billing issue, not a code error.'
           : `⚠️ The AI service returned an error: ${errMsg || 'Anthropic API error'}`
         writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: friendly })}\n\n`))
+        writeGuideTail(writer, encoder, '', guideLines)
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: data.error || 'Anthropic API error', refundNeeded: isCredit })}\n\n`))
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, error: true })}\n\n`))
         break
@@ -1829,8 +1840,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
-        const guideTail = missingGuideText(textBlocks.map(b => b.text).join('\n'), guideLines)
-        if (guideTail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: guideTail })}\n\n`))
+        writeGuideTail(writer, encoder, textBlocks.map(b => b.text).join('\n'), guideLines)
 
         // Generate follow-up suggestions using a fast Haiku call
         // Skip if no assistant text (pure tool-call turns produce no useful suggestions)
@@ -2229,6 +2239,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         )
       } else {
         log(`unexpected stop_reason: ${data.stop_reason}`)
+        writeGuideTail(writer, encoder, '', guideLines)
         writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: 'Unexpected stop: ' + data.stop_reason })}\n\n`))
         break
       }
@@ -2242,12 +2253,14 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
       // (2026-07-31, recurring confusion). State it plainly and ask.
       const stopMsg = `Stopped after ${turn} turns (the limit for this request) — the task may not be finished. Reply "continue" to resume, or tell me what to do differently.`
       writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: stopMsg })}\n\n`))
+      writeGuideTail(writer, encoder, '', guideLines)
       writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn, maxReached: true })}\n\n`))
     }
   } catch (err) {
     stats.success = false
     stats.error = err.message
     log(`FATAL ERROR: ${err.message}\n${err.stack}`)
+    writeGuideTail(writer, encoder, '', guideLines)
     writer.write(encoder.encode(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`))
   } finally {
     const durationMs = Date.now() - startTime
