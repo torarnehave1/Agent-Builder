@@ -1118,14 +1118,16 @@ function parseOpenAIToolArgs(raw) {
 // Tools behind a World setup-guide step end their message (or error) with "Guide: <step> — <url>"
 // (withWorldSetupGuide in tool-executors.js). The model tends to drop it when it writes its own
 // summary, so the loop collects those lines and appends any the final reply left out.
-const GUIDE_LINE_RE = /^Guide: .+ — (https:\/\/\S+)$/gm
+const GUIDE_LINE_RE = /^Guide: (.+) — (https:\/\/\S+)$/gm
 export function collectGuideLines(text, into) {
   if (typeof text !== 'string' || !text.includes('Guide: ')) return
-  for (const m of text.matchAll(GUIDE_LINE_RE)) if (!into.some(g => g.line === m[0])) into.push({ line: m[0], url: m[1] })
+  for (const m of text.matchAll(GUIDE_LINE_RE)) if (!into.some(g => g.line === m[0])) into.push({ line: m[0], step: m[1], url: m[2] })
 }
 export function missingGuideText(reply, guides) {
-  // By the whole line, not the link: every step shares the guide graph's URL.
-  const missing = guides.filter(g => !String(reply || '').includes(g.line))
+  // Present = the step's label AND the link, in any form (the model writes [label](url)). Not the
+  // link alone: every step shares the guide graph's URL.
+  const text = String(reply || '')
+  const missing = guides.filter(g => !(text.includes(g.step) && text.includes(g.url)))
   return missing.length ? `\n\n${missing.map(g => g.line).join('\n')}` : ''
 }
 

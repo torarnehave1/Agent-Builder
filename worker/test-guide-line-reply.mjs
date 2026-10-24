@@ -32,6 +32,7 @@ const LINE15 = `Guide: 15 · Bilder, video og PDF på cdn.<domene> — ${GURL}`
 collectGuideLines(`Photo storage ready.\n${LINE15}`, g2)
 check('two steps sharing one link are both collected', g2.length === 2, JSON.stringify(g2))
 check('two steps, only the missing one is appended', missingGuideText(`Done.\n${LINE}`, g2) === `\n\n${LINE15}`, JSON.stringify(missingGuideText(`Done.\n${LINE}`, g2)))
+check('the model\'s markdown-link form counts as present (live 2026-10-24)', missingGuideText(`Guide: [10 · Verifiser hele kjeden](${GURL})`, g) === '')
 check('the bare link alone does not count as the line', missingGuideText(`see ${GURL}`, g) === `\n\n${LINE}`)
 
 const loop = fs.readFileSync(new URL('./agent-loop.js', import.meta.url), 'utf8')
