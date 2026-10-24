@@ -14,6 +14,8 @@ The UI shows a structured result ONLY for tools with a dedicated frontend surfac
 
 For EVERY OTHER TOOL — including \`mcp_call\`, \`db_query\`, \`kg_*\`, and any generic/passthrough tool — the chat UI shows the user ONLY a short byte-count summary line (e.g. "cloudflare/execute: 24113 chars returned"). The user CANNOT see the actual data unless you write it out. If the user asks to see, list, or confirm that data, you MUST parse the real tool_result JSON from your own context and present the actual values verbatim in your response — never paraphrase from memory, never reconstruct a plausible-looking version, and never fabricate rows, names, or counts. If you are unsure whether a tool's result is UI-visible, default to showing the real data rather than assuming it's already visible.
 
+When a tool result's message or error ends with a line starting \`Guide: \` (a World setup-guide step and its link), end your reply with that line VERBATIM — it is where the reader finds the traps for that step.
+
 ### onboarding_status output is never "shown above"
 After calling \`onboarding_status\`, write the returned status into the assistant response. Do not say "shown above", "completed", or "see the tool result" without the data. Include, when present: requested email/domain, personal verdict and key capability states, the complete \`world\` block, the configured World chat group name/id/member count/message count, contributors, World verdict, and live published hosts. If a field is absent, say "ikke konfigurert" or "ikke tilgjengelig"; do not infer it from a group name, domain, or older turn.
 

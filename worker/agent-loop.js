@@ -1115,8 +1115,23 @@ function parseOpenAIToolArgs(raw) {
   }
 }
 
+// Tools behind a World setup-guide step end their message (or error) with "Guide: <step> — <url>"
+// (withWorldSetupGuide in tool-executors.js). The model tends to drop it when it writes its own
+// summary, so the loop collects those lines and appends any the final reply left out.
+const GUIDE_LINE_RE = /^Guide: .+ — (https:\/\/\S+)$/gm
+export function collectGuideLines(text, into) {
+  if (typeof text !== 'string' || !text.includes('Guide: ')) return
+  for (const m of text.matchAll(GUIDE_LINE_RE)) if (!into.some(g => g.line === m[0])) into.push({ line: m[0], url: m[1] })
+}
+export function missingGuideText(reply, guides) {
+  // By the whole line, not the link: every step shares the guide graph's URL.
+  const missing = guides.filter(g => !String(reply || '').includes(g.line))
+  return missing.length ? `\n\n${missing.map(g => g.line).join('\n')}` : ''
+}
+
 async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 6
+  const guideLines = []
   const selectedModel = options.model || `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
   const provider = isGrokModel(selectedModel)
     ? {
@@ -1296,6 +1311,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       })
 
       if (!toolCalls.length) {
+        const guideTail = missingGuideText(assistantText, guideLines)
+        if (guideTail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: guideTail })}\n\n`))
         writer.write(encoder.encode(`event: done\ndata: ${JSON.stringify({ turns: turn })}\n\n`))
         break
       }
@@ -1445,6 +1462,8 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
           // Nodetyper: the preview card (draft code + sample) — for the browser only.
           if (result.nodeTypeCard) ssePayload.nodeTypeCard = result.nodeTypeCard
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
+          collectGuideLines(result?.message, guideLines)
+          collectGuideLines(result?.error, guideLines)
           const resultForOpenAI = { ...result }
           delete resultForOpenAI.updatedHtml
           delete resultForOpenAI.nodeTypeCard
@@ -1462,6 +1481,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
             ).run().catch(e => console.error('[stats] openai tool insert failed:', e.message))
           }
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, error: error.message })}\n\n`))
+          collectGuideLines(error.message, guideLines)
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error.message }) })
         }
       }
@@ -1510,6 +1530,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
  */
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
+  const guideLines = []
   const model = options.model || DEFAULT_MODEL
   if (isOpenAICompatibleModel(model)) {
     return streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options)
@@ -1806,6 +1827,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         for (const block of textBlocks) {
           writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: block.text })}\n\n`))
         }
+        const guideTail = missingGuideText(textBlocks.map(b => b.text).join('\n'), guideLines)
+        if (guideTail) writer.write(encoder.encode(`event: text\ndata: ${JSON.stringify({ content: guideTail })}\n\n`))
 
         // Generate follow-up suggestions using a fast Haiku call
         // Skip if no assistant text (pure tool-call turns produce no useful suggestions)
@@ -2136,6 +2159,8 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // Nodetyper: the preview card (draft code + sample) — for the browser only.
             if (result.nodeTypeCard) ssePayload.nodeTypeCard = result.nodeTypeCard
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify(ssePayload)}\n\n`))
+            collectGuideLines(result?.message, guideLines)
+            collectGuideLines(result?.error, guideLines)
             // Strip large fields that are only for the frontend (not needed by Claude)
             const resultForClaude = { ...result }
             delete resultForClaude.updatedHtml
@@ -2157,6 +2182,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
               ).run().catch(e => console.error('[stats] tool insert failed:', e.message))
             }
             writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: toolUse.id, tool: toolUse.name, success: false, error: error.message })}\n\n`))
+            collectGuideLines(error.message, guideLines)
             return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }) }
           }
         }
