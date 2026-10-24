@@ -5347,6 +5347,37 @@ function worldSetupGuide(step = 'step-00-index') {
   }
 }
 
+// Steps 11–16 each name the tools that do them. Those tools answer with their step, success or
+// failure, so the traps written there (D1 token scope, EU fixed at creation, R2 custom domain on the
+// apex) reach the reader at the moment they matter, not only from the top of the guide.
+const WORLD_SETUP_GUIDE_STEP_FOR_TOOL = {
+  provision_world_graphs: 'step-11-graph-store',
+  set_world_graph_store_status: 'step-11-graph-store',
+  move_graph_to_world: 'step-11-graph-store',
+  set_world_brand: 'step-12-editor-brand',
+  setup_world_homepage: 'step-13-homepage-redirect',
+  set_world_redirect: 'step-13-homepage-redirect',
+  provision_world_commerce: 'step-14-commerce',
+  grant_world_access: 'step-14-commerce',
+  provision_world_photos: 'step-15-media-cdn',
+  create_world_course: 'step-16-courses',
+  set_world_course_status: 'step-16-courses',
+}
+
+function withWorldSetupGuide(toolName, result) {
+  const step = WORLD_SETUP_GUIDE_STEP_FOR_TOOL[toolName]
+  if (!step || !result || typeof result !== 'object' || result.guide) return result
+  const guide = worldSetupGuide(step)
+  const line = `Guide: ${guide.step} — ${guide.url}`
+  // The summary line the chat shows is message, else error — the guide goes on whichever it reads.
+  const field = typeof result.message === 'string' ? 'message' : typeof result.error === 'string' ? 'error' : null
+  return {
+    ...result,
+    guide,
+    ...(field && !result[field].includes(guide.url) ? { [field]: `${result[field]}\n${line}` } : {}),
+  }
+}
+
 // Is the World's zone already in the World's own account? Buying the domain INSIDE that account
 // (alivenesslab.net, 2026-09-24) skips the transfer entirely — but both tools kept ending with
 // "next: move the zone" afterwards, which is advice to redo something already done. One read settles
@@ -18307,7 +18338,7 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
   if (toolInput && typeof toolInput === 'object') toolInput[CF_TOKEN_LEDGER] = ledger
   let result
   try {
-    result = await dispatchTool(toolName, toolInput, env, operationMap, onProgress)
+    result = withWorldSetupGuide(toolName, await dispatchTool(toolName, toolInput, env, operationMap, onProgress))
   } catch (err) {
     if (ledger.length && err && typeof err.message === 'string') {
       const annotated = await annotateCfTokens({ success: false, error: err.message }, ledger, env, toolName).catch(() => null)
@@ -20044,4 +20075,4 @@ async function executeCheckPagesDeploymentStatus(input, env) {
   }
 }
 
-export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, signPublishToken }
+export { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, signPublishToken, withWorldSetupGuide }
