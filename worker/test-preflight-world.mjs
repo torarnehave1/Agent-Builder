@@ -167,6 +167,24 @@ const CALLER = { userId: 'owner', authContext: { role: 'Superadmin', email: 'own
   check('and it points at what remains', /ready/i.test(r.next || ''), r.next)
 }
 
+// 5b. Zone held and every host answers with its page: the build is done, so the guide moves on to
+// verifying it end to end (step 10) instead of sending the reader back to attach hosts.
+{
+  const { env, restore } = makeEnv({
+    world: { founder_email: 'alivenesslab.org@gmail.com', hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    domainRow: { hosting_model: 'own_account', cf_account_id: '077b2127436f8d047c000ecad69e4017' },
+    config: { cf_account_id: '077b2127436f8d047c000ecad69e4017', cf_api_token: 'cfat_account_owned', cf_kv_namespace_id: 'kv456' },
+    tokenOwner: 'account', zone: 'active', proxy: true, publishSecret: 'alivenesslab.net',
+    hosts: { 'alivenesslab.net': { status: 200, key: true }, 'me.alivenesslab.net': { status: 200, key: true } },
+  })
+  const r = await executeTool('preflight_world', { ...CALLER, domain: 'alivenesslab.net' }, env)
+  restore()
+  const allPass = r.checks?.every(c => c.state === 'pass' || c.state === 'skip')
+  check('every host serving passes its check', find(r, 'hosts')?.state === 'pass', JSON.stringify(find(r, 'hosts')))
+  check('and the guide moves on to verifying (step 10)', r.verdict !== 'READY' || r.guide?.node_id === 'step-10-verify', `${r.verdict} ${JSON.stringify(r.guide)} ${allPass}`)
+  check('the fixture is READY, so the line above tested something', r.verdict === 'READY', `${r.verdict}: ${JSON.stringify(r.checks?.filter(c => c.state !== 'pass'))}`)
+}
+
 // 6. The zone is somewhere else: a caution with the move named, not a pass.
 {
   const { env, restore } = makeEnv({

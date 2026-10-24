@@ -5347,10 +5347,15 @@ function worldSetupGuide(step = 'step-00-index') {
   }
 }
 
-// Steps 11–16 each name the tools that do them. Those tools answer with their step, success or
-// failure, so the traps written there (D1 token scope, EU fixed at creation, R2 custom domain on the
-// apex) reach the reader at the moment they matter, not only from the top of the guide.
+// Steps that name the tools doing them. Those tools answer with their step, success or failure, so
+// the traps written there (D1 token scope, EU fixed at creation, R2 custom domain on the apex, Email
+// Routing locking the root MX) reach the reader at the moment they matter, not only from the top of
+// the guide. A function decides from the input, for a tool that is a World step only sometimes.
 const WORLD_SETUP_GUIDE_STEP_FOR_TOOL = {
+  set_world_dns_records: 'step-06-mailbox',
+  // add_email_account also adds Gmail and SMTP senders that have nothing to do with a World.
+  add_email_account: input => input?.accountType === 'cf-email-service' ? 'step-07-sending' : null,
+  check_world_publish: 'step-10-verify',
   provision_world_graphs: 'step-11-graph-store',
   set_world_graph_store_status: 'step-11-graph-store',
   move_graph_to_world: 'step-11-graph-store',
@@ -5364,11 +5369,21 @@ const WORLD_SETUP_GUIDE_STEP_FOR_TOOL = {
   set_world_course_status: 'step-16-courses',
 }
 
-function withWorldSetupGuide(toolName, result) {
-  const step = WORLD_SETUP_GUIDE_STEP_FOR_TOOL[toolName]
+function worldSetupGuideStepFor(toolName, input) {
+  const entry = WORLD_SETUP_GUIDE_STEP_FOR_TOOL[toolName]
+  const step = typeof entry === 'function' ? entry(input) : entry
+  return step && WORLD_SETUP_GUIDE_STEPS[step] ? step : null
+}
+
+function worldSetupGuideLine(guide) {
+  return `Guide: ${guide.step} — ${guide.url}`
+}
+
+function withWorldSetupGuide(toolName, result, input = {}) {
+  const step = worldSetupGuideStepFor(toolName, input)
   if (!step || !result || typeof result !== 'object' || result.guide) return result
   const guide = worldSetupGuide(step)
-  const line = `Guide: ${guide.step} — ${guide.url}`
+  const line = worldSetupGuideLine(guide)
   // The summary line the chat shows is message, else error — the guide goes on whichever it reads.
   const field = typeof result.message === 'string' ? 'message' : typeof result.error === 'string' ? 'error' : null
   return {
@@ -5633,9 +5648,12 @@ async function executePreflightWorld(input, env) {
         // which is what "attach each host with create_subdomain" did to a World serving six pages.
         ? `The World is serving. ${unpublished.length} attached hostname(s) have no page yet: ${unpublished.join(', ')}. Publish each one — publish_world_page for the console, publish_html_node for the rest.`
         : `The World is ready and every attached hostname serves a page.`
+  // Every host answering with a page means the build is done; what remains is checking it end to
+  // end as a member would, which is its own step — not "attach hosts" again.
+  const allServing = verdict === 'READY' && zoneHeld && checks.some(c => c.check === 'hosts' && c.state === 'pass')
   const guide = fails.length
     ? fails[0].guide || worldSetupGuide()
-    : worldSetupGuide(zoneHeld ? 'step-09-hosts-and-pages' : 'step-08-zone-move')
+    : worldSetupGuide(!zoneHeld ? 'step-08-zone-move' : allServing ? 'step-10-verify' : 'step-09-hosts-and-pages')
   return {
     success: true,
     domain,
@@ -18338,11 +18356,17 @@ async function executeTool(toolName, toolInput, env, operationMap, onProgress) {
   if (toolInput && typeof toolInput === 'object') toolInput[CF_TOKEN_LEDGER] = ledger
   let result
   try {
-    result = withWorldSetupGuide(toolName, await dispatchTool(toolName, toolInput, env, operationMap, onProgress))
+    result = withWorldSetupGuide(toolName, await dispatchTool(toolName, toolInput, env, operationMap, onProgress), toolInput)
   } catch (err) {
     if (ledger.length && err && typeof err.message === 'string') {
       const annotated = await annotateCfTokens({ success: false, error: err.message }, ledger, env, toolName).catch(() => null)
       if (annotated) err.message = annotated.error
+    }
+    // Some executors throw instead of returning an error (add_email_account) — the guide rides along.
+    const step = worldSetupGuideStepFor(toolName, toolInput)
+    if (step && err && typeof err.message === 'string') {
+      const line = worldSetupGuideLine(worldSetupGuide(step))
+      if (!err.message.includes(line)) err.message = `${err.message}\n${line}`
     }
     throw err
   }
