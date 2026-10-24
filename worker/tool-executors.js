@@ -5385,11 +5385,14 @@ function withWorldSetupGuide(toolName, result, input = {}) {
   const guide = worldSetupGuide(step)
   const line = worldSetupGuideLine(guide)
   // The summary line the chat shows is message, else error — the guide goes on whichever it reads.
+  // A result with neither still gets the line as its message: a bare guide object went unread by
+  // the model on check_world_publish (2026-10-24), so the guide must be in text or it is not there.
   const field = typeof result.message === 'string' ? 'message' : typeof result.error === 'string' ? 'error' : null
+  if (!field) return { ...result, guide, message: line }
   return {
     ...result,
     guide,
-    ...(field && !result[field].includes(guide.url) ? { [field]: `${result[field]}\n${line}` } : {}),
+    ...(!result[field].includes(guide.url) ? { [field]: `${result[field]}\n${line}` } : {}),
   }
 }
 
@@ -7613,6 +7616,9 @@ async function executeProvisionWorldPhotos(input, env) {
     next: route.ok
       ? `Photo storage ready: bucket ${bucketName} + ${workerName} + ${deliveryBase}. Upload a test image (POST ${deliveryBase}/photos/upload with X-Upload-Secret), then open ${deliveryBase}/photos/<key>.`
       : `Bucket + worker ready, but ${deliveryHost} is NOT routed: ${route.note}`,
+    message: route.ok
+      ? `Photo storage for ${domain} ready: bucket ${bucketName}${bucketCreated ? ' (created)' : ''}, ${workerName}${workerCreated ? ' (created)' : ''}, served at ${deliveryBase}/photos/<key>.`
+      : `Photo storage for ${domain}: bucket ${bucketName} and ${workerName} ready, but ${deliveryHost} is NOT routed: ${route.note}`,
   }
 }
 
@@ -8341,6 +8347,11 @@ async function executeCheckWorldPublish(input, env) {
     hosts: results,
     mint_ok,
     mint_detail,
+    // The chat's summary line is this message — it carries the per-host answer, not "completed".
+    message: [
+      `${domain}: ${results.filter(r => r.has_page).length} of ${results.length} host(s) serve a published page; publish secret ${mint_ok ? 'set' : 'NOT set'}.`,
+      ...results.map(r => `  ${r.host} — ${r.detail}${r.http ? ` (HTTP ${r.http})` : ''}`),
+    ].join('\n'),
     note: 'Read-only — stores nothing and creates no token. HTML_PAGES is enabled per-World from the Cloudflare dashboard (create + bind the namespace to the brand proxy). Whether the publish secret on the brand proxy matches can only be confirmed by an actual publish_world_page run.',
   }
 }

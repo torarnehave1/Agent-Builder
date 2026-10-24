@@ -61,6 +61,10 @@ check('a success carries step 11', ok.guide?.node_id === 'step-11-graph-store')
 check('and the message ends with the guide line', /\nGuide: 11 · Grafer/.test(ok.message), ok.message)
 check('success is not touched otherwise', ok.success === true && ok.message.startsWith('Graph store ready.'))
 
+// A result with no message and no error still shows the guide in text — a bare object went unread.
+const bare = withWorldSetupGuide('check_world_publish', { success: true, hosts: [] })
+check('a result with no message gets the guide line as its message', /^Guide: 10 · Verifiser/.test(bare.message || ''), JSON.stringify(bare))
+
 // A result that already chose its own guide keeps it; an unmapped tool is left alone.
 const own = { success: true, message: 'x', guide: { node_id: 'step-09-hosts-and-pages' } }
 check('an existing guide is not overwritten', withWorldSetupGuide('setup_world_homepage', own) === own)
