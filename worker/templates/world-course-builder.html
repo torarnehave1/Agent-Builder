@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="no">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kursbygger – Stine Oksvold Design</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+  /* ===== VERDENENS UTTRYKK — byttes per World (samme tokens som Min side) ===== */
+  :root {
+    --ink: #2b3445; --text: #3d4552; --muted: #6b7380; --line: #e9e1e5;
+    --accent: #a3386b; --accent-dark: #7f2a53; --surface: #eadce2; --soft: #f8f1f4; --bg: #fdfbfc;
+    --ok: #3f7a5c; --ok-soft: #e4efec; --warn: #8a5a12; --warn-soft: #fff4de; --danger: #9b2c2c;
+    --font-display: 'Alegreya', Georgia, serif; --font-body: 'Alegreya Sans', system-ui, sans-serif;
+    --radius: 14px;
+  }
+  /* ============================================================================ */
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 17px; line-height: 1.5; }
+  a { color: var(--accent); }
+  button, input, textarea, select { font: inherit; color: inherit; }
+  h1, h2, h3 { font-family: var(--font-display); color: var(--ink); line-height: 1.2; margin: 0; }
+  img { max-width: 100%; display: block; }
+
+  header.top { background: #fff; border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1180px; margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); }
+  .brand img { height: 44px; width: auto; }
+  .brand span { font-family: var(--font-display); font-weight: 700; font-size: 21px; }
+  .who { font-size: 14px; color: var(--muted); }
+
+  .demo { background: var(--warn-soft); border-bottom: 1px solid #ecd6a6; color: var(--warn); font-size: 15px; }
+  .demo .bar { padding: 10px 20px; justify-content: flex-start; }
+
+  .layout { max-width: 1180px; margin: 0 auto; padding: 24px 20px 64px; display: grid; grid-template-columns: 280px 1fr; gap: 28px; align-items: start; }
+  aside.courses { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; position: sticky; top: 16px; }
+  aside.courses h2 { font-size: 20px; margin: 4px 6px 12px; }
+  .course-link { display: flex; gap: 10px; align-items: center; width: 100%; padding: 8px; border: 0; background: none; border-radius: 10px; text-align: left; cursor: pointer; }
+  .course-link:hover { background: var(--soft); }
+  .course-link.on { background: var(--surface); }
+  .course-link img, .course-link .ph { width: 52px; height: 36px; border-radius: 6px; object-fit: cover; background: var(--surface); flex: 0 0 auto; }
+  .course-link b { display: block; color: var(--ink); font-size: 16px; line-height: 1.25; }
+  .course-link small { color: var(--muted); font-size: 13px; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: var(--accent); color: #fff; font-weight: 700; cursor: pointer; text-decoration: none; }
+  .btn:hover { background: var(--accent-dark); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn.ghost { background: #fff; color: var(--accent); border: 1px solid var(--accent); }
+  .btn.ghost:hover { background: var(--soft); }
+  .btn.plain { background: none; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  .btn.plain:hover { background: var(--soft); }
+  .btn.small { min-height: 36px; padding: 0 12px; font-size: 15px; }
+  .btn.wide { width: 100%; margin-top: 12px; }
+  .icon { width: 36px; min-height: 36px; padding: 0; }
+
+  .head { display: grid; grid-template-columns: 240px 1fr; gap: 22px; background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+  .cover { position: relative; aspect-ratio: 16/10; border-radius: 10px; background: var(--surface); overflow: hidden; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 14px; }
+  .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .cover label { position: absolute; right: 8px; bottom: 8px; }
+  .k { font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); font-weight: 700; }
+  .title-row { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  .title-row h1 { font-size: clamp(26px, 3vw, 34px); }
+  .meta { font-size: 15px; color: var(--muted); }
+  .pill { display: inline-block; font-size: 13px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .pill.draft { background: var(--warn-soft); color: var(--warn); }
+  .pill.published { background: var(--ok-soft); color: var(--ok); }
+  .pill.archived { background: #eee; color: #555; }
+  .head-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+
+  h2.sec { font-size: 24px; margin: 30px 0 12px; display: flex; justify-content: space-between; align-items: center; }
+  h2.sec .btn { font-family: var(--font-body); font-size: 16px; }
+  .steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .step { background: #fff; border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; }
+  .step.hidden { opacity: .6; background: repeating-linear-gradient(135deg, #fff, #fff 10px, var(--soft) 10px, var(--soft) 20px); }
+  .step.drag-over { outline: 2px dashed var(--accent); }
+  .num { width: 30px; height: 30px; border-radius: 999px; background: var(--surface); color: var(--ink); display: grid; place-items: center; font-weight: 700; cursor: grab; }
+  .step h3 { font-size: 19px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .badge { font-size: 12.5px; padding: 2px 8px; border-radius: 999px; background: var(--soft); color: var(--muted); }
+  .badge.miss { background: var(--warn-soft); color: var(--warn); }
+  .badge.okb { background: var(--ok-soft); color: var(--ok); }
+  .step-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .empty { background: #fff; border: 1px dashed var(--line); border-radius: var(--radius); padding: 22px; color: var(--muted); }
+
+  dialog { border: 0; border-radius: 16px; padding: 0; width: min(640px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(43,52,69,.25); }
+  dialog::backdrop { background: rgba(43,52,69,.35); }
+  .dlg { padding: 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+  .dlg h2 { font-size: 24px; }
+  .dlg-actions { display: flex; justify-content: flex-end; gap: 10px; padding-top: 6px; }
+  label.f { display: flex; flex-direction: column; gap: 6px; font-weight: 500; color: var(--ink); }
+  label.f small { font-weight: 400; color: var(--muted); }
+  input[type=text], textarea, select { border: 1px solid #d9c9d0; border-radius: 10px; padding: 10px 12px; background: #fff; width: 100%; }
+  textarea { min-height: 120px; resize: vertical; }
+  input:focus-visible, textarea:focus-visible, select:focus-visible, .btn:focus-visible, .course-link:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+  .seg { display: flex; gap: 8px; }
+  .seg button { flex: 1; min-height: 44px; border: 1px solid #d9c9d0; background: #fff; border-radius: 10px; cursor: pointer; font-weight: 700; color: var(--ink); }
+  .seg button[aria-pressed=true] { border-color: var(--accent); background: var(--soft); color: var(--accent); }
+  .drop { border: 2px dashed #d9c9d0; border-radius: 12px; padding: 20px; text-align: center; color: var(--muted); }
+  .drop.has { border-style: solid; border-color: var(--ok); color: var(--ok); }
+  .progress { height: 8px; background: var(--surface); border-radius: 999px; overflow: hidden; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .log { font-size: 14px; color: var(--muted); }
+  .md p { margin: 0 0 10px; } .md ul { padding-left: 20px; margin: 0 0 10px; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 12px; font-size: 15px; z-index: 50; max-width: calc(100vw - 32px); }
+  .err { color: var(--danger); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  footer { text-align: center; color: var(--muted); font-size: 14px; padding: 24px; border-top: 1px solid var(--line); }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    aside.courses { position: static; }
+    .head { grid-template-columns: 1fr; }
+    .step { grid-template-columns: 34px 1fr; }
+    .step-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <a class="brand" href="#"><img id="logo" alt=""><span id="brandName">Kursbygger</span></a>
+    <span class="who" id="who"></span>
+  </div>
+</header>
+<div class="demo" id="demo" hidden><div class="bar" id="demoText"></div></div>
+
+<div class="layout">
+  <aside class="courses" aria-label="Kursene">
+    <h2>Kursene</h2>
+    <div id="courseList"><p class="meta">Henter …</p></div>
+    <button class="btn wide" id="newCourseBtn" type="button">+ Nytt kurs</button>
+  </aside>
+  <main id="main"><p class="meta">Velg et kurs, eller lag et nytt.</p></main>
+</div>
+<footer><span id="footName"></span> · Kursbygger</footer>
+
+<!-- Nytt kurs -->
+<dialog id="dlgCourse"><form method="dialog" class="dlg" id="formCourse">
+  <h2 id="dlgCourseTitle">Nytt kurs</h2>
+  <label class="f">Tittel <input type="text" name="title" required placeholder="F.eks. Enkel lue"></label>
+  <label class="f">Kort linje til kurskortet <input type="text" name="tagline" placeholder="F.eks. Strikk din første lue, steg for steg"></label>
+  <label class="f">Om kurset <small>2–3 setninger</small><textarea name="about"></textarea></label>
+  <label class="f">Du lager <input type="text" name="you_make" placeholder="Hva har deltakeren laget til slutt?"></label>
+  <label class="f">Passer for <input type="text" name="for_whom"></label>
+  <label class="f">Nivå
+    <select name="level"><option value="nybegynner">Nybegynner</option><option value="litt erfaren">Litt erfaren</option><option value="erfaren">Erfaren</option></select>
+  </label>
+  <label class="f">Dette trenger du <small>én ting per linje</small><textarea name="you_need" placeholder="60 cm rundpinne nr. 7&#10;garn&#10;stoppenål"></textarea></label>
+  <div class="dlg-actions"><button class="btn plain" value="cancel" formnovalidate>Avbryt</button><button class="btn" value="ok">Lagre</button></div>
+</form></dialog>
+
+<!-- Nytt / endre steg -->
+<dialog id="dlgStep"><form method="dialog" class="dlg" id="formStep">
+  <h2 id="dlgStepTitle">Nytt steg</h2>
+  <div class="seg" role="group" aria-label="Type steg" id="stepType">
+    <button type="button" data-t="video" aria-pressed="true">Video</button>
+    <button type="button" data-t="text" aria-pressed="false">Tekst og PDF</button>
+  </div>
+  <label class="f">Tittel <input type="text" name="title" required placeholder="F.eks. Legg opp"></label>
+  <div id="videoPart">
+    <label class="f">Videofil <small>MP4, høyst 100 MB. Transkripsjon og oppsummering lages etterpå.</small>
+      <input type="file" name="video" accept="video/mp4,video/*"></label>
+    <div class="drop" id="videoInfo">Ingen fil valgt</div>
+  </div>
+  <div id="textPart" hidden>
+    <label class="f">Tekst <small>Markdown går fint</small><textarea name="text"></textarea></label>
+    <label class="f">PDF (valgfritt) <input type="file" name="pdf" accept="application/pdf"></label>
+  </div>
+  <div id="stepProgress" hidden><div class="progress"><i id="bar"></i></div><p class="log" id="stepLog" aria-live="polite"></p></div>
+  <div class="dlg-actions"><button class="btn plain" value="cancel" formnovalidate id="stepCancel">Avbryt</button><button class="btn" value="ok" id="stepOk">Legg til</button></div>
+</form></dialog>
+
+<!-- Les / rediger tekster i et steg -->
+<dialog id="dlgText"><form method="dialog" class="dlg" id="formText">
+  <h2 id="dlgTextTitle">Steg</h2>
+  <label class="f">Tittel <input type="text" name="title"></label>
+  <label class="f" id="fSummary">Oppsummering <small>Vises over videoen på Min side</small><textarea name="summary"></textarea></label>
+  <label class="f" id="fTranscript">Transkripsjon <small>Kan rettes for hånd</small><textarea name="transcript" style="min-height:200px"></textarea></label>
+  <label class="f" id="fText" hidden>Tekst<textarea name="text"></textarea></label>
+  <div class="dlg-actions"><button class="btn plain" value="cancel" formnovalidate>Avbryt</button><button class="btn" value="ok">Lagre</button></div>
+</form></dialog>
+
+<script>
+(function () {
+  'use strict'
+  // ===== VERDENEN — byttes per World ==========================================================
+  var CONFIG = {
+    world: 'sodesign.no',                 // overstyres av vertsnavnet når siden ligger på kurs.<domene>
+    name: 'Stine Oksvold Design',
+    logo: 'https://vegvisr.imgix.net/1790371018515-1.png?w=160&auto=format',
+    minside: 'https://minside.sodesign.no/',
+    album: null,                          // null = kursets tittel
+  }
+  // ===========================================================================================
+  var API = 'https://agent.vegvisr.org'
+  var host = location.hostname.toLowerCase()
+  if (/^kurs\./.test(host)) CONFIG.world = host.replace(/^kurs\./, '')
+  var MAX_BYTES = 100 * 1024 * 1024
+  var AUDIO_MAX_S = 12 * 60   // 16 kHz mono WAV ≈ 1,9 MB/min; Whisper tar 25 MB
+
+  var $ = function (s, el) { return (el || document).querySelector(s) }
+  var app = { demo: false, courses: [], course: null }
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] }) }
+  function md(s) { return window.marked && window.DOMPurify ? DOMPurify.sanitize(marked.parse(String(s || ''))) : esc(s) }
+  function mins(s) { return Math.max(1, Math.round((s || 0) / 60)) }
+  function user() { try { return JSON.parse(localStorage.getItem('vegvisr_user') || 'null') } catch (e) { return null } }
+  function toast(msg, ms) {
+    var t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); t.textContent = msg
+    document.body.appendChild(t); setTimeout(function () { t.remove() }, ms || 3500)
+  }
+  function slug(s) { return String(s || '').toLowerCase().replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a').normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) }
+
+  $('#logo').src = CONFIG.logo; $('#logo').alt = CONFIG.name
+  $('#brandName').textContent = 'Kursbygger'
+  $('#footName').textContent = CONFIG.name
+
+  // ---------- API ----------
+  function api(path, opts) {
+    var u = user()
+    if (!u || !u.token) return Promise.reject(Object.assign(new Error('Ikke logget inn'), { status: 401 }))
+    opts = opts || {}
+    var headers = Object.assign({ Authorization: 'Bearer ' + u.token }, opts.headers || {})
+    if (opts.body && !(opts.body instanceof FormData)) headers['Content-Type'] = 'application/json'
+    return fetch(API + path, Object.assign({}, opts, { headers: headers })).then(function (r) {
+      return r.json().catch(function () { return {} }).then(function (j) {
+        if (!r.ok || j.success === false) { var e = new Error(j.error || ('Feil ' + r.status)); e.status = r.status; throw e }
+        return j
+      })
+    })
+  }
+  function post(path, body) { return api(path, { method: 'POST', body: JSON.stringify(Object.assign({ world: CONFIG.world }, body)) }) }
+  function q(o) { return Object.keys(o).map(function (k) { return k + '=' + encodeURIComponent(o[k]) }).join('&') }
+
+  // Upload straight to the World's cdn with a five-minute token for its storage.
+  function uploadFile(file, key, meta, onPct) {
+    return post('/world-photos/token', { scope: ['upload', 'album', 'read'] }).then(function (t) {
+      return new Promise(function (resolve, reject) {
+        var fd = new FormData()
+        fd.append('file', file, key.split('/').pop())
+        fd.append('key', key)
+        fd.append('album', CONFIG.album || (app.course && app.course.album) || (app.course && app.course.title) || 'Kurs')
+        var u = user(); if (u && u.email) fd.append('actor', u.email)
+        if (t.owner) fd.append('owner', t.owner)
+        fd.append('meta', JSON.stringify(meta || {}))
+        var xhr = new XMLHttpRequest()
+        xhr.open('POST', t.deliveryBase.replace(/\/+$/, '') + '/photos/upload')
+        xhr.setRequestHeader('Authorization', 'Bearer ' + t.token)
+        xhr.upload.onprogress = function (e) { if (e.lengthComputable && onPct) onPct(e.loaded / e.total) }
+        xhr.onload = function () {
+          var j = {}; try { j = JSON.parse(xhr.responseText) } catch (e) {}
+          if (xhr.status >= 200 && xhr.status < 300 && j.url) resolve({ url: j.url, key: key })
+          else reject(new Error('Opplasting feilet (' + xhr.status + '): ' + (j.error || 'ukjent')))
+        }
+        xhr.onerror = function () { reject(new Error('Opplasting feilet (nettverk)')) }
+        xhr.send(fd)
+      })
+    })
+  }
+
+  // The video's speech as 16 kHz mono WAV, made in the browser (the server cannot run ffmpeg).
+  function extractAudio(file) {
+    var Ctx = window.AudioContext || window.webkitAudioContext
+    return file.arrayBuffer().then(function (buf) {
+      var ctx = new Ctx()
+      return ctx.decodeAudioData(buf).then(function (decoded) { ctx.close(); return decoded })
+    }).then(function (decoded) {
+      var rate = 16000
+      var off = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate)
+      var src = off.createBufferSource(); src.buffer = decoded; src.connect(off.destination); src.start()
+      return off.startRendering()
+    }).then(function (rendered) { return wav(rendered.getChannelData(0), 16000) })
+  }
+  function wav(samples, rate) {
+    var b = new ArrayBuffer(44 + samples.length * 2), v = new DataView(b)
+    function s(o, str) { for (var i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)) }
+    s(0, 'RIFF'); v.setUint32(4, 36 + samples.length * 2, true); s(8, 'WAVE'); s(12, 'fmt ')
+    v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, rate, true)
+    v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); s(36, 'data'); v.setUint32(40, samples.length * 2, true)
+    for (var i = 0; i < samples.length; i++) { var x = Math.max(-1, Math.min(1, samples[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true) }
+    return new Blob([b], { type: 'audio/wav' })
+  }
+  function videoDuration(file) {
+    return new Promise(function (resolve) {
+      var v = document.createElement('video'); v.preload = 'metadata'
+      v.onloadedmetadata = function () { var d = v.duration; URL.revokeObjectURL(v.src); resolve(isFinite(d) ? d : 0) }
+      v.onerror = function () { resolve(0) }
+      v.src = URL.createObjectURL(file)
+    })
+  }
+
+  // ---------- Demo (before /world-course/* is deployed, or not signed in) ----------
+  var DEMO = {
+    graphId: '27d21ff6-c24e-4717-a818-7792ef562159', title: 'Enkel hals strikkekurs', status: 'draft', version: 18,
+    image: 'https://cdn.sodesign.no/photos/kurs/enkel-hals/kursbilde.jpg', level: 'nybegynner', folder: 'kurs/enkel-hals',
+    about: { tagline: 'Strikk din første hals, steg for steg', about: 'I dette kurset lærer du å legge opp masker, strikke rette masker, felle av og sy sammen, steg for steg med video.', you_make: 'En enkel hals i rettstrikk, 30 masker bred og 34 cm lang.', for_whom: 'Deg som aldri har strikket før.', level: 'nybegynner', you_need: ['60 cm rundpinne nr. 7', 'garn', 'stoppenål', 'saks'] },
+    lessons: [
+      { id: 'l01-oppskriften', title: 'Oppskriften', type: 'text', visible: true, duration_s: 0, text: 'Her er oppskriften på Enkel hals. Last den ned og ha den foran deg når du følger kurset.', pdf: { name: 'Enkel_hals.pdf' }, summary: '', transcript: '', missing: [] },
+      { id: 'l02-legg-opp', title: 'Legg opp', type: 'video', visible: true, duration_s: 315, video: 'https://cdn.sodesign.no/photos/kurs/enkel-hals/02-legg-opp.mp4', summary: 'Du lærer å legge opp 30 masker på rundpinne nr. 7.', transcript: '**[00:00]** Hei hei! Velkommen til den her videoen …', missing: [] },
+      { id: 'l03-strikk-rette-masker', title: 'Strikk rette masker', type: 'video', visible: true, duration_s: 280, video: 'https://cdn.sodesign.no/photos/kurs/enkel-hals/03-strikk-rette-masker.mp4', summary: 'Du lærer å strikke rette masker steg for steg.', transcript: '**[00:00]** Hei hei, og velkommen …', missing: [] },
+      { id: 'l04-fell-av', title: 'Fell av', type: 'video', visible: true, duration_s: 192, video: 'https://cdn.sodesign.no/photos/kurs/enkel-hals/04-fell-av.mp4', summary: 'Du får se hvordan du feller av alle maskene.', transcript: '**[00:00]** Hei og velkommen til film 3 …', missing: [] },
+      { id: 'l05-fest-trader-og-sy-sammen', title: 'Fest tråder og sy sammen', type: 'video', visible: true, duration_s: 355, video: 'https://cdn.sodesign.no/photos/kurs/enkel-hals/05-fest-trader-og-sy-sammen.mp4', summary: '', transcript: '**[00:00]** Hei, og velkommen til den siste filmen …', missing: ['oppsummering'] },
+    ],
+  }
+  function demoOn(reason) {
+    app.demo = true
+    $('#demo').hidden = false
+    $('#demoText').textContent = 'Forhåndsvisning med eksempeldata (' + reason + '). Ingenting lagres. Når kursverktøyene er deployet, viser siden de ekte kursene.'
+  }
+  // A local stand-in for the server rules, so the page can be tried before deploy.
+  function demoApply(op, b) {
+    var c = app.course
+    if (op === 'reorder') { var map = {}; c.lessons.forEach(function (l) { map[l.id] = l }); c.lessons = b.order.map(function (id) { return map[id] }) }
+    if (op === 'lesson/update') { c.lessons.forEach(function (l) { if (l.id === b.lessonId) { ['title', 'text', 'summary', 'transcript'].forEach(function (k) { if (b[k] !== undefined) l[k] = b[k] }); if (b.visible !== undefined) l.visible = b.visible } }) }
+    if (op === 'lesson') c.lessons.push({ id: 'l' + String(c.lessons.length + 1).padStart(2, '0') + '-' + slug(b.title), title: b.title, type: b.type, visible: true, duration_s: b.duration_s || 0, text: b.text || '', summary: '', transcript: '', missing: b.type === 'video' ? ['transkripsjon', 'oppsummering'] : [] })
+    if (op === 'status') c.status = b.status
+    if (op === 'update') { if (b.title) c.title = b.title; c.about = Object.assign({}, c.about, b) }
+    c.lessons.forEach(function (l, i) { l.order = i + 1; l.missing = l.type === 'video' ? [!l.transcript && 'transkripsjon', !l.summary && 'oppsummering'].filter(Boolean) : l.missing })
+    return Promise.resolve({ course: c })
+  }
+  function change(op, body) {
+    if (app.demo) return demoApply(op, body).then(function (r) { render(); return r })
+    return post('/world-course/' + op, Object.assign({ graphId: app.course.graphId, version: app.course.version }, body))
+      .then(function (r) { app.course = r.course; render(); return r })
+      .catch(function (e) {
+        if (e.status === 409) { toast('Kurset ble endret et annet sted. Laster inn på nytt …'); return openCourse(app.course.graphId) }
+        toast('Kunne ikke lagre: ' + e.message, 5000); throw e
+      })
+  }
+
+  // ---------- Load ----------
+  function loadList() {
+    var u = user()
+    $('#who').textContent = u && u.email ? u.email : ''
+    if (!u || !u.token) { demoOn('ikke logget inn'); app.courses = [DEMO]; renderList(); return openCourse(DEMO.graphId) }
+    return api('/world-course/list?' + q({ world: CONFIG.world })).then(function (r) {
+      app.courses = r.courses || []
+      renderList()
+      if (app.courses[0]) openCourse(app.courses[0].graphId)
+      else $('#main').innerHTML = '<div class="empty">Ingen kurs ennå. Trykk «Nytt kurs» for å lage det første.</div>'
+    }).catch(function (e) {
+      demoOn(e.status === 404 ? 'kursverktøyene er ikke deployet ennå' : e.status === 403 ? 'du er ikke founder i ' + CONFIG.world : 'serveren svarte ikke')
+      app.courses = [DEMO]; renderList(); openCourse(DEMO.graphId)
+    })
+  }
+  function openCourse(graphId) {
+    if (app.demo) { app.course = JSON.parse(JSON.stringify(DEMO)); render(); renderList(); return Promise.resolve() }
+    $('#main').innerHTML = '<p class="meta">Henter kurset …</p>'
+    return api('/world-course/get?' + q({ world: CONFIG.world, graphId: graphId })).then(function (r) { app.course = r.course; render(); renderList() })
+      .catch(function (e) { $('#main').innerHTML = '<p class="err">Kunne ikke hente kurset: ' + esc(e.message) + '</p>' })
+  }
+
+  // ---------- Render ----------
+  function renderList() {
+    var el = $('#courseList')
+    if (!app.courses.length) { el.innerHTML = '<p class="meta">Ingen kurs ennå.</p>'; return }
+    el.innerHTML = app.courses.map(function (c) {
+      var on = app.course && app.course.graphId === c.graphId
+      return '<button type="button" class="course-link' + (on ? ' on' : '') + '" data-id="' + esc(c.graphId) + '"' + (on ? ' aria-current="true"' : '') + '>'
+        + (c.image ? '<img src="' + esc(c.image) + '?w=120" alt="">' : '<span class="ph"></span>')
+        + '<span><b>' + esc(c.title) + '</b>' + (c.status ? '<small>' + statusText(c.status) + '</small>' : '') + '</span></button>'
+    }).join('')
+    el.querySelectorAll('.course-link').forEach(function (b) { b.onclick = function () { openCourse(b.dataset.id) } })
+  }
+  function statusText(s) { return { draft: 'Utkast', published: 'Publisert', archived: 'Arkivert' }[s] || s }
+
+  function render() {
+    var c = app.course; if (!c) return
+    var visible = c.lessons.filter(function (l) { return l.visible })
+    var total = visible.reduce(function (a, l) { return a + (l.type === 'video' ? l.duration_s || 0 : 0) }, 0)
+    var html = '<section class="head">'
+      + '<div class="cover">' + (c.image ? '<img src="' + esc(c.image) + '?w=600" alt="Kursbilde">' : 'Ingen kursbilde')
+      + '<label class="btn small plain" style="background:#fff">Bytt bilde<input class="sr" type="file" accept="image/*" id="coverFile"></label></div>'
+      + '<div><div class="k">Kurs</div><div class="title-row"><h1>' + esc(c.title) + '</h1><span class="pill ' + esc(c.status) + '">' + statusText(c.status) + '</span></div>'
+      + '<p class="meta">' + visible.length + ' steg' + (total ? ' · ca. ' + mins(total) + ' min video' : '') + (c.level ? ' · ' + esc(c.level) : '') + '</p>'
+      + (c.about && c.about.tagline ? '<p>' + esc(c.about.tagline) + '</p>' : '')
+      + '<div class="head-actions">'
+      + '<button class="btn plain" type="button" id="editCourse">Rediger kursinfo</button>'
+      + (c.status === 'published' ? '<button class="btn plain" type="button" id="toDraft">Gjør til utkast</button>' : '<button class="btn" type="button" id="publish">Publiser</button>')
+      + '<a class="btn ghost" href="' + esc(CONFIG.minside + '#/kurs/' + c.graphId) + '" target="_blank" rel="noopener">Se på Min side</a>'
+      + '</div></div></section>'
+    html += '<h2 class="sec">Stegene <button class="btn" type="button" id="addStep">+ Nytt steg</button></h2>'
+    if (!c.lessons.length) html += '<div class="empty">Ingen steg ennå. Legg til en video eller en tekst med PDF.</div>'
+    else html += '<ol class="steps" id="steps">' + c.lessons.map(stepHtml).join('') + '</ol>'
+    html += '<p class="meta" style="margin-top:14px">Dra i nummeret for å flytte et steg. Skjulte steg beholdes, men vises ikke for kundene.</p>'
+    $('#main').innerHTML = html
+    wire()
+  }
+  function stepHtml(l, i) {
+    var n = c_visibleIndex(l)
+    var badges = []
+    badges.push('<span class="badge">' + (l.type === 'video' ? 'Video · ' + mins(l.duration_s) + ' min' : 'Tekst' + (l.pdf ? ' og PDF' : '')) + '</span>')
+    if (!l.visible) badges.push('<span class="badge">Skjult</span>')
+    ;(l.missing || []).forEach(function (m) { badges.push('<span class="badge miss">Mangler ' + esc(m) + '</span>') })
+    if (l.type === 'video' && !(l.missing || []).length) badges.push('<span class="badge okb">Transkribert og oppsummert</span>')
+    var acts = '<button class="btn small plain" type="button" data-act="open">Tekster</button>'
+    if (l.type === 'video' && (l.missing || []).length) acts += '<button class="btn small ghost" type="button" data-act="transcribe">Lag transkripsjon</button>'
+    acts += '<button class="btn small plain icon" type="button" data-act="up" aria-label="Flytt opp"' + (i === 0 ? ' disabled' : '') + '>↑</button>'
+    acts += '<button class="btn small plain icon" type="button" data-act="down" aria-label="Flytt ned"' + (i === app.course.lessons.length - 1 ? ' disabled' : '') + '>↓</button>'
+    acts += '<button class="btn small plain" type="button" data-act="' + (l.visible ? 'hide' : 'show') + '">' + (l.visible ? 'Skjul' : 'Vis') + '</button>'
+    return '<li class="step' + (l.visible ? '' : ' hidden') + '" draggable="true" data-id="' + esc(l.id) + '">'
+      + '<span class="num" title="Dra for å flytte">' + (l.visible ? n : '–') + '</span>'
+      + '<div><h3>' + esc(l.title) + '</h3><div class="badges">' + badges.join('') + '</div></div>'
+      + '<div class="step-actions">' + acts + '</div></li>'
+  }
+  function c_visibleIndex(l) { var k = 0; for (var i = 0; i < app.course.lessons.length; i++) { if (app.course.lessons[i].visible) k++; if (app.course.lessons[i] === l) return k } return k }
+
+  function wire() {
+    var c = app.course
+    $('#addStep').onclick = function () { openStepDialog() }
+    $('#editCourse').onclick = function () { openCourseDialog(c) }
+    if ($('#publish')) $('#publish').onclick = function () { change('status', { status: 'published' }).then(function () { toast('Kurset er publisert. Kunder med tilgang ser det på Min side.') }) }
+    if ($('#toDraft')) $('#toDraft').onclick = function () { change('status', { status: 'draft' }) }
+    $('#coverFile').onchange = function (e) {
+      var f = e.target.files[0]; if (!f) return
+      if (app.demo) { toast('Forhåndsvisning: bildet lastes ikke opp.'); return }
+      var key = (c.folder || 'kurs/' + slug(c.title)) + '/kursbilde-' + Date.now() + '.' + (f.name.split('.').pop() || 'jpg').toLowerCase()
+      toast('Laster opp bildet …')
+      uploadFile(f, key, { kind: 'course-image' }).then(function (u) { return change('update', { image_url: u.url, image_key: u.key }) }).then(function () { toast('Kursbildet er byttet.') }).catch(function (er) { toast(er.message, 5000) })
+    }
+    var list = $('#steps'); if (!list) return
+    list.querySelectorAll('.step').forEach(function (li) {
+      var id = li.dataset.id
+      li.querySelectorAll('[data-act]').forEach(function (b) { b.onclick = function () { stepAction(b.dataset.act, id) } })
+      li.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', id); e.dataTransfer.effectAllowed = 'move' })
+      li.addEventListener('dragover', function (e) { e.preventDefault(); li.classList.add('drag-over') })
+      li.addEventListener('dragleave', function () { li.classList.remove('drag-over') })
+      li.addEventListener('drop', function (e) {
+        e.preventDefault(); li.classList.remove('drag-over')
+        var from = e.dataTransfer.getData('text/plain'); if (!from || from === id) return
+        var ids = c.lessons.map(function (l) { return l.id }).filter(function (x) { return x !== from })
+        ids.splice(ids.indexOf(id), 0, from)
+        change('reorder', { order: ids })
+      })
+    })
+  }
+
+  function stepAction(act, id) {
+    var c = app.course, ids = c.lessons.map(function (l) { return l.id }), i = ids.indexOf(id), l = c.lessons[i]
+    if (act === 'up' || act === 'down') {
+      var j = act === 'up' ? i - 1 : i + 1; if (j < 0 || j >= ids.length) return
+      ids.splice(i, 1); ids.splice(j, 0, id); return change('reorder', { order: ids })
+    }
+    if (act === 'hide' || act === 'show') return change('lesson/update', { lessonId: id, visible: act === 'show' }).then(function () { toast(act === 'hide' ? 'Steget er skjult for kundene.' : 'Steget vises igjen.') })
+    if (act === 'open') return openTextDialog(l)
+    if (act === 'transcribe') return transcribeExisting(l)
+  }
+
+  // ---------- Dialogs ----------
+  function openCourseDialog(c) {
+    var f = $('#formCourse'), a = (c && c.about) || {}
+    $('#dlgCourseTitle').textContent = c ? 'Rediger kursinfo' : 'Nytt kurs'
+    f.title.value = c ? c.title : ''; f.tagline.value = a.tagline || ''; f.about.value = a.about || ''
+    f.you_make.value = a.you_make || ''; f.for_whom.value = a.for_whom || ''; f.level.value = a.level || (c && c.level) || 'nybegynner'
+    f.you_need.value = (a.you_need || []).join('\n')
+    var d = $('#dlgCourse')
+    d.onclose = function () {
+      if (d.returnValue !== 'ok') return
+      var body = { title: f.title.value.trim(), tagline: f.tagline.value.trim(), about: f.about.value.trim(), you_make: f.you_make.value.trim(), for_whom: f.for_whom.value.trim(), level: f.level.value, you_need: f.you_need.value.split('\n').map(function (x) { return x.trim() }).filter(Boolean) }
+      if (!body.title) return
+      if (c) return change('update', body).then(function () { toast('Kursinfo lagret.') })
+      if (app.demo) { toast('Forhåndsvisning: kurset lagres ikke.'); return }
+      post('/world-course/create', Object.assign({ metaArea: '#STRIKKESKOLEN' }, body)).then(function (r) {
+        toast('Kurset er laget som utkast.')
+        app.courses.unshift({ graphId: r.graphId, title: body.title, status: 'draft' })
+        app.course = r.course; render(); renderList()
+      }).catch(function (e) { toast('Kunne ikke lage kurset: ' + e.message, 5000) })
+    }
+    d.showModal()
+  }
+
+  var stepType = 'video'
+  $('#stepType').querySelectorAll('button').forEach(function (b) {
+    b.onclick = function () {
+      stepType = b.dataset.t
+      $('#stepType').querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', String(x === b)) })
+      $('#videoPart').hidden = stepType !== 'video'; $('#textPart').hidden = stepType !== 'text'
+    }
+  })
+  $('#formStep').video.onchange = function (e) {
+    var f = e.target.files[0], info = $('#videoInfo')
+    if (!f) { info.textContent = 'Ingen fil valgt'; info.className = 'drop'; return }
+    if (f.size > MAX_BYTES) { info.textContent = f.name + ' er ' + Math.round(f.size / 1048576) + ' MB. Grensen er 100 MB — komprimer videoen først.'; info.className = 'drop err'; return }
+    info.textContent = f.name + ' · ' + Math.round(f.size / 1048576) + ' MB'; info.className = 'drop has'
+    if (!$('#formStep').title.value) $('#formStep').title.value = f.name.replace(/\.[^.]+$/, '').replace(/^\d+[-_ ]*/, '').replace(/[-_]+/g, ' ')
+  }
+  function openStepDialog() {
+    var f = $('#formStep'); f.reset(); $('#videoInfo').textContent = 'Ingen fil valgt'; $('#videoInfo').className = 'drop'
+    $('#stepProgress').hidden = true; $('#bar').style.width = '0'; $('#stepOk').disabled = false
+    var d = $('#dlgStep')
+    $('#stepOk').onclick = function (e) {
+      e.preventDefault()
+      var title = f.title.value.trim(); if (!title) { f.title.focus(); return }
+      if (stepType === 'video') {
+        var file = f.video.files[0]
+        if (!file) { toast('Velg en videofil.'); return }
+        if (file.size > MAX_BYTES) { toast('Videoen er over 100 MB.'); return }
+        addVideoStep(title, file)
+      } else addTextStep(title, f.text.value, f.pdf.files[0])
+    }
+    d.showModal()
+  }
+  function stepLog(msg, pct) { $('#stepProgress').hidden = false; $('#stepLog').textContent = msg; if (pct != null) $('#bar').style.width = Math.round(pct * 100) + '%' }
+
+  function addVideoStep(title, file) {
+    var c = app.course
+    $('#stepOk').disabled = true
+    if (app.demo) {
+      stepLog('Forhåndsvisning: videoen lastes ikke opp.', 1)
+      return videoDuration(file).then(function (d) { return change('lesson', { title: title, type: 'video', duration_s: Math.round(d) }) }).then(function () { $('#dlgStep').close() })
+    }
+    var nn = String(c.lessons.length + 1).padStart(2, '0')
+    var key = (c.folder || 'kurs/' + slug(c.title)) + '/' + nn + '-' + slug(title) + '.mp4'
+    var duration = 0, lessonId
+    stepLog('Leser videoen …', 0)
+    videoDuration(file).then(function (d) {
+      duration = Math.round(d)
+      stepLog('Laster opp …', 0)
+      return uploadFile(file, key, { course: c.slug || slug(c.title), lesson: title, duration_s: duration }, function (p) { stepLog('Laster opp … ' + Math.round(p * 100) + ' %', p) })
+    }).then(function (u) {
+      stepLog('Legger til steget …', 1)
+      return change('lesson', { title: title, type: 'video', video_url: u.url, key: u.key, bytes: file.size, duration_s: duration })
+    }).then(function (r) {
+      lessonId = r.lessonId
+      $('#dlgStep').close()
+      toast('Steget er lagt til. Transkripsjonen lages nå …', 5000)
+      return transcribe(lessonId, file)
+    }).catch(function (e) { stepLog('Stoppet: ' + e.message); $('#stepOk').disabled = false })
+  }
+
+  function addTextStep(title, text, pdf) {
+    var c = app.course
+    $('#stepOk').disabled = true
+    if (app.demo) { return change('lesson', { title: title, type: 'text', text: text }).then(function () { $('#dlgStep').close() }) }
+    var go = pdf
+      ? uploadFile(pdf, (c.folder || 'kurs/' + slug(c.title)) + '/' + slug(pdf.name.replace(/\.pdf$/i, '')) + '.pdf', { kind: 'pdf', lesson: title }, function (p) { stepLog('Laster opp PDF … ' + Math.round(p * 100) + ' %', p) })
+      : Promise.resolve(null)
+    go.then(function (u) {
+      return change('lesson', Object.assign({ title: title, type: 'text', text: text }, u ? { pdf_url: u.url, pdf_key: u.key, pdf_name: pdf.name } : {}))
+    }).then(function () { $('#dlgStep').close(); toast('Steget er lagt til.') })
+      .catch(function (e) { stepLog('Stoppet: ' + e.message); $('#stepOk').disabled = false })
+  }
+
+  function transcribe(lessonId, file) {
+    return videoDuration(file).then(function (d) {
+      if (d > AUDIO_MAX_S) throw new Error('Videoen er lengre enn 12 minutter; transkripsjon av så lange videoer kommer senere.')
+      return extractAudio(file)
+    }).then(function (audio) {
+      var fd = new FormData()
+      fd.append('world', CONFIG.world); fd.append('graphId', app.course.graphId); fd.append('lessonId', lessonId)
+      fd.append('audio', audio, lessonId + '.wav')
+      return api('/world-course/transcribe', { method: 'POST', body: fd })
+    }).then(function (r) {
+      app.course = r.course; render()
+      toast(r.summaryError ? 'Transkripsjonen er klar. Oppsummeringen feilet: ' + r.summaryError : 'Transkripsjon og oppsummering er klare.', 5000)
+    }).catch(function (e) { toast('Transkripsjonen ble ikke laget: ' + e.message, 6000) })
+  }
+  // For a step whose video is already uploaded: the browser fetches it once from the cdn.
+  function transcribeExisting(l) {
+    if (app.demo) { toast('Forhåndsvisning: her ville transkripsjon og oppsummering blitt laget.'); return }
+    if (!l.video) return
+    toast('Henter videoen og lager transkripsjonen …', 5000)
+    fetch(l.video).then(function (r) { if (!r.ok) throw new Error('kunne ikke hente videoen (' + r.status + ')'); return r.blob() })
+      .then(function (b) { return transcribe(l.id, new File([b], l.id + '.mp4', { type: 'video/mp4' })) })
+      .catch(function (e) { toast(e.message, 5000) })
+  }
+
+  function openTextDialog(l) {
+    var f = $('#formText')
+    $('#dlgTextTitle').textContent = l.title
+    f.title.value = l.title
+    var video = l.type === 'video'
+    $('#fSummary').hidden = !video; $('#fTranscript').hidden = !video; $('#fText').hidden = video
+    f.summary.value = l.summary || ''; f.transcript.value = l.transcript || ''; f.text.value = l.text || ''
+    var d = $('#dlgText')
+    d.onclose = function () {
+      if (d.returnValue !== 'ok') return
+      var body = { lessonId: l.id }
+      if (f.title.value.trim() && f.title.value.trim() !== l.title) body.title = f.title.value.trim()
+      if (video) {
+        if (f.summary.value !== (l.summary || '')) body.summary = f.summary.value
+        if (f.transcript.value !== (l.transcript || '')) body.transcript = f.transcript.value
+      } else if (f.text.value !== (l.text || '')) body.text = f.text.value
+      if (Object.keys(body).length > 1) change('lesson/update', body).then(function () { toast('Lagret.') })
+    }
+    d.showModal()
+  }
+
+  $('#newCourseBtn').onclick = function () { openCourseDialog(null) }
+
+  // Sign-in: vegvisr-auth (injected when the page is published) stores the user in localStorage.
+  var tries = 0
+  ;(function wait() { if (user() || tries++ > 6) return loadList(); setTimeout(wait, 500) })()
+})()
+</script>
+</body>
+</html>
