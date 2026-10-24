@@ -5329,6 +5329,12 @@ const WORLD_SETUP_GUIDE_STEPS = {
   'step-08-zone-move': '8 · Flytt sonen til World-kontoen',
   'step-09-hosts-and-pages': '9 · Koble vertsnavn og publiser sidene',
   'step-10-verify': '10 · Verifiser hele kjeden',
+  'step-11-graph-store': '11 · Grafer i World-ens egen database',
+  'step-12-editor-brand': '12 · Editoren i World-ens uttrykk',
+  'step-13-homepage-redirect': '13 · Forside og gammelt domene',
+  'step-14-commerce': '14 · Kundedatabase',
+  'step-15-media-cdn': '15 · Bilder, video og PDF på cdn.<domene>',
+  'step-16-courses': '16 · Kurs og produkter fra Kajabi',
 }
 
 function worldSetupGuide(step = 'step-00-index') {
