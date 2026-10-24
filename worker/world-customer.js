@@ -81,7 +81,7 @@ function courseCard(graphId, g, doneCount) {
 // The steps of a course, in order, with what the lesson page shows.
 function courseContent(graphId, g, doneSet) {
   const steps = (g.nodes || [])
-    .filter((n) => n.metadata && n.metadata.lesson)
+    .filter((n) => n.metadata && n.metadata.lesson && n.visible !== false)
     .sort((a, b) => a.metadata.lesson.order - b.metadata.lesson.order)
     .map((n) => {
       const l = n.metadata.lesson

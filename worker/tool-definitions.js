@@ -3912,6 +3912,99 @@ const TOOL_DEFINITIONS = [
       required: [],
     },
   },
+  // ---- World course builder (2026-10-24, world-course.js) — one set of rules for this agent, the
+  // World's course-builder page (/world-course/*) and later MCP. Founder of the World, its account
+  // holder, a Superadmin or a system owner. Step 17 of the World setup guide (graph b7f3a1d0).
+  {
+    name: 'list_world_courses',
+    description: "List a World's courses: its graphs tagged #KURS, read from the World's own graph store. Start here to find a course's graphId.",
+    input_schema: { type: 'object', properties: { world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, }, required: ['world'] },
+  },
+  {
+    name: 'get_world_course',
+    description: "Read one course in a World as the builder sees it: title, status (draft/published/archived), the course image, «Om kurset», and every step in order with its type, video, duration, visibility and what is missing (video, transkripsjon, oppsummering, tekst). Read before changing a course.",
+    input_schema: { type: 'object', properties: { world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, }, required: ['world', 'graphId'] },
+  },
+  {
+    name: 'create_world_course',
+    description: "Create a new, empty course in a World, on the course template Min side reads: a produkt node (metadata.product: kind course, status draft, slug, folder kurs/<slug>, access), an optional course image, and «Om kurset». Tagged #KURS. Add steps afterwards with add_course_lesson. Never publishes anything.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        world: { type: 'string', description: "The World's domain, e.g. sodesign.no." },
+        title: { type: 'string', description: 'Course title, e.g. «Enkel lue».' },
+        tagline: { type: 'string', description: 'One short line for the course card.' },
+        about: { type: 'string', description: '2-3 sentences: what the course is.' },
+        you_make: { type: 'string', description: 'What the participant has made at the end.' },
+        for_whom: { type: 'string', description: 'Who the course is for.' },
+        level: { type: 'string', description: 'nybegynner, litt erfaren or erfaren.' },
+        you_need: { type: 'array', items: { type: 'string' }, description: 'Equipment and materials.' },
+        access: { type: 'object', description: 'Optional, e.g. {"type":"membership","ref":"den-lille-strikkeskolen"}.' },
+        image_url: { type: 'string', description: 'Optional course image already on the World cdn.' },
+        image_key: { type: 'string', description: 'Its storage key, e.g. kurs/enkel-lue/kursbilde.jpg.' },
+        metaArea: { type: 'string', description: 'Extra meta areas besides #KURS, e.g. "#STRIKKESKOLEN".' },
+      },
+      required: ['world', 'title'],
+    },
+  },
+  {
+    name: 'add_course_lesson',
+    description: "Add one step to a course. A video step needs a video already uploaded to the World's cdn (video_url, key; max 100 MB). A text step takes text and optionally a PDF url. Order, the «Steg N av M» labels, the product counts and the step list in «Om kurset» are recomputed. The step's id never changes afterwards (customers' progress points at it).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' },
+        title: { type: 'string', description: 'Step title, e.g. «Legg opp».' },
+        type: { type: 'string', enum: ['video', 'text'] },
+        video_url: { type: 'string' }, key: { type: 'string' }, bytes: { type: 'number' }, duration_s: { type: 'number' },
+        text: { type: 'string', description: 'Markdown for a text step.' },
+        pdf_url: { type: 'string' }, pdf_key: { type: 'string' }, pdf_name: { type: 'string' },
+        position: { type: 'number', description: 'Optional 1-based place; default last.' },
+      },
+      required: ['world', 'graphId', 'title', 'type'],
+    },
+  },
+  {
+    name: 'update_course_lesson',
+    description: "Change one step: title, text, PDF, visibility (visible:false hides it from customers but keeps it and its file), a replaced video (new url/key — its transcript and summary are marked as belonging to the old video), or the summary/transcript text by hand.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' },
+        lessonId: { type: 'string' },
+        title: { type: 'string' }, text: { type: 'string' }, visible: { type: 'boolean' },
+        video_url: { type: 'string' }, key: { type: 'string' }, bytes: { type: 'number' }, duration_s: { type: 'number' },
+        pdf_url: { type: 'string' }, pdf_key: { type: 'string' }, pdf_name: { type: 'string' },
+        summary: { type: 'string' }, transcript: { type: 'string' },
+      },
+      required: ['world', 'graphId', 'lessonId'],
+    },
+  },
+  {
+    name: 'reorder_course_lessons',
+    description: 'Put a course\'s steps in a new order. order = lesson ids first to last; steps not listed keep their relative order after them.',
+    input_schema: { type: 'object', properties: { world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' }, order: { type: 'array', items: { type: 'string' } } }, required: ['world', 'graphId', 'order'] },
+  },
+  {
+    name: 'update_world_course',
+    description: "Change the course itself: title, description, level, access, course image (image_url/image_key), or the fields of «Om kurset» (tagline, about, you_make, for_whom, you_need, keywords, hashtags) — «Om kurset» is then written fresh from those fields.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' },
+        title: { type: 'string' }, description: { type: 'string' }, level: { type: 'string' }, access: { type: 'object' },
+        image_url: { type: 'string' }, image_key: { type: 'string' },
+        tagline: { type: 'string' }, about: { type: 'string' }, you_make: { type: 'string' }, for_whom: { type: 'string' },
+        you_need: { type: 'array', items: { type: 'string' } }, keywords: { type: 'array', items: { type: 'string' } }, hashtags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['world', 'graphId'],
+    },
+  },
+  {
+    name: 'set_world_course_status',
+    description: 'Set a course to draft, published or archived (metadata.product.status). Access for customers is still decided by grants only (grant_world_access).',
+    input_schema: { type: 'object', properties: { world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' }, status: { type: 'string', enum: ['draft', 'published', 'archived'] } }, required: ['world', 'graphId', 'status'] },
+  },
   {
     name: 'grant_world_access',
     description: "Give (or with revoke:true take back) one person's access to one product in a World — e.g. a test customer, or a purchase made outside the shop. Writes customers + grants in the World's OWN customer database (provision_world_commerce first) and reads the row back. product_ref is the product graph's id (a course graph). Customer pages decide access from grants only, never from role. Superadmin only. Code-hardcoded (not in registry).",

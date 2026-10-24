@@ -6,6 +6,7 @@
  */
 
 import { commerceContext, commerceQuery } from './world-customer.js'
+import { executeCourseTool, COURSE_TOOL_OPS } from './world-course.js'
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE } from './system-prompt.js'
@@ -18627,6 +18628,15 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeProvisionWorldKv(toolInput, env)
     case 'provision_world_photos':
       return await executeProvisionWorldPhotos(toolInput, env)
+    case 'list_world_courses':
+    case 'get_world_course':
+    case 'create_world_course':
+    case 'add_course_lesson':
+    case 'update_course_lesson':
+    case 'reorder_course_lessons':
+    case 'update_world_course':
+    case 'set_world_course_status':
+      return await executeCourseTool(toolName, toolInput, env)
     case 'grant_world_access':
       return await executeGrantWorldAccess(toolInput, env)
     case 'list_world_grants':
