@@ -6476,13 +6476,15 @@ async function executeSetRealtimeRecordingsDomain(input, env) {
 export async function verifyRealtimeKit(accountId, appId, token) {
   if (!accountId) return { ok: false, error: 'the World has no Cloudflare account id stored — set it first.' }
   try {
-    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}/meetings?per_page=1`, {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}/meetings`, {
       headers: { Authorization: `Bearer ${token}` },
     })
     if (r.ok) return { ok: true, status: r.status }
     const j = await r.json().catch(() => null)
     const cf = (j && j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].code)) || ''
-    const why = r.status === 401 || r.status === 403
+    // A bad token comes back as 400 "Authentication failed", not only 401/403.
+    const authFail = r.status === 401 || r.status === 403 || /authenticat/i.test(String(cf))
+    const why = authFail
       ? 'Cloudflare refused the token for this RealtimeKit app'
       : r.status === 404 ? 'Cloudflare found no RealtimeKit app with that id in this account' : 'Cloudflare refused the check'
     return { ok: false, status: r.status, error: `${why} (HTTP ${r.status}${cf ? `: ${cf}` : ''}), account ${accountId}.` }
