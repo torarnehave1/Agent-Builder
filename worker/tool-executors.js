@@ -6,6 +6,7 @@
  */
 
 import { commerceContext, commerceQuery } from './world-customer.js'
+import { CONTACTS_FEATURES, DEFAULT_WORLD_CONTACTS_FEATURES, ensureWorldAppFeatures, worldContactsProfile, effectiveFeatures } from './world-contacts.js'
 import { executeCourseTool, COURSE_TOOL_OPS } from './world-course.js'
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
@@ -7931,6 +7932,40 @@ async function executeProvisionWorldCommerce(input, env) {
     message: `Customer database for ${domain} ready: D1 ${dbName} (EU) in the founder's account ${cfAccount}, schema ${WORLD_COMMERCE_SCHEMA_VERSION}, tables ${WORLD_COMMERCE_TABLES.join(', ')}. The platform keeps only the register row (status "${row?.status}"); no customer data is stored on the platform.`,
     domain, cf_account_id: cfAccount, d1_database_id: db.uuid, d1_database_name: dbName,
     schema_version: WORLD_COMMERCE_SCHEMA_VERSION, tables, registry_status: row?.status, steps,
+  }
+}
+
+// ---- set_world_app_features (2026-10-26) ---------------------------------------------------------
+// What the Contacts app may do in a World (stored as data; the app reads it from /world-contacts/worlds).
+// Only the switches passed change; the rest keep their stored or default value. Superadmin only.
+async function executeSetWorldAppFeatures(input, env) {
+  const gate = await resolveWorldInfraContext(input, env)
+  if (gate.error) return { success: false, error: gate.error }
+  const domain = String(input.domain || '').trim().toLowerCase()
+  const app = String(input.app || 'contacts').trim().toLowerCase()
+  if (!domain) return { success: false, error: 'domain is required, e.g. sodesign.no.' }
+  if (app !== 'contacts') return { success: false, error: 'app must be "contacts" (the only app with a World profile so far).' }
+  const wf = await env.DB.prepare('SELECT 1 AS ok FROM world_founders WHERE LOWER(domain) = ? LIMIT 1').bind(domain).first().catch(() => null)
+  if (!wf) return { success: false, error: `no World ${domain}` }
+  let change = input.features
+  if (typeof change === 'string') { try { change = JSON.parse(change) } catch { return { success: false, error: 'features must be an object like {"sms": false}' } } }
+  change = change && typeof change === 'object' ? change : {}
+  const unknown = Object.keys(change).filter((k) => !CONTACTS_FEATURES.includes(k))
+  if (unknown.length) return { success: false, error: `unknown feature(s): ${unknown.join(', ')}. Known: ${CONTACTS_FEATURES.join(', ')}` }
+  const bad = Object.entries(change).filter(([, v]) => typeof v !== 'boolean').map(([k]) => k)
+  if (bad.length) return { success: false, error: `feature values must be true or false: ${bad.join(', ')}` }
+  const { profile: before } = await worldContactsProfile(env, domain)
+  const next = { ...before, ...change }
+  await ensureWorldAppFeatures(env)
+  await env.DB.prepare(`INSERT INTO world_app_features (domain, app, features, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(domain, app) DO UPDATE SET features = excluded.features, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+    .bind(domain, app, JSON.stringify(next), new Date().toISOString(), String(input.userId || '')).run()
+  const { profile } = await worldContactsProfile(env, domain)
+  const on = CONTACTS_FEATURES.filter((k) => profile[k]), off = CONTACTS_FEATURES.filter((k) => !profile[k])
+  return {
+    success: true, domain, app, features: profile,
+    for_founder: effectiveFeatures(profile, 'founder'), for_operator: effectiveFeatures(profile, 'operator'),
+    message: `Contacts in ${domain} (read back): on ${on.join(', ') || '—'}; off ${off.join(', ') || '—'}. E-mail and rooms work only when the founder or account holder is signed in; anyone working on the World's behalf sees them off.`,
   }
 }
 
@@ -18747,6 +18782,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
     case 'update_world_course':
     case 'set_world_course_status':
       return await executeCourseTool(toolName, toolInput, env)
+    case 'set_world_app_features':
+      return await executeSetWorldAppFeatures(toolInput, env)
     case 'grant_world_access':
       return await executeGrantWorldAccess(toolInput, env)
     case 'list_world_grants':

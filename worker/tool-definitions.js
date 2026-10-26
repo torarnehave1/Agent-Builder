@@ -4006,6 +4006,19 @@ const TOOL_DEFINITIONS = [
     input_schema: { type: 'object', properties: { world: { type: 'string', description: "The World's domain, e.g. sodesign.no." }, graphId: { type: 'string', description: 'The course graph id (from list_world_courses or create_world_course).' }, version: { type: 'number', description: 'Optional: the version you read; the save is refused if the course changed since.' }, status: { type: 'string', enum: ['draft', 'published', 'archived'] } }, required: ['world', 'graphId', 'status'] },
   },
   {
+    name: 'set_world_app_features',
+    description: "Switch what the Contacts app (contacts.vegvisr.org) may do in a World — stored as data per World and read by the app. Switches: email, rooms (RealTime rooms), sms, reports (coaching reports), register_user, logs (contact log), calendar, analytics, photo (photo upload), clear_all. Without a stored profile a World gets: email and rooms on, everything else off. Contact work itself (view, search, labels, edit, add, delete one, import) is always on. E-mail and rooms act as the signed-in person, so they are on only when the World's founder or account holder is signed in. Pass only the switches to change; the rest are kept. Reads the profile back. Superadmin only. Code-hardcoded (not in registry).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: "The World's domain, e.g. sodesign.no." },
+        app: { type: 'string', enum: ['contacts'], description: 'The app; only contacts so far.' },
+        features: { type: 'object', description: 'Switches to change, e.g. {"sms": false, "email": true}.', additionalProperties: { type: 'boolean' } },
+      },
+      required: ['domain', 'features'],
+    },
+  },
+  {
     name: 'grant_world_access',
     description: "Give (or with revoke:true take back) one person's access to one product in a World — e.g. a test customer, or a purchase made outside the shop. Writes customers + grants in the World's OWN customer database (provision_world_commerce first) and reads the row back. product_ref is the product graph's id (a course graph). Customer pages decide access from grants only, never from role. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {

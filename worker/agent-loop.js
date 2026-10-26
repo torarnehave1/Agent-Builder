@@ -240,7 +240,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   // same journey (nibi.no, 2026-09-15). Every executor below is Superadmin-gated and returns no
   // token or secret value (checked: publish/upload secrets come back as status objects only).
   'check_world_credentials', 'get_world_app_interests',
-  'provision_world_kv', 'provision_world_photos', 'provision_world_graphs', 'provision_world_commerce', 'grant_world_access', 'list_world_grants', 'list_world_courses', 'get_world_course', 'create_world_course', 'add_course_lesson', 'update_course_lesson', 'reorder_course_lessons', 'update_world_course', 'set_world_course_status', 'move_graph_to_world', 'set_world_graph_store_status', 'set_world_brand', 'set_world_redirect', 'provision_world_email', 'set_world_dns_records',
+  'provision_world_kv', 'provision_world_photos', 'provision_world_graphs', 'provision_world_commerce', 'grant_world_access', 'list_world_grants', 'set_world_app_features', 'list_world_courses', 'get_world_course', 'create_world_course', 'add_course_lesson', 'update_course_lesson', 'reorder_course_lessons', 'update_world_course', 'set_world_course_status', 'move_graph_to_world', 'set_world_graph_store_status', 'set_world_brand', 'set_world_redirect', 'provision_world_email', 'set_world_dns_records',
   'deploy_world_proxy', 'set_world_publish_secret', 'check_world_publish', 'setup_world_homepage',
   'publish_world_page', 'publish_all_world_pages', 'upload_world_image', 'set_world_email_template',
   'get_world_email_templates', 'preview_world_email_template', 'remove_world_email_template',

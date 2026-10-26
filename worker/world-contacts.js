@@ -6,7 +6,8 @@
 // The Contacts app (contacts.vegvisr.org) uses this when a World is chosen instead of «Mine».
 // Columns match the app's own contacts table, so the app sends the same records either way.
 //
-//   GET  /world-contacts/worlds                         the Worlds this caller may work in
+//   GET  /world-contacts/worlds                         the Worlds this caller may work in, each with
+//                                                       relation (founder|holder|operator) and features
 //   GET  /world-contacts/list?world=&offset=&limit=     a page of contacts (limit ≤ 2000)
 //   POST /world-contacts/import {world, contacts, source}   ≤ 250 per call; merged on e-mail
 //   POST /world-contacts/update {world, id, record}
@@ -25,6 +26,51 @@ const JSON_ARRAYS = ['labels', 'emails', 'phones', 'addresses', 'websites']
 const MAX_IMPORT = 250
 const MAX_PAGE = 2000
 const MAX_SQL = 90_000 // D1 refuses a statement over 100 KB
+
+// ---- what the Contacts app may do in a World (decided 2026-10-26) ----------------------------------
+// A per-World profile, stored as data (table world_app_features, one row per World and app) and
+// changed with the tool set_world_app_features. Without a row, the default below applies.
+// Core contact work (view, search, labels, edit, add, delete one, import) is always on and not listed.
+export const CONTACTS_FEATURES = ['email', 'rooms', 'sms', 'reports', 'register_user', 'logs', 'calendar', 'analytics', 'photo', 'clear_all']
+export const DEFAULT_WORLD_CONTACTS_FEATURES = {
+  email: true, rooms: true,
+  sms: false, reports: false, register_user: false, logs: false, calendar: false, analytics: false, photo: false, clear_all: false,
+}
+// E-mail and rooms act as the SIGNED-IN person (their sender, their RealTime rooms). So they are on
+// only when that person is the World's founder or account holder; someone working on the World's
+// behalf would otherwise send from their own sender and add people to their own rooms.
+const ACTS_AS_CALLER = ['email', 'rooms']
+
+export async function ensureWorldAppFeatures(env) {
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS world_app_features (
+    domain TEXT NOT NULL, app TEXT NOT NULL, features TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT,
+    PRIMARY KEY (domain, app))`).run()
+}
+
+export async function worldContactsProfile(env, domain) {
+  await ensureWorldAppFeatures(env)
+  const row = await env.DB.prepare('SELECT features FROM world_app_features WHERE domain = ? AND app = ?').bind(domain, 'contacts').first().catch(() => null)
+  let stored = {}
+  try { stored = row ? JSON.parse(row.features) : {} } catch { stored = {} }
+  const profile = { ...DEFAULT_WORLD_CONTACTS_FEATURES }
+  for (const k of CONTACTS_FEATURES) if (typeof stored[k] === 'boolean') profile[k] = stored[k]
+  return { profile, stored: Boolean(row) }
+}
+
+// founder | holder | operator (Superadmin or system owner working on the World's behalf)
+async function relationTo(env, who, domain) {
+  const wf = await env.DB.prepare('SELECT founder_email, account_holder_email FROM world_founders WHERE LOWER(domain) = ? ORDER BY created_at LIMIT 1').bind(domain).first().catch(() => null)
+  const me = String(who.email || '').toLowerCase()
+  if (wf && String(wf.founder_email || '').toLowerCase() === me) return 'founder'
+  if (wf && String(wf.account_holder_email || '').toLowerCase() === me) return 'holder'
+  return 'operator'
+}
+
+export function effectiveFeatures(profile, relation) {
+  const out = { ...profile }
+  if (relation === 'operator') for (const k of ACTS_AS_CALLER) out[k] = false
+  return out
+}
 
 const json = (body, status, cors) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 const nowIso = () => new Date().toISOString()
@@ -192,7 +238,9 @@ export async function handleWorldContacts(request, env, url, cors, resolveCaller
       const gate = await mayBuildIn(env, who, s.domain)
       if (!gate.ok) continue
       const wf = await env.DB.prepare('SELECT world_name FROM world_founders WHERE LOWER(domain) = ? ORDER BY created_at LIMIT 1').bind(s.domain).first().catch(() => null)
-      worlds.push({ domain: s.domain, name: (wf && wf.world_name) || s.domain })
+      const relation = await relationTo(env, who, s.domain)
+      const { profile } = await worldContactsProfile(env, s.domain)
+      worlds.push({ domain: s.domain, name: (wf && wf.world_name) || s.domain, relation, features: effectiveFeatures(profile, relation) })
     }
     return json({ success: true, worlds }, 200, cors)
   }

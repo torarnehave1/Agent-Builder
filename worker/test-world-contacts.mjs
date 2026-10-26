@@ -148,6 +148,23 @@ const c = (name, email, labels, extra = {}) => ({ fullName: name, firstName: nam
   check('POST with X-API-Token keeps its body (world + contacts arrive)', res.status === 200 && b.inserted === 1 && seenAuth === 'Bearer tok123', `${res.status} ${JSON.stringify(b)} auth=${seenAuth}`)
 }
 {
+  // Feature profile: default, relation rule, and the tool that changes it.
+  const w = (await call('GET', '/world-contacts/worlds', OWNER)).body.worlds[0]
+  check('operator: default profile, e-mail and rooms off (they would act as the operator)',
+    w.relation === 'operator' && w.features.email === false && w.features.rooms === false && w.features.sms === false && w.features.reports === false, JSON.stringify(w))
+  const f = (await call('GET', '/world-contacts/worlds', as('stine.oksvold@gmail.com'))).body.worlds[0]
+  check('founder: e-mail and rooms on, sms/reports/register_user/photo off',
+    f.relation === 'founder' && f.features.email && f.features.rooms && !f.features.sms && !f.features.reports && !f.features.register_user && !f.features.photo, JSON.stringify(f))
+  const set = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 'sa', features: { photo: true, rooms: false } }, env)
+  const f2 = (await call('GET', '/world-contacts/worlds', as('stine.oksvold@gmail.com'))).body.worlds[0]
+  check('set_world_app_features changes only the switches passed, read back by the app',
+    set.success && f2.features.photo === true && f2.features.rooms === false && f2.features.email === true && f2.features.sms === false, JSON.stringify({ set, f2 }))
+  const bad = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 'sa', features: { teleport: true } }, env)
+  check('unknown switch refused', !bad.success && /unknown feature/.test(bad.error), JSON.stringify(bad))
+  const nonSuper = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 's', features: { sms: true } }, env)
+  check('non-Superadmin refused', !nonSuper.success, JSON.stringify(nonSuper))
+}
+{
   const platformRows = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%contact%'`).all()
   check('platform database has no contacts table', platformRows.length === 0, JSON.stringify(platformRows))
 }
