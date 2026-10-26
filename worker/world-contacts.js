@@ -75,6 +75,23 @@ export function effectiveFeatures(profile, relation) {
   return out
 }
 
+// CORS for a World's own host (e.g. https://contacts.sodesign.no). The platform's own *.vegvisr.org
+// origins are already in `cors`; this adds an origin whose host is a registered World domain or a
+// subdomain of one. Credentials are not needed: the app sends X-API-Token.
+export async function worldOriginCors(request, env, cors) {
+  const origin = request.headers.get('Origin') || ''
+  if (!origin || cors['Access-Control-Allow-Origin'] === origin) return cors
+  let host
+  try { const u = new URL(origin); if (u.protocol !== 'https:') return cors; host = u.hostname.toLowerCase() } catch { return cors }
+  const parts = host.split('.')
+  const candidates = parts.slice(0, -1).map((_, i) => parts.slice(i).join('.')).filter((d) => d.includes('.'))
+  if (!candidates.length) return cors
+  const row = await env.DB.prepare(`SELECT 1 AS ok FROM world_founders WHERE LOWER(domain) IN (${candidates.map(() => '?').join(', ')}) LIMIT 1`)
+    .bind(...candidates).first().catch(() => null)
+  if (!row) return cors
+  return { ...cors, 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Token', Vary: 'Origin' }
+}
+
 const json = (body, status, cors) => new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } })
 const nowIso = () => new Date().toISOString()
 const uuid = () => crypto.randomUUID()

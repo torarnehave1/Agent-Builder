@@ -1,4 +1,4 @@
-// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-15 (editor origin added).
+// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-26 (contacts origin added; editor origin 2026-10-15).
 // The KV key is the SOURCE — deploy_world_proxy reads it, not this file. This copy exists because
 // that template once drifted seven months from any reviewable source, and a change nobody can read
 // is a change nobody can check. Update BOTH when changing the proxy, and keep the KV backup key
@@ -86,7 +86,10 @@ export default {
       aichat: env.APP_AICHAT_ORIGIN,
       connect: env.APP_CONNECT_ORIGIN,
       photos: env.APP_PHOTOS_ORIGIN,
-      editor: env.APP_EDITOR_ORIGIN || 'https://editor.vegvisr.org'
+      editor: env.APP_EDITOR_ORIGIN || 'https://editor.vegvisr.org',
+      // contacts.<World domain> serves the Contacts app (2026-10-26); in a World it shows only that
+      // World's contact list, stored in the World's own database.
+      contacts: env.APP_CONTACTS_ORIGIN || 'https://contacts.vegvisr.org'
     };
 
     const url = new URL(request.url);

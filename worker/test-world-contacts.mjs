@@ -169,6 +169,16 @@ const c = (name, email, labels, extra = {}) => ({ fullName: name, firstName: nam
   check('non-Superadmin refused', !nonSuper.success, JSON.stringify(nonSuper))
 }
 {
+  const { worldOriginCors } = await import(path.join(tmp, 'world-contacts.js'))
+  const base = { 'Access-Control-Allow-Origin': '' }
+  const o = (origin) => worldOriginCors(new Request('https://agent.vegvisr.org/world-contacts/worlds', { headers: { Origin: origin } }), env, base)
+  check('CORS: contacts.sodesign.no is allowed', (await o('https://contacts.sodesign.no'))['Access-Control-Allow-Origin'] === 'https://contacts.sodesign.no', '')
+  check('CORS: the apex of a World is allowed', (await o('https://sodesign.no'))['Access-Control-Allow-Origin'] === 'https://sodesign.no', '')
+  check('CORS: an unknown domain is not', (await o('https://evil.example.com'))['Access-Control-Allow-Origin'] === '', '')
+  check('CORS: a look-alike is not (sodesign.no.evil.com)', (await o('https://sodesign.no.evil.com'))['Access-Control-Allow-Origin'] === '', '')
+  check('CORS: http is not', (await o('http://contacts.sodesign.no'))['Access-Control-Allow-Origin'] === '', '')
+}
+{
   const platformRows = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%contact%'`).all()
   check('platform database has no contacts table', platformRows.length === 0, JSON.stringify(platformRows))
 }

@@ -27,7 +27,7 @@ import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { handleWorldCustomer } from './world-customer.js'
-import { handleWorldContacts } from './world-contacts.js'
+import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
 import { handleWorldCourse } from './world-course.js'
 import { buildImageInput, DEFAULT_IMAGE_MODEL } from './image-models.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
@@ -2246,8 +2246,11 @@ export default {
       // World contacts (2026-10-26): the founder's contact list in the World's own customer database,
       // read and written by the Contacts app in World mode. See world-contacts.js.
       if (pathname.startsWith('/world-contacts/')) {
-        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders })
-        return handleWorldContacts(request, env, url, corsHeaders, resolveAuthorizedCaller)
+        // Contacts also runs on a World's own host (contacts.<World domain>, via the World's brand proxy),
+        // so that origin is trusted here too — only for a registered World domain or its subdomains.
+        const wc = await worldOriginCors(request, env, corsHeaders)
+        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: wc })
+        return handleWorldContacts(request, env, url, wc, resolveAuthorizedCaller)
       }
 
       // World course builder (2026-10-24): create and change a World's courses from its course-builder
