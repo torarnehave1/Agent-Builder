@@ -173,11 +173,13 @@ async function importContacts(ctx, list, source) {
 
 export async function handleWorldContacts(request, env, url, cors, resolveCaller) {
   // The Contacts app sends X-API-Token; the shared resolver reads Authorization.
+  // Only the headers are copied: building a Request from `request` would take its body, and the
+  // import's {world, contacts} would then read as empty (bug found live 2026-10-26).
   let req = request
   const xTok = request.headers.get('X-API-Token')
   if (xTok && !request.headers.get('Authorization')) {
     const h = new Headers(request.headers); h.set('Authorization', `Bearer ${xTok}`)
-    req = new Request(request, { headers: h })
+    req = new Request(request.url, { method: 'GET', headers: h })
   }
   const caller = await resolveCaller(req, env).catch(() => null)
   if (!caller || !caller.authenticated || !caller.email) return json({ success: false, error: 'not signed in' }, 401, cors)

@@ -137,6 +137,17 @@ const c = (name, email, labels, extra = {}) => ({ fullName: name, firstName: nam
   check('more than 250 per call → 400', over.status === 400, JSON.stringify(over.body))
 }
 {
+  // The Contacts app sends X-API-Token, not Authorization: the POST body must still arrive.
+  let seenAuth = null
+  const viaToken = async (req) => { seenAuth = req.headers.get('Authorization'); return { authenticated: true, email: 'owner@example.com' } }
+  const res = await handleWorldContacts(
+    new Request('https://agent.vegvisr.org/world-contacts/import', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': 'tok123' },
+      body: JSON.stringify({ world: 'sodesign.no', source: 'kajabi', contacts: [c('Via token', 'token@example.com', ['Kurs'])] }) }),
+    env, new URL('https://agent.vegvisr.org/world-contacts/import'), {}, viaToken)
+  const b = await res.json()
+  check('POST with X-API-Token keeps its body (world + contacts arrive)', res.status === 200 && b.inserted === 1 && seenAuth === 'Bearer tok123', `${res.status} ${JSON.stringify(b)} auth=${seenAuth}`)
+}
+{
   const platformRows = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%contact%'`).all()
   check('platform database has no contacts table', platformRows.length === 0, JSON.stringify(platformRows))
 }
