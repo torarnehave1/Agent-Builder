@@ -6,7 +6,7 @@
  */
 
 import { commerceContext, commerceQuery } from './world-customer.js'
-import { CONTACTS_FEATURES, DEFAULT_WORLD_CONTACTS_FEATURES, ensureWorldAppFeatures, worldContactsProfile, effectiveFeatures } from './world-contacts.js'
+import { CONTACTS_FEATURES, NOT_IN_A_WORLD_YET, ensureWorldAppFeatures, worldContactsProfile, effectiveFeatures } from './world-contacts.js'
 import { executeCourseTool, COURSE_TOOL_OPS } from './world-course.js'
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
@@ -7954,6 +7954,8 @@ async function executeSetWorldAppFeatures(input, env) {
   if (unknown.length) return { success: false, error: `unknown feature(s): ${unknown.join(', ')}. Known: ${CONTACTS_FEATURES.join(', ')}` }
   const bad = Object.entries(change).filter(([, v]) => typeof v !== 'boolean').map(([k]) => k)
   if (bad.length) return { success: false, error: `feature values must be true or false: ${bad.join(', ')}` }
+  const notYet = NOT_IN_A_WORLD_YET.filter((k) => change[k] === true)
+  if (notYet.length) return { success: false, error: `${notYet.join(', ')} cannot be switched on in a World yet: they write to the signed-in user's own tables (contact log, calendar), not the World's.` }
   const { profile: before } = await worldContactsProfile(env, domain)
   const next = { ...before, ...change }
   await ensureWorldAppFeatures(env)
@@ -7965,7 +7967,7 @@ async function executeSetWorldAppFeatures(input, env) {
   return {
     success: true, domain, app, features: profile,
     for_founder: effectiveFeatures(profile, 'founder'), for_operator: effectiveFeatures(profile, 'operator'),
-    message: `Contacts in ${domain} (read back): on ${on.join(', ') || '—'}; off ${off.join(', ') || '—'}. E-mail and rooms work only when the founder or account holder is signed in; anyone working on the World's behalf sees them off.`,
+    message: `Contacts in ${domain} (read back): on ${on.join(', ') || '—'}; off ${off.join(', ') || '—'}. E-mail, rooms and photo act as the signed-in person, so they work only when the founder or account holder is signed in; anyone working on the World's behalf sees them off.`,
   }
 }
 

@@ -4007,7 +4007,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_world_app_features',
-    description: "Switch what the Contacts app (contacts.vegvisr.org) may do in a World — stored as data per World and read by the app. Switches: email, rooms (RealTime rooms), sms, reports (coaching reports), register_user, logs (contact log), calendar, analytics, photo (photo upload), clear_all. Without a stored profile a World gets: email and rooms on, everything else off. Contact work itself (view, search, labels, edit, add, delete one, import) is always on. E-mail and rooms act as the signed-in person, so they are on only when the World's founder or account holder is signed in. Pass only the switches to change; the rest are kept. Reads the profile back. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Switch what the Contacts app (contacts.vegvisr.org) may do in a World — stored as data per World and read by the app. Switches: email, rooms (RealTime rooms), sms, reports (coaching reports), register_user, logs (contact log), calendar, analytics, photo (photo upload), clear_all. Without a stored profile a World gets: email and rooms on, everything else off. Contact work itself (view, search, labels, edit, add, delete one, import) is always on. E-mail, rooms and photo act as the signed-in person, so they are on only when the World's founder or account holder is signed in. logs, calendar, analytics and clear_all cannot be switched on in a World yet (they write to the signed-in user's own tables). Pass only the switches to change; the rest are kept. Reads the profile back. Superadmin only. Code-hardcoded (not in registry).",
     input_schema: {
       type: 'object',
       properties: {

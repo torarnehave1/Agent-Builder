@@ -159,6 +159,10 @@ const c = (name, email, labels, extra = {}) => ({ fullName: name, firstName: nam
   const f2 = (await call('GET', '/world-contacts/worlds', as('stine.oksvold@gmail.com'))).body.worlds[0]
   check('set_world_app_features changes only the switches passed, read back by the app',
     set.success && f2.features.photo === true && f2.features.rooms === false && f2.features.email === true && f2.features.sms === false, JSON.stringify({ set, f2 }))
+  check('photo is on for the founder but off for an operator (it uploads to the caller\'s storage)',
+    (await call('GET', '/world-contacts/worlds', OWNER)).body.worlds[0].features.photo === false, 'operator photo not off')
+  const notYet = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 'sa', features: { logs: true } }, env)
+  check('logs cannot be switched on in a World yet', !notYet.success && /cannot be switched on/.test(notYet.error), JSON.stringify(notYet))
   const bad = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 'sa', features: { teleport: true } }, env)
   check('unknown switch refused', !bad.success && /unknown feature/.test(bad.error), JSON.stringify(bad))
   const nonSuper = await executeTool('set_world_app_features', { domain: 'sodesign.no', userId: 's', features: { sms: true } }, env)

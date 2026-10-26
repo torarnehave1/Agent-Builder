@@ -39,7 +39,10 @@ export const DEFAULT_WORLD_CONTACTS_FEATURES = {
 // E-mail and rooms act as the SIGNED-IN person (their sender, their RealTime rooms). So they are on
 // only when that person is the World's founder or account holder; someone working on the World's
 // behalf would otherwise send from their own sender and add people to their own rooms.
-const ACTS_AS_CALLER = ['email', 'rooms']
+const ACTS_AS_CALLER = ['email', 'rooms', 'photo'] // photo: the upload lands in the signed-in person's photo storage
+// These write to the signed-in user's own platform tables (contact log, calendar sync, wipe); a World
+// has no place for them yet, so they cannot be switched on for a World.
+export const NOT_IN_A_WORLD_YET = ['logs', 'calendar', 'analytics', 'clear_all']
 
 export async function ensureWorldAppFeatures(env) {
   await env.DB.prepare(`CREATE TABLE IF NOT EXISTS world_app_features (
