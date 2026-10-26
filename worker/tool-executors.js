@@ -7821,7 +7821,7 @@ async function executeProvisionWorldGraphs(input, env) {
 // the register row below — never the customer list (same principle as the graph store).
 // The founder is the data controller. Workers that read and write it (checkout/webhook, Min side,
 // locked delivery on cdn.<domain>) come in later steps and bind this database.
-const WORLD_COMMERCE_SCHEMA_VERSION = 1
+const WORLD_COMMERCE_SCHEMA_VERSION = 2 // 2 (2026-10-26): contacts — the founder's contact list with tags
 const WORLD_COMMERCE_SCHEMA = [
   `CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS customers (
@@ -7845,8 +7845,15 @@ const WORLD_COMMERCE_SCHEMA = [
   `CREATE INDEX IF NOT EXISTS idx_orders_email ON orders(email)`,
   `CREATE INDEX IF NOT EXISTS idx_grants_email ON grants(email)`,
   `CREATE INDEX IF NOT EXISTS idx_memberships_email ON memberships(email)`,
+  // Schema 2: the contact list (Kajabi/Google imports, tags as labels). Same columns as the Contacts
+  // app's own table so the app sends the same records; `email` = primary e-mail, lower-case, the merge key.
+  `CREATE TABLE IF NOT EXISTS contacts (
+     id TEXT PRIMARY KEY, email TEXT, full_name TEXT NOT NULL, first_name TEXT, middle_name TEXT, last_name TEXT,
+     nickname TEXT, birthday TEXT, notes TEXT, photo TEXT, labels TEXT, emails TEXT, phones TEXT, addresses TEXT,
+     websites TEXT, organization TEXT, source TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS ux_contacts_email ON contacts(email)`,
 ]
-const WORLD_COMMERCE_TABLES = ['customers', 'orders', 'grants', 'memberships', 'progress', 'schema_version']
+const WORLD_COMMERCE_TABLES = ['customers', 'orders', 'grants', 'memberships', 'progress', 'contacts', 'schema_version']
 
 async function ensureWorldCommerceRegistry(env) {
   await env.DB.prepare(
