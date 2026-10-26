@@ -13,7 +13,7 @@
 import { getTemplate, getTemplateVersion, extractTemplateId, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
-import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode, signPublishToken } from './tool-executors.js'
+import { executeTool, executeCreateHtmlFromTemplate, executeAnalyzeNode, executeAnalyzeGraph, executeEnhanceText, pickAppMarker, pickAppUrlMarker, scrapeAppCardLine, isAppCatalogNode, signPublishToken, verifyRealtimeKit } from './tool-executors.js'
 import { streamingAgentLoop, executeAgent } from './agent-loop.js'
 import { runAutomation, runSingleStep } from './automation-runner.js'
 import { buildAutomationSpec } from './automation-builder.js'
@@ -592,6 +592,30 @@ export default {
           return new Response(JSON.stringify({ error: `No World is registered for ${domain} and no founder_email was given.` }), { status: 400, headers: corsHeaders })
         }
 
+        // POST { domain, rtk_app_id?, rtk_token? } — the World's OWN RealtimeKit app. Separate from
+        // cf_api_token on purpose: that one is the brand-proxy Workers/KV/DNS token, and a
+        // Realtime-only token written there breaks every proxy deploy. Same executor as the chat
+        // tool (setup_realtime_kit), which verifies the app+token pair against Cloudflare first.
+        if (request.method === 'POST' && (body.rtk_app_id || body.rtk_token)) {
+          const result = await executeTool('setup_realtime_kit', {
+            userId: auth.userId,
+            authContext: { userId: auth.userId, role: auth.role, profile: auth.profile },
+            founder_email: founderEmail,
+            app_id: String(body.rtk_app_id || '').trim(),
+            rtk_token: String(body.rtk_token || '').trim(),
+          }, env)
+          const { rtk_token: _dropRtk, ...safe } = result || {}
+          // "incomplete" (no bucket yet) still means the Realtime pair was stored.
+          const stored = result && result.stored !== false && result.configured
+          return new Response(JSON.stringify({
+            ...safe,
+            success: Boolean(stored),
+            message: stored
+              ? `Realtime app stored for ${founderEmail} and accepted by Cloudflare.${safe.missing && safe.missing.length ? ` Still missing: ${safe.missing.join(', ')}.` : ''}`
+              : (safe.error || 'Nothing stored.'),
+          }), { status: stored ? 200 : 400, headers: corsHeaders })
+        }
+
         if (request.method === 'POST') {
           const cfApiToken = String(body.cf_api_token || '').trim()
           if (!cfApiToken) {
@@ -613,7 +637,7 @@ export default {
         }
 
         // GET — state only, so the UI can say "stored and accepted" without ever holding the secret.
-        const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token, cf_kv_namespace_id FROM config WHERE email = ?').bind(founderEmail).first()
+        const row = await env.DB.prepare('SELECT cf_account_id, cf_api_token, cf_kv_namespace_id, cf_rtk_app_id, cf_rtk_token, cf_r2_bucket FROM config WHERE email = ?').bind(founderEmail).first()
         const stored = String(row?.cf_api_token || '').trim()
         let tokenLive = null
         if (stored) {
@@ -636,6 +660,25 @@ export default {
           token_stored: Boolean(stored),
           token_suffix: stored ? `...${stored.slice(-6)}` : null,
           token_live: tokenLive,
+          ...(await (async () => {
+            const rtkApp = String(row?.cf_rtk_app_id || '').trim()
+            const rtkTok = String(row?.cf_rtk_token || '').trim()
+            let rtkLive = null
+            let rtkError = null
+            if (rtkApp && rtkTok) {
+              const v = await verifyRealtimeKit(row?.cf_account_id, rtkApp, rtkTok)
+              rtkLive = v.ok ? true : (v.status ? false : null)
+              if (!v.ok) rtkError = v.error
+            }
+            return {
+              rtk_app_id: rtkApp || null,
+              rtk_token_stored: Boolean(rtkTok),
+              rtk_token_suffix: rtkTok ? `...${rtkTok.slice(-6)}` : null,
+              rtk_live: rtkLive,
+              rtk_error: rtkError,
+              r2_bucket: row?.cf_r2_bucket || null,
+            }
+          })()),
         }), { headers: corsHeaders })
       }
 

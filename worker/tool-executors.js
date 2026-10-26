@@ -6471,6 +6471,26 @@ async function executeSetRealtimeRecordingsDomain(input, env) {
   }
 }
 
+// Does this token open this RealtimeKit app in this account? Same URL shape realtime-worker
+// calls (accounts/<acct>/realtime/kit/<app>/meetings). Never returns the token.
+export async function verifyRealtimeKit(accountId, appId, token) {
+  if (!accountId) return { ok: false, error: 'the World has no Cloudflare account id stored — set it first.' }
+  try {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/realtime/kit/${appId}/meetings?per_page=1`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (r.ok) return { ok: true, status: r.status }
+    const j = await r.json().catch(() => null)
+    const cf = (j && j.errors && j.errors[0] && (j.errors[0].message || j.errors[0].code)) || ''
+    const why = r.status === 401 || r.status === 403
+      ? 'Cloudflare refused the token for this RealtimeKit app'
+      : r.status === 404 ? 'Cloudflare found no RealtimeKit app with that id in this account' : 'Cloudflare refused the check'
+    return { ok: false, status: r.status, error: `${why} (HTTP ${r.status}${cf ? `: ${cf}` : ''}), account ${accountId}.` }
+  } catch (e) {
+    return { ok: false, error: `could not reach Cloudflare to verify (${e && e.message ? e.message : 'network error'}).` }
+  }
+}
+
 async function executeSetupRealtimeKit(input, env) {
   const callerProfile = await resolveUserProfile(input.userId, env)
   const callerRole = (callerProfile?.Role || callerProfile?.role || '').trim()
@@ -6505,6 +6525,15 @@ async function executeSetupRealtimeKit(input, env) {
     bucket: bucket || existing.cf_r2_bucket || null,
     domain: recordingsDomain || existing.cf_r2_public_base || null,
   }
+
+  // realtime-worker switches a founder onto their OWN RealtimeKit app the moment both
+  // cf_rtk_app_id and cf_rtk_token are set. A wrong pair would break every room that founder
+  // opens, so a new app id or token is checked against Cloudflare before anything is written.
+  if ((appId || rtkToken) && values.appId && values.rtkToken) {
+    const check = await verifyRealtimeKit(existing.cf_account_id, values.appId, values.rtkToken)
+    if (!check.ok) return { success: false, stored: false, founder_email: founderEmail, error: `Nothing stored — ${check.error}` }
+  }
+
   await env.DB.prepare(
     'UPDATE config SET cf_rtk_app_id = ?, cf_rtk_token = ?, cf_r2_bucket = ?, cf_r2_public_base = ? WHERE lower(email) = ?'
   ).bind(values.appId, values.rtkToken, values.bucket, values.domain, founderEmail).run()

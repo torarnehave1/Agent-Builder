@@ -22,6 +22,12 @@ interface CredentialState {
   token_stored: boolean;
   token_suffix: string | null;
   token_live: boolean | null;
+  rtk_app_id?: string | null;
+  rtk_token_stored?: boolean;
+  rtk_token_suffix?: string | null;
+  rtk_live?: boolean | null;
+  rtk_error?: string | null;
+  r2_bucket?: string | null;
 }
 
 // Same convention as GitHubConnect: the Agent-Builder login leaves no cookie session the
@@ -47,6 +53,8 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
   const [domain, setDomain] = useState('');
   const [accountId, setAccountId] = useState('');
   const [token, setToken] = useState('');
+  const [rtkAppId, setRtkAppId] = useState('');
+  const [rtkToken, setRtkToken] = useState('');
   const [state, setState] = useState<CredentialState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -64,6 +72,8 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
     setDomain(d);
     const row = worlds.find((w) => w.domain === d);
     setAccountId(row?.cf_account_id || '');
+    setRtkAppId('');
+    setRtkToken('');
     setState(null);
     if (d) check(d);
   };
@@ -85,6 +95,7 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
       } else {
         setState(data);
         if (data.cf_account_id && !accountId) setAccountId(data.cf_account_id);
+        if (data.rtk_app_id) setRtkAppId(data.rtk_app_id);
       }
     } catch {
       setError('Could not reach the worker.');
@@ -120,6 +131,36 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
       }
     } catch {
       setToken('');
+      setError('Could not reach the worker. Nothing was stored.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The World's own RealtimeKit app. Kept apart from the main token above: that one runs the
+  // brand proxy, and a Realtime-only token stored there breaks every proxy deploy.
+  const saveRealtime = async () => {
+    const d = domain.trim().toLowerCase();
+    if (!d || !rtkAppId.trim() || !rtkToken.trim()) return;
+    setBusy(true);
+    setError('');
+    setSaved('');
+    try {
+      const res = await fetch(`${AGENT_API}/world-credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-API-Token': getAuthToken() },
+        body: JSON.stringify({ domain: d, rtk_app_id: rtkAppId.trim(), rtk_token: rtkToken.trim() }),
+      });
+      const data = await res.json();
+      setRtkToken('');
+      if (!res.ok || data.success === false) {
+        setError(data.error || data.message || `Cloudflare refused the Realtime token (HTTP ${res.status}).`);
+      } else {
+        setSaved(data.message || 'Realtime app stored.');
+        await check(d);
+      }
+    } catch {
+      setRtkToken('');
       setError('Could not reach the worker. Nothing was stored.');
     } finally {
       setBusy(false);
@@ -172,6 +213,20 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
               )}
             </div>
             <div>Page store: {state.kv_namespace_id || <span className="text-amber-400">not provisioned</span>}</div>
+            <div>Realtime app: {state.rtk_app_id || <span className="text-amber-400">not set</span>}</div>
+            <div>
+              Realtime token:{' '}
+              {!state.rtk_token_stored ? (
+                <span className="text-amber-400">none stored</span>
+              ) : state.rtk_live === false ? (
+                <span className="text-rose-400">{state.rtk_token_suffix} — REJECTED{state.rtk_error ? `: ${state.rtk_error}` : ''}</span>
+              ) : state.rtk_live === null || state.rtk_live === undefined ? (
+                <span>{state.rtk_token_suffix} — not verified{state.rtk_app_id ? '' : ' (no app id)'}</span>
+              ) : (
+                <span className="text-emerald-400">{state.rtk_token_suffix} — accepted for this app</span>
+              )}
+            </div>
+            <div>Recordings bucket: {state.r2_bucket || <span className="text-amber-400">not set</span>}</div>
           </div>
         )}
 
@@ -220,6 +275,48 @@ export default function WorldCredentials({ resolvedTheme = 'dark' }: Props) {
           >
             Check
           </button>
+        </div>
+      </div>
+
+      <div className={`mt-6 border-t pt-4 ${isLight ? 'border-slate-200' : 'border-white/10'}`}>
+        <h4 className={`text-xs font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>Realtime (RealtimeKit)</h4>
+        <p className={`text-xs mb-3 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
+          The World's own Realtime app. This token is NOT the API token above — never paste a Realtime-only token
+          there. The app id and token are checked together against Cloudflare before anything is stored.
+        </p>
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className={labelClass}>Realtime app id</label>
+            <input
+              className={field}
+              value={rtkAppId}
+              spellCheck={false}
+              placeholder="from Realtime → RealtimeKit in the World's Cloudflare account"
+              onChange={(e) => setRtkAppId(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Realtime API token</label>
+            <input
+              className={field}
+              type="password"
+              value={rtkToken}
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="paste the Realtime token here"
+              onChange={(e) => setRtkToken(e.target.value)}
+            />
+          </div>
+          <div>
+            <button
+              type="button"
+              disabled={busy || !domain.trim() || !rtkAppId.trim() || !rtkToken.trim()}
+              onClick={saveRealtime}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-40"
+            >
+              {busy ? 'Verifying…' : 'Store Realtime app'}
+            </button>
+          </div>
         </div>
       </div>
 
