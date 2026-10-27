@@ -9937,6 +9937,10 @@ async function executeListRecordings(input, env) {
             // it the contact it belongs to.
             if (!known.contactId) known.contactId = l.contact_id || ''
             if (!known.contactName) known.contactName = l.contact_name || ''
+            // A transcript written to the interaction's note (Contact Hub's "Transkriber" or
+            // transcribe_contact_recording) counts too — the portfolio copy never gets it, so the
+            // recording was listed as "not transcribed" right after it was (2026-10-27, live).
+            if (!known.transcriptionText && l.notes) known.transcriptionText = l.notes
             if (l.contact_name && !String(known.displayName || '').includes(l.contact_name)) {
               known.displayName = `Contact Log — ${l.contact_name}`
             }
