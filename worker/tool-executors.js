@@ -40,6 +40,7 @@ import { listVemotionLibrary, getVemotionLibraryItem, vemotionCurveAppendix } fr
 import { getVemotionMediaInfo, listVemotionVideos, importVemotionVideo } from './vemotion-media.js'
 import { setDrawingPace } from './vemotion-timing.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
+import { transcribeAudioBytes } from './server-transcribe.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -11901,6 +11902,139 @@ async function executeAddContactLog(input, env) {
   return { success: true, logId: data._id || data.id, message: `Log entry added for ${contactName}` }
 }
 
+// Transcribe a Contact Hub recording ON THE SERVER and keep the text in two places: a fulltext
+// node in a graph, and appended to the interaction's own note (what "Transkriber" in Contact Hub
+// does). Exists for the MCP server, which has no browser for the chat's transcribe_audio path.
+// The recording is chosen by its interaction id; whose table is read is decided by userId, which
+// the door takes from the verified caller — never a body field.
+const SERVER_TRANSCRIPT_MARK = '--- Transkripsjon (Agent-Builder) ---'
+
+async function executeTranscribeContactRecording(input, env) {
+  const { userId } = input
+  const raw = String(input.recordingId || input.logId || '').trim()
+  if (!raw) throw new Error('recordingId is required (from list_recordings or get_contact_logs)')
+  if (!userId || String(userId).includes('@')) throw new Error('Contact-log transcription requires the internal user id')
+
+  const { logsTableId } = await resolveContactTableIds(userId, env)
+  if (!logsTableId) throw new Error('No contact_logs table found for this user')
+  let row = null
+  if (raw.startsWith('contactlog:')) {
+    const byId = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { _id: raw.slice('contactlog:'.length) }, limit: 1 })
+    row = (byId.records || byId.rows || [])[0] || null
+  } else {
+    // A recording that is in the audio portfolio AND on an interaction is listed by
+    // list_recordings under its portfolio id. The interaction is the one carrying the same file.
+    const profile = await resolveUserProfile(userId, env).catch(() => null)
+    const portfolio = profile?.email ? await fetchAllPortfolioRecordings(env, profile.email).catch(() => []) : []
+    const hit = portfolio.find(r => r.recordingId === raw)
+    if (hit?.r2Url) {
+      const logs = await fetchContactLogRecordings(env, logsTableId)
+      row = logs.find(l => l.recording_url === hit.r2Url) || null
+      if (!row) throw new Error(`Recording ${raw} is in the audio portfolio but not on any ContactHub interaction`)
+    }
+  }
+  if (!row) throw new Error(`No interaction with recording id ${raw}`)
+  const logId = row._id || row.id
+  if (!row.recording_url) throw new Error(`Interaction ${logId} has no recording`)
+
+  const audioRes = await fetch(row.recording_url)
+  if (!audioRes.ok) throw new Error(`Could not download the recording (${audioRes.status})`)
+  const buf = new Uint8Array(await audioRes.arrayBuffer())
+  const fileName = (String(row.recording_url).split('/').pop() || 'audio.webm').split('?')[0]
+  const tx = await transcribeAudioBytes(env, buf, {
+    fileName,
+    contentType: audioRes.headers.get('content-type') || 'audio/webm',
+    language: input.language || 'no',
+  })
+  if (!tx.text) throw new Error('Whisper returned no text for this recording')
+
+  const contactName = row.contact_name || 'Ukjent kontakt'
+  const when = row.logged_at ? new Date(row.logged_at) : new Date()
+  const dateLabel = when.toLocaleDateString('nb-NO', { timeZone: 'Europe/Oslo', day: 'numeric', month: 'long', year: 'numeric' })
+  const timeLabel = when.toLocaleTimeString('nb-NO', { timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit' })
+  const title = `Transkripsjon – ${contactName} – ${dateLabel}`
+  const nodeId = crypto.randomUUID()
+  const node = {
+    id: nodeId,
+    label: `# ${title}`,
+    type: 'fulltext',
+    info: `**${contactName}** · ${dateLabel} kl. ${timeLabel} · ${tx.chunks} del${tx.chunks === 1 ? '' : 'er'}\n\n${tx.text}`,
+    color: '#4A90D9',
+    bibl: [row.recording_url],
+    visible: true,
+  }
+
+  // 1. Graph: append to the one given, or create a new private one.
+  let graphId = typeof input.graphId === 'string' && input.graphId.trim() ? input.graphId.trim() : null
+  if (graphId) {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/addNode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ graphId, node }),
+    })
+    if (!res.ok) {
+      const t = await res.text().catch(() => '')
+      throw new Error(`Transcribed, but adding the node to graph ${graphId} failed (${res.status}): ${t.slice(0, 200)}`)
+    }
+  } else {
+    graphId = crypto.randomUUID()
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: graphId,
+        override: false,
+        graphData: {
+          metadata: {
+            title,
+            description: `Transkripsjon av samtalen med ${contactName}, ${dateLabel} kl. ${timeLabel}.`,
+            metaArea: '#TRANSKRIPSJON #SAMTALE',
+            category: '#Transcription #Audio',
+            createdBy: env.__kgActing || '',
+            version: 0,
+          },
+          nodes: [node],
+          edges: [],
+        },
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(`Transcribed, but saving the graph failed (${res.status}): ${data.error || ''}`)
+    graphId = data.id || graphId
+  }
+
+  // 2. The interaction's own note — the same place Contact Hub's "Transkriber" writes. Not twice.
+  const oldNotes = String(row.notes || '')
+  let notesUpdated = false
+  if (!oldNotes.includes(SERVER_TRANSCRIPT_MARK)) {
+    const notes = `${oldNotes ? `${oldNotes}\n\n` : ''}${SERVER_TRANSCRIPT_MARK}\n${tx.text}`
+    await drizzleFetch(env, '/update', { tableId: logsTableId, id: logId, record: { notes } })
+    notesUpdated = true
+  }
+
+  const viewerUrl = `https://www.vegvisr.org/gnew-viewer?graphId=${graphId}`
+  return {
+    success: true,
+    message:
+      `Transcribed the recording with ${contactName} (${dateLabel} kl. ${timeLabel}): ${tx.chunks} part(s), ` +
+      `${tx.text.length} characters${tx.failed ? `, ${tx.failed} part(s) FAILED` : ''}. ` +
+      `Saved as node ${nodeId} in graph ${graphId} (${viewerUrl}). ` +
+      (notesUpdated ? 'Also added to the interaction note in ContactHub.' : 'The interaction note already had a transcript; left unchanged.'),
+    graphId,
+    nodeId,
+    viewerUrl,
+    recordingId: `contactlog:${logId}`,
+    contactId: row.contact_id || null,
+    contactName,
+    loggedAt: row.logged_at || null,
+    chunks: tx.chunks,
+    failedChunks: tx.failed,
+    chars: tx.text.length,
+    notesUpdated,
+    transcript: tx.text,
+  }
+}
+
 async function executeCreateContact(input, env) {
   const { name, email, phone, company, job_title, tags, labels, notes, userId } = input
   if (!name || !email || !phone) {
@@ -18889,6 +19023,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeSearchContacts(toolInput, env)
     case 'get_contact_logs':
       return await executeGetContactLogs(toolInput, env)
+    case 'transcribe_contact_recording':
+      return await executeTranscribeContactRecording(toolInput, env)
     case 'add_contact_log':
       return await executeAddContactLog(toolInput, env)
     case 'create_contact':

@@ -3295,6 +3295,44 @@ export default {
         }
       }
 
+      // POST /contacts/logs, /contacts/recordings, /contacts/transcribe — a contact's interaction
+      // history, the recordings among it, and server-side transcription of one of them.
+      //
+      // The MCP server's get_contact_logs / list_recordings / transcribe_contact_recording reach
+      // these, so they run the same executors the Agent-Builder chat uses. Whose tables are read
+      // or written is decided by the verified caller (userId), never a body field.
+      const contactsReadRoute = { '/contacts/logs': 'get_contact_logs', '/contacts/recordings': 'list_recordings', '/contacts/transcribe': 'transcribe_contact_recording' }[pathname]
+      if (contactsReadRoute && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const str = (k) => (typeof body[k] === 'string' && body[k].trim() ? body[k].trim() : undefined)
+        const input = { userId: callerAuth.userId }
+        if (contactsReadRoute === 'get_contact_logs') {
+          input.contactId = str('contactId')
+          input.limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200)
+          if (!input.contactId) return new Response(JSON.stringify({ success: false, error: 'contactId is required' }), { status: 400, headers: corsHeaders })
+        } else if (contactsReadRoute === 'list_recordings') {
+          input.query = str('query')
+          input.limit = Math.min(Math.max(Number(body.limit) || 20, 1), 200)
+        } else {
+          input.recordingId = str('recordingId')
+          input.graphId = str('graphId')
+          input.language = str('language')
+          if (!input.recordingId) return new Response(JSON.stringify({ success: false, error: 'recordingId is required' }), { status: 400, headers: corsHeaders })
+        }
+        try {
+          const r = await executeTool(contactsReadRoute, input, env, {})
+          return new Response(JSON.stringify({ success: true, ...r }), { headers: corsHeaders })
+        } catch (e) {
+          const status = /No interaction|has no recording|contact_logs table|contacts table/i.test(e.message) ? 404
+            : /required/.test(e.message) ? 400 : 502
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /contacts/report/{set,preview,send} — ContactHub meeting reports → Enkel endring CMS.
       //
       // The MCP server's set_meeting_report / preview_meeting_report / send_meeting_report reach
