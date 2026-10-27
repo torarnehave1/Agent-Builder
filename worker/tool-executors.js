@@ -9940,7 +9940,8 @@ async function executeListRecordings(input, env) {
             // A transcript written to the interaction's note (Contact Hub's "Transkriber" or
             // transcribe_contact_recording) counts too — the portfolio copy never gets it, so the
             // recording was listed as "not transcribed" right after it was (2026-10-27, live).
-            if (!known.transcriptionText && l.notes) known.transcriptionText = l.notes
+            // A short note ("Fin prat") is not a transcript; 500 chars is ~30 s of speech.
+            if (!known.transcriptionText && String(l.notes || '').length >= 500) known.transcriptionText = l.notes
             if (l.contact_name && !String(known.displayName || '').includes(l.contact_name)) {
               known.displayName = `Contact Log — ${l.contact_name}`
             }
