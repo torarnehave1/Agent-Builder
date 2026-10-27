@@ -7299,8 +7299,13 @@ async function executeDeployWorldProxy(input, env) {
   if (!env.WORLD_TEMPLATES) return { success: false, error: 'WORLD_TEMPLATES KV is not bound on agent-worker.' }
   const script = await env.WORLD_TEMPLATES.get('template:brand-proxy')
   if (!script) return { success: false, error: 'Brand-proxy script not found in WORLD_TEMPLATES (key "template:brand-proxy").' }
-  const secret = env.HTML_PUBLISH_SECRET
-  if (!secret) return { success: false, error: 'agent-worker has no HTML_PUBLISH_SECRET binding — set it once via `wrangler secret put HTML_PUBLISH_SECRET`.' }
+  // The proxy must hold the secret publish_html_node SIGNS with for this World: the per-World
+  // secret when one exists (set_world_publish_secret), else the legacy global. Stamping the global
+  // one unconditionally broke every publish to sodesign.no after a forced redeploy (2026-10-27:
+  // "Invalid or missing publish token").
+  const secretInfo = await getWorldPublishSecret(env, domain)
+  const secret = secretInfo?.secret
+  if (!secret) return { success: false, error: `No publish secret for ${domain}: no per-World secret and agent-worker has no HTML_PUBLISH_SECRET. Run set_world_publish_secret for ${domain} first.` }
 
   // READ BEFORE WRITE. An explicit worker_name still wins, but otherwise the worker that actually
   // owns the hostname beats the <stem>-brand-proxy guess — the guess creates an orphan worker that
@@ -7414,7 +7419,7 @@ async function executeDeployWorldProxy(input, env) {
     created: true,
     registry,
     kv: { HTML_PAGES: htmlNs.id, BRAND_CONFIG: brandNs.id },
-    publish_secret: 'set',
+    publish_secret: secretInfo.scope === 'world' ? 'set (per-World)' : 'set (legacy global)',
     routed_worker: probe.routedName || null,
     worker_name_source: input.worker_name ? 'caller' : (probe.routedName ? `resolved from the ${targetHost} route` : 'guessed from the domain'),
     default_origin: defaultOrigin,
