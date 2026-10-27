@@ -25,5 +25,11 @@ check('a shared host does not', !/brand=/.test(shared) && /require-auth/.test(sh
 check('no gate, no element', buildGateElement({ gate: false, gateBrand: true }) === '', 'expected empty')
 check('stored gate settings without gateBrand behave as before', !/brand=/.test(buildGateElement(base)), buildGateElement(base))
 
+// 2026-10-27: no card name on a World host -> no app-name, so the component takes the World's brand name.
+const worldNoName = buildGateElement({ gate: true, gateBrand: true })
+check('World host without a card name leaves app-name out', !/app-name=/.test(worldNoName) && /brand="auto"/.test(worldNoName), worldNoName)
+check('World host with a card name keeps it', /app-name="Stine Oksvold Design – Min side"/.test(world), world)
+check('shared host without a card name still says Vegvisr', /app-name="Vegvisr"/.test(buildGateElement({ gate: true, gateBrand: false })), buildGateElement({ gate: true, gateBrand: false }))
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall gate-brand checks pass')

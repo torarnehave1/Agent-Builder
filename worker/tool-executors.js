@@ -8,6 +8,7 @@
 import { commerceContext, commerceQuery } from './world-customer.js'
 import { CONTACTS_FEATURES, NOT_IN_A_WORLD_YET, ensureWorldAppFeatures, worldContactsProfile, effectiveFeatures } from './world-contacts.js'
 import { executeCourseTool, COURSE_TOOL_OPS } from './world-course.js'
+import { executeWorldBrandTool } from './world-brand.js'
 import { getTemplate, getTemplateVersion, listTemplates, DEFAULT_TEMPLATE_ID } from './template-registry.js'
 import { isOpenAPITool, executeOpenAPITool, loadOpenAPITools, clearOpenAPICache } from './openapi-tools.js'
 import { FORMATTING_REFERENCE, NODE_TYPES_REFERENCE, HTML_BUILDER_REFERENCE, VEMOTION_REFERENCE, CAROUSEL_REFERENCE } from './system-prompt.js'
@@ -2480,7 +2481,10 @@ function buildGateElement(opts) {
   const clean = v => String(v == null ? '' : v).replace(/"/g, '&quot;')
   let attrs = ' require-auth'
   if (opts.gateRole) attrs += ` require-role="${clean(opts.gateRole)}"`
-  attrs += ` app-name="${clean(opts.gateAppName || 'Vegvisr')}"`
+  // On a World's own host with no name given, leave app-name out: the component then takes the
+  // World's brand name from /branding.json (2026-10-27). Elsewhere the card says Vegvisr as before.
+  if (opts.gateAppName) attrs += ` app-name="${clean(opts.gateAppName)}"`
+  else if (!opts.gateBrand) attrs += ' app-name="Vegvisr"'
   if (opts.gateLogo) attrs += ` logo="${clean(opts.gateLogo)}"`
   // The component defaults to Norwegian; lang="en" switches its text (vegvisr-auth lang table).
   if (String(opts.gateLang || '').toLowerCase().startsWith('en')) attrs += ' lang="en"'
@@ -18791,6 +18795,10 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeCourseTool(toolName, toolInput, env)
     case 'set_world_app_features':
       return await executeSetWorldAppFeatures(toolInput, env)
+    case 'save_world_brand':
+    case 'get_world_brand':
+    case 'publish_world_brand':
+      return await executeWorldBrandTool(toolName, toolInput, env, { setWorldBrand: executeSetWorldBrand })
     case 'grant_world_access':
       return await executeGrantWorldAccess(toolInput, env)
     case 'list_world_grants':

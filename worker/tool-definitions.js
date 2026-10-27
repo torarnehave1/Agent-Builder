@@ -4094,6 +4094,59 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'get_world_brand',
+    description:
+      "Read a World's brand from its brand graph (the single source of its look): name, slogan, logo, square logo, favicon, colours (accent, accentDark, ink, muted, surface, card), fonts (display, body, Google Fonts cssUrl), language, light/dark. CALL THIS BEFORE you build or restyle any page, email or app for a World, and use these exact values — never guess a World's colours or fonts. For the World's founder, account holder or a Superadmin.",
+    input_schema: {
+      type: 'object',
+      properties: { domain: { type: 'string', description: 'The World domain, e.g. sodesign.no.' } },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'save_world_brand',
+    description:
+      "Create or update a World's brand graph (tag #BRAND-<domain>, stored in the World's own storage, one world-brand node). Pass only what changes; the rest is kept. Colours must be hex, fonts.css_url a https://fonts.googleapis.com/ stylesheet, logos https URLs. Reads it back. Then run publish_world_brand to put it on the World's hosts. For the World's founder, account holder or a Superadmin.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. sodesign.no.' },
+        name: { type: 'string', description: 'Brand name, e.g. "Stine Oksvold Design". Required the first time.' },
+        slogan: { type: 'string' },
+        logo_url: { type: 'string', description: 'HTTPS URL of the main logo.' },
+        logo_square_url: { type: 'string', description: 'HTTPS URL of a square logo (login card, app icon).' },
+        favicon_url: { type: 'string', description: 'HTTPS URL of the favicon (180x180 works well).' },
+        lang: { type: 'string', enum: ['no', 'en'] },
+        scheme: { type: 'string', enum: ['light', 'dark'] },
+        email_from_name: { type: 'string', description: 'Sender name for the World\'s e-mail.' },
+        colors: {
+          type: 'object',
+          description: 'Hex colours.',
+          properties: { accent: { type: 'string' }, accentDark: { type: 'string' }, ink: { type: 'string' }, muted: { type: 'string' }, surface: { type: 'string' }, card: { type: 'string' } },
+        },
+        fonts: {
+          type: 'object',
+          properties: {
+            display: { type: 'string', description: 'CSS font-family for headings, e.g. "Alegreya, serif".' },
+            body: { type: 'string', description: 'CSS font-family for body text, e.g. "\'Alegreya Sans\', sans-serif".' },
+            css_url: { type: 'string', description: 'Google Fonts stylesheet URL that loads both.' },
+          },
+        },
+      },
+      required: ['domain'],
+    },
+  },
+  {
+    name: 'publish_world_brand',
+    description:
+      "Put a World's brand graph on all its hosts: writes it as brand:<domain> into the World brand proxy's BRAND_CONFIG, which every host of the World without a brand of its own falls back to (/branding.json — the login card, the editor, Contacts). Superadmin only. Visible within about 5 minutes.",
+    input_schema: {
+      type: 'object',
+      properties: { domain: { type: 'string', description: 'The World domain, e.g. sodesign.no.' } },
+      required: ['domain'],
+    },
+  },
+  {
     name: 'set_world_brand',
     description:
       "Set how one of a World's hosts looks (Superadmin only): writes brand:<host> into the World's OWN BRAND_CONFIG (the KV its brand proxy serves as /branding.json). Name, slogan, logo, tab title, favicon, and — under editor — the knowledge-graph editor's fonts and colours, which the editor applies on editor.<domain>. Replaces the whole value for that host; reads it back.",

@@ -1,4 +1,4 @@
-// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-26 (contacts origin added; editor origin 2026-10-15).
+// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-27 (World brand fallback brand:<parent> on /branding.json; 2026-10-26: contacts origin added; editor origin 2026-10-15).
 // The KV key is the SOURCE — deploy_world_proxy reads it, not this file. This copy exists because
 // that template once drifted seven months from any reviewable source, and a change nobody can read
 // is a change nobody can check. Update BOTH when changing the proxy, and keep the KV backup key
@@ -341,6 +341,11 @@ export default {
         if (url.hostname.startsWith('www.')) {
           keys.push(`brand:${url.hostname.replace(/^www\./, '')}`);
         }
+        // A host without a brand of its own wears the World's brand: brand:<parent domain>, written by
+        // publish_world_brand from the World's brand graph (2026-10-27). dashboard.sodesign.no ->
+        // brand:sodesign.no. Never shorter than two labels, so no host falls back to a TLD.
+        const labels = url.hostname.split('.');
+        for (let i = 1; i <= labels.length - 2; i++) keys.push(`brand:${labels.slice(i).join('.')}`);
         for (const key of keys) {
           const raw = await env.BRAND_CONFIG.get(key);
           if (raw) {
