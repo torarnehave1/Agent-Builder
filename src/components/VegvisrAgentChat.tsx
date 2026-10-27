@@ -15,7 +15,7 @@ function GraphPreviewLazy(props: { graphId: string; title: string; onClose: () =
 import { useAgentChat, getToolPartState, getToolCallId, getToolInput, getToolOutput } from '@cloudflare/ai-chat/react';
 import { isToolUIPart, isTextUIPart, getToolName } from 'ai';
 import { providerOf } from '../lib/modelProvider';
-import { kgJsonHeaders } from '../lib/kgAuth';
+import { kgJsonHeaders, kgAuthHeaders } from '../lib/kgAuth';
 
 const AGENT_HOST = 'agent.vegvisr.org';
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history';
@@ -764,7 +764,7 @@ function insertWrappedImageIntoMarkdown(markdown: string, mode: 'leftside' | 'ri
 }
 
 async function fetchGraphData(graphId: string) {
-  const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`);
+  const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
   const data = await res.json();
   if (!res.ok) throw new Error(data?.error || `Failed to load graph (${res.status})`);
   return data;
@@ -842,7 +842,7 @@ function CreatedGraphCard({ graphId, fallbackTitle }: { graphId: string; fallbac
 
   useEffect(() => {
     if (!graphId) return;
-    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })
       .then(r => r.json())
       .then(data => {
         const nodes = data.nodes || [];

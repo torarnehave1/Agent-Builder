@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { formatHtmlForReading } from '../lib/format-html';
-import { kgJsonHeaders, kgSessionToken, kgRole } from '../lib/kgAuth';
+import { kgJsonHeaders, kgSessionToken, kgRole, kgAuthHeaders } from '../lib/kgAuth';
 
 // --- Direct anchor-section editing (no agent, no LLM) -------------------------
 // Editable regions are delimited by comment markers <!-- edit:<id>:start/end -->.
@@ -543,7 +543,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const loadPublishedHosts = useCallback(async () => {
     if (!graphId || !nodeId) { setPublishedHosts([]); return; }
     try {
-      const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
       if (!res.ok) return;
       const data = await res.json();
       const node = (data.nodes || []).find((n: { id: string }) => n.id === nodeId);
@@ -788,7 +788,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       }
       if (!changed) { setVisualMsg('Ingen endring'); setVisualSaving(false); return; }
       const newHtml = '<!DOCTYPE html>\n' + src.documentElement.outerHTML;
-      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
       if (!gRes.ok) { setVisualMsg('Lesing feilet'); setVisualSaving(false); return; }
       const g0 = await gRes.json();
       const miss0 = nodeMissingMsg(g0, nodeId, graphId);
@@ -799,7 +799,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
-        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
+        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST', headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
@@ -882,7 +882,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     try {
       const newHtml = setSectionInner(html, editAnchor, editValue);
       if (newHtml === html) { setSaveMsg('No change'); setSaving(false); return; }
-      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
       if (!gRes.ok) { setSaveMsg('Read failed'); setSaving(false); return; }
       const g = await gRes.json();
       const miss = nodeMissingMsg(g, nodeId, graphId);
@@ -894,7 +894,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
-        const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json();
+        const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })).json();
         expectedVersion = Number(latest?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST',
@@ -922,7 +922,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (n === 0) { setSrMsg('Ingen treff'); setSrSaving(false); return; }
       const newHtml = replaceMatches(html, srFind, srReplace, srWholeWord);
       if (newHtml === html) { setSrMsg('Ingen endring'); setSrSaving(false); return; }
-      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
       if (!gRes.ok) { setSrMsg('Lesing feilet'); setSrSaving(false); return; }
       const gSr = await gRes.json();
       const missSr = nodeMissingMsg(gSr, nodeId, graphId);
@@ -933,7 +933,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
         body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
       });
       if (res.status === 409) {
-        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json())?.metadata?.version || 0);
+        expectedVersion = Number((await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })).json())?.metadata?.version || 0);
         res = await fetch('https://knowledge.vegvisr.org/patchNode', {
           method: 'POST', headers: kgJsonHeaders(),
           body: JSON.stringify({ graphId, nodeId, fields: { info: newHtml }, expectedVersion }),
@@ -956,7 +956,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
     newHtml: string,
   ): Promise<{ ok: true; version: number } | { ok: false; error: string }> => {
     if (!graphId || !nodeId) return { ok: false, error: 'Ingen node valgt' };
-    const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+    const gRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
     if (!gRes.ok) return { ok: false, error: 'Lesing feilet' };
     const g = await gRes.json();
     const miss = nodeMissingMsg(g, nodeId, graphId);
@@ -970,7 +970,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       });
     let res = await put(Number(g?.metadata?.version || 0));
     if (res.status === 409) {
-      const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`)).json();
+      const latest = await (await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })).json();
       res = await put(Number(latest?.metadata?.version || 0));
     }
     const data = await res.json().catch(() => null);
@@ -1055,7 +1055,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
   const restoreVersion = async () => {
     if (!graphId || !nodeId || !versionHtml) return;
     try {
-      const graphRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+      const graphRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
       if (!graphRes.ok) return;
       const graphData = await graphRes.json();
       const expectedVersion = Number(graphData?.metadata?.version || 0);
@@ -1067,7 +1067,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       });
 
       if (res.status === 409) {
-        const latestRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`);
+        const latestRes = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() });
         if (!latestRes.ok) return;
         const latestGraph = await latestRes.json();
         const retryVersion = Number(latestGraph?.metadata?.version || 0);
@@ -1117,7 +1117,7 @@ export default function HtmlPreview({ html, onClose, onConsoleErrors, onHtmlChan
       if (!d || d.type !== 'vegvisr:node-saved' || !graphId || !nodeId) return;
       if (d.nodeId !== nodeId || (d.graphId && d.graphId !== graphId)) return;
       try {
-        const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { cache: 'no-store' });
+        const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(graphId)}`, { cache: 'no-store', headers: kgAuthHeaders() });
         if (!res.ok) return;
         const g = await res.json();
         const node = (g.nodes || []).find((n: { id: string }) => n.id === nodeId);

@@ -711,7 +711,7 @@ function GraphCard({ graphId, title, href }: { graphId: string; title: string; h
 
   useEffect(() => {
     if (!graphId) return;
-    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+    fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })
       .then(r => r.json())
       .then(data => {
         const nodes = data.nodes || [];
@@ -1060,7 +1060,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     if (!graphId) return;
     setGraphs(prev => {
       if (prev.some(g => g.id === graphId)) return prev;
-      fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`)
+      fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(graphId)}`, { headers: kgAuthHeaders() })
         .then(r => r.json())
         .then(data => {
           const title = (data.metadata?.title as string) || graphId;
@@ -2029,7 +2029,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         // Auto-load Gemma Rules graph as system context (best-effort, silent on failure)
         let rulesSystemMessage = '';
         try {
-          const rulesRes = await fetch(`${KG_BASE}/getknowgraph?id=gemma_rules`);
+          const rulesRes = await fetch(`${KG_BASE}/getknowgraph?id=gemma_rules`, { headers: kgAuthHeaders() });
           if (rulesRes.ok) {
             const rulesGraph = await rulesRes.json() as { nodes?: Array<{ label?: string; info?: string }> };
             const ruleNodes = (rulesGraph.nodes || [])
@@ -2131,7 +2131,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 const kgData = await kgRes.json() as Record<string, unknown>;
                 toolResult = { success: true, nodeId, ...kgData };
               } else if (name === 'read_graph') {
-                const kgRes = await fetch(`${KG_BASE}/getknowgraph?id=${encodeURIComponent(args.graphId as string)}`);
+                const kgRes = await fetch(`${KG_BASE}/getknowgraph?id=${encodeURIComponent(args.graphId as string)}`, { headers: kgAuthHeaders() });
                 const kgData = await kgRes.json() as { nodes?: unknown[]; edges?: unknown[]; metadata?: Record<string, unknown> };
                 const nodeSummaries = (kgData.nodes || []).map((n: unknown) => {
                   const node = n as Record<string, unknown>;
@@ -2322,7 +2322,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               const gId = (resultData.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
               const nId = (resultData.nodeId || lastHtmlNodeIdRef.current) as string | undefined;
               if (gId && nId) {
-                fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+                fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`, { headers: kgAuthHeaders() })
                   .then(r => r.json())
                   .then(graph => {
                     const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
@@ -2341,7 +2341,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
             if (subGraphId) { lastAgentGraphRef.current = subGraphId; onGraphChange(subGraphId); }
             // Fetch the updated HTML from the node to show in preview
             if (subGraphId && subNodeId) {
-              fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(subGraphId)}`)
+              fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(subGraphId)}`, { headers: kgAuthHeaders() })
                 .then(r => r.json())
                 .then(graph => {
                   const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === subNodeId);
@@ -2366,7 +2366,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 const gId = (readGraphId || inp.graphId) as string;
                 const nId = inp.nodeId as string;
                 if (gId && nId) {
-                  fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+                  fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`, { headers: kgAuthHeaders() })
                     .then(r => r.json())
                     .then(graph => {
                       const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
@@ -2419,7 +2419,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
           const gId = (rd.graphId || graphId || lastAgentGraphRef.current) as string | undefined;
           const nId = (rd.nodeId || lastHtmlNodeIdRef.current) as string | undefined;
           if (gId && nId) {
-            fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`)
+            fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(gId)}`, { headers: kgAuthHeaders() })
               .then(r => r.json())
               .then(graph => {
                 const node = (graph.nodes || []).find((n: Record<string, unknown>) => n.id === nId);
@@ -2775,7 +2775,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               };
             } else {
               // Existing graph: read it, append the node, write it back whole.
-              const existingRes = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(targetGraphId)}`);
+              const existingRes = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(targetGraphId)}`, { headers: kgAuthHeaders() });
               if (!existingRes.ok) throw new Error(`could not read graph ${targetGraphId} (${existingRes.status})`);
               const existing = await existingRes.json();
               payload = {
@@ -3012,8 +3012,14 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                   const targetGraph = graphId || lastAgentGraphRef.current;
                   if (!targetGraph) return;
                   try {
-                    const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(targetGraph)}`);
-                    if (!res.ok) return;
+                    const res = await fetch(`https://knowledge.vegvisr.org/getknowgraph?id=${encodeURIComponent(targetGraph)}`, { headers: kgAuthHeaders() });
+                    // A World graph (stored in the founder's own database) answers 403 to anyone not
+                    // signed in as its founder — say so instead of doing nothing.
+                    if (!res.ok) {
+                      const err = await res.json().catch(() => ({} as { error?: string }));
+                      alert(`Could not open the graph (${res.status}): ${err.error || res.statusText}`);
+                      return;
+                    }
                     const data = await res.json();
                     // html-node = a page; email-template = an email whose `info` is the body HTML.
                     // Both open in HtmlPreview (info → preview, pinned to the node for save).
