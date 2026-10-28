@@ -22,6 +22,7 @@ import { CHAT_SYSTEM_PROMPT } from './system-prompt.js'
 import { runChatbotSubagent } from './chatbot-subagent.js'
 import { runMeetingGraphSubagent } from './meeting-graph-subagent.js'
 import { DEFAULT_MODEL, MODELS, KNOWN_MODELS } from './models.js'
+import { isRoutable } from './model-router.js'
 import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
@@ -2655,6 +2656,8 @@ export default {
         ctx.waitUntil(
           streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, effectiveUserId, env, {
             model: agentModel,
+            // Route per message only for the picker's own choice; a saved agent's model is explicit.
+            autoRoute: agentModel === model && isRoutable(model),
             maxTurns: maxTurns || 25,
             mode: planMode ? 'plan' : 'auto',
             toolFilter,

@@ -92,16 +92,41 @@ interface FileAttachment {
   size: number;
 }
 
+// Which model the worker's automatic choice (model-router.js) picked for one message.
+interface ModelChoice {
+  model: string;
+  tier?: 'simple' | 'complex';
+  reason?: string;
+  via?: 'classifier' | 'fallback' | 'ceiling';
+}
+
+const MODEL_LABELS: Record<string, string> = {
+  'claude-haiku-5-5': 'Haiku 5.5', 'claude-sonnet-5-5': 'Sonnet 5.5', 'claude-opus-5-5': 'Opus 5.5',
+  'claude-haiku-4-5-20251001': 'Haiku 4.5', 'claude-sonnet-4-6': 'Sonnet 4.6', 'claude-opus-4-6': 'Opus 4.6',
+};
+
+function ModelChoiceLine({ c }: { c: ModelChoice }) {
+  const label = MODEL_LABELS[c.model] || c.model;
+  const why = c.via === 'fallback' ? 'automatic choice unavailable — using the stronger model'
+    : c.tier === 'complex' ? 'complex task' : c.tier === 'simple' ? 'simple task' : '';
+  return (
+    <div className="mb-2 text-[11px] app-text-muted" title={c.reason || ''}>
+      Model: <span className="font-medium">{label}</span>{why ? ` · ${why}` : ''}{c.reason && c.via === 'classifier' ? ` (${c.reason})` : ''}
+    </div>
+  );
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   images?: ImageAttachment[];
   files?: FileAttachment[];
   toolCalls?: ToolCall[];
+  modelChoice?: ModelChoice;
 }
 
 interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions' | 'agent_info';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'tool_progress' | 'text' | 'done' | 'error' | 'suggestions' | 'agent_info' | 'model_choice';
   data: Record<string, unknown>;
 }
 
@@ -110,6 +135,7 @@ interface AssistantState {
   toolCalls: ToolCall[];
   thinking: boolean;
   error?: string;
+  modelChoice?: ModelChoice;
 }
 
 // One recording waiting to be transcribed in this browser. The agent emits one per
@@ -1169,6 +1195,9 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
     for (const msg of messages) {
       lines.push(`--- ${msg.role.toUpperCase()} ---`);
+      if (msg.modelChoice) {
+        lines.push(`  [MODEL] ${msg.modelChoice.model} (${msg.modelChoice.tier || '?'}, ${msg.modelChoice.via || '?'}${msg.modelChoice.reason ? `: ${msg.modelChoice.reason}` : ''})`);
+      }
       if (msg.toolCalls && msg.toolCalls.length > 0) {
         for (const tc of msg.toolCalls) {
           lines.push(`  [TOOL] ${tc.tool} (${tc.status})`);
@@ -1955,6 +1984,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
     setCurrent(state);
 
     let finalToolCalls: ToolCall[] = [];
+    let finalModelChoice: ModelChoice | undefined;
     // A QUEUE, not a single slot. The agent routinely fires one transcribe_audio per
     // recording in the same turn; with a single slot each tool_result overwrote the
     // previous one and only the last recording was ever transcribed (2026-09-10).
@@ -2488,6 +2518,10 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               next.thinking = true;
               break;
 
+            case 'model_choice':
+              if (typeof ev.data.model === 'string') next.modelChoice = ev.data as unknown as ModelChoice;
+              break;
+
             case 'tool_call':
               next.thinking = false;
               next.toolCalls.push({
@@ -2547,6 +2581,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
 
           // Keep a copy of tool calls for finalization
           finalToolCalls = next.toolCalls;
+          finalModelChoice = next.modelChoice;
           return next;
         });
 
@@ -2575,6 +2610,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         role: 'assistant',
         content: assistantText,
         toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+        modelChoice: finalModelChoice,
       }]);
 
       // Persist assistant message with tool metadata
@@ -2883,6 +2919,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         role: 'assistant',
         content: current?.text || (isAbort ? '*(Stopped by user)*' : `Error: ${err instanceof Error ? err.message : String(err)}`),
         toolCalls: finalToolCalls.length > 0 ? finalToolCalls : undefined,
+        modelChoice: finalModelChoice,
       }]);
     }
 
@@ -3209,6 +3246,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
                 : 'app-surface border app-border app-text'
             }`}
           >
+            {msg.role === 'assistant' && msg.modelChoice && <ModelChoiceLine c={msg.modelChoice} />}
             {/* Show tool calls for completed assistant messages */}
             {msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0 && (
               <div className="mb-2">
@@ -3342,6 +3380,7 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
               )}
             </div>
           <div className="min-w-0 overflow-x-auto px-4 py-3 rounded-[14px] app-surface border app-border app-text text-[0.95rem] leading-relaxed">
+            {current.modelChoice && <ModelChoiceLine c={current.modelChoice} />}
             {current.thinking && <ThinkingIndicator />}
             {current.toolCalls.map(tc => (
               <ToolCallCard key={tc.id} tc={tc} userId={userId} onPreview={onPreview} onActiveHtmlNode={onActiveHtmlNode} onSend={sendMessage} />

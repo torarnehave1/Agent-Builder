@@ -8,7 +8,7 @@
 
 import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { readModelResponse } from './model-response.js'
-import { DEFAULT_MODEL } from './models.js'
+import { DEFAULT_MODEL, KNOWN_MODELS, acceptsSampling } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   let graphId = (typeof rawGraphId === 'string' && rawGraphId.trim()) ? rawGraphId.trim() : null
   let discardedGraphId = null // the id the model passed to create_graph, which the server did not use
   const maxTurns = 10
-  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
+  // The main agent passes its routed model in auto mode (model-router.js); otherwise the default.
+  const model = (typeof input._model === 'string' && KNOWN_MODELS.has(input._model)) ? input._model : (env.SUBAGENT_MODEL || DEFAULT_MODEL)
   let inputTokens = 0
   let outputTokens = 0
 
@@ -204,7 +205,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         messages,
         model,
         max_tokens: 8192,
-        temperature: 0.2,
+        ...(acceptsSampling(model) ? { temperature: 0.2 } : {}),
         system: KG_SUBAGENT_SYSTEM_PROMPT,
         tools,
       }),

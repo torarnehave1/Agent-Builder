@@ -22,5 +22,6 @@ export function providerOf(id?: string): string {
   if (id.startsWith('openai/')) return 'OpenAI';
   if (id.startsWith('grok/')) return 'Grok (xAI)';
   if (id.startsWith('claude-')) return 'Anthropic';
+  if (id === 'auto') return 'Anthropic (automatic choice per message)';
   return `(unrecognised prefix: ${id.split('/')[0]})`;
 }

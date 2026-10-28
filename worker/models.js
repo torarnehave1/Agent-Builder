@@ -27,7 +27,23 @@ export const MODELS = Object.freeze({
   SONNET: 'claude-sonnet-4-6',
   OPUS:   'claude-opus-4-8',
   FABLE:  'claude-fable-5',
+  // 5.5 generation (added 2026-10-28 for the automatic model choice). Thinking is always on and
+  // `temperature` is rejected — see acceptsSampling().
+  HAIKU_55:  'claude-haiku-5-5',
+  SONNET_55: 'claude-sonnet-5-5',
+  OPUS_55:   'claude-opus-5-5',
 })
+
+/** Picker value meaning "let the worker choose per message" (model-router.js). */
+export const AUTO_MODEL = 'auto'
+
+/**
+ * Only the older models take a `temperature`. The 5.x line (and Opus 4.7+) answers 400, which
+ * anthropic-worker then retries without it — a wasted round trip on every turn.
+ */
+export function acceptsSampling(modelId) {
+  return /^claude-(haiku-4-5|sonnet-4-6|sonnet-4-2025|opus-4-6|opus-4-2025)/.test(String(modelId || ''))
+}
 
 /** The fallback every subagent / loop should use when no model is specified. */
 export const DEFAULT_MODEL = MODELS.HAIKU

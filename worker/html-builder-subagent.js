@@ -10,7 +10,7 @@ import { TOOL_DEFINITIONS } from './tool-definitions.js'
 import { scanHtmlSyntax, ownedBlockRanges } from './html-syntax.js'
 import { detectTranslationGap } from './html-i18n.js'
 import { detectDeadSelectorWiring } from './html-tabs.js'
-import { DEFAULT_MODEL } from './models.js'
+import { DEFAULT_MODEL, KNOWN_MODELS, acceptsSampling } from './models.js'
 import { repairToolPairing, textBlocksOnly } from './message-history.js'
 
 // ---------------------------------------------------------------------------
@@ -799,7 +799,8 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
   const MAX_TIMEOUT_RETRIES = 1
   let timeoutRetries = 0
   const startTime = Date.now()
-  const model = env.SUBAGENT_MODEL || DEFAULT_MODEL
+  // The main agent passes its routed model in auto mode (model-router.js); otherwise the default.
+  const model = (typeof input._model === 'string' && KNOWN_MODELS.has(input._model)) ? input._model : (env.SUBAGENT_MODEL || DEFAULT_MODEL)
   let inputTokens = 0
   let outputTokens = 0
 
@@ -933,7 +934,7 @@ async function runHtmlBuilderSubagent(input, env, onProgress, executeTool) {
           messages,
           model,
           max_tokens: 8192,
-          temperature: 0.2,
+          ...(acceptsSampling(model) ? { temperature: 0.2 } : {}),
           system: dynamicSystemPrompt,
           tools,
         }),

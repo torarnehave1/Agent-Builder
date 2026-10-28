@@ -9,7 +9,8 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { readModelResponse } from './model-response.js'
 import { executeTool } from './tool-executors.js'
-import { DEFAULT_MODEL, MODELS } from './models.js'
+import { DEFAULT_MODEL, MODELS, acceptsSampling } from './models.js'
+import { routeModel } from './model-router.js'
 import { repairToolPairing } from './message-history.js'
 import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate, executeValidateHtmlSyntax } from './html-builder-subagent.js'
 
@@ -1591,7 +1592,21 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
 async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options) {
   const maxTurns = options.maxTurns || 8
   const guideLines = []
-  const model = options.model || DEFAULT_MODEL
+  let model = options.model || DEFAULT_MODEL
+  // Automatic model choice (model-router.js): the picker value is the ceiling, the request decides.
+  let routedChoice = null
+  if (options.autoRoute) {
+    const routeTask = deriveActiveTask(messages, { graphId: options.graphId })
+    routedChoice = await routeModel(env, {
+      userId,
+      selected: options.model,
+      requestText: routeTask.primary || routeTask.latest,
+      hasActiveHtml: !!options.activeHtmlNodeId,
+    })
+    model = routedChoice.model
+    console.log(`[agent-loop] model route: ${options.model} → ${model} (${routedChoice.tier}, ${routedChoice.via}: ${routedChoice.reason})`)
+    writer.write(encoder.encode(`event: model_choice\ndata: ${JSON.stringify({ selected: options.model, ...routedChoice })}\n\n`))
+  }
   if (isOpenAICompatibleModel(model)) {
     return streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt, userId, env, options)
   }
@@ -1753,7 +1768,7 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
           messages: cappedMessages,
           model,
           max_tokens: 16384,
-          temperature: 0.3,
+          ...(acceptsSampling(model) ? { temperature: 0.3 } : {}),
           system: taskSlot
             ? [
                 { type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } },
@@ -2043,6 +2058,10 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
             // when it wants the subagent to work on a specific graph. If omitted, the subagent is free to
             // create new graphs. Auto-injection was causing "create new graph" requests to silently
             // add content to the last-used graph instead.
+            // Auto mode: the subagent does the heavy lifting, so it gets the model the router chose.
+            if (routedChoice && (toolUse.name === 'delegate_to_html_builder' || toolUse.name === 'delegate_to_kg')) {
+              toolUse.input._model = model
+            }
             if (!toolUse.input.nodeId && options.activeHtmlNodeId && toolUse.name === 'delegate_to_html_builder') {
               toolUse.input.nodeId = options.activeHtmlNodeId
               log(`auto-injected nodeId=${options.activeHtmlNodeId} into ${toolUse.name}`)

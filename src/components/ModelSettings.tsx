@@ -46,18 +46,54 @@ const MODELS = [
     badgeColor: 'bg-orange-500/20 text-orange-300',
   },
   {
-    id: 'claude-haiku-4-5-20251001',
-    name: 'Haiku 4.5',
-    description: 'Fast and cost-efficient. Best for most tasks.',
-    inputCost: 0.80,
-    outputCost: 4.00,
+    id: 'auto',
+    name: 'Auto',
+    description: 'The worker picks per message: Haiku 5.5 for simple requests (publish, read, look up, run one tool), Sonnet 5.5 for code changes, debugging and multi-step work. The chosen model is shown above each answer.',
+    inputCost: 0.10,
+    outputCost: 10.00,
     badge: 'Default',
     badgeColor: 'bg-emerald-500/20 text-emerald-300',
   },
   {
+    id: 'claude-haiku-5-5',
+    name: 'Haiku 5.5',
+    description: 'Fastest and cheapest current model. Every message uses it, also code changes.',
+    inputCost: 0.10,
+    outputCost: 0.50,
+    badge: 'Fast',
+    badgeColor: 'bg-emerald-500/20 text-emerald-300',
+  },
+  {
+    id: 'claude-sonnet-5-5',
+    name: 'Sonnet 5.5',
+    description: 'Strong at code and multi-step work. As a manual choice it is the ceiling: simple messages still go to Haiku 5.5.',
+    inputCost: 2.00,
+    outputCost: 10.00,
+    badge: 'Balanced',
+    badgeColor: 'bg-sky-500/20 text-sky-300',
+  },
+  {
+    id: 'claude-opus-5-5',
+    name: 'Opus 5.5',
+    description: 'Strongest current Opus. As a manual choice it is the ceiling: complex messages use Opus 5.5, simple ones Haiku 5.5.',
+    inputCost: 4.00,
+    outputCost: 20.00,
+    badge: 'Premium',
+    badgeColor: 'bg-amber-500/20 text-amber-300',
+  },
+  {
+    id: 'claude-haiku-4-5-20251001',
+    name: 'Haiku 4.5',
+    description: 'Previous generation. Chosen manually it is used for every message, without automatic choice.',
+    inputCost: 1.00,
+    outputCost: 5.00,
+    badge: 'Previous',
+    badgeColor: 'bg-slate-500/20 text-slate-300',
+  },
+  {
     id: 'claude-sonnet-4-6',
     name: 'Sonnet 4.6',
-    description: 'Balanced performance. Better reasoning and longer outputs.',
+    description: 'Previous generation Sonnet.',
     inputCost: 3.00,
     outputCost: 15.00,
     badge: 'Balanced',
@@ -66,9 +102,9 @@ const MODELS = [
   {
     id: 'claude-opus-4-6',
     name: 'Opus 4.6',
-    description: 'Premium — ~19× Haiku / ~5× Sonnet per token. Reserve for hard multi-step reasoning the smaller models genuinely cannot do; not for routine build/edit work.',
-    inputCost: 15.00,
-    outputCost: 75.00,
+    description: 'Previous generation Opus. Opus 5.5 is stronger and cheaper.',
+    inputCost: 5.00,
+    outputCost: 25.00,
     badge: 'Premium',
     badgeColor: 'bg-amber-500/20 text-amber-300',
   },
@@ -147,7 +183,7 @@ const MODELS = [
 ];
 
 const STORAGE_KEY = 'agent_builder_model';
-const DEFAULT_MODEL = 'claude-haiku-4-5-20251001';
+const DEFAULT_MODEL = 'auto';
 
 export function isLocalDev(): boolean {
   try {
@@ -233,7 +269,7 @@ export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' 
 
         <p className={`mt-6 text-[11px] ${isLight ? 'text-slate-400' : 'text-white/30'}`}>
           Pricing shown as input / output per million tokens.
-          Haiku is ~4× cheaper than Sonnet, Sonnet is ~5× cheaper than Opus.
+          Auto shows the range: Haiku 5.5 input up to Sonnet 5.5 output.
         </p>
       </div>
     </div>
