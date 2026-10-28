@@ -738,9 +738,13 @@ function detectFunctionalGaps(html) {
   const classCssM = h.match(/\.([a-z][\w-]*)\s*\{[^{}]*--[a-z-]+\s*:/i) // a class that redefines CSS vars (light-theme override)
   if (hasToggle && (dataThemeCss || classCssM)) {
     let wired = false, mech = ''
-    if (dataThemeCss) { mech = 'data-theme'; wired = /setAttribute\(\s*["']data-theme/.test(h) }
+    // dataset.theme = … is the same as setAttribute('data-theme', …) (Lipi, 2026-10-28).
+    if (dataThemeCss) { mech = 'data-theme'; wired = /setAttribute\(\s*["']data-theme/.test(h) || /\.dataset\.theme\s*=[^=]/.test(h) }
     else { const c = classCssM[1]; mech = '.' + c; wired = new RegExp('classList\\.(toggle|add|remove)\\(\\s*["\'`]' + c).test(h) }
-    const clickWired = /addEventListener\(\s*["']click/.test(h) && /(getElementById|querySelector)\([^)]*(theme|toggle|tbtn)/i.test(h)
+    // A click handler may be addEventListener('click') or an .onclick assignment, on an element
+    // found by getElementById/querySelector or a $()/$$() helper.
+    const clickWired = (/addEventListener\(\s*["']click/.test(h) && /(getElementById|querySelector)\([^)]*(theme|toggle|tbtn)/i.test(h))
+      || /(getElementById|querySelector|\$\$?)\(\s*["'`][^"'`]*(theme|toggle|tbtn)[^"'`]*["'`]\s*\)\s*\.(onclick\s*=|addEventListener\(\s*["']click)/i.test(h)
     if (!wired || !clickWired) {
       gaps.push(`Theme toggle is PRESENT but NOT WIRED: there is a toggle button and light-mode CSS (${mech}), but the JavaScript never applies ${mech} on click, so the button does nothing. Add a click handler on the button that toggles ${mech} and persists to localStorage.`)
     }
@@ -750,8 +754,12 @@ function detectFunctionalGaps(html) {
   const fontM = h.match(/fonts\.googleapis\.com\/css2?\?[^"'\s>]*family=([^:&"'\s>]+)/i)
   if (fontM) {
     const fam = decodeURIComponent(fontM[1]).replace(/\+/g, ' ')
-    const famRe = new RegExp('font-family\\s*:[^;}]*' + fam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')
-    if (!famRe.test(h)) gaps.push(`Google font "${fam}" is LOADED (the <link> is there) but never APPLIED — no element has font-family: '${fam}'. Add font-family:'${fam}' to the target element (e.g. the heading) or it renders in the default font.`)
+    const famEsc = fam.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const famRe = new RegExp('font(-family)?\\s*:[^;}]*' + famEsc, 'i')
+    // Applied through a CSS variable: --sans:'Source Sans 3',… then font-family:var(--sans).
+    const viaVar = [...h.matchAll(new RegExp('--([\\w-]+)\\s*:[^;}]*' + famEsc, 'gi'))]
+      .some(m => new RegExp('font(-family)?\\s*:[^;}]*var\\(\\s*--' + m[1] + '\\s*[,)]', 'i').test(h))
+    if (!famRe.test(h) && !viaVar) gaps.push(`Google font "${fam}" is LOADED (the <link> is there) but never APPLIED — no element has font-family: '${fam}'. Add font-family:'${fam}' to the target element (e.g. the heading) or it renders in the default font.`)
   }
 
   // 3. Icon font loaded but no glyph element uses it.

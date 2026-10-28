@@ -910,6 +910,22 @@ function buildTaskSlot(activeTask, options = {}) {
   return lines.join('\n')
 }
 
+// Verktøy som ENDRER en html-node. Lesing, publisering og tilbakerulling endrer ikke siden og
+// skal ikke utløse funksjonsporten (publish_html_node gjorde det via /html/ — 2026-10-28).
+const HTML_EDIT_TOOLS = new Set([
+  'create_html_node', 'create_html_from_template', 'edit_html_node', 'replace_html_section',
+  'append_to_section', 'insert_in_element', 'insert_html_at', 'insert_component', 'fill_slot_with_component',
+  'move_html_element', 'remove_html_element', 'apply_layout', 'apply_tabs', 'add_tab',
+  'translate_html_node', 'delegate_to_html_builder',
+])
+
+async function collectFunctionalGaps(env, graphId, nodeId) {
+  const html = await fetchNodeHtmlForGate(env, graphId, nodeId)
+  const gaps = detectFunctionalGaps(html)
+  const dead = await detectDeadEndpoints(html)
+  return dead.length ? gaps.concat(dead) : gaps
+}
+
 function isGraphWriteIntent(userText) {
   const text = String(userText || '').toLowerCase()
   if (!text) return false
@@ -1584,6 +1600,12 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
   const planMode = options.mode === 'plan'
   let turn = 0
   let functionalGateRetries = 0
+  // Funksjonsporten skal bare stoppe for feil DENNE turen innførte. Uten grunnlinjen ble en
+  // publisering av Lipi (2026-10-28) til «Fix each on the node» for to feil som ikke var feil,
+  // og agenten skrev om en side ingen hadde bedt den endre.
+  const functionalGateBaseline = (options.graphId && options.activeHtmlNodeId)
+    ? collectFunctionalGaps(env, options.graphId, options.activeHtmlNodeId).catch(() => null)
+    : Promise.resolve(null)
   const startTime = Date.now()
   const sessionId = crypto.randomUUID()
   // Fix A: the GOAL is the latest SUBSTANTIVE user request, not the latest message.
@@ -1847,13 +1869,17 @@ async function streamingAgentLoop(writer, encoder, messages, systemPrompt, userI
         // end_turn and force the agent to fix it before finishing. Only fires when this
         // turn actually touched an html-node tool, so it never nags on non-HTML chats.
         if (options.graphId && options.activeHtmlNodeId && functionalGateRetries < 2 &&
-            stats.toolCalls.some(t => /html|append_to_section|insert_in_element|insert_html_at|apply_layout|apply_tabs|add_tab|insert_component|fill_slot/i.test(t))) {
+            stats.toolCalls.some(t => HTML_EDIT_TOOLS.has(t))) {
           let gaps = []
           try {
-            const gateHtml = await fetchNodeHtmlForGate(env, options.graphId, options.activeHtmlNodeId)
-            gaps = detectFunctionalGaps(gateHtml)
-            const dead = await detectDeadEndpoints(gateHtml)
-            if (dead.length) gaps = gaps.concat(dead)
+            gaps = await collectFunctionalGaps(env, options.graphId, options.activeHtmlNodeId)
+            const baseline = await functionalGateBaseline
+            if (baseline) {
+              const before = new Set(baseline)
+              const preexisting = gaps.filter(g => before.has(g)).length
+              gaps = gaps.filter(g => !before.has(g))
+              if (preexisting) log(`functional gate: ${preexisting} gap(s) already present before this turn — not forcing a fix`)
+            }
           }
           catch (e) { log(`functional gate read failed: ${e.message}`) }
           if (gaps.length) {
