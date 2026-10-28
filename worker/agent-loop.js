@@ -30,6 +30,9 @@ import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate, execut
 const READ_ONLY_TOOLS = new Set([
   // Knowledge-graph reads
   'read_graph', 'read_graph_content', 'read_node', 'kg_get_know_graph',
+  // HTML-node reads (return source/sections/anchors/text; write nothing). Missing until
+  // 2026-10-28, so Plan mode could not look at the code it was asked to plan a fix for.
+  'read_html_source', 'read_html_head', 'read_html_section', 'list_html_anchors', 'list_html_text',
   'list_graphs', 'list_meta_areas', 'search_graphs',
   // App-data / DB reads
   'query_data_nodes', 'query_app_table', 'get_app_table_schema',
@@ -927,19 +930,33 @@ async function collectFunctionalGaps(env, graphId, nodeId) {
   return dead.length ? gaps.concat(dead) : gaps
 }
 
-function isGraphWriteIntent(userText) {
-  const text = String(userText || '').toLowerCase()
-  if (!text) return false
-  const writeVerb = /(create|build|make|generate|add|write|compose|patch|update|modify)/
-  const graphTarget = /(graph|knowledge graph|node|nodes)/
-  return writeVerb.test(text) && graphTarget.test(text)
+// Intent is read from what the user ASKED, not from data they pasted: drop the
+// "[Current UI context: graphId=…]" suffix /chat appends and every "quoted value". On 2026-10-28
+// a set_world_brand request tripped the graph-write guard — "write" came from the quoted slogan
+// "Learn to write Sanskrit" and "graph" from the appended UI context — and the agent was forced
+// to create a graph node nobody asked for.
+export function stripForIntent(userText) {
+  return String(userText || '')
+    .replace(/\[Current UI context:[^\]]*\]/g, ' ')
+    .replace(/"[^"\n]*"|“[^”\n]*”|«[^»\n]*»/g, ' ')
+    .toLowerCase()
+}
+
+// Whole-word starts only: "paragraph" is not a graph, "address" is not "add".
+const WRITE_VERB_RE = /\b(creat|build|built|mak|generat|add(?!ress)|writ|wrote|compos|patch|updat|modif)/
+const GRAPH_TARGET_RE = /\b(graph|knowledge graph|node)/
+
+export function isGraphWriteIntent(userText) {
+  const text = stripForIntent(userText)
+  if (!text.trim()) return false
+  return WRITE_VERB_RE.test(text) && GRAPH_TARGET_RE.test(text)
 }
 
 function isExplicitCreateGraphIntent(userText) {
-  const text = String(userText || '').toLowerCase()
-  if (!text) return false
-  const createVerb = /(create|build|make|generate)/
-  const graphTarget = /(graph|knowledge graph)/
+  const text = stripForIntent(userText)
+  if (!text.trim()) return false
+  const createVerb = /\b(creat|build|mak|generat)/
+  const graphTarget = /\b(graph|knowledge graph)/
   const discoveryOnly = /(find|search|list|show|browse|explore|retrieve)/
   return createVerb.test(text) && graphTarget.test(text) && !discoveryOnly.test(text)
 }
