@@ -33,7 +33,7 @@ const need = [
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
   'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl', 'cssForHtmlNode',
-  'withAccept', 'tokenHeaders', 'inAreas',
+  'withAccept', 'tokenHeaders', 'inAreas', 'nextFrameHeight',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -350,6 +350,28 @@ check('accept stays alongside the token header',
 check('no areas keeps every World row', api.inAreas(row('a', { metaArea: '' }), []))
 check('areas narrow World rows like a chip does',
   api.inAreas(row('a', { metaArea: '#STINE #STRIKK' }), ['STRIKK']) && !api.inAreas(row('b', { metaArea: '#STINE' }), ['NIBI']))
+
+// html-node frames report their own height (scripts on, same-origin off, 2026-10-30).
+{
+  const fresh = () => ({ height: 320, lastGrowth: -1, rounds: 0, stopped: false })
+  const feed = (st, ...hs) => { for (const h of hs) st.height = api.nextFrameHeight(st, h); return st.height }
+  check('a taller page is followed in one step', feed(fresh(), 900) === 900)
+  check('a shorter page shrinks the frame (a slide changed)', feed(fresh(), 900, 600) === 600)
+  // 60vh hero: content = 400 + 0.6 * frame — settles near 1000 with shrinking growth.
+  {
+    const st = fresh()
+    for (let i = 0; i < 60; i++) st.height = api.nextFrameHeight(st, 400 + 0.6 * st.height)
+    check('a 60vh hero settles instead of growing forever', st.height >= 990 && st.height <= 1000, String(st.height))
+  }
+  // min-height:100vh + 16px margin: grows by 16 every round — the margin case.
+  {
+    const st = fresh()
+    for (let i = 0; i < 10; i++) st.height = api.nextFrameHeight(st, st.height + 16)
+    check('a 100vh body with a margin stops after the repeated growth', st.height === 336 && st.stopped, String(st.height))
+  }
+  check('junk is ignored', feed(fresh(), 'x', NaN) === 320)
+  check('the height is clamped to 40..20000', feed(fresh(), 5) === 40 && feed(fresh(), 1e9) === 20000)
+}
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed.')
 process.exit(failed ? 1 : 0)
