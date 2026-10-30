@@ -1591,87 +1591,120 @@
     return wrap
   }
 
-  // An html-node in its own frame, the way the viewer shows one — but locked down for a
-  // page that is not ours:
-  //  - sandbox WITHOUT allow-scripts. No script from graph content runs on a customer
-  //    site; 7 of 27 published html-nodes load marked + DOMPurify from jsdelivr, and
-  //    those parts stay inert here (2026-09-14). allow-same-origin is safe ONLY because
-  //    scripts are off — it lets this component read the frame to size it. Never add
-  //    allow-scripts next to it: together they let the frame lift its own sandbox.
+  // An html-node in its own frame, the way the viewer shows one — locked down for a page
+  // that is not ours, but with its scripts RUNNING (2026-10-30):
+  //  - sandbox="allow-scripts" WITHOUT allow-same-origin. The frame gets an opaque origin
+  //    of its own: its scripts run (slideshows, tabs, the 7 html-nodes that load marked +
+  //    DOMPurify), but they cannot reach this page, its cookies, its localStorage (where
+  //    World mode keeps a sign-in token) or its DOM. NEVER add allow-same-origin next to
+  //    allow-scripts: together they let the frame lift its own sandbox. This is the same
+  //    isolation <vegvisr-node> uses for registered renderers.
   //  - no allow-forms, no top navigation; links open a new tab (<base target=_blank> +
   //    allow-popups-to-escape-sandbox, so the opened site works normally).
   //  - the node's CSS stays inside the frame and cannot restyle the host page, and its
   //    @media queries answer to the dialog's width, as they would in a browser window.
+  //  - this page can no longer read the frame, so the frame measures itself and reports
+  //    its height by postMessage (heightReporter); the message is trusted only from this
+  //    frame's own window, carrying this frame's nonce.
   function pageEl (plan, css) {
     var wrap = document.createElement('div')
     wrap.className = 'vgp-page'
     var frame = document.createElement('iframe')
     frame.title = plan.label || 'HTML'
-    frame.setAttribute('sandbox', 'allow-same-origin allow-popups allow-popups-to-escape-sandbox')
+    frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox')
     frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
-    frame.srcdoc = pageSource(plan.text, css)
+    var nonce = 'vgp' + Math.random().toString(36).slice(2) + Date.now().toString(36)
+    frame.srcdoc = pageSource(plan.text, css, nonce)
+    var state = { height: 320, lastGrowth: -1, rounds: 0, stopped: false }
+    var onMessage = function (e) {
+      if (!frame.isConnected) { window.removeEventListener('message', onMessage); return }
+      if (e.source !== frame.contentWindow) return
+      var d = e.data || {}
+      if (d.vgpFrame !== 'height' || d.nonce !== nonce) return
+      var next = nextFrameHeight(state, d.height)
+      if (next === state.height) return
+      var scroller = frame.closest('.vgp-dlg-body')
+      var keep = scroller ? scroller.scrollTop : 0
+      state.height = next
+      frame.style.height = next + 'px'
+      if (scroller) scroller.scrollTop = keep
+    }
+    window.addEventListener('message', onMessage)
+    // A new width (a phone turned, a window resized) reflows the page, so the settling
+    // starts over. Height changes are this code's own doing and are ignored.
     var lastWidth = -1
-    var queued = false
-    var refit = function () {
-      if (queued) return
-      queued = true
-      requestAnimationFrame(function () { queued = false; fitPage(frame) })
-    }
-    // Size as soon as the document is PARSED, not at the frame's load event: that waits
-    // for every image, and a 22-screenshot page sat at 320px until the last one arrived
-    // (seen 2026-09-14). Each image then re-fits as it lands; load re-fits once more.
-    var wired = false
-    var started = Date.now()
-    var wire = function () {
-      var doc
-      try { doc = frame.contentDocument } catch (e) { return true }
-      if (!doc || doc.URL !== 'about:srcdoc' || doc.readyState === 'loading') return false
-      if (!wired) {
-        wired = true
-        Array.prototype.forEach.call(doc.images, function (img) {
-          if (!img.complete) {
-            img.addEventListener('load', refit)
-            img.addEventListener('error', refit)
-          }
-        })
-        if (doc.fonts && doc.fonts.ready) doc.fonts.ready.then(refit)
-      }
-      fitPage(frame)
-      return true
-    }
-    var poll = setInterval(function () {
-      if (!frame.isConnected || Date.now() - started > 20000 || wire()) clearInterval(poll)
-    }, 100)
-    frame.addEventListener('load', function () {
-      clearInterval(poll)
-      wire()
-    })
-    // Width changes (a phone turned, a window resized) reflow the page; height changes
-    // are this code's own doing and are ignored, so sizing cannot feed itself.
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(function (entries) {
         var w = Math.round(entries[0].contentRect.width)
-        if (w !== lastWidth) { lastWidth = w; refit() }
+        if (w !== lastWidth) {
+          lastWidth = w
+          state.lastGrowth = -1
+          state.rounds = 0
+          state.stopped = false
+        }
       }).observe(frame)
     }
     wrap.appendChild(frame)
     return wrap
   }
 
-  // The node's document, cleaned: scripts and plugin elements removed (they could not
-  // run in the sandbox anyway; removing them means their files are not even fetched),
-  // meta refresh and <base> removed, on* attributes and javascript:/data:text/html urls
-  // stripped, the css-nodes added, and links pointed at a new tab.
-  function pageSource (html, css) {
+  // The frame's next height from one reported content height — pure, so it is tested.
+  // vh units are measured against the frame itself, so a page with a 60vh hero grows a
+  // little every time the frame does, by a shrinking amount, and settles. A body with
+  // min-height:100vh plus a margin never settles: it outgrows the frame by the same
+  // margin every round. A repeated growth is recognised as that case and the last height
+  // before it is kept (everything real fits, only that empty margin stays cut); a
+  // repeated growth of 1-2px is the tail of settling and is taken. After 40 growth rounds
+  // without a width change, the frame stops following. A smaller height is always taken:
+  // the content got shorter (a slide changed, a wider frame reflowed it).
+  function nextFrameHeight (state, reported) {
+    var h = Math.ceil(Number(reported))
+    if (!isFinite(h)) return state.height
+    h = Math.min(Math.max(h, 40), 20000)
+    if (h < state.height) {
+      state.lastGrowth = -1
+      return h
+    }
+    if (h === state.height || state.stopped || state.rounds >= 40) return state.height
+    var growth = h - state.height
+    if (growth === state.lastGrowth) {
+      state.stopped = true
+      return growth > 2 ? state.height : h
+    }
+    state.lastGrowth = growth
+    state.rounds += 1
+    return h
+  }
+
+  // Runs inside the frame, after the node's own scripts. Measures the content, not the
+  // frame: documentElement.scrollHeight is never less than the frame, so it only says
+  // something when the content overflows; otherwise the body's bottom edge (plus its
+  // margin) is the height. Reports on every size change, on load and when fonts land.
+  function heightReporter (nonce) {
+    return '(function(){var n=' + JSON.stringify(nonce) + ',last=-1;' +
+      'function measure(){var de=document.documentElement,b=document.body;if(!b)return 0;' +
+      'var r=b.getBoundingClientRect(),mb=parseFloat(getComputedStyle(b).marginBottom)||0;' +
+      'var bottom=Math.ceil(r.bottom+(window.scrollY||0)+mb);' +
+      'return de.scrollHeight>de.clientHeight+1?Math.max(de.scrollHeight,bottom):bottom}' +
+      'function send(){var h=measure();if(h&&h!==last){last=h;parent.postMessage({vgpFrame:"height",nonce:n,height:h},"*")}}' +
+      'if(typeof ResizeObserver==="function"){var ro=new ResizeObserver(send);ro.observe(document.documentElement);if(document.body)ro.observe(document.body)}' +
+      'addEventListener("load",send);if(document.fonts&&document.fonts.ready)document.fonts.ready.then(send);' +
+      'setTimeout(send,50);setTimeout(send,600)})();'
+  }
+
+  // The node's document, prepared for its frame: plugin elements, meta refresh and <base>
+  // removed, javascript:/data:text/html urls stripped, the css-nodes added, links pointed
+  // at a new tab, and the height reporter added last. The node's own scripts and event
+  // handlers stay: the sandbox above is what keeps them away from this page.
+  function pageSource (html, css, nonce) {
     var doc = new DOMParser().parseFromString(String(html), 'text/html')
-    ;['script', 'object', 'embed', 'base', 'meta[http-equiv]'].forEach(function (sel) {
+    ;['object', 'embed', 'base', 'meta[http-equiv]'].forEach(function (sel) {
       Array.prototype.forEach.call(doc.querySelectorAll(sel), function (el) { el.parentNode.removeChild(el) })
     })
     Array.prototype.forEach.call(doc.querySelectorAll('*'), function (el) {
       Array.prototype.slice.call(el.attributes).forEach(function (attr) {
         var name = attr.name.toLowerCase()
-        if (name.indexOf('on') === 0) el.removeAttribute(attr.name)
-        else if (['href', 'src', 'xlink:href', 'action', 'formaction'].indexOf(name) !== -1 && isUnsafeUrl(attr.value)) {
+        if (['href', 'src', 'xlink:href', 'action', 'formaction'].indexOf(name) !== -1 && isUnsafeUrl(attr.value)) {
           el.removeAttribute(attr.name)
         }
       })
@@ -1685,52 +1718,16 @@
     base.setAttribute('target', '_blank')
     doc.head.insertBefore(base, doc.head.firstChild)
     // The frame is sized to its content, so its own vertical scrollbar would only ever
-    // flash during measurement.
+    // flash while the height settles.
     var fit = doc.createElement('style')
     fit.textContent = 'html{overflow-y:hidden}'
     doc.head.appendChild(fit)
+    if (nonce) {
+      var reporter = doc.createElement('script')
+      reporter.textContent = heightReporter(nonce)
+      doc.body.appendChild(reporter)
+    }
     return '<!DOCTYPE html>' + doc.documentElement.outerHTML
-  }
-
-  // The frame's height has to account for vh units, which 13 of 27 published html-nodes
-  // use and which are measured against the frame itself. Start from the height at 0px
-  // (vh counts for nothing), then grow until the document fits: a hero with
-  // min-height:60vh gets taller each round by a shrinking amount and settles. A body with
-  // min-height:100vh plus a margin never settles — it outgrows the frame by the same
-  // margin every round — so a repeated growth is recognised and the last height before
-  // it kept: everything real fits, only that empty margin stays cut (seen on a test page,
-  // 2026-09-14). The dialog's scroll position is put back, so a late image does not make
-  // the reader jump.
-  function fitPage (frame) {
-    var doc
-    try { doc = frame.contentDocument } catch (e) { doc = null }
-    if (!doc || !doc.documentElement) return
-    var scroller = frame.closest('.vgp-dlg-body')
-    var keep = scroller ? scroller.scrollTop : 0
-    // scrollHeight is a rounded integer; a vh-derived height is fractional (60vh of
-    // 1173px), so the exact box height is read too and rounded UP — scrollHeight alone
-    // left a test page 1px short.
-    var measure = function () {
-      var el = doc.documentElement
-      return Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height))
-    }
-    frame.style.height = '0px'
-    var h = measure()
-    var lastGrowth = -1
-    // Up to 40 rounds: a page with no vh settles in one, a 60vh hero in about ten
-    // (8 left a test hero 4px short). A repeated growth of 1-2px is the tail of that
-    // settling, not the margin case, so it keeps the taller height instead.
-    for (var i = 0; i < 40; i++) {
-      frame.style.height = h + 'px'
-      var next = measure()
-      if (next <= h) break
-      var growth = next - h
-      if (growth === lastGrowth) { h = growth > 2 ? h - growth : next; break }
-      lastGrowth = growth
-      h = next
-    }
-    frame.style.height = h + 'px'
-    if (scroller) scroller.scrollTop = keep
   }
 
   function mount (root) {
