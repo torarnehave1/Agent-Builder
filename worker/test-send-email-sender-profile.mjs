@@ -35,17 +35,19 @@ const check = (name, cond, detail) => {
 const acct = (id, email, extra = {}) => ({ id, email, accountType: 'cf-email-service', cfAccountId: 'acc', ...extra })
 const data = (accounts) => JSON.stringify({ settings: { emailAccounts: accounts } })
 
-function makeEnv({ extraRows = [] } = {}) {
+function makeEnv({ extraRows = [], grants = [] } = {}) {
   const db = new DatabaseSync(':memory:')
   db.exec(`
     CREATE TABLE config (user_id TEXT, email TEXT, Role TEXT, bio TEXT, profileimage TEXT, phone TEXT, phone_verified_at TEXT, data TEXT);
     CREATE TABLE world_founders (founder_email TEXT, account_holder_email TEXT, domain TEXT, created_at TEXT);
+    CREATE TABLE email_sender_grants (id TEXT, sender_email TEXT, holder_email TEXT, grantee_email TEXT, granted_by TEXT, granted_at TEXT, expires_at TEXT, revoked_at TEXT, revoked_by TEXT, note TEXT);
   `)
   const add = (uid, email, role, accounts) => db.prepare('INSERT INTO config (user_id, email, Role, data) VALUES (?, ?, ?, ?)').run(uid, email, role, data(accounts))
   add('owner-uuid', 'torarnehave@gmail.com', 'Superadmin', [acct('t1', 'torarnehave@vegvisr.org', { accountType: 'smtp' }), acct('t2', 'post@universi.no')])
   add('b8e7', 'post@nibi.no', 'Admin', [acct('5c34', 'post@nibi.no')])
   add('admin-uuid', 'someone@example.com', 'Admin', [acct('s1', 'someone@example.com', { accountType: 'gmail' })])
   for (const r of extraRows) add(...r)
+  for (const g of grants) db.prepare('INSERT INTO email_sender_grants (id, sender_email, holder_email, grantee_email, granted_by, granted_at, expires_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(...g)
   db.prepare("INSERT INTO world_founders VALUES ('post@nibi.no', 'post@nibi.no', 'nibi.no', '2026-09-13')").run()
   const DB = {
     prepare(sql) {
@@ -124,6 +126,36 @@ const run = async (env, input) => { try { return await executeTool('send_email',
   const { env, sent } = makeEnv()
   const r = await run(env, { ...MAIL, userId: 'owner-uuid', fromEmail: 'post@nibi.no', forUserEmail: 'post@nibi.no' })
   check('explicit forUserEmail path unchanged', r.success === true && sent[0].body.userEmail === 'post@nibi.no', JSON.stringify({ r, sent }))
+}
+
+// 7. Sender grants (2026-11-03): a non-Superadmin with a live grant sends from the holder's account.
+{
+  const { env, sent } = makeEnv({ grants: [['g1', 'post@nibi.no', 'post@nibi.no', 'someone@example.com', 'post@nibi.no', '2026-11-03', null, null]] })
+  const r = await run(env, { ...MAIL, userId: 'admin-uuid', fromEmail: 'post@nibi.no' })
+  check('grantee sends from granted address', r.success === true && sent.length === 1 && sent[0].path === '/send-cf-email' && sent[0].body.userEmail === 'post@nibi.no' && sent[0].body.accountId === '5c34', JSON.stringify({ r, sent }))
+  check('result names grantee and grant', r.sent_by === 'someone@example.com' && r.basis === 'grant' && /on a grant from post@nibi\.no \(grant g1\)/.test(r.message), JSON.stringify(r))
+}
+{
+  const { env, sent } = makeEnv({ grants: [['g2', 'post@nibi.no', 'post@nibi.no', 'someone@example.com', 'post@nibi.no', '2026-01-01', '2026-02-01T00:00:00Z', null]] })
+  const r = await run(env, { ...MAIL, userId: 'admin-uuid', fromEmail: 'post@nibi.no' })
+  check('expired grant refused', r.thrown && /expired/.test(r.thrown) && sent.length === 0, JSON.stringify(r))
+}
+{
+  const { env, sent } = makeEnv({ grants: [['g3', 'post@nibi.no', 'post@nibi.no', 'someone@example.com', 'post@nibi.no', '2026-01-01', null, '2026-10-01']] })
+  const r = await run(env, { ...MAIL, userId: 'admin-uuid', fromEmail: 'post@nibi.no' })
+  check('revoked grant refused, error points to grant_email_sender', r.thrown && /grant_email_sender/.test(r.thrown) && sent.length === 0, JSON.stringify(r))
+}
+{
+  const { env, sent } = makeEnv({ extraRows: [['other-uuid', 'other@example.com', 'Admin', []]], grants: [['g4', 'post@nibi.no', 'post@nibi.no', 'someone@example.com', 'post@nibi.no', '2026-11-03', null, null]] })
+  const r = await run(env, { ...MAIL, userId: 'other-uuid', fromEmail: 'post@nibi.no' })
+  check("someone else's grant does not count", r.thrown && sent.length === 0, JSON.stringify(r))
+}
+{
+  const { env, sent } = makeEnv({ grants: [['g6', 'torarnehave@vegvisr.org', 'torarnehave@gmail.com', 'someone@example.com', 'torarnehave@gmail.com', '2026-11-03', null, null]] })
+  const r = await run(env, { ...MAIL, userId: 'admin-uuid', fromEmail: 'torarnehave@vegvisr.org' })
+  check('grant on a non-cf account refused', r.thrown && /not a Cloudflare Email Sending account/.test(r.thrown) && sent.length === 0, JSON.stringify(r))
+  const r2 = await run(env, { ...MAIL, userId: 'admin-uuid', fromEmail: 'someone@example.com' })
+  check('own sender unaffected by grants', r2.success && sent.at(-1).body.userEmail === 'someone@example.com' && !r2.basis, JSON.stringify(r2))
 }
 
 fs.rmSync(tmp, { recursive: true, force: true })

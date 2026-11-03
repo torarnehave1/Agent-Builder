@@ -9983,6 +9983,43 @@ async function executeSendEmail(input, env) {
     }
   }
 
+  // A sender grant (2026-11-03): the holder of an address let THIS caller send from it
+  // (grant_email_sender → email_sender_grants, the same table MCP's send_email reads). Checked only
+  // when the address is not on the caller's own profile and no Superadmin lookup already found its
+  // holder. Same rules as dev-worker's resolveSenderAccess: a live row for exactly this sender and
+  // grantee, not expired, and the holder must still have the address as a Cloudflare Email Sending
+  // account. The mail goes out from the holder's account; the result says who sent it on whose grant.
+  let grantNote = null
+  if (requestedFrom && !forUser && profile === callerProfile && !accounts.some(a => (a.email || '').toLowerCase() === requestedFrom)) {
+    const callerEmail = String(callerProfile.email || '').toLowerCase()
+    const grant = callerEmail
+      ? await env.DB.prepare(
+          `SELECT id, holder_email, expires_at FROM email_sender_grants
+            WHERE sender_email = ? AND grantee_email = ? AND revoked_at IS NULL LIMIT 1`
+        ).bind(requestedFrom, callerEmail).first().catch(() => null)
+      : null
+    if (grant) {
+      if (grant.expires_at && new Date(grant.expires_at) <= new Date()) {
+        throw new Error(`Your grant to send as ${requestedFrom} expired on ${grant.expires_at}. Ask ${grant.holder_email} for a new one.`)
+      }
+      const holderProfile = await resolveUserProfile(grant.holder_email, env)
+      let holderData = {}
+      try { holderData = JSON.parse(holderProfile?.data || '{}') } catch { /* ignore */ }
+      const holderAccounts = holderData?.settings?.emailAccounts || []
+      const held = holderAccounts.find(a => (a.email || '').toLowerCase() === requestedFrom)
+      if (!holderProfile?.email || !held) {
+        throw new Error(`You have a grant to send as ${requestedFrom}, but ${grant.holder_email} no longer has that address on their profile. Ask them to check it.`)
+      }
+      if ((held.accountType || '').toLowerCase() !== 'cf-email-service' || !held.id) {
+        throw new Error(`You have a grant to send as ${requestedFrom}, but it is not a Cloudflare Email Sending account, so it cannot be used through a grant.`)
+      }
+      profile = holderProfile
+      accounts = [held]
+      grantNote = `Sent from ${requestedFrom} on a grant from ${grant.holder_email} (grant ${grant.id}).`
+      resolvedProfileNote = grantNote
+    }
+  }
+
   if (accounts.length === 0) {
     throw new Error(`No email accounts configured for ${profile.email}. Set one up in vemail.vegvisr.org first.`)
   }
@@ -9991,7 +10028,7 @@ async function executeSendEmail(input, env) {
   let account
   if (requestedFrom) {
     account = accounts.find(a => a.email.toLowerCase() === requestedFrom)
-    if (!account) throw new Error(`No configured account matches "${requestedFrom}" in ${profile.email}'s profile or any other profile. Available on ${profile.email}: ${accounts.map(a => a.email).join(', ')}. Only then add it with add_email_account.`)
+    if (!account) throw new Error(`No configured account matches "${requestedFrom}" in ${profile.email}'s profile or any other profile. Available on ${profile.email}: ${accounts.map(a => a.email).join(', ')}. If you hold it yourself, add it with add_email_account; if someone else holds it, they can give you access with grant_email_sender.`)
   } else {
     // Prefer @vegvisr.org accounts (SMTP relay, no app password needed)
     account = accounts.find(a => a.email.endsWith('@vegvisr.org')) || accounts.find(a => a.isDefault) || accounts[0]
@@ -10045,6 +10082,7 @@ async function executeSendEmail(input, env) {
     to: toEmail,
     subject,
     sender_profile: profile.email,
+    ...(grantNote ? { sent_by: callerProfile.email, basis: 'grant' } : {}),
     message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}".${resolvedProfileNote ? ` ${resolvedProfileNote}` : ''}`
   }
 }

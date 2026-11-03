@@ -1939,7 +1939,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'send_email',
-    description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. Use this when the user asks to send, write, or compose an email. A Superadmin can pass forUserEmail to send from a DIFFERENT user account (e.g. to trigger a verified send for a founder, which stamps last_verified_at on that founder).',
+    description: 'Send an email on behalf of the user. Uses the user\'s configured email account (Gmail or SMTP/vegvisr.org). Requires the user to have at least one email account set up in their profile settings. It can also send from an address another person holds when that holder gave the user a sender grant (grant_email_sender) — pass that address as fromEmail. Use this when the user asks to send, write, or compose an email. A Superadmin can pass forUserEmail to send from a DIFFERENT user account (e.g. to trigger a verified send for a founder, which stamps last_verified_at on that founder).',
     input_schema: {
       type: 'object',
       properties: {
