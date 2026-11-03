@@ -1875,7 +1875,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_world_member_roles',
-    description: "Give, take away or set the World roles of ONE member of a World — e.g. make Giulia secretary of nibi.no (#NIBI-SEKRETAER). A role is a group tag named <World tag>-<ROLE>; pass just the role name (\"SEKRETAER\") or the full tag. The person must already be a member (carry the World tag). Only this World's own role tags are touched: mode 'add' (default) adds, 'remove' takes away, 'replace' sets exactly these roles and keeps every other tag. Use this for 'make X secretary / treasurer / board member of <World>', NOT admin_set_user_role, which changes the PLATFORM role (Admin, Superadmin) and is Superadmin only. Reads the row back and reports verified. Superadmin, or the World Founder of that domain.",
+    description: "Give, take away or set the World roles of ONE member of a World — e.g. make Giulia secretary of nibi.no (#NIBI-SEKRETAER). A role is a group tag named <World tag>-<ROLE>; pass just the role name (\"SEKRETAER\") or the full tag. The person must already be a member (carry the World tag). Only this World's own role tags are touched: mode 'add' (default) adds, 'remove' takes away, 'replace' sets exactly these roles and keeps every other tag. Use this for 'make X secretary / treasurer / board member of <World>', NOT admin_set_user_role, which changes the PLATFORM role (Admin, Superadmin) and is Superadmin only. Reads the row back and reports verified. Superadmin, or the World Founder of that domain. A role gives no right to send mail from the World's address; that is grant_email_sender.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1885,6 +1885,41 @@ const TOOL_DEFINITIONS = [
         mode: { type: 'string', enum: ['add', 'remove', 'replace'], description: "'add' (default), 'remove' or 'replace'." }
       },
       required: ['domain', 'email', 'roles']
+    }
+  },
+  {
+    name: 'grant_email_sender',
+    description: "Let ONE other registered person send e-mail FROM an address you hold — e.g. let Giulia send as post@nibi.no. Writes a sender grant; it does not copy any password or credential, and the address stays on the holder's profile. Only the holder of the address may grant it: a Superadmin or World Founder who does not hold it is refused (a System Owner first uses \"Login as <address>\" in the Builder). The grantee must already be registered. Granting twice is harmless (alreadyGranted). Use this for 'let X send from <address>', 'give X sender access to <address>'. NOT grant_world_access (product access for customers), NOT set_email_password / set_mailbox_password (credentials), NOT set_world_member_roles (a role tag gives no sending rights).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        senderEmail: { type: 'string', description: 'The address to delegate, e.g. "post@nibi.no". Must be a sending address on YOUR profile.' },
+        granteeEmail: { type: 'string', description: 'The registered person who may send from it.' },
+        expiresInDays: { type: 'number', description: 'Optional. Days until the grant lapses. Omit for no expiry.' },
+        note: { type: 'string', description: 'Optional short reason, e.g. "Sekretær, sender protokoller".' }
+      },
+      required: ['senderEmail', 'granteeEmail']
+    }
+  },
+  {
+    name: 'list_email_sender_grants',
+    description: "List the e-mail sender grants you are part of — ones you gave as holder of an address, and ones given to you — with grantId, sender, grantee, who granted, when, expiry. Read this before revoke_email_sender_grant to get the grantId. Changes nothing.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        includeRevoked: { type: 'boolean', description: 'Also show withdrawn grants. Default false.' }
+      }
+    }
+  },
+  {
+    name: 'revoke_email_sender_grant',
+    description: "Withdraw one e-mail sender grant by its grantId (from list_email_sender_grants). The holder, the grantee or a Superadmin may withdraw. The row is kept with revoked_at set, so history survives. Withdrawing twice is harmless (alreadyRevoked).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        grantId: { type: 'string', description: 'The grant to withdraw, from list_email_sender_grants.' }
+      },
+      required: ['grantId']
     }
   },
   {
@@ -4045,7 +4080,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'grant_world_access',
-    description: "Give (or with revoke:true take back) one person's access to one product in a World — e.g. a test customer, or a purchase made outside the shop. Writes customers + grants in the World's OWN customer database (provision_world_commerce first) and reads the row back. product_ref is the product graph's id (a course graph). Customer pages decide access from grants only, never from role. Superadmin only. Code-hardcoded (not in registry).",
+    description: "Give (or with revoke:true take back) one person's access to one product in a World — e.g. a test customer, or a purchase made outside the shop. Writes customers + grants in the World's OWN customer database (provision_world_commerce first) and reads the row back. product_ref is the product graph's id (a course graph). Customer pages decide access from grants only, never from role. Superadmin only. Code-hardcoded (not in registry). For letting someone send e-mail from an address, use grant_email_sender instead.",
     input_schema: {
       type: 'object',
       properties: {

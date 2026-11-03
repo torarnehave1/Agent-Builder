@@ -249,6 +249,7 @@ const OPENAI_AGENT_TOOL_NAMES = [
   'publish_world_page', 'publish_all_world_pages', 'upload_world_image', 'set_world_email_template',
   'get_world_email_templates', 'preview_world_email_template', 'remove_world_email_template',
   'list_world_member_roles', 'set_world_member_roles',
+  'grant_email_sender', 'list_email_sender_grants', 'revoke_email_sender_grant',
   'list_world_founder_templates', 'save_world_founder_template',
   'backup_world_founder_templates_to_kg', 'restore_world_founder_template_from_kg',
   'set_realtime_recordings_domain', 'cloudflare_api',

@@ -9406,6 +9406,56 @@ async function executeSetWorldMemberRoles(input, env) {
   }
 }
 
+// ── E-mail sender grants (2026-11-03) ─────────────────────────────────────────────────────────
+// "Giulia may send mail as post@nibi.no". The grant lives in dev-worker (email_sender_grants) and
+// its rule stays there: ONLY the holder of the address may grant it — not a Superadmin, not the
+// World Founder. These tools add no rule of their own. They call dev-worker's REST route over the
+// KG_WORKER binding, which names the signed-in chat user (envActingFor → x-acting-user-email), so
+// the granter is always the person logged in. A System Owner grants for a mailbox by first using
+// "Login as <address>" in the Builder.
+async function senderGrantCall(input, env, path, init) {
+  const who = await actingEmailFor(input, env)
+  if (!who) return { success: false, error: 'No signed-in user behind this call, so there is nobody to grant from. Sign in and retry.' }
+  if (!env.KG_WORKER) return { success: false, error: 'KG_WORKER binding missing on agent-worker.' }
+  let res, data
+  try {
+    res = await env.KG_WORKER.fetch(`https://knowledge-graph-worker${path}`, init)
+    data = await res.json().catch(() => null)
+  } catch (e) {
+    return { success: false, error: `Sender-grant call failed: ${e.message}` }
+  }
+  if (!data) return { success: false, error: `Sender-grant route answered HTTP ${res.status} with no JSON.` }
+  return { ...data, actingAs: who }
+}
+
+async function executeGrantEmailSender(input, env) {
+  const senderEmail = String(input.senderEmail || '').trim().toLowerCase()
+  const granteeEmail = String(input.granteeEmail || '').trim().toLowerCase()
+  if (!senderEmail || !granteeEmail) return { success: false, error: 'senderEmail and granteeEmail are both required.' }
+  const body = { senderEmail, granteeEmail }
+  if (input.expiresInDays != null) body.expiresInDays = input.expiresInDays
+  if (input.note) body.note = String(input.note)
+  const r = await senderGrantCall(input, env, '/email/sender-grants', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  })
+  if (!r.success && r.code === 'FORBIDDEN_GRAPH' && /not yours to delegate/i.test(r.error || '')) {
+    r.hint = `You are signed in as ${r.actingAs}. Only the account that holds ${senderEmail} can grant it. ` +
+      `A System Owner does this by choosing "Login as ${senderEmail}" in the Builder first, then asking again.`
+  }
+  return r
+}
+
+async function executeListEmailSenderGrants(input, env) {
+  const q = input.includeRevoked ? '?includeRevoked=1' : ''
+  return await senderGrantCall(input, env, `/email/sender-grants${q}`, { method: 'GET' })
+}
+
+async function executeRevokeEmailSenderGrant(input, env) {
+  const grantId = String(input.grantId || '').trim()
+  if (!grantId) return { success: false, error: 'grantId is required — read it from list_email_sender_grants.' }
+  return await senderGrantCall(input, env, `/email/sender-grants/${encodeURIComponent(grantId)}/revoke`, { method: 'POST' })
+}
+
 async function executeSetWorldEmailTemplate(input, env) {
   const domain = (input.domain || '').trim().toLowerCase()
   if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "universi.no")')
@@ -19156,6 +19206,12 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeListWorldMemberRoles(toolInput, env)
     case 'set_world_member_roles':
       return await executeSetWorldMemberRoles(toolInput, env)
+    case 'grant_email_sender':
+      return await executeGrantEmailSender(toolInput, env)
+    case 'list_email_sender_grants':
+      return await executeListEmailSenderGrants(toolInput, env)
+    case 'revoke_email_sender_grant':
+      return await executeRevokeEmailSenderGrant(toolInput, env)
     case 'list_email_accounts':
       return await executeListEmailAccounts(toolInput, env)
     case 'add_email_destination':
