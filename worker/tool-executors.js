@@ -9256,6 +9256,156 @@ function upsertSignatureNode(nodes, sig, markBody) {
   return id
 }
 
+// ── World member roles (2026-11-03) ───────────────────────────────────────────────────────────
+//
+// A World Founder gives the members of their own World a role — e.g. #NIBI-SEKRETAER — without a
+// Superadmin. Roles are group tags on the member's config row, named <World tag>-<ROLE>, so they
+// need no new table and every page that already reads group_tags can see them.
+//
+// What keeps this narrow:
+//   - the caller is a Superadmin, or the founder / account holder of THIS domain (world_founders);
+//   - only tags that start with the World's own tag and a hyphen can be added or removed, so a
+//     founder can never touch #VEGR.AI, another World's tags, or the membership tag itself;
+//   - the person must already be a member (carry the World tag as a whole token);
+//   - the platform role (config.Role: Admin, Superadmin…) is never read or written here. That is
+//     admin_set_user_role / set_user_role, Superadmin only.
+const WORLD_ROLE_NAME_RE = /^[A-Z0-9]+(?:-[A-Z0-9]+)*$/
+
+async function resolveWorldRoleContext(input, env) {
+  const domain = String(input.domain || '').trim().toLowerCase()
+  if (!domain || !domain.includes('.')) return { error: 'A valid World domain is required, e.g. "nibi.no".' }
+  const world = await env.DB.prepare(
+    'SELECT domain, world_name, meta_area_tag, founder_email, account_holder_email FROM world_founders WHERE lower(domain) = ? ORDER BY created_at LIMIT 1'
+  ).bind(domain).first()
+  if (!world) return { error: `No World is registered for ${domain}.` }
+  const worldTag = '#' + String(world.meta_area_tag || '').replace(/^#+/, '').trim().toUpperCase()
+  if (worldTag === '#') return { error: `The World ${domain} has no content tag (meta_area_tag), so its roles cannot be named.` }
+
+  const callerProfile = input.userId ? await resolveUserProfile(input.userId, env) : null
+  const callerRole = String(callerProfile?.role || callerProfile?.Role || '').trim().toLowerCase()
+  const callerEmail = String(callerProfile?.email || '').trim().toLowerCase()
+  if (callerRole !== 'superadmin') {
+    const own = callerEmail
+      ? await env.DB.prepare('SELECT 1 AS ok FROM world_founders WHERE lower(domain) = ? AND (lower(founder_email) = ? OR lower(account_holder_email) = ?) LIMIT 1').bind(domain, callerEmail, callerEmail).first()
+      : null
+    if (!own) return { error: `Only a Superadmin or the World Founder of ${domain} can manage its member roles.` }
+  }
+  return { domain, worldName: world.world_name || domain, worldTag, rolePrefix: worldTag + '-', callerEmail }
+}
+
+function splitTags(s) {
+  return String(s || '').split(/\s+/).map((t) => t.trim()).filter(Boolean)
+}
+
+/** "sekretær", "SEKRETAER", "#NIBI-SEKRETAER" → "#NIBI-SEKRETAER". Returns { tag } or { error }. */
+function normaliseWorldRole(raw, ctx) {
+  let t = String(raw || '').trim().replace(/^#+/, '').toUpperCase()
+    .replace(/Æ/g, 'AE').replace(/Ø/g, 'O').replace(/Å/g, 'AA').replace(/\s+/g, '-')
+  const stem = ctx.worldTag.slice(1)
+  if (t === stem) return { error: `${ctx.worldTag} is the membership tag, not a role. Use a role name such as ${ctx.rolePrefix}SEKRETAER.` }
+  if (t.startsWith(stem + '-')) t = t.slice(stem.length + 1)
+  // A written tag ("#IIBA") that is not under this World's prefix is somebody else's tag — refuse
+  // it rather than quietly turning it into #NIBI-IIBA.
+  else if (/^\s*#/.test(String(raw))) return { error: `"${raw}" is not a role of ${ctx.domain}. Its roles are named ${ctx.rolePrefix}<ROLE>.` }
+  if (!t || !WORLD_ROLE_NAME_RE.test(t)) {
+    return { error: `"${raw}" is not a valid role name. Use letters A–Z and digits, words joined by "-", e.g. SEKRETAER or STYRE-MEDLEM.` }
+  }
+  return { tag: ctx.rolePrefix + t }
+}
+
+async function executeListWorldMemberRoles(input, env) {
+  const ctx = await resolveWorldRoleContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  // LIKE narrows the scan; the whole-token check below decides membership, so "#NIBI-LEDER" alone
+  // never counts as being in #NIBI.
+  const rows = await env.DB.prepare(
+    `SELECT email, COALESCE(json_extract(data, '$.profile.name'), '') AS name, group_tags
+       FROM config WHERE UPPER(COALESCE(group_tags, '')) LIKE ? ORDER BY LOWER(email) LIMIT 1000`
+  ).bind(`%${ctx.worldTag}%`).all()
+  const members = []
+  const strays = []
+  for (const r of rows.results || []) {
+    const tags = splitTags(r.group_tags).map((t) => t.toUpperCase())
+    const roles = tags.filter((t) => t.startsWith(ctx.rolePrefix))
+    if (tags.includes(ctx.worldTag)) members.push({ email: r.email, name: r.name || null, roles })
+    else if (roles.length) strays.push({ email: r.email, name: r.name || null, roles })
+  }
+  const roleCounts = {}
+  for (const m of members) for (const t of m.roles) roleCounts[t] = (roleCounts[t] || 0) + 1
+  const lines = members.map((m) => `• ${m.name || m.email} <${m.email}>: ${m.roles.length ? m.roles.join(' ') : 'no role'}`)
+  return {
+    success: true,
+    domain: ctx.domain,
+    worldTag: ctx.worldTag,
+    rolePrefix: ctx.rolePrefix,
+    count: members.length,
+    members,
+    roles: roleCounts,
+    // People who keep a role tag after losing the membership tag. Listed so the founder can clean
+    // them up; set_world_member_roles still refuses to give them new roles.
+    ...(strays.length ? { formerMembersWithRoles: strays } : {}),
+    message: `${ctx.domain}: ${members.length} member${members.length === 1 ? '' : 's'} with ${ctx.worldTag}.` +
+      (lines.length ? `\n${lines.join('\n')}` : '') +
+      (strays.length ? `\n${strays.length} person(s) still carry a ${ctx.rolePrefix}… role without ${ctx.worldTag}: ${strays.map((s) => s.email).join(', ')}.` : ''),
+  }
+}
+
+async function executeSetWorldMemberRoles(input, env) {
+  const ctx = await resolveWorldRoleContext(input, env)
+  if (ctx.error) return { success: false, error: ctx.error }
+  const mode = String(input.mode || 'add').trim().toLowerCase()
+  if (!['add', 'remove', 'replace'].includes(mode)) return { success: false, error: "mode must be 'add', 'remove' or 'replace'." }
+  const email = String(input.email || '').trim().toLowerCase()
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { success: false, error: 'A valid member e-mail is required.' }
+
+  const rawRoles = Array.isArray(input.roles) ? input.roles : splitTags(String(input.roles || '').replace(/,/g, ' '))
+  if (!rawRoles.length && mode !== 'replace') return { success: false, error: 'roles is required, e.g. ["SEKRETAER"].' }
+  const wanted = []
+  for (const raw of rawRoles) {
+    const n = normaliseWorldRole(raw, ctx)
+    if (n.error) return { success: false, error: n.error }
+    if (!wanted.includes(n.tag)) wanted.push(n.tag)
+  }
+
+  const row = await env.DB.prepare('SELECT email, group_tags FROM config WHERE lower(email) = ? LIMIT 1').bind(email).first()
+  if (!row) return { success: false, error: `${email} is not registered.` }
+  const before = row.group_tags || null
+  const current = splitTags(before)
+  const upper = current.map((t) => t.toUpperCase())
+  if (!upper.includes(ctx.worldTag)) {
+    return { success: false, error: `${email} is not a member of ${ctx.domain} (has no ${ctx.worldTag} tag), so they cannot be given its roles.` }
+  }
+
+  const isRole = (t) => t.toUpperCase().startsWith(ctx.rolePrefix)
+  let next
+  if (mode === 'add') next = [...current, ...wanted.filter((w) => !upper.includes(w))]
+  else if (mode === 'remove') next = current.filter((t) => !wanted.includes(t.toUpperCase()))
+  else next = [...current.filter((t) => !isRole(t)), ...wanted] // replace: this World's roles only
+
+  const after = next.length ? next.join(' ') : null
+  const rolesBefore = current.filter(isRole).map((t) => t.toUpperCase())
+  const rolesAfter = next.filter(isRole).map((t) => t.toUpperCase())
+  if (after === before) {
+    return { success: true, domain: ctx.domain, email, changed: false, roles: rolesAfter, rolesBefore,
+      message: `${email} already has ${rolesAfter.length ? rolesAfter.join(' ') : 'no role'} in ${ctx.domain}. Nothing changed.` }
+  }
+  await env.DB.prepare('UPDATE config SET group_tags = ? WHERE lower(email) = ?').bind(after, email).run()
+  const check = await env.DB.prepare('SELECT group_tags FROM config WHERE lower(email) = ? LIMIT 1').bind(email).first()
+  const stored = splitTags(check?.group_tags).filter(isRole).map((t) => t.toUpperCase())
+  const verified = JSON.stringify(stored) === JSON.stringify(rolesAfter)
+  return {
+    success: verified,
+    domain: ctx.domain,
+    email,
+    changed: true,
+    verified,
+    roles: stored,
+    rolesBefore,
+    ...(verified ? {} : { error: 'The roles were written but did not read back as expected.' }),
+    message: `${email} in ${ctx.domain}: ${rolesBefore.length ? rolesBefore.join(' ') : 'no role'} → ${stored.length ? stored.join(' ') : 'no role'}.`,
+  }
+}
+
 async function executeSetWorldEmailTemplate(input, env) {
   const domain = (input.domain || '').trim().toLowerCase()
   if (!domain || !domain.includes('.')) throw new Error('A valid World domain is required (e.g. "universi.no")')
@@ -19002,6 +19152,10 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeRemoveWorldEmailTemplate(toolInput, env)
     case 'set_world_email_template':
       return await executeSetWorldEmailTemplate(toolInput, env)
+    case 'list_world_member_roles':
+      return await executeListWorldMemberRoles(toolInput, env)
+    case 'set_world_member_roles':
+      return await executeSetWorldMemberRoles(toolInput, env)
     case 'list_email_accounts':
       return await executeListEmailAccounts(toolInput, env)
     case 'add_email_destination':

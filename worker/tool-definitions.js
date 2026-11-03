@@ -1566,7 +1566,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'admin_set_user_role',
-    description: "Change the role of a user who is ALREADY registered. admin_register_user does NOT change the role of an existing account — it completes the profile and leaves the ranking alone — so this is the only way to re-rank someone. Superadmin cannot be granted here, and a user who already IS Superadmin cannot be changed. Superadmin caller only. Use for \"make X an Admin\", \"change X's role\".",
+    description: "Change the role of a user who is ALREADY registered. admin_register_user does NOT change the role of an existing account — it completes the profile and leaves the ranking alone — so this is the only way to re-rank someone. Superadmin cannot be granted here, and a user who already IS Superadmin cannot be changed. Superadmin caller only. Use for \"make X an Admin\", \"change X's role\". This is the PLATFORM role only: for a role inside a World (secretary, treasurer, board member of nibi.no …) use set_world_member_roles instead.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1860,6 +1860,31 @@ const TOOL_DEFINITIONS = [
         language: { type: 'string', description: 'ISO code. Omit to remove every language of that purpose.' }
       },
       required: ['domain', 'purpose']
+    }
+  },
+  {
+    name: 'list_world_member_roles',
+    description: "List the members of a World (everyone carrying the World's tag, e.g. #NIBI) and the World roles each holds — tags named <World tag>-<ROLE>, e.g. #NIBI-LEDER, #NIBI-SEKRETAER, #NIBI-OKONOMI. These are board/office roles inside ONE World, NOT the platform role (Admin, Superadmin…). Returns only this World's role tags, never other groups or contact details beyond name and e-mail. Read this before set_world_member_roles. Superadmin, or the World Founder of that domain.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "nibi.no".' }
+      },
+      required: ['domain']
+    }
+  },
+  {
+    name: 'set_world_member_roles',
+    description: "Give, take away or set the World roles of ONE member of a World — e.g. make Giulia secretary of nibi.no (#NIBI-SEKRETAER). A role is a group tag named <World tag>-<ROLE>; pass just the role name (\"SEKRETAER\") or the full tag. The person must already be a member (carry the World tag). Only this World's own role tags are touched: mode 'add' (default) adds, 'remove' takes away, 'replace' sets exactly these roles and keeps every other tag. Use this for 'make X secretary / treasurer / board member of <World>', NOT admin_set_user_role, which changes the PLATFORM role (Admin, Superadmin) and is Superadmin only. Reads the row back and reports verified. Superadmin, or the World Founder of that domain.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. "nibi.no".' },
+        email: { type: 'string', description: 'The member to change. Must already carry the World tag.' },
+        roles: { type: 'array', items: { type: 'string' }, description: 'Role names, e.g. ["SEKRETAER"] or ["#NIBI-OKONOMI"]. Letters and digits, words joined by "-"; Æ/Ø/Å become AE/O/AA. Empty with mode replace clears all of this World\'s roles.' },
+        mode: { type: 'string', enum: ['add', 'remove', 'replace'], description: "'add' (default), 'remove' or 'replace'." }
+      },
+      required: ['domain', 'email', 'roles']
     }
   },
   {

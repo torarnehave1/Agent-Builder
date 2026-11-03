@@ -3531,6 +3531,33 @@ export default {
         return new Response(JSON.stringify(result), { status, headers: corsHeaders })
       }
 
+      // World member roles, for the MCP server (2026-11-03). Same door as the e-mail template
+      // routes above: identity from the caller's own credential only, the executor's own gate
+      // (Superadmin or that World's founder) untouched, nothing widened here.
+      const WORLD_ROLE_ROUTES = {
+        '/world/member-roles': 'list_world_member_roles',
+        '/world/member-roles/set': 'set_world_member_roles',
+      }
+      if (WORLD_ROLE_ROUTES[pathname] && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ success: false, error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        if (!body.domain) {
+          return new Response(JSON.stringify({ success: false, error: 'domain is required' }), { status: 400, headers: corsHeaders })
+        }
+        const result = await executeTool(WORLD_ROLE_ROUTES[pathname], {
+          domain: body.domain,
+          ...(body.email ? { email: body.email } : {}),
+          ...(body.roles !== undefined ? { roles: body.roles } : {}),
+          ...(body.mode ? { mode: body.mode } : {}),
+          userId: callerAuth.userId,
+        }, env, {}).catch((e) => ({ success: false, error: e.message }))
+        const status = result?.success === false ? (/Only a Superadmin/.test(result.error || '') ? 403 : 400) : 200
+        return new Response(JSON.stringify(result), { status, headers: corsHeaders })
+      }
+
       // Store a mailbox password without a model in the loop.
       //
       // The reason this route exists is L154: on 2026-10-04 the same job was handed to the chat,
