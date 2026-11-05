@@ -13,12 +13,13 @@
 //   POST /world-contacts/update {world, id, record}
 //   POST /world-contacts/delete {world, id}
 //
-// Who may: the World's founder or account holder, a Superadmin, or a system owner (mayBuildIn — the
-// same rule as /world-photos/token and /world-course/*).
+// Who may: the World's founder or account holder, or a system owner (mayHoldContacts). NOT a
+// Superadmin as such (decided 2026-11-05, «A»): the contact list is the founder's customer data, and
+// the Superadmin role is held by several accounts across the platform — one of them, a founder of
+// another World, could read all of sodesign.no's contacts. Courses and the brand keep mayBuildIn.
 // Auth: Authorization: Bearer <emailVerificationToken> or X-API-Token.
 
 import { commerceContext, commerceQuery } from './world-customer.js'
-import { mayBuildIn } from './world-course.js'
 
 export const CONTACT_COLUMNS = ['full_name', 'first_name', 'middle_name', 'last_name', 'nickname', 'birthday',
   'notes', 'photo', 'labels', 'emails', 'phones', 'addresses', 'websites', 'organization']
@@ -60,7 +61,22 @@ export async function worldContactsProfile(env, domain) {
   return { profile, stored: Boolean(row) }
 }
 
-// founder | holder | operator (Superadmin or system owner working on the World's behalf)
+// Founder, account holder or system owner of `domain` — the only callers who may see or change its
+// contacts. Same result shape as mayBuildIn so the handler reads the same.
+export async function mayHoldContacts(env, who, domain) {
+  const d = String(domain || '').trim().toLowerCase()
+  if (!d) return { ok: false, status: 400, error: 'world is required, e.g. sodesign.no' }
+  const wf = await env.DB.prepare('SELECT founder_email, account_holder_email FROM world_founders WHERE LOWER(domain) = ? ORDER BY created_at LIMIT 1').bind(d).first().catch(() => null)
+  if (!wf) return { ok: false, status: 404, error: `no World ${d}` }
+  const me = String(who.email || '').toLowerCase()
+  if (!me) return { ok: false, status: 401, error: 'not signed in' }
+  const isMember = [wf.founder_email, wf.account_holder_email].some((e) => e && String(e).toLowerCase() === me)
+  const isOwner = isMember || Boolean(await env.DB.prepare('SELECT 1 AS ok FROM system_owners WHERE LOWER(email) = ? LIMIT 1').bind(me).first().catch(() => null))
+  if (!isOwner) return { ok: false, status: 403, error: `only ${d}'s founder, its account holder or the system owner may see its contacts` }
+  return { ok: true, domain: d, founderEmail: String(wf.founder_email || '').toLowerCase() }
+}
+
+// founder | holder | operator (the system owner working on the World's behalf)
 async function relationTo(env, who, domain) {
   const wf = await env.DB.prepare('SELECT founder_email, account_holder_email FROM world_founders WHERE LOWER(domain) = ? ORDER BY created_at LIMIT 1').bind(domain).first().catch(() => null)
   const me = String(who.email || '').toLowerCase()
@@ -255,7 +271,7 @@ export async function handleWorldContacts(request, env, url, cors, resolveCaller
     const stores = await env.DB.prepare('SELECT domain FROM world_commerce_stores ORDER BY domain').all().catch(() => ({ results: [] }))
     const worlds = []
     for (const s of stores.results || []) {
-      const gate = await mayBuildIn(env, who, s.domain)
+      const gate = await mayHoldContacts(env, who, s.domain)
       if (!gate.ok) continue
       const wf = await env.DB.prepare('SELECT world_name FROM world_founders WHERE LOWER(domain) = ? ORDER BY created_at LIMIT 1').bind(s.domain).first().catch(() => null)
       const relation = await relationTo(env, who, s.domain)
@@ -267,7 +283,7 @@ export async function handleWorldContacts(request, env, url, cors, resolveCaller
 
   const body = request.method === 'POST' ? await request.json().catch(() => ({})) : {}
   const world = url.searchParams.get('world') || body.world
-  const gate = await mayBuildIn(env, who, world)
+  const gate = await mayHoldContacts(env, who, world)
   if (!gate.ok) return json({ success: false, error: gate.error }, gate.status, cors)
   const ctx = await commerceContext(env, gate.domain)
   if (ctx.error) return json({ success: false, error: `${ctx.error}. Run provision_world_commerce for ${gate.domain}.` }, ctx.status, cors)

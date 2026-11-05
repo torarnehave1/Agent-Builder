@@ -183,5 +183,23 @@ const c = (name, email, labels, extra = {}) => ({ fullName: name, firstName: nam
   check('platform database has no contacts table', platformRows.length === 0, JSON.stringify(platformRows))
 }
 
+// 2026-11-05 («A»): a Superadmin who is not the World's founder, holder or the system owner may not
+// see or change its contacts (slowyou.net@gmail.com read all of sodesign.no's contacts on contacts.sodesign.no).
+{
+  const SUPER = as('super@example.com', 'Superadmin')
+  const list = await call('GET', '/world-contacts/list?world=sodesign.no', SUPER)
+  check('a Superadmin outside the World is refused the list (403)', list.status === 403 && !list.body.records, JSON.stringify(list).slice(0, 200))
+  const imp = await call('POST', '/world-contacts/import', SUPER, { world: 'sodesign.no', contacts: [{ full_name: 'X', emails: [{ value: 'x@example.com' }] }] })
+  check('… and refused import (403)', imp.status === 403, JSON.stringify(imp).slice(0, 200))
+  const upd = await call('POST', '/world-contacts/update', SUPER, { world: 'sodesign.no', id: 'any', record: { notes: 'x' } })
+  check('… and refused update (403)', upd.status === 403, JSON.stringify(upd).slice(0, 200))
+  const worlds = await call('GET', '/world-contacts/worlds', SUPER)
+  check('… and the World is not offered to it', worlds.status === 200 && !(worlds.body.worlds || []).some((w) => w.domain === 'sodesign.no'), JSON.stringify(worlds.body))
+  const founder = await call('GET', '/world-contacts/list?world=sodesign.no', as('stine.oksvold@gmail.com', 'Admin'))
+  check('the founder still gets the list', founder.status === 200 && Array.isArray(founder.body.records), JSON.stringify(founder).slice(0, 200))
+  const owner = await call('GET', '/world-contacts/list?world=sodesign.no', OWNER)
+  check('the system owner still gets the list', owner.status === 200 && Array.isArray(owner.body.records), JSON.stringify(owner).slice(0, 200))
+}
+
 console.log(failures ? `\n${failures} failure(s)` : '\nall passed')
 process.exit(failures ? 1 : 0)
