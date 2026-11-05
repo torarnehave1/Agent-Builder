@@ -4154,6 +4154,20 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: 'save_world_report',
+    description:
+      "Store a World's private report — e.g. key \"dashboard\": the sales numbers its dashboard page shows — in the World's OWN customer database. The published page carries no numbers and fetches the report after sign-in from /world-reports/get, which only the World's founder, account holder or the system owner may read (not other Superadmins). Replaces the whole report for that key; reads it back. Only aggregates — never names or e-mail addresses. For the founder, account holder or system owner.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        domain: { type: 'string', description: 'The World domain, e.g. sodesign.no.' },
+        key: { type: 'string', description: 'Report name, default "dashboard".' },
+        data: { type: 'object', description: 'The report as a JSON object (max 200 KB).' },
+      },
+      required: ['domain', 'data'],
+    },
+  },
+  {
     name: 'get_world_brand',
     description:
       "Read a World's brand from its brand graph (the single source of its look): name, slogan, logo, square logo, favicon, colours (accent, accentDark, ink, muted, surface, card), fonts (display, body, Google Fonts cssUrl), language, light/dark. CALL THIS BEFORE you build or restyle any page, email or app for a World, and use these exact values — never guess a World's colours or fonts. For the World's founder, account holder or a Superadmin.",

@@ -29,6 +29,7 @@ import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteEl
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { handleWorldCustomer } from './world-customer.js'
 import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
+import { handleWorldReports } from './world-reports.js'
 import { handleWorldCourse } from './world-course.js'
 import { buildImageInput, DEFAULT_IMAGE_MODEL } from './image-models.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
@@ -2246,6 +2247,12 @@ export default {
 
       // World contacts (2026-10-26): the founder's contact list in the World's own customer database,
       // read and written by the Contacts app in World mode. See world-contacts.js.
+      // A World's private reports (the sales dashboard): founder, account holder or system owner only.
+      if (pathname.startsWith('/world-reports/')) {
+        const wc = await worldOriginCors(request, env, corsHeaders)
+        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: wc })
+        return handleWorldReports(request, env, url, wc, resolveAuthorizedCaller)
+      }
       if (pathname.startsWith('/world-contacts/')) {
         // Contacts also runs on a World's own host (contacts.<World domain>, via the World's brand proxy),
         // so that origin is trusted here too — only for a registered World domain or its subdomains.
