@@ -30,6 +30,7 @@ import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAut
 import { handleWorldCustomer } from './world-customer.js'
 import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
 import { handleWorldReports } from './world-reports.js'
+import { handleWorldPayments } from './world-payments.js'
 import { handleWorldCourse } from './world-course.js'
 import { buildImageInput, DEFAULT_IMAGE_MODEL } from './image-models.js'
 import { buildGithubAuthorizeUrl, exchangeGithubCode, saveGithubConnection, getGithubConnection, disconnectGithub, setGithubReadOnly, disconnectGithubByAccountLogin, disconnectGithubByInstallationId, verifyGithubWebhookSignature } from './github.js'
@@ -2247,6 +2248,12 @@ export default {
 
       // World contacts (2026-10-26): the founder's contact list in the World's own customer database,
       // read and written by the Contacts app in World mode. See world-contacts.js.
+      // A World's payments (card + Vipps), one row each, for the live dashboard: same access rule.
+      if (pathname.startsWith('/world-payments/')) {
+        const wc = await worldOriginCors(request, env, corsHeaders)
+        if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: wc })
+        return handleWorldPayments(request, env, url, wc, resolveAuthorizedCaller)
+      }
       // A World's private reports (the sales dashboard): founder, account holder or system owner only.
       if (pathname.startsWith('/world-reports/')) {
         const wc = await worldOriginCors(request, env, corsHeaders)
