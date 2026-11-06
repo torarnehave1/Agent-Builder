@@ -62,6 +62,20 @@ export function declaredInputs(nodes: Node[]): AutomationInput[] {
   return Array.isArray(raw) ? raw.filter((i) => i && typeof i.key === 'string' && i.key.trim()) : [];
 }
 
+/**
+ * The signed-in user's session token, sent with every worker call that acts as the user.
+ * Since 2026-11-06 the worker takes identity only from a credential, never from `userId` in the
+ * body; the cookie alone does not always reach agent.vegvisr.org, so this mirrors AgentChat.
+ */
+function sessionToken(): string {
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || '{}');
+    return user.emailVerificationToken || '';
+  } catch {
+    return '';
+  }
+}
+
 /** NL → automation spec via the worker (agent authors it; nothing runs). */
 export async function buildAutomation(
   prompt: string,
@@ -73,7 +87,7 @@ export async function buildAutomation(
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, userId, tools, callerEmail }),
+    body: JSON.stringify({ prompt, userId, tools, callerEmail, authToken: sessionToken() }),
   });
   const data = (await res.json()) as AutomationSpec;
   if (!res.ok) throw new Error(data.error || `Build failed: ${res.status}`);
@@ -114,7 +128,7 @@ export async function testStep(
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, stepId, userId, callerEmail, inputs }),
+    body: JSON.stringify({ graphId, stepId, userId, callerEmail, inputs, authToken: sessionToken() }),
   });
   const data = (await res.json()) as { success: boolean; step: RunStep | null; error?: string };
   if (!res.ok && !data.step) throw new Error(data.error || `Test failed: ${res.status}`);
@@ -136,7 +150,7 @@ export async function runAutomation(
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ graphId, dryRun, userId, callerEmail, inputs }),
+    body: JSON.stringify({ graphId, dryRun, userId, callerEmail, inputs, authToken: sessionToken() }),
   });
   const data = (await res.json()) as RunResult;
   if (!res.ok) throw new Error(data.error || `Run failed: ${res.status}`);

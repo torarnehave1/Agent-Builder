@@ -168,6 +168,14 @@ export default function AgentExecutor({ userId, contractId, contractName, graphI
           userId,
           contractId: overrideContractId || contractId || 'contract_dark_glass',
           graphId,
+          // The worker takes identity only from a credential (2026-11-06), as in AgentChat.
+          authToken: (() => {
+            try {
+              return JSON.parse(localStorage.getItem('user') || '{}').emailVerificationToken || '';
+            } catch {
+              return '';
+            }
+          })(),
         }),
         signal: controller.signal,
       });

@@ -9,6 +9,7 @@ import { TOOL_DEFINITIONS, PROFF_TOOLS } from './tool-definitions.js'
 import { loadOpenAPITools } from './openapi-tools.js'
 import { readModelResponse } from './model-response.js'
 import { executeTool } from './tool-executors.js'
+import { restrictToolsToAgent, refusedToolResult } from './agent-tool-allowlist.js'
 import { DEFAULT_MODEL, MODELS, acceptsSampling } from './models.js'
 import { routeModel } from './model-router.js'
 import { repairToolPairing } from './message-history.js'
@@ -2400,15 +2401,26 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
   }
 
   const messages = [{ role: 'user', content: taskWithContract }]
-  const requiresGraphWrite = isGraphWriteIntent(taskWithContract)
-  const requiresCreateGraph = isExplicitCreateGraphIntent(taskWithContract)
-  const requiresCalendarQuery = isCalendarQueryIntent(messages)
-  const graphWriteVerificationStartIndex = messages.length
-  const calendarQueryStartIndex = messages.length
-  const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
 
   const { allTools, operationMap } = await loadAllTools(env)
   const authContext = options?.authContext || null
+
+  // Only the agent's own tools (agent_configs.tools) are offered and executed — see
+  // agent-tool-allowlist.js. The forced continuations below nudge the model toward a tool, so
+  // each one applies only when this agent actually has that tool; otherwise it would nag a
+  // tool-less agent until max_turns.
+  const agentTools = restrictToolsToAgent(allTools, agentConfig.tools)
+  const agentToolNames = new Set(agentTools.map(t => t.name))
+  const canWriteGraph = agentToolNames.has('delegate_to_kg')
+  const canReadGraph = ['read_node', 'read_graph', 'read_graph_content'].some(n => agentToolNames.has(n))
+  const canQueryCalendar = [...agentToolNames].some(n => n.startsWith('calendar_'))
+
+  const requiresGraphWrite = canWriteGraph && isGraphWriteIntent(taskWithContract)
+  const requiresCreateGraph = isExplicitCreateGraphIntent(taskWithContract)
+  const requiresCalendarQuery = canQueryCalendar && isCalendarQueryIntent(messages)
+  const graphWriteVerificationStartIndex = messages.length
+  const calendarQueryStartIndex = messages.length
+  const graphWriteCompletionBaseline = countGraphWriteCompletions(messages)
 
   const executionLog = []
   let turn = 0
@@ -2440,7 +2452,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
     const modelEvent = await wal.begin('model_call', model, {
       turn,
       messages: messages.length,
-      tools: allTools.length,
+      tools: agentTools.length,
       maxTokens: agentConfig.max_tokens || 4096,
       agentId: agentConfig.id || null,
     })
@@ -2456,7 +2468,8 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         max_tokens: agentConfig.max_tokens || 4096,
         temperature: agentConfig.temperature ?? 0.3,
         system: agentConfig.system_prompt,
-        tools: allTools
+        // An agent with no tools gets no `tools` field at all rather than an empty array.
+        tools: agentTools.length ? agentTools : undefined
       })
     })
 
@@ -2495,7 +2508,7 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         continue
       }
 
-      if (requiresGraphWrite && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
+      if (requiresGraphWrite && canReadGraph && !hasGraphWriteVerification(messages, graphWriteVerificationStartIndex)) {
         executionLog.push({
           turn,
           type: 'forced_continuation',
@@ -2545,7 +2558,11 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
     }
 
     if (data.stop_reason === 'tool_use') {
-      const toolUses = data.content.filter(c => c.type === 'tool_use')
+      const requestedToolUses = data.content.filter(c => c.type === 'tool_use')
+      // A tool the agent was not given is refused, never executed — the model can still name
+      // one it saw earlier in the conversation or invent one.
+      const refusedToolUses = requestedToolUses.filter(t => !agentToolNames.has(t.name))
+      const toolUses = requestedToolUses.filter(t => agentToolNames.has(t.name))
       const serverSearches = data.content.filter(c => c.type === 'server_tool_use')
 
       for (const search of serverSearches) {
@@ -2638,7 +2655,13 @@ async function executeAgent(agentConfig, userTask, userId, env, options = {}) {
         }
       }))
 
-      const toolResults = [...sequentialResults, ...parallelResults]
+      const refusedResults = refusedToolUses.map((toolUse) => {
+        const result = refusedToolResult(toolUse.name)
+        executionLog.push({ turn, type: 'tool_error', tool: toolUse.name, error: result.error, timestamp: new Date().toISOString() })
+        return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(result), is_error: true }
+      })
+
+      const toolResults = [...sequentialResults, ...parallelResults, ...refusedResults]
 
       messages.push(
         { role: 'assistant', content: data.content },

@@ -2347,15 +2347,23 @@ export default {
 
       if (pathname === '/execute' && request.method === 'POST') {
         const body = await request.json()
-        const { agentId, task, userId, contractId, graphId, authToken } = body
+        const { agentId, task, contractId, graphId, authToken } = body
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || userId
-
-        if (!agentId || !task || !effectiveUserId) {
+        // Who runs the agent comes from the caller's own credential, never from body.userId
+        // (2026-11-06): with the fallback, anyone could run an agent — and spend that user's
+        // API keys — by naming their id.
+        const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+        if (!effectiveUserId) {
           return new Response(JSON.stringify({
-            error: 'agentId, task, and userId are required'
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
+
+        if (!agentId || !task) {
+          return new Response(JSON.stringify({
+            error: 'agentId and task are required'
           }), { status: 400, headers: corsHeaders })
         }
 
@@ -3142,10 +3150,17 @@ export default {
           })
         }
         try {
-          const authContext = await resolveAuthorizedCaller(request, env)
-          const effectiveUserId = authContext?.userId || body.userId || null
-          const callerEmail = authContext?.email || body.callerEmail
-            || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
+          const authContext = body.authToken
+            ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+            : await resolveAuthorizedCaller(request, env)
+          // Identity from the caller's credential only (2026-11-06) — see /automation/run.
+          const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+          if (!effectiveUserId) {
+            return new Response(JSON.stringify({ error: 'Unauthorized — sign in to build an automation.' }), {
+              status: 401, headers: corsHeaders
+            })
+          }
+          const callerEmail = authContext.email || null
           const spec = await buildAutomationSpec({ prompt, tools, userId: effectiveUserId, callerEmail, env })
           return new Response(JSON.stringify(spec), { headers: corsHeaders })
         } catch (err) {
@@ -3612,11 +3627,20 @@ export default {
         }
 
         try {
-          const authContext = await resolveAuthorizedCaller(request, env)
-          const effectiveUserId = authContext?.userId || body.userId || null
+          const authContext = body.authToken
+            ? await resolveAuthorizedCallerWithCredentials({ authToken: body.authToken }, env)
+            : await resolveAuthorizedCaller(request, env)
+          // Identity from the caller's credential only (2026-11-06). The old fallback to
+          // body.userId / body.callerEmail let an unauthenticated caller run an automation as
+          // any user and pick who a "me" notification goes to.
+          const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+          if (!effectiveUserId) {
+            return new Response(JSON.stringify({ error: 'Unauthorized — sign in to run an automation.' }), {
+              status: 401, headers: corsHeaders
+            })
+          }
           // Caller's email — used to default a "me"/empty notify recipient.
-          const callerEmail = authContext?.email || body.callerEmail
-            || (typeof body.userId === 'string' && body.userId.includes('@') ? body.userId : null)
+          const callerEmail = authContext.email || null
 
           // Load the automation graph.
           const graphRes = await env.KG_WORKER.fetch(
@@ -3748,7 +3772,7 @@ export default {
           ...(typeof gate === 'boolean' ? { gate, gateRole, gateAppName, gateLogo, gateLang, gateRegisterMode } : {}),
           // version_pill omitted → publish_html_node reuses the pill setting stored for this host.
           ...(typeof version_pill === 'boolean' ? { version_pill } : {}),
-          authContext, userId: authContext.userId || body.userId || null,
+          authContext, userId: authContext?.authenticated ? authContext.userId : null,
         }, env)
         return new Response(JSON.stringify(result), {
           status: result.success ? 200 : 400, headers: corsHeaders
@@ -3778,7 +3802,7 @@ export default {
         // legitimate update look like a failure while the old bytes kept serving.
         const result = await executeTool(kind === 'layout' ? 'save_layout' : 'save_component', {
           name, impl, schema, verify, delivery, description, overwrite: overwrite === true,
-          authContext, userId: authContext.userId || body.userId || null,
+          authContext, userId: authContext?.authenticated ? authContext.userId : null,
         }, env)
         return new Response(JSON.stringify(result), {
           status: result.success === false ? 400 : 200, headers: corsHeaders
@@ -3801,7 +3825,7 @@ export default {
           : await resolveAuthorizedCaller(request, env)
         const result = await executeTool('create_subdomain', {
           subdomain, root_domain, zone_id,
-          authContext, userId: authContext.userId || body.userId || null,
+          authContext, userId: authContext?.authenticated ? authContext.userId : null,
         }, env)
         return new Response(JSON.stringify(result), {
           status: result.success ? 200 : 400, headers: corsHeaders
