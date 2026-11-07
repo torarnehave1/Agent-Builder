@@ -2614,7 +2614,7 @@ async function probeDeadBackendUrls(html) {
 // hint). Treating every host as shared is what silently wrote charlie.iamazing.page's page into the
 // Vegvisr account's KV while the founder's proxy — the one actually serving the host — never saw it
 // (2026-09-05). The classification only PICKS a path; readPublishedKey below is what proves it.
-const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training', 'movemetime.com']
+const SHARED_BRAND_ZONES = ['vegvisr.org', 'norsegong.com', 'xyzvibe.com', 'slowyou.training']
 const isSharedBrandHost = (host) => SHARED_BRAND_ZONES.some((z) => host === z || host.endsWith(`.${z}`))
 
 // A STATIC list cannot answer "who serves this host" — a domain moves. vegr.ai was on this list and
