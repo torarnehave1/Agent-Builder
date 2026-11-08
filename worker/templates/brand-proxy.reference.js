@@ -1,4 +1,4 @@
-// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-10-27 (World brand fallback brand:<parent> on /branding.json; 2026-10-26: contacts origin added; editor origin 2026-10-15).
+// REFERENCE COPY of template:brand-proxy in WORLD_TEMPLATES KV, as deployed 2026-11-08 (graph/API data paths to knowledge/api.vegvisr.org when passing through to the vegvisr.org app; 2026-10-27: World brand fallback brand:<parent> on /branding.json; 2026-10-26: contacts origin added; editor origin 2026-10-15).
 // The KV key is the SOURCE — deploy_world_proxy reads it, not this file. This copy exists because
 // that template once drifted seven months from any reviewable source, and a change nobody can read
 // is a change nobody can check. Update BOTH when changing the proxy, and keep the KV backup key
@@ -438,6 +438,20 @@ export default {
       const subdomain = hostParts[0];
       if (appOrigins[subdomain]) {
         targetOrigin = appOrigins[subdomain];
+      }
+    }
+
+    // A World that passes through to the vegvisr.org app (DEFAULT_ORIGIN www.vegvisr.org) gets the
+    // app's data calls on its OWN host: on a custom domain the viewer turns knowledge.vegvisr.org and
+    // api.vegvisr.org URLs into relative paths. www.vegvisr.org answers those paths with the app's
+    // HTML, and the viewer fails with "Unexpected token '<'". Route them like the platform
+    // brand-worker does (movemetime.com, 2026-11-08).
+    if (targetOrigin === defaultOrigin && /(^|\.)vegvisr\.org$/.test(new URL(defaultOrigin).host)) {
+      const p = url.pathname;
+      if (/^\/(getknowgraph|saveknowgraph|updateknowgraph|deleteknowgraph|saveGraphWithHistory)/.test(p)) {
+        targetOrigin = 'https://knowledge.vegvisr.org';
+      } else if (/^\/(mystmkrasave|generate-header-image|grok-ask|grok-elaborate|apply-style-template)/.test(p)) {
+        targetOrigin = 'https://api.vegvisr.org';
       }
     }
 
