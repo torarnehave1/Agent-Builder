@@ -1207,7 +1207,7 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'get_vemotion_catalog',
-    description: 'What VEmotion can draw, as structured data: every layer type (text, shape, math-shape, image, video, audio, kg-shape, card, path, knitting-chart, telemetry-track) with each property\'s type, unit, default, range and whether it can be animated; the layer and composition fields; animation kinds and their fields; easings; the formula vocabulary for math-shapes and motion scenes; canvas presets; fonts; and which part libraries exist. Generated from the same rules vemotion_save_composition enforces. Use it to know WHAT exists (e.g. "which properties does a card layer read?"); get_vemotion_reference teaches technique.',
+    description: 'What VEmotion can draw, as structured data: every layer type (text, shape, math-shape, image, video, audio, kg-shape, card, path, knitting-chart, telemetry-track, dot-field) with each property\'s type, unit, default, range and whether it can be animated; the layer and composition fields; animation kinds and their fields; easings; the formula vocabulary for math-shapes, motion scenes and dot-fields; canvas presets; fonts; and which part libraries exist. Generated from the same rules vemotion_save_composition enforces. Use it to know WHAT exists (e.g. "which properties does a card layer read?"); get_vemotion_reference teaches technique.',
     input_schema: { type: 'object', properties: {} }
   },
   {

@@ -75,7 +75,7 @@ if (!fs.existsSync(`${APP}/lib/renderer.ts`)) {
 
   // 3. Ungated types = what their draw method reads, + opacity/scale (drawLayer), + motionScenes
   //    when the method reads offsets (motion scenes move a layer by setting offsetX/offsetY).
-  const DRAW = { image: 'drawImage', video: 'drawVideo', 'kg-shape': 'drawKgShape', card: 'drawCard', path: 'drawPath', 'knitting-chart': 'drawKnittingChart', 'telemetry-track': 'drawTelemetryTrack' }
+  const DRAW = { image: 'drawImage', video: 'drawVideo', 'kg-shape': 'drawKgShape', card: 'drawCard', path: 'drawPath', 'knitting-chart': 'drawKnittingChart', 'telemetry-track': 'drawTelemetryTrack', 'dot-field': 'drawDotField' }
   const exporter = fs.readFileSync(`${APP}/lib/exporter.ts`, 'utf8')
   const exporterReads = { video: ['audioEnabled', 'volume'], audio: [] }
   for (const m of exporter.matchAll(/props\.(\w+)/g)) exporterReads.audio.push(m[1])

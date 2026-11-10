@@ -230,6 +230,29 @@ export const LAYER_TYPES = {
       showLegend: p('boolean', { default: true }),
     },
   },
+  // 2026-11-10 (app build WY). A "living body" of a few hundred dots cost a few hundred layers
+  // before; the IIBA films were drawn outside VEmotion for that reason.
+  'dot-field': {
+    summary: 'Many dots in ONE layer (1–2000): a math-shape that draws a dot at each sample instead of a line through them. xFormula / yFormula run once per dot with the dot\'s own number as `i`, so one layer is a grid, a ring, a cluster or a breathing body — and a keyframed `m` slides it from one layout to another. Vocabulary: `formula.dotField`.',
+    gated: false,
+    note: 'An x/y formula outside the vocabulary draws NOTHING; a broken radius / opacity / mix formula falls back to the plain property. No lines between dots (use math-shapes) and at most two colours.',
+    properties: {
+      ...COMMON,
+      count: p('number', { range: [1, 2000], default: 120, note: 'How many dots — `n` in the formulas.' }),
+      radius: p('number', { unit: 'px', default: 6, animatable: true, note: 'Dot size — `r` in radiusFormula.' }),
+      xFormula: p('formula', { note: 'ABSOLUTE canvas x of dot i. Write it in the layer box: x0 + w/2 + min(w,h)*0.45*cos(2*pi*u). A math-shape curve formula works unchanged — the dots sit along the curve.' }),
+      yFormula: p('formula', { note: 'ABSOLUTE canvas y of dot i.' }),
+      radiusFormula: p('formula', { note: 'Optional. Size per dot, e.g. r * (1 + 0.2*sin(time*2 + rnd*2*pi)) — each dot pulsing on its own.' }),
+      opacityFormula: p('formula', { note: 'Optional. 0–1 per dot, multiplied with the layer opacity. smooth(0, 0.6, time - u*2) makes the dots appear one after another.' }),
+      color: p('color', { default: '#38bdf8' }),
+      color2: p('color', { note: 'Optional second colour, #rgb or #rrggbb. Used only with mixFormula.' }),
+      mixFormula: p('formula', { note: 'Optional. 0 = color, 1 = color2, per dot. `rnd` gives a natural two-tone mix; smooth(0, 1, m) turns the whole field as m is animated.' }),
+      m: p('number', { default: 0, animatable: true, note: 'A free number for the formulas. Animate it with an ordinary keyframe animation ({ property: "m", keyframes: [...] }) — e.g. A + (B - A) * smooth(0, 1, m) slides every dot from layout A to layout B.' }),
+      seed: p('number', { default: 1, note: 'Another seed = another arrangement of rnd / rnd2.' }),
+      tStart: p('number', { default: 0, note: 'The sweep of `t`, as in math-shape.' }),
+      tEnd: p('number', { default: 6.283185 }),
+    },
+  },
 }
 
 // Fill in `alsoAccepted` descriptions and the gate's animatable list for the gated types.
@@ -306,7 +329,7 @@ export const EASINGS = {
 }
 
 export const FORMULA = {
-  usedBy: ['math-shape xFormula / yFormula', 'motionScenes xFormula / yFormula / scaleFormula'],
+  usedBy: ['math-shape xFormula / yFormula', 'motionScenes xFormula / yFormula / scaleFormula', 'dot-field formulas (with the extra names in `dotField`)'],
   variables: {
     t: 'math-shape: swept tStart → tEnd. motionScene: seconds since the scene started',
     p: 'progress 0 → 1 across the sweep / scene',
@@ -319,6 +342,36 @@ export const FORMULA = {
   operators: ['+', '-', '*', '/', '%', '(', ')'],
   notAllowed: '`^` (use pow(a, b)), exp (use pow(2.71828, x)), log, asin/acos/atan, Math.* — a formula outside the vocabulary draws NOTHING, silently.',
   rule: 'Formulas return ABSOLUTE canvas coordinates: start with x0 + … / y0 + …, and size with w / h / min(w,h) so the curve follows the box and refit scales it.',
+  // dot-field formulas (xFormula, yFormula, radiusFormula, opacityFormula, mixFormula) know
+  // everything above PLUS these. They are not available to math-shapes or motion scenes.
+  dotField: {
+    variables: {
+      i: 'the dot\'s number, 0 … n-1',
+      n: 'how many dots (count)',
+      u: 'i / n — closed layouts: a ring has no doubled dot',
+      p: 'i / (n-1) — open layouts: a line reaches both ends',
+      t: 'tStart + (tEnd - tStart) * p — the math-shape sweep, so a curve formula places the dots along the curve',
+      time: 'layer-clock seconds — what makes the dots move, beat or breathe',
+      rnd: 'a fixed random number 0–1 per dot, the same in every frame',
+      rnd2: 'a second one, independent of rnd',
+      m: 'the layer\'s animatable `m` property',
+      r: 'the layer\'s `radius`',
+    },
+    functions: ['floor', 'smooth(a, b, x) — 0 below a, 1 above b, a soft S-curve between'],
+    layouts: {
+      sunflower: { xFormula: 'x0 + w/2 + min(w,h)*0.48*sqrt((i+0.5)/n)*cos(i*2.39996)', yFormula: 'y0 + h/2 + min(w,h)*0.48*sqrt((i+0.5)/n)*sin(i*2.39996)' },
+      ring: { xFormula: 'x0 + w/2 + min(w,h)*0.45*cos(2*pi*u)', yFormula: 'y0 + h/2 + min(w,h)*0.45*sin(2*pi*u)' },
+      cluster: { xFormula: 'x0 + w/2 + w*0.48*sqrt(rnd)*cos(2*pi*rnd2)', yFormula: 'y0 + h/2 + h*0.48*sqrt(rnd)*sin(2*pi*rnd2)' },
+      grid: { xFormula: 'x0 + (i % max(1, floor(sqrt(n*w/h) + 0.5)) + 0.5) * w / max(1, floor(sqrt(n*w/h) + 0.5))', yFormula: 'y0 + (floor(i / max(1, floor(sqrt(n*w/h) + 0.5))) + 0.5) * h / floor((n + max(1, floor(sqrt(n*w/h) + 0.5)) - 1) / max(1, floor(sqrt(n*w/h) + 0.5)))' },
+      wave: { xFormula: 'x0 + p*w', yFormula: 'y0 + h/2 + h*0.35*sin(2*pi*p*2 - time*2)' },
+    },
+    recipes: {
+      breathe: 'multiply the offset from the centre by (1 + 0.06*sin(time*pi/3)) — one breath every six seconds',
+      heartbeat: 'radiusFormula: r * (1 + 0.35*pow(2.71828, -pow((time % 1.5 - 0.10)/0.06, 2)) + 0.2*pow(2.71828, -pow((time % 1.5 - 0.38)/0.07, 2)))',
+      morph: 'xFormula: (A) + ((B) - (A)) * smooth(0, 1, m) with the same for y, and animate m 0 → 1',
+    },
+    noConditionals: 'There is no if. Use smooth, min, max and % instead.',
+  },
 }
 
 // The app's canvas-size menu and font menu (CompositionEditor.tsx) — test-vemotion-catalog.mjs
