@@ -7779,20 +7779,37 @@ async function executeProvisionWorldGraphs(input, env) {
   if (!route.ok) return { success: false, error: `Could not attach ${host} to ${workerName}: ${route.status}: ${route.detail}`, steps, note: route.note || 'token needs Zone Read + Workers Routes edit.' }
   steps.push(route.alreadyAttached ? `HAD  host — ${host}` : `DID  host — ${host} attached`)
 
-  // 4. Tables, through the proxy, signed. A fresh custom domain can take a few seconds for its
-  //    certificate, so the first calls are retried.
+  // 4. Tables, through the proxy, signed. Two different failures, waited for differently:
+  //    - the HOST is not serving yet (Cloudflare 530/52x, no JSON, or a thrown fetch): a brand-new
+  //      custom domain needs its DNS record and certificate. 24 seconds was not enough for
+  //      movemetime.com (2026-11-10), so this waits up to ~90 seconds.
+  //    - the PROXY answered and refused (its own JSON, e.g. "bad signature"): waiting changes
+  //      nothing, so that stops after three tries.
   const body = JSON.stringify({ statements: schema.statements, schema_version: schema.version })
+  // WORLD_GRAPH_HOST_RETRY_MS exists so the test can run the wait without sleeping; unset in production.
+  const retryMs = env.WORLD_GRAPH_HOST_RETRY_MS !== undefined && Number(env.WORLD_GRAPH_HOST_RETRY_MS) >= 0 ? Number(env.WORLD_GRAPH_HOST_RETRY_MS) : 5000
   let migrated = null
   let lastError = ''
-  for (let attempt = 0; attempt < 8 && !migrated; attempt++) {
-    if (attempt) await new Promise((r) => setTimeout(r, 3000))
+  let proxyRefusals = 0
+  let hostNotServing = false
+  for (let attempt = 0; attempt < 19 && !migrated && proxyRefusals < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, retryMs))
     try {
       const token = await signWorldGraphToken(env.WORLD_GRAPH_SIGNING_KEY, { aud: domain, op: 'migrate', body })
       const res = await fetch(`${endpoint}/__graphs/migrate`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body })
       const j = await res.json().catch(() => null)
       if (res.ok && j?.ok) migrated = j
-      else lastError = j?.error || `HTTP ${res.status}`
-    } catch (e) { lastError = e.message }
+      else if (j && typeof j.ok === 'boolean') { proxyRefusals++; hostNotServing = false; lastError = j.error || `HTTP ${res.status}` }
+      else { hostNotServing = true; lastError = `HTTP ${res.status}` }
+    } catch (e) { hostNotServing = true; lastError = e.message }
+  }
+  if (!migrated && hostNotServing) {
+    return {
+      success: false,
+      error: `${host} is not serving yet (${lastError}) — a new hostname can need a few minutes for DNS and its certificate. Nothing is lost: the database, the proxy and the host are in place. Run provision_world_graphs for ${domain} again in a few minutes; finished steps are skipped.`,
+      steps,
+      d1_database_id: db.uuid,
+    }
   }
   if (!migrated) return { success: false, error: `Schema migration through ${endpoint} failed: ${lastError}`, steps }
   steps.push(`DID  schema — ${migrated.applied} statements, version ${migrated.schema_version}`)

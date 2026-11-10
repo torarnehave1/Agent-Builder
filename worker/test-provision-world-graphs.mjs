@@ -192,5 +192,54 @@ async function makeWorld({ withKey = true, schemaTables = true } = {}) {
   check('a proxy with another public key rejects the migrate as a bad signature', r.success === false && /bad signature/.test(r.error), JSON.stringify(r).slice(0, 400))
 }
 
+// 5. A new hostname that is not serving yet (movemetime.com, 2026-11-10: HTTP 530 for longer than
+//    the old 24-second wait). The tool must outwait a slow host, and say so plainly when it cannot.
+const slowHost = (failFirst) => {
+  const real = globalThis.fetch
+  const seen = { migrateCalls: 0 }
+  globalThis.fetch = async (input, init = {}) => {
+    const u = new URL(typeof input === 'string' ? input : input.url)
+    if (u.hostname === `graphs.${DOMAIN}` && u.pathname === '/__graphs/migrate') {
+      seen.migrateCalls++
+      if (seen.migrateCalls <= failFirst) return new Response('error code: 530', { status: 530 })
+    }
+    return real(input, init)
+  }
+  return seen
+}
+{
+  const { env, platform } = await makeWorld()
+  env.WORLD_GRAPH_HOST_RETRY_MS = 0
+  const seen = slowHost(12)
+  const r = await executeTool('provision_world_graphs', { userId: 'owner-uuid', domain: DOMAIN }, env)
+  const row = platform.prepare('SELECT status FROM world_graph_stores WHERE domain = ?').get(DOMAIN)
+  check('a host that answers 530 twelve times and then serves: provisioning completes', r.success === true && seen.migrateCalls === 13 && row?.status === 'provisioned', JSON.stringify(r).slice(0, 400))
+}
+{
+  const { env, state, platform } = await makeWorld()
+  env.WORLD_GRAPH_HOST_RETRY_MS = 0
+  const seen = slowHost(Infinity)
+  const r = await executeTool('provision_world_graphs', { userId: 'owner-uuid', domain: DOMAIN }, env)
+  let row = null
+  try { row = platform.prepare('SELECT status FROM world_graph_stores WHERE domain = ?').get(DOMAIN) } catch { /* table not created: no row */ }
+  check('a host that never serves: says "not serving yet" and to run again, writes no registry row',
+    r.success === false && /not serving yet \(HTTP 530\)/.test(r.error) && /again/.test(r.error) && seen.migrateCalls === 19 && !row && state.databases.length === 1,
+    JSON.stringify(r).slice(0, 400) + ` calls=${seen.migrateCalls}`)
+}
+// 6. A proxy that ANSWERS and refuses is not waited for like a slow host.
+{
+  const { env } = await makeWorld()
+  env.WORLD_GRAPH_HOST_RETRY_MS = 0
+  const real = globalThis.fetch
+  let calls = 0
+  globalThis.fetch = async (input, init = {}) => {
+    const u = new URL(typeof input === 'string' ? input : input.url)
+    if (u.hostname === `graphs.${DOMAIN}` && u.pathname === '/__graphs/migrate') { calls++; return new Response(JSON.stringify({ ok: false, error: 'bad signature' }), { status: 401 }) }
+    return real(input, init)
+  }
+  const r = await executeTool('provision_world_graphs', { userId: 'owner-uuid', domain: DOMAIN }, env)
+  check('a refusing proxy stops after three tries, with its own error', r.success === false && /bad signature/.test(r.error) && !/not serving yet/.test(r.error) && calls === 3, JSON.stringify(r).slice(0, 300) + ` calls=${calls}`)
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall provision_world_graphs checks pass')
