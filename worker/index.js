@@ -3365,6 +3365,30 @@ export default {
         }
       }
 
+      // POST /contacts/notes/add — save a note on one contact (a contact_log row of type 'Note').
+      //
+      // The MCP server's add_contact_note reaches this. Whose book is written is decided by the
+      // verified caller; the contact must exist in that book and its name comes from the row.
+      if (pathname === '/contacts/notes/add' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        try {
+          const r = await executeTool('add_contact_note', {
+            userId: callerAuth.userId,
+            contactId: typeof body.contactId === 'string' ? body.contactId.trim() : undefined,
+            note: typeof body.note === 'string' ? body.note : undefined,
+          }, env, {})
+          return new Response(JSON.stringify(r), { headers: corsHeaders })
+        } catch (e) {
+          const status = /No contact with id|contacts table|contact_logs table/i.test(e.message) ? 404
+            : /required|must be at most/.test(e.message) ? 400 : 502
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /contacts/report/{set,preview,send} — ContactHub meeting reports → Enkel endring CMS.
       //
       // The MCP server's set_meeting_report / preview_meeting_report / send_meeting_report reach

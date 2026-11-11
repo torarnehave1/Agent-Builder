@@ -12163,6 +12163,27 @@ async function executeAddContactLog(input, env) {
   return { success: true, logId: data._id || data.id, message: `Log entry added for ${contactName}` }
 }
 
+// A free-text note on one contact, saved as a contact_log entry of type 'Note' — the same row the
+// Contacts app writes from its Note button, so it shows in Interaction History and get_contact_logs.
+// Exists for the MCP server's add_contact_note. The contact is looked up in the caller's OWN table
+// (userId comes from the verified caller) and its name is taken from that row, never from input.
+async function executeAddContactNote(input, env) {
+  const { userId, contactId } = input
+  const note = typeof input.note === 'string' ? input.note.trim() : ''
+  if (!contactId) throw new Error('contactId is required')
+  if (!note) throw new Error('note is required — nothing was saved')
+  if (note.length > 20000) throw new Error('note must be at most 20000 characters — nothing was saved')
+  const { row, logsTableId } = await loadReportContact(env, userId, contactId)
+  if (!logsTableId) throw new Error('No contact_logs table found for this user. Open the Contacts app once to create it.')
+  const name = row.full_name || [row.first_name, row.last_name].filter(Boolean).join(' ') || 'Unknown'
+  const loggedAt = new Date().toISOString()
+  const data = await drizzleFetch(env, '/insert', {
+    tableId: logsTableId,
+    record: { contact_id: String(row._id), contact_name: name, contact_type: 'Note', notes: note, logged_at: loggedAt },
+  })
+  return { success: true, logId: String(data._id || data.id || ''), contactId: String(row._id), name, loggedAt, note }
+}
+
 // Transcribe a Contact Hub recording ON THE SERVER and keep the text in two places: a fulltext
 // node in a graph, and appended to the interaction's own note (what "Transkriber" in Contact Hub
 // does). Exists for the MCP server, which has no browser for the chat's transcribe_audio path.
@@ -19300,6 +19321,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeTranscribeContactRecording(toolInput, env)
     case 'add_contact_log':
       return await executeAddContactLog(toolInput, env)
+    case 'add_contact_note':
+      return await executeAddContactNote(toolInput, env)
     case 'create_contact':
       return await executeCreateContact(toolInput, env)
     case 'set_meeting_report':
