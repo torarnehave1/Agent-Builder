@@ -33,7 +33,7 @@ const need = [
   'normalizeVideoUrl', 'youtubeVideoId', 'youtubeParam', 'youtubeEmbed',
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
   'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl', 'cssForHtmlNode',
-  'withAccept', 'tokenHeaders', 'inAreas', 'nextFrameHeight',
+  'withAccept', 'tokenHeaders', 'inAreas', 'nextFrameHeight', 'cloudflareVideo',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -230,6 +230,23 @@ check('a css-node never reaches the reader', api.nodeRenderPlan({ type: 'css-nod
 check('an unknown type with content still renders rather than vanishing',
   api.nodeRenderPlan({ type: 'something-new', info: 'real content' }).kind === 'markdown')
 check('a node with no content is skipped', api.nodeRenderPlan({ type: 'fulltext', info: '   ' }).kind === 'skip')
+
+// cloudflare-video: the viewer's rules (GNewCloudflareVideoNode.vue). The mp4 path is the
+// REAL node path from graph 0564f1ab (2026-11-11).
+const cfv = (node) => api.nodeRenderPlan(Object.assign({ type: 'cloudflare-video', label: 'Video', info: 'Opptak' }, node))
+check('a cloudflare-video with an MP4 url plays as a recording',
+  (p => p.kind === 'recording' && p.src === 'https://realtimevideos.vegvisr.org/recordings/bbb42d2b-7466-49e2-b272-9779c33703ff_1794333836208.mp4' && p.label === 'Video')(
+    cfv({ path: 'https://realtimevideos.vegvisr.org/recordings/bbb42d2b-7466-49e2-b272-9779c33703ff_1794333836208.mp4' })))
+check('a cloudflare-video with a Stream id plays in the Stream iframe',
+  (p => p.kind === 'video' && p.src === 'https://customer-7tiaylt74yxtwkg8.cloudflarestream.com/0123456789abcdef0123456789abcdef/iframe')(
+    cfv({ path: '0123456789abcdef0123456789abcdef' })))
+check('a Stream id in metadata.videoId is used when path is empty',
+  cfv({ path: null, metadata: { videoId: '0123456789abcdef0123456789abcdef' } }).kind === 'video')
+check('a Stream id inside a pasted iframe in info is read',
+  cfv({ path: '', info: '<iframe src="https://customer-x.cloudflarestream.com/0123456789abcdef0123456789abcdef/iframe"></iframe>' }).src ===
+  'https://customer-7tiaylt74yxtwkg8.cloudflarestream.com/0123456789abcdef0123456789abcdef/iframe')
+check('a cloudflare-video with no video falls back to its note', cfv({ path: '' }).kind === 'markdown')
+check('a javascript: path is never a video', cfv({ path: 'javascript:alert(1).mp4' }).kind === 'markdown')
 
 // 9a. realtime-video: the viewer's key rule (GNewRealtimeVideoNode.vue). The first value is
 // the REAL node path from a2341af7.

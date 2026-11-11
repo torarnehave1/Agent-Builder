@@ -367,6 +367,15 @@
       var rv = realtimeVideoUrl(node && node.path)
       if (rv) return { kind: 'recording', text: info, label: label, src: rv }
     }
+    // A cloudflare-video node holds a Cloudflare Stream id — or, like realtime-video, a
+    // plain MP4 file — in path. With no branch the reader got only its note and no player
+    // (seen 2026-11-11 on nibi.no, graph 0564f1ab). Same rules as the viewer's
+    // GNewCloudflareVideoNode.vue. A node with neither falls through, so the note shows.
+    if (type === 'cloudflare-video') {
+      var cf = cloudflareVideo(node)
+      if (cf && cf.kind === 'stream') return { kind: 'video', text: info, label: label, src: cf.src }
+      if (cf && cf.kind === 'file') return { kind: 'recording', text: info, label: label, src: cf.src }
+    }
     // A youtube-video node likewise keeps the video out of info, which holds its
     // description. Without this branch the reader got the description and no video.
     // A node whose url cannot be read falls through, so the description still shows.
@@ -399,6 +408,30 @@
     if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return '' // javascript:, data: … are not keys
     var key = v.replace(/^\/+/, '')
     return 'https://realtimevideos.vegvisr.org/' + (key.indexOf('recordings/') === 0 ? key : 'recordings/' + key)
+  }
+
+  // The viewer's rule (GNewCloudflareVideoNode.vue). A Stream id is exactly 32 hex
+  // characters — in path, in metadata.videoId, or inside a cloudflarestream.com /
+  // videodelivery.net url (a pasted <iframe> snippet included, in path or info) — and plays
+  // in Stream's own iframe on the account's fixed subdomain, so the id cannot point the
+  // player anywhere else. Otherwise a path ending in a video file extension is a plain
+  // file and goes through the realtime-video key rule.
+  function cloudflareVideo (node) {
+    function streamId (raw) {
+      var v = String(raw == null ? '' : raw).trim()
+      if (/^[a-f0-9]{32}$/.test(v)) return v
+      var m = v.match(/(?:cloudflarestream\.com|videodelivery\.net)\/([a-f0-9]{32})(?![a-f0-9])/)
+      return m ? m[1] : ''
+    }
+    var path = String((node && node.path) || '').trim()
+    var meta = (node && node.metadata) || {}
+    var id = streamId(path) || streamId(meta.videoId) || streamId(node && node.info)
+    if (id) return { kind: 'stream', src: 'https://customer-7tiaylt74yxtwkg8.cloudflarestream.com/' + id + '/iframe' }
+    if (/\.(mp4|webm|mov|m4v)($|[?#])/i.test(path)) {
+      var file = realtimeVideoUrl(path)
+      if (file) return { kind: 'file', src: file }
+    }
+    return null
   }
 
   // The YouTube url rules are the viewer's (GNewVideoNode + src/utils/youtube.js in
