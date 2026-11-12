@@ -16,7 +16,7 @@ import NetworkTab from './NetworkTab';
 import type { AutomationDraft } from '../lib/logToAutomation';
 import type { ResolvedTheme, ThemeMode } from '../lib/theme';
 
-type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'usage' | 'network';
+type View = 'context' | 'chat' | 'graphs' | 'automation' | 'data' | 'agents' | 'settings' | 'models' | 'usage' | 'network';
 
 interface Props {
   userId: string;
@@ -68,7 +68,7 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
           <span className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Vegvisr</span>
           <span className="text-sm text-purple-400">Agent</span>
           <nav className="flex items-center gap-1 ml-4">
-            {(['context', 'chat', 'graphs', 'automation', 'agents', 'data', 'usage', 'settings', 'network'] as const)
+            {(['context', 'chat', 'graphs', 'automation', 'agents', 'data', 'usage', 'settings', 'models', 'network'] as const)
               // Network maps relationships between identifiable people. Owner only;
               // /network returns 403 for anyone else regardless of what is rendered.
               .filter((tab) => tab !== 'network' || role === 'Superadmin')
@@ -98,6 +98,7 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
                   : tab === 'data' ? 'Data'
                   : tab === 'usage' ? 'Usage'
                   : tab === 'network' ? 'Network'
+                  : tab === 'models' ? 'Models'
                   : 'Settings'}
               </button>
             ))}
@@ -222,8 +223,10 @@ export default function AgentBuilder({ userId, userEmail, role, language, onLang
         <div className="flex flex-col gap-4 p-4 overflow-y-auto">
           <GitHubConnect resolvedTheme={resolvedTheme} />
           {role === 'Superadmin' && <WorldCredentials resolvedTheme={resolvedTheme} />}
-          <ModelSettings model={model} onChange={setModel} resolvedTheme={resolvedTheme} />
         </div>
+      )}
+      {view === 'models' && (
+        <ModelSettings model={model} onChange={setModel} resolvedTheme={resolvedTheme} />
       )}
     </div>
   );
