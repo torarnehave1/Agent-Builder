@@ -34,6 +34,7 @@ const need = [
   'shareLink', 'deepLinkId', 'withoutDeepLink', 'shareTargets',
   'isPasswordProtected', 'passwordMatches', 'realtimeVideoUrl', 'cssForHtmlNode',
   'withAccept', 'tokenHeaders', 'inAreas', 'nextFrameHeight', 'cloudflareVideo',
+  'frontPlan', 'splitStories', 'readFront', 'placeFront',
 ]
 for (const n of need) {
   if (!parts[n]) { console.error(`FAIL: function ${n} not found in components/graph-portfolio.js`); process.exit(1) }
@@ -388,6 +389,107 @@ check('areas narrow World rows like a chip does',
   }
   check('junk is ignored', feed(fresh(), 'x', NaN) === 320)
   check('the height is clamped to 40..20000', feed(fresh(), 5) === 40 && feed(fresh(), 1e9) === 20000)
+}
+
+// Front page (2026-11-13). A graph asks for it with a plan in a json-node, normally hidden.
+{
+  const planNode = (frontpage, over = {}) => ({
+    id: 'plan', type: 'json-node', visible: false, info: JSON.stringify({ frontpage }), ...over,
+  })
+  const text = (id, info, over = {}) => ({ id, type: 'fulltext', info, ...over })
+  const first = text('a', [
+    '![Header|width: 100%](https://blog.vegvisr.org/head.png)',
+    '**Utgave 2 – 2026**',
+    'Hei på dere.',
+    '### Raske tilskudd',
+    'Om tilskudd.',
+    '#### Underpunkt',
+    'Blir i saken.',
+    '### Møte med IIBA 11. november',
+    'Hovedsaken.',
+  ].join('\n'))
+  const second = text('b', [
+    '### Jump for Joy med Khalle',
+    'Før sitatet.',
+    "[QUOTE | Cited='Giulia']",
+    'Vi tar et lite hopp',
+    '[END QUOTE]',
+    'Etter sitatet.',
+    '### Khalle som æresmaskot?',
+    "![Leftside-1|width: 200px](https://vegvisr.imgix.net/khalle.jpg)",
+    'Tor Arne foreslår.',
+    '### Julemøte fredag 27. november',
+    'Mer kommer.',
+  ].join('\n'))
+  const map = { id: 'kart', type: 'html-node', label: 'World Pulse', info: '<p>kart</p>' }
+  const film = { id: 'film', type: 'youtube-video', label: 'Film', path: 'https://youtu.be/dQw4w9WgXcQ', info: '' }
+  const plan = {
+    masthead: { title: 'NIBI Nyhetsbrev', left: 'NIBI', right: 'Utgave 2 – 2026' },
+    lead: { label: 'Hovedsak', story: 'Møte med IIBA' },
+    bands: ['kart'],
+    corner: { label: 'Khalle-hjørnet', stories: ['Khalle som æresmaskot', 'Jump for Joy'], color: 'red;background:url(x)' },
+    pullQuote: 'Jump for Joy',
+    columns: [{ groups: [{ label: 'Hva skjer', stories: ['Julemøte', 'Finnes ikke'], dates: { title: 'Datoer', items: [['27. november', 'Julemøte'], 'feil'] } }] }],
+    more: { label: 'Flere saker' },
+  }
+  const graph = { nodes: [first, map, second, film, planNode(plan)] }
+
+  check('a hidden json-node with a frontpage key is the plan',
+    api.frontPlan(graph) && api.frontPlan(graph).lead.story === 'Møte med IIBA')
+  check('a graph without one has no plan', api.frontPlan({ nodes: [first, second] }) === null)
+  check('json that is not a plan, or not json at all, is no plan',
+    api.frontPlan({ nodes: [{ id: 'j', type: 'json-node', info: '{"a":1}' }, { id: 'k', type: 'json-node', info: 'ikke json' },
+      { id: 'l', type: 'json-node', info: '{"frontpage":"ja"}' }, { id: 'm', type: 'fulltext', info: '{"frontpage":{}}' }] }) === null)
+
+  const sp = api.splitStories(first.info)
+  check('"###" starts a story, "####" stays inside it',
+    sp.stories.length === 2 && sp.stories[0].title === 'Raske tilskudd' && /#### Underpunkt/.test(sp.stories[0].body),
+    JSON.stringify(sp.stories))
+  check('text before the first heading is pre', /Hei på dere\./.test(sp.pre) && !/Raske/.test(sp.pre))
+  check('text without headings is all pre', api.splitStories('Bare tekst').stories.length === 0 && api.splitStories(null).pre === '')
+
+  const read = api.readFront(graph, null)
+  check('header image and editorial come from the first fulltext node',
+    read.image === 'https://blog.vegvisr.org/head.png' && /Hei på dere\./.test(read.editorial) && !/Header/.test(read.editorial),
+    JSON.stringify([read.image, read.editorial]))
+  check('stories are read in order across nodes',
+    read.stories.map(s => s.title).join('|') === 'Raske tilskudd|Møte med IIBA 11. november|Jump for Joy med Khalle|Khalle som æresmaskot?|Julemøte fredag 27. november',
+    read.stories.map(s => s.title).join('|'))
+  check('other drawable nodes are panels; the hidden plan is not',
+    read.panels.map(n => n.id).join(',') === 'kart,film', read.panels.map(n => n.id).join(','))
+
+  const f = api.placeFront(plan, read)
+  check('the lead is found by the start of its heading', f.lead && f.lead.title === 'Møte med IIBA 11. november' && f.leadLabel === 'Hovedsak')
+  check('the edition line already in the masthead is dropped from the editorial',
+    f.editorial === 'Hei på dere.' && f.masthead.right === 'Utgave 2 – 2026', JSON.stringify(f.editorial))
+  check('corner stories keep the plan order', f.corner.stories.map(s => s.title).join('|') === 'Khalle som æresmaskot?|Jump for Joy med Khalle')
+  check('the corner portrait is lifted out of its story',
+    f.corner.image === 'https://vegvisr.imgix.net/khalle.jpg' && f.corner.stories[0].body === 'Tor Arne foreslår.',
+    JSON.stringify([f.corner.image, f.corner.stories[0].body]))
+  check('the pull quote is lifted out of its story',
+    f.pull && f.pull.text === 'Vi tar et lite hopp' && f.pull.cited === 'Giulia' &&
+    !/QUOTE/.test(f.corner.stories[1].body) && /Før sitatet\./.test(f.corner.stories[1].body) && /Etter sitatet\./.test(f.corner.stories[1].body),
+    JSON.stringify([f.pull, f.corner.stories[1].body]))
+  check('a colour that is not #rrggbb falls back to the default', f.corner.color === '#3f8f3a', f.corner.color)
+  check('a column group keeps its dates, minus malformed rows, and skips a story that does not exist',
+    f.columns.length === 1 && f.columns[0][0].stories.length === 1 && f.columns[0][0].dates.length === 1 && f.columns[0][0].datesTitle === 'Datoer',
+    JSON.stringify(f.columns))
+  check('a story the plan does not name lands in more', f.more.map(s => s.title).join('|') === 'Raske tilskudd' && f.moreLabel === 'Flere saker')
+  check('bands are the named panels, the rest stay panels',
+    f.bands.map(n => n.id).join(',') === 'kart' && f.panels.map(n => n.id).join(',') === 'film')
+  check('placing does not change what was read', /QUOTE/.test(read.stories[2].body) && /Leftside/.test(read.stories[3].body))
+
+  let placed = (f.lead ? 1 : 0) + f.follow.length + f.corner.stories.length + f.beside.length + (f.closing ? 1 : 0) + f.more.length
+  f.columns.forEach(groups => groups.forEach(g => { placed += g.stories.length }))
+  check('every story is placed exactly once', placed === read.stories.length, `${placed} of ${read.stories.length}`)
+
+  const same = api.placeFront({ lead: { story: 'Møte' }, beside: ['Møte'], closing: 'Møte' }, read)
+  check('a story named twice is placed once', same.lead && same.beside.length === 0 && same.closing === null)
+  const junk = api.placeFront({ lead: 'x', corner: [], columns: 'nei', bands: {}, beside: 7, masthead: null }, read)
+  check('a malformed plan places nothing and loses nothing',
+    junk.lead === null && junk.columns.length === 0 && junk.more.length === read.stories.length && junk.panels.length === 2)
+  const empty = api.placeFront({}, api.readFront({ nodes: [text('x', 'Bare tekst uten overskrifter')] }, null))
+  check('a graph without stories gives an empty placement', empty.more.length === 0 && empty.lead === null && empty.texts.length === 1)
 }
 
 console.log(failed ? `\n${failed} check(s) FAILED` : '\nAll checks passed.')

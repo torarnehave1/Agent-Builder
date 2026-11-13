@@ -397,6 +397,199 @@
     return { kind: 'skip', text: '', label: label }
   }
 
+  // FRONT PAGE (2026-11-13, first use: NIBI Nyhetsbrev – Utgave 2 – 2026 on nibi.no).
+  // A graph can ask to be shown as a newspaper front page instead of node under node. It
+  // asks with a PLAN: a json-node — normally hidden in the editor, which is why this reads
+  // every node and not visibleNodes() — whose info is JSON with a "frontpage" key. The plan
+  // is layout only; the text stays in the fulltext nodes. Same plan, same rules as the
+  // editor's own front page (Knowledge-Editor, src/components/FrontPageView.tsx) — keep the
+  // two in step. A graph without a plan is drawn exactly as before.
+  //
+  //   { "frontpage": {
+  //       "masthead":  { "title": "…", "left": "…", "right": "…" },
+  //       "lead":      { "label": "Hovedsak", "story": "<start of heading>", "follow": ["…"] },
+  //       "editorial": { "label": "Lederen har ordet" },
+  //       "bands":     ["<node id>"],            // non-fulltext nodes in full width
+  //       "corner":    { "label": "…", "stories": ["…"], "caption": "…", "color": "#3f8f3a" },
+  //       "beside":    ["…"],                    // stories beside the corner
+  //       "pullQuote": "…",                      // story whose first [QUOTE] is shown large
+  //       "columns":   [ { "groups": [ { "label": "…", "stories": ["…"],
+  //                        "dates": { "title": "…", "items": [["27. november", "Julemøte"]] } } ] } ],
+  //       "closing":   "…",
+  //       "more":      { "label": "Flere saker" } } }
+  function frontPlan (graph) {
+    var nodes = (graph && graph.nodes) || []
+    for (var i = 0; i < nodes.length; i++) {
+      var n = nodes[i]
+      if (!n || String(n.type || '').toLowerCase() !== 'json-node' || !n.info) continue
+      try {
+        var parsed = JSON.parse(String(n.info))
+        var plan = parsed && parsed.frontpage
+        if (plan && typeof plan === 'object' && !Array.isArray(plan)) return plan
+      } catch (e) { /* not JSON, so not a plan */ }
+    }
+    return null
+  }
+
+  // Every "### Heading" section of a fulltext node is a story. "####" and deeper stay
+  // inside the story they belong to; what stands before the first heading is `pre`.
+  function splitStories (info) {
+    var parts = String(info == null ? '' : info).split(/^###(?!#)[ \t]+/m)
+    return {
+      pre: parts[0] || '',
+      stories: parts.slice(1).map(function (part) {
+        var nl = part.indexOf('\n')
+        return {
+          title: (nl === -1 ? part : part.slice(0, nl)).trim(),
+          body: nl === -1 ? '' : part.slice(nl + 1).trim(),
+        }
+      }),
+    }
+  }
+
+  // The graph as front page material, in reading order. The text before the first heading
+  // of the first fulltext node is the editorial, and a ![Header|…](url) image there is the
+  // masthead image. Every other visible node that the dialog can draw is a panel.
+  function readFront (graph, registered) {
+    var HEADER = /^!\[Header[^\]]*\]\(([^)\s]+)\)[ \t]*$/im
+    var out = { image: '', editorial: '', stories: [], panels: [], texts: [] }
+    var seen = false
+    visibleNodes(graph).forEach(function (node) {
+      if (String(node.type || '').toLowerCase() !== 'fulltext') {
+        if (nodeRenderPlan(node, registered).kind !== 'skip') out.panels.push(node)
+        return
+      }
+      var split = splitStories(node.info)
+      var pre = split.pre
+      if (!seen) {
+        var header = pre.match(HEADER)
+        if (header) {
+          out.image = header[1]
+          pre = pre.replace(HEADER, '')
+        }
+      }
+      pre = pre.trim()
+      if (pre) {
+        if (!seen && split.stories.length) out.editorial = pre
+        else out.texts.push({ key: 'text-' + node.id, body: pre })
+      }
+      seen = true
+      split.stories.forEach(function (st, i) {
+        out.stories.push({ key: node.id + '::' + i, title: st.title, body: st.body })
+      })
+    })
+    return out
+  }
+
+  // Where each story goes. A story is named in the plan by the START of its heading and is
+  // placed once, in the plan's own order of precedence (lead, follow, corner, beside,
+  // closing, columns). A story the plan does not name is never dropped: it lands in `more`.
+  // The pull quote and the corner portrait are LIFTED out of their story's text, so neither
+  // is shown twice. Returns copies; the graph is not modified.
+  function placeFront (plan, read) {
+    var QUOTE = /\[QUOTE\s*\|\s*Cited\s*=\s*['"]?(.*?)['"]?\]([\s\S]*?)\[END QUOTE\]/i
+    var SIDE = /^!\[(?:Leftside|Rightside)[^\]]*\]\(([^)\s]+)\)[ \t]*\n?/im
+    var p = (plan && typeof plan === 'object') ? plan : {}
+    var obj = function (v) { return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {} }
+    var list = function (v) { return Array.isArray(v) ? v : [] }
+    var str = function (v) { return typeof v === 'string' ? v.trim() : '' }
+    var stories = list(read && read.stories).map(function (st) {
+      return { key: st.key, title: st.title, body: st.body }
+    })
+    var used = {}
+    var take = function (start) {
+      start = str(start)
+      if (!start) return null
+      for (var i = 0; i < stories.length; i++) {
+        if (!used[stories[i].key] && stories[i].title.indexOf(start) === 0) {
+          used[stories[i].key] = true
+          return stories[i]
+        }
+      }
+      return null
+    }
+    var takeAll = function (starts) {
+      return list(starts).map(take).filter(function (st) { return !!st })
+    }
+    var leadPlan = obj(p.lead)
+    var cornerPlan = obj(p.corner)
+    var out = {
+      masthead: {
+        title: str(obj(p.masthead).title), left: str(obj(p.masthead).left), right: str(obj(p.masthead).right),
+        image: str(read && read.image),
+      },
+      leadLabel: str(leadPlan.label),
+      lead: take(leadPlan.story),
+      follow: takeAll(leadPlan.follow),
+      editorialLabel: str(obj(p.editorial).label),
+      editorial: str(read && read.editorial),
+      corner: {
+        label: str(cornerPlan.label), caption: str(cornerPlan.caption),
+        color: /^#[0-9a-f]{6}$/i.test(str(cornerPlan.color)) ? str(cornerPlan.color) : '#3f8f3a',
+        image: '', stories: takeAll(cornerPlan.stories),
+      },
+      beside: takeAll(p.beside),
+      pull: null,
+      columns: [],
+      closing: take(p.closing),
+      moreLabel: str(obj(p.more).label),
+      more: [],
+      texts: list(read && read.texts),
+      bands: [],
+      panels: [],
+    }
+    out.columns = list(p.columns).map(function (column) {
+      return list(obj(column).groups).map(function (group) {
+        var g = obj(group)
+        var dates = obj(g.dates)
+        return {
+          label: str(g.label),
+          datesTitle: str(dates.title),
+          dates: list(dates.items).filter(function (it) { return Array.isArray(it) && it.length >= 2 })
+            .map(function (it) { return [String(it[0]), String(it[1])] }),
+          stories: takeAll(g.stories),
+        }
+      }).filter(function (g) { return g.label || g.dates.length || g.stories.length })
+    }).filter(function (groups) { return groups.length })
+    out.more = stories.filter(function (st) { return !used[st.key] })
+
+    var pullStart = str(p.pullQuote)
+    if (pullStart) {
+      for (var i = 0; i < stories.length; i++) {
+        if (stories[i].title.indexOf(pullStart) !== 0) continue
+        var q = stories[i].body.match(QUOTE)
+        if (q) {
+          out.pull = { cited: q[1].trim(), text: q[2].trim() }
+          stories[i].body = stories[i].body.replace(QUOTE, '').trim()
+        }
+        break
+      }
+    }
+    for (var c = 0; c < out.corner.stories.length; c++) {
+      var side = out.corner.stories[c].body.match(SIDE)
+      if (side) {
+        out.corner.image = side[1]
+        out.corner.stories[c].body = out.corner.stories[c].body.replace(SIDE, '').trim()
+        break
+      }
+    }
+    // "**Utgave 2 – 2026**" on a line of its own is already in the masthead.
+    if (out.masthead.right && out.editorial) {
+      var nl = out.editorial.indexOf('\n')
+      var first = (nl === -1 ? out.editorial : out.editorial.slice(0, nl)).replace(/\*/g, '').trim()
+      if (first === out.masthead.right) out.editorial = nl === -1 ? '' : out.editorial.slice(nl + 1).trim()
+    }
+    var bandIds = list(p.bands).map(String)
+    var panels = list(read && read.panels)
+    bandIds.forEach(function (id) {
+      for (var j = 0; j < panels.length; j++) {
+        if (String(panels[j].id) === id) { out.bands.push(panels[j]); break }
+      }
+    })
+    out.panels = panels.filter(function (n) { return bandIds.indexOf(String(n.id)) === -1 })
+    return out
+  }
+
   // The viewer's rule (GNewRealtimeVideoNode.vue): a full http(s) url is used as it is;
   // a bare key is served from the realtimevideos bucket, under recordings/ unless the
   // key already starts there. The host is fixed, so a key cannot point the player
@@ -736,6 +929,51 @@
       '.vgp-node{margin:0 0 1.1rem}',
       '.vgp-node img{max-width:100%;height:auto}',
       '.vgp-node pre,.vgp-node table{overflow-x:auto;max-width:100%}',
+      // Front page (a graph with a "frontpage" plan). Colours follow the host page: text and
+      // rules are the dialog's own colour, accents the theme's primary.
+      '.vgp-dlg.vgp-dlg-front{width:min(1120px,100%)}',
+      '.vgf{--vgf-serif:Georgia,"Iowan Old Style","Palatino Linotype","Times New Roman",serif;--vgf-accent:var(--v-primary,#2a6f97)}',
+      '.vgf-kicker{font:700 .72rem/1.4 inherit;text-transform:uppercase;letter-spacing:.16em;margin:0 0 .5rem}',
+      '.vgf-accent{color:var(--vgf-accent)}',
+      '.vgf-under{border-bottom:1px solid currentColor;padding-bottom:.4rem}',
+      '.vgf-mast{border-bottom:4px double currentColor;padding-bottom:.5rem;margin:0 0 1.5rem}',
+      '.vgf-strip{display:flex;flex-wrap:wrap;justify-content:space-between;gap:.75rem;border-bottom:1px solid currentColor;',
+      'padding-bottom:.4rem;margin:0;opacity:.7}',
+      '.vgf-title{font:700 clamp(2.1rem,7vw,3.6rem)/1 var(--vgf-serif);text-align:center;margin:0;padding:.75rem 0;text-wrap:balance}',
+      '.vgf-banner{display:block;width:100%;height:auto;border-radius:4px;margin:0 0 2rem}',
+      '.vgf-row{display:grid;grid-template-columns:minmax(0,1fr);gap:1.75rem;margin:0 0 2.25rem}',
+      '.vgf-row>*{min-width:0}',
+      '.vgf-stack{display:flex;flex-direction:column;gap:1.4rem;min-width:0}',
+      '.vgf-h{font:700 1.25rem/1.3 var(--vgf-serif);margin:0 0 .5rem;text-wrap:balance;color:inherit}',
+      '.vgf-h-lead{font-size:clamp(1.9rem,5vw,3rem);line-height:1.06;margin-bottom:.75rem}',
+      '.vgf-story{border-top:3px solid currentColor;padding-top:.5rem;min-width:0}',
+      '.vgf-story.vgf-thin{border-top-width:1px}',
+      '.vgf-story.vgf-large{margin-top:1.5rem}',
+      '.vgf-story.vgf-large>.vgf-h{font-size:clamp(1.5rem,3.4vw,1.9rem)}',
+      '.vgf-text{margin:0;font-size:.95rem;line-height:1.6}',
+      '.vgf-text>:first-child{margin-top:0}',
+      '.vgf-text>:last-child{margin-bottom:0}',
+      '.vgf-lead>.vgf-text{font-size:1.1rem}',
+      '.vgf-editorial{align-self:start;padding:1rem 1.25rem;border-top:3px solid var(--vgf-accent);background:rgba(127,127,127,.12)}',
+      '.vgf-panel{border-top:3px solid currentColor;padding-top:.5rem;margin:0 0 2.25rem}',
+      '.vgf-panel>.vgp-node{margin:0}',
+      '.vgf-corner{padding:1rem 1.25rem;border-top:3px solid;min-width:0}',
+      '.vgf-corner-in{display:grid;grid-template-columns:minmax(0,1fr);gap:1.25rem}',
+      '.vgf-fig{margin:0;justify-self:center;max-width:300px}',
+      '.vgf-fig img{display:block;width:100%;aspect-ratio:4/5;object-fit:cover;border-radius:4px}',
+      '.vgf-fig figcaption{font:italic 1rem/1.4 var(--vgf-serif);text-align:center;margin-top:.4rem;opacity:.75}',
+      '.vgf-pull{margin:0 0 2.25rem;padding:1.5rem .5rem;text-align:center;border:solid currentColor;border-width:1px 0}',
+      '.vgf-pull p{font:italic 600 clamp(1.5rem,4.2vw,2.25rem)/1.2 var(--vgf-serif);max-width:28ch;margin:0 auto .6rem;text-wrap:balance}',
+      '.vgf-pull cite{font-style:normal;opacity:.7;margin:0}',
+      '.vgf-dates{border:1px solid var(--v-border,rgba(127,127,127,.4));padding:.75rem .9rem;font-size:.95rem}',
+      '.vgf-dates dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:.25rem .75rem;margin:0}',
+      '.vgf-dates dt{font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}',
+      '.vgf-dates dd{margin:0}',
+      '.vgf-closing{border-top:4px double currentColor;padding-top:1rem;text-align:center}',
+      '.vgf-closing>.vgf-h{font-size:clamp(1.5rem,4vw,2.25rem);line-height:1.15}',
+      '.vgf-closing>.vgf-text{max-width:65ch;margin:0 auto}',
+      '@media (min-width:700px){.vgf-corner-pic{grid-template-columns:240px minmax(0,1fr)}.vgf-cols{grid-template-columns:repeat(2,minmax(0,1fr))}}',
+      '@media (min-width:980px){.vgf-2-1{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}.vgf-cols{grid-template-columns:repeat(3,minmax(0,1fr))}}',
       '.vgp-diagram{margin:0 0 1.1rem;padding:.9rem 1rem;border:1px solid var(--v-border,rgba(127,127,127,.22));border-radius:10px}',
       '.vgp-diagram[data-fallback]{border-style:dashed}',
       '.vgp-diagram figcaption{font:600 .9rem/1.4 inherit;margin-bottom:.6rem}',
@@ -1279,6 +1517,7 @@
     d.open = true
     d.heading.textContent = card.title
     d.body.textContent = ''
+    d.box.classList.remove('vgp-dlg-front')
     d.close.setAttribute('aria-label', opts.t.close)
     d.close.title = opts.t.close
     closeShareMenu(false)
@@ -1432,6 +1671,22 @@
 
   function renderGraphInto (body, graph, ft, opts) {
     body.textContent = ''
+    // A graph with a front page plan is drawn as one. Anything going wrong there must not
+    // cost the reader the article: the body is emptied and the graph drawn the plain way.
+    var box = body.closest ? body.closest('.vgp-dlg') : null
+    if (box) box.classList.remove('vgp-dlg-front')
+    var plan = frontPlan(graph)
+    if (plan) {
+      try {
+        if (renderFrontInto(body, graph, ft, opts, plan)) {
+          if (box) box.classList.add('vgp-dlg-front')
+          return
+        }
+      } catch (e) {
+        console.warn('[graph-portfolio] front page did not render, showing the plain article:', e)
+      }
+      body.textContent = ''
+    }
     var md = (graph && graph.metadata) || {}
     if (md.description) {
       var lead = document.createElement('p')
@@ -1441,65 +1696,235 @@
     }
     var rendered = 0
     visibleNodes(graph).forEach(function (node) {
-      var plan = nodeRenderPlan(node, opts.registeredTypes)
-      if (plan.kind === 'skip') return
-      if (plan.kind === 'registered') {
-        var el = document.createElement('vegvisr-node')
-        el.className = 'vgp-node'
-        el.style.display = 'block'
-        if (opts.world) el.world = opts.world
-        // A plain copy: the element posts it into a frame, and the graph object stays ours.
-        el.node = { id: node.id, label: node.label, type: node.type, info: node.info, metadata: node.metadata || {} }
-        body.appendChild(el)
-        rendered += 1
-        return
-      }
-      if (plan.kind === 'mermaid') {
-        body.appendChild(diagramEl(plan, opts))
-        rendered += 1
-        return
-      }
-      if (plan.kind === 'audio') {
-        body.appendChild(mediaEl(plan, ft, 'audio'))
-        rendered += 1
-        return
-      }
-      if (plan.kind === 'recording') {
-        body.appendChild(mediaEl(plan, ft, 'video'))
-        rendered += 1
-        return
-      }
-      if (plan.kind === 'page') {
-        body.appendChild(pageEl(plan, cssForHtmlNode(graph, node.id)))
-        rendered += 1
-        return
-      }
-      if (plan.kind === 'video') {
-        body.appendChild(videoEl(plan, ft))
-        rendered += 1
-        return
-      }
-      var section = document.createElement('div')
-      section.className = 'vgp-node'
-      try {
-        section.innerHTML = ft.render(plan.text)
-      } catch (e) {
-        console.warn('[graph-portfolio] node ' + node.id + ' did not render:', e)
-        section.textContent = plan.text
-      }
-      scrubInto(section)
+      var el = nodeEl(node, graph, ft, opts)
+      if (!el) return
       // Drop the first node's opening heading when it merely repeats the title
       // already shown in the dialog bar.
-      if (rendered === 0) {
-        var lead = section.firstElementChild
-        if (lead && /^H[1-3]$/.test(lead.tagName) && sameHeading(lead.textContent, opts.dialogTitle)) {
-          section.removeChild(lead)
+      if (rendered === 0 && el.vgpMarkdown) {
+        var first = el.firstElementChild
+        if (first && /^H[1-3]$/.test(first.tagName) && sameHeading(first.textContent, opts.dialogTitle)) {
+          el.removeChild(first)
         }
       }
-      body.appendChild(section)
+      body.appendChild(el)
       rendered += 1
     })
     if (!rendered) message(body, opts.t.emptyGraph)
+  }
+
+  // One node as the element the dialog shows for it, or null for a node it skips. Shared by
+  // the plain article and the front page, so a node looks the same in both.
+  function nodeEl (node, graph, ft, opts) {
+    var plan = nodeRenderPlan(node, opts.registeredTypes)
+    if (plan.kind === 'skip') return null
+    if (plan.kind === 'registered') {
+      var el = document.createElement('vegvisr-node')
+      el.className = 'vgp-node'
+      el.style.display = 'block'
+      if (opts.world) el.world = opts.world
+      // A plain copy: the element posts it into a frame, and the graph object stays ours.
+      el.node = { id: node.id, label: node.label, type: node.type, info: node.info, metadata: node.metadata || {} }
+      return el
+    }
+    if (plan.kind === 'mermaid') return diagramEl(plan, opts)
+    if (plan.kind === 'audio') return mediaEl(plan, ft, 'audio')
+    if (plan.kind === 'recording') return mediaEl(plan, ft, 'video')
+    if (plan.kind === 'page') return pageEl(plan, cssForHtmlNode(graph, node.id), opts.pageStart)
+    if (plan.kind === 'video') return videoEl(plan, ft)
+    var section = markdownEl(plan.text, ft, node.id)
+    section.vgpMarkdown = true
+    return section
+  }
+
+  // Fulltext (markdown + Vegvisr elements) as a scrubbed element. Text that does not render
+  // is shown as it stands rather than lost.
+  function markdownEl (text, ft, id) {
+    var section = document.createElement('div')
+    section.className = 'vgp-node'
+    try {
+      section.innerHTML = ft.render(text)
+    } catch (e) {
+      console.warn('[graph-portfolio] node ' + id + ' did not render:', e)
+      section.textContent = text
+    }
+    scrubInto(section)
+    return section
+  }
+
+  // The front page itself. Returns false when the plan places nothing (a plan in a graph
+  // without "###" stories), so the caller draws the plain article instead.
+  function renderFrontInto (body, graph, ft, opts, plan) {
+    var f = placeFront(plan, readFront(graph, opts.registeredTypes))
+    var storyCount = (f.lead ? 1 : 0) + f.follow.length + f.corner.stories.length + f.beside.length +
+      (f.closing ? 1 : 0) + f.more.length
+    f.columns.forEach(function (groups) { groups.forEach(function (g) { storyCount += g.stories.length }) })
+    if (!storyCount) return false
+
+    var mk = function (tag, cls, text) {
+      var el = document.createElement(tag)
+      if (cls) el.className = cls
+      if (text != null) el.textContent = text
+      return el
+    }
+    var httpUrl = function (u) { return /^https?:\/\//i.test(String(u || '')) && !isUnsafeUrl(u) }
+    var text = function (md, id) {
+      var el = markdownEl(md, ft, id)
+      el.className = 'vgp-node vgf-text'
+      return el
+    }
+    var story = function (st, cls, level) {
+      var art = mk('article', 'vgf-story' + (cls ? ' ' + cls : ''))
+      art.appendChild(mk(level || 'h3', 'vgf-h', st.title))
+      if (st.body) art.appendChild(text(st.body, st.key))
+      return art
+    }
+    // Panels get the full width of the page, so an html-node there starts taller.
+    var wide = {}
+    for (var k in opts) wide[k] = opts[k]
+    wide.pageStart = 680
+    var panel = function (node) {
+      var el = nodeEl(node, graph, ft, wide)
+      if (!el) return null
+      var sec = mk('section', 'vgf-panel')
+      if (node.label) sec.appendChild(mk('p', 'vgf-kicker', node.label))
+      sec.appendChild(el)
+      return sec
+    }
+
+    var root = mk('div', 'vgf')
+    var md = (graph && graph.metadata) || {}
+
+    // Masthead
+    var head = mk('header', 'vgf-mast')
+    if (f.masthead.left || f.masthead.right) {
+      var strip = mk('div', 'vgf-strip vgf-kicker')
+      strip.appendChild(mk('span', '', f.masthead.left))
+      strip.appendChild(mk('span', '', f.masthead.right))
+      head.appendChild(strip)
+    }
+    head.appendChild(mk('h1', 'vgf-title', f.masthead.title || md.title || opts.dialogTitle || ''))
+    root.appendChild(head)
+    if (httpUrl(f.masthead.image)) {
+      var banner = mk('img', 'vgf-banner')
+      banner.src = f.masthead.image
+      banner.alt = ''
+      root.appendChild(banner)
+    }
+
+    // Lead + editorial
+    if (f.lead || f.editorial) {
+      var top = mk('section', 'vgf-row' + (f.lead && f.editorial ? ' vgf-2-1' : ''))
+      if (f.lead) {
+        var leadEl = mk('article', 'vgf-lead')
+        if (f.leadLabel) leadEl.appendChild(mk('p', 'vgf-kicker vgf-accent', f.leadLabel))
+        leadEl.appendChild(mk('h2', 'vgf-h vgf-h-lead', f.lead.title))
+        if (f.lead.body) leadEl.appendChild(text(f.lead.body, f.lead.key))
+        f.follow.forEach(function (st) { leadEl.appendChild(story(st, 'vgf-large')) })
+        top.appendChild(leadEl)
+      }
+      if (f.editorial) {
+        var aside = mk('aside', 'vgf-editorial')
+        if (f.editorialLabel) aside.appendChild(mk('p', 'vgf-kicker vgf-accent', f.editorialLabel))
+        aside.appendChild(text(f.editorial, 'editorial'))
+        top.appendChild(aside)
+      }
+      root.appendChild(top)
+    }
+
+    f.bands.forEach(function (node) {
+      var el = panel(node)
+      if (el) root.appendChild(el)
+    })
+
+    // Corner + the stories beside it
+    if (f.corner.stories.length || f.beside.length) {
+      var mid = mk('section', 'vgf-row' + (f.corner.stories.length && f.beside.length ? ' vgf-2-1' : ''))
+      if (f.corner.stories.length) {
+        var corner = mk('div', 'vgf-corner')
+        corner.style.borderTopColor = f.corner.color
+        corner.style.backgroundColor = f.corner.color + '1f'
+        if (f.corner.label) {
+          var cl = mk('p', 'vgf-kicker', f.corner.label)
+          cl.style.color = f.corner.color
+          corner.appendChild(cl)
+        }
+        var inner = mk('div', 'vgf-corner-in')
+        if (httpUrl(f.corner.image)) {
+          inner.className += ' vgf-corner-pic'
+          var fig = mk('figure', 'vgf-fig')
+          var pic = mk('img', '')
+          pic.src = f.corner.image
+          pic.alt = ''
+          fig.appendChild(pic)
+          if (f.corner.caption) fig.appendChild(mk('figcaption', '', f.corner.caption))
+          inner.appendChild(fig)
+        }
+        var stack = mk('div', 'vgf-stack')
+        f.corner.stories.forEach(function (st) {
+          var art = story(st, 'vgf-thin')
+          art.style.borderTopColor = f.corner.color
+          stack.appendChild(art)
+        })
+        inner.appendChild(stack)
+        corner.appendChild(inner)
+        mid.appendChild(corner)
+      }
+      if (f.beside.length) {
+        var side = mk('div', 'vgf-stack')
+        f.beside.forEach(function (st) { side.appendChild(story(st)) })
+        mid.appendChild(side)
+      }
+      root.appendChild(mid)
+    }
+
+    if (f.pull) {
+      var quote = mk('blockquote', 'vgf-pull')
+      quote.appendChild(mk('p', '', f.pull.text.replace(/\s+/g, ' ')))
+      if (f.pull.cited) quote.appendChild(mk('cite', 'vgf-kicker', f.pull.cited))
+      root.appendChild(quote)
+    }
+
+    if (f.columns.length) {
+      var cols = mk('section', 'vgf-row vgf-cols')
+      f.columns.forEach(function (groups) {
+        var col = mk('div', 'vgf-stack')
+        groups.forEach(function (g) {
+          if (g.label) col.appendChild(mk('p', 'vgf-kicker vgf-accent vgf-under', g.label))
+          if (g.dates.length) {
+            var boxEl = mk('div', 'vgf-dates')
+            if (g.datesTitle) boxEl.appendChild(mk('p', 'vgf-kicker', g.datesTitle))
+            var dl = mk('dl', '')
+            g.dates.forEach(function (it) {
+              dl.appendChild(mk('dt', '', it[0]))
+              dl.appendChild(mk('dd', '', it[1]))
+            })
+            boxEl.appendChild(dl)
+            col.appendChild(boxEl)
+          }
+          g.stories.forEach(function (st) { col.appendChild(story(st)) })
+        })
+        cols.appendChild(col)
+      })
+      root.appendChild(cols)
+    }
+
+    if (f.more.length || f.texts.length) {
+      if (f.moreLabel && f.more.length) root.appendChild(mk('p', 'vgf-kicker vgf-accent vgf-under', f.moreLabel))
+      var more = mk('section', 'vgf-row vgf-cols')
+      f.more.forEach(function (st) { more.appendChild(story(st)) })
+      f.texts.forEach(function (t) { more.appendChild(text(t.body, t.key)) })
+      root.appendChild(more)
+    }
+
+    f.panels.forEach(function (node) {
+      var el = panel(node)
+      if (el) root.appendChild(el)
+    })
+
+    if (f.closing) root.appendChild(story(f.closing, 'vgf-closing', 'h2'))
+
+    body.appendChild(root)
+    return true
   }
 
   // A diagram node is DRAWN with mermaid (served from our own origin, loaded only
@@ -1639,7 +2064,7 @@
   //  - this page can no longer read the frame, so the frame measures itself and reports
   //    its height by postMessage (heightReporter); the message is trusted only from this
   //    frame's own window, carrying this frame's nonce.
-  function pageEl (plan, css) {
+  function pageEl (plan, css, startHeight) {
     var wrap = document.createElement('div')
     wrap.className = 'vgp-page'
     var frame = document.createElement('iframe')
@@ -1648,7 +2073,12 @@
     frame.setAttribute('referrerpolicy', 'strict-origin-when-cross-origin')
     var nonce = 'vgp' + Math.random().toString(36).slice(2) + Date.now().toString(36)
     frame.srcdoc = pageSource(plan.text, css, nonce)
-    var state = { height: 320, lastGrowth: -1, rounds: 0, stopped: false }
+    // A page laid out to FILL its frame (html,body{height:100%}) reports the frame's own
+    // height back, so it never grows past where it starts. The front page gives such a
+    // page room with a taller start; a page with a height of its own still shrinks to it.
+    var start = startHeight > 0 ? startHeight : 320
+    var state = { height: start, lastGrowth: -1, rounds: 0, stopped: false }
+    if (start !== 320) frame.style.height = start + 'px'
     var onMessage = function (e) {
       if (!frame.isConnected) { window.removeEventListener('message', onMessage); return }
       if (e.source !== frame.contentWindow) return
@@ -1713,9 +2143,13 @@
   // frame: documentElement.scrollHeight is never less than the frame, so it only says
   // something when the content overflows; otherwise the body's bottom edge (plus its
   // margin) is the height. Reports on every size change, on load and when fonts land.
+  // Nothing is reported while the frame itself has no height yet (its place in the dialog
+  // is not laid out): a page that fills its frame (html,body{height:100%}) measured only
+  // its own padding then, and the frame collapsed to the 40px floor for good — seen
+  // 2026-11-13 with the World Pulse map on the front page.
   function heightReporter (nonce) {
     return '(function(){var n=' + JSON.stringify(nonce) + ',last=-1;' +
-      'function measure(){var de=document.documentElement,b=document.body;if(!b)return 0;' +
+      'function measure(){var de=document.documentElement,b=document.body;if(!b||!window.innerHeight)return 0;' +
       'var r=b.getBoundingClientRect(),mb=parseFloat(getComputedStyle(b).marginBottom)||0;' +
       'var bottom=Math.ceil(r.bottom+(window.scrollY||0)+mb);' +
       'return de.scrollHeight>de.clientHeight+1?Math.max(de.scrollHeight,bottom):bottom}' +
