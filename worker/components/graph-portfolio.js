@@ -393,15 +393,19 @@
     // The editor's password control ("Add password protection to this Knowledge
     // Graph…"). The viewer hides it from readers; so does this dialog.
     if (type === 'password-protection') return { kind: 'skip', text: '', label: label }
+    // A newsletter's header node is read by programs (frontPlan); its info is a note for the
+    // person editing, not something for the reader.
+    if (type === 'nyhetsbrev') return { kind: 'skip', text: '', label: label }
     if (info.trim()) return { kind: 'markdown', text: info, label: label }
     return { kind: 'skip', text: '', label: label }
   }
 
   // FRONT PAGE (2026-11-13, first use: NIBI Nyhetsbrev – Utgave 2 – 2026 on nibi.no).
   // A graph can ask to be shown as a newspaper front page instead of node under node. It
-  // asks with a PLAN: a json-node — normally hidden in the editor, which is why this reads
-  // every node and not visibleNodes() — whose info is JSON with a "frontpage" key. The plan
-  // is layout only; the text stays in the fulltext nodes. Same plan, same rules as the
+  // asks with a PLAN, held by the header node of a newsletter graph (type nyhetsbrev,
+  // metadata.forside) — normally hidden in the editor, which is why frontPlan reads every
+  // node and not visibleNodes(). The plan is layout only; the text stays in the fulltext
+  // nodes. The plan's shape, shown here in its older json-node wrapping ("frontpage"): Same plan, same rules as the
   // editor's own front page (Knowledge-Editor, src/components/FrontPageView.tsx) — keep the
   // two in step. A graph without a plan is drawn exactly as before.
   //
@@ -419,13 +423,27 @@
   //       "more":      { "label": "Flere saker" } } }
   function frontPlan (graph) {
     var nodes = (graph && graph.nodes) || []
+    var isObj = function (v) { return !!v && typeof v === 'object' && !Array.isArray(v) }
+    var type = function (n) { return String((n && n.type) || '').toLowerCase() }
+    // 1. A newsletter graph (graph type "Nyhetsbrevgraf", registered 2026-11-13): its header
+    //    node, type nyhetsbrev, carries the plan in metadata.forside. The masthead comes from
+    //    the header's own fields unless the plan sets one.
     for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i]
-      if (!n || String(n.type || '').toLowerCase() !== 'json-node' || !n.info) continue
+      if (type(nodes[i]) !== 'nyhetsbrev') continue
+      var m = nodes[i].metadata
+      if (!isObj(m) || !isObj(m.forside)) return null // a newsletter without a front page
+      var plan = {}
+      for (var k in m.forside) plan[k] = m.forside[k]
+      if (!isObj(plan.masthead)) plan.masthead = { title: m.navn, left: m.utgiver, right: m.utgave }
+      return plan
+    }
+    // 2. Before the graph type existed: a json-node whose info is JSON with a "frontpage" key.
+    for (var j = 0; j < nodes.length; j++) {
+      var n = nodes[j]
+      if (type(n) !== 'json-node' || !n.info) continue
       try {
         var parsed = JSON.parse(String(n.info))
-        var plan = parsed && parsed.frontpage
-        if (plan && typeof plan === 'object' && !Array.isArray(plan)) return plan
+        if (parsed && isObj(parsed.frontpage)) return parsed.frontpage
       } catch (e) { /* not JSON, so not a plan */ }
     }
     return null

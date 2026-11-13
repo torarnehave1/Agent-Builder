@@ -488,6 +488,29 @@ check('areas narrow World rows like a chip does',
   const junk = api.placeFront({ lead: 'x', corner: [], columns: 'nei', bands: {}, beside: 7, masthead: null }, read)
   check('a malformed plan places nothing and loses nothing',
     junk.lead === null && junk.columns.length === 0 && junk.more.length === read.stories.length && junk.panels.length === 2)
+  // The newsletter graph type (2026-11-13): the plan lives on the nyhetsbrev header node.
+  const header = (forside, over = {}) => ({
+    id: 'hode', type: 'nyhetsbrev', visible: false, label: 'NIBI Nyhetsbrev – Utgave 2 – 2026', info: 'Notat for den som redigerer.',
+    metadata: { navn: 'NIBI Nyhetsbrev', utgiver: 'NIBI', utgave: 'Utgave 2 – 2026', ...(forside ? { forside } : {}) }, ...over,
+  })
+  const viaHeader = api.frontPlan({ nodes: [first, second, header({ lead: { story: 'Møte med IIBA' } })] })
+  check('the nyhetsbrev header node carries the plan in metadata.forside', viaHeader && viaHeader.lead.story === 'Møte med IIBA')
+  check('the masthead comes from the header fields',
+    viaHeader.masthead.title === 'NIBI Nyhetsbrev' && viaHeader.masthead.left === 'NIBI' && viaHeader.masthead.right === 'Utgave 2 – 2026',
+    JSON.stringify(viaHeader.masthead))
+  check('a masthead set in the plan wins over the header fields',
+    api.frontPlan({ nodes: [header({ masthead: { title: 'Egen' } })] }).masthead.title === 'Egen')
+  check('the header node wins over an older json-node plan',
+    api.frontPlan({ nodes: [planNode(plan), header({ lead: { story: 'Raske' } })] }).lead.story === 'Raske')
+  check('a newsletter without forside has no plan, even beside an old json-node',
+    api.frontPlan({ nodes: [header(null), planNode(plan)] }) === null)
+  check('reading the plan does not change the header node', (() => {
+    const h = header({ lead: { story: 'x' } }); api.frontPlan({ nodes: [h] }); return h.metadata.forside.masthead === undefined
+  })())
+  check('the header node is never shown to the reader, visible or not',
+    api.nodeRenderPlan(header(null, { visible: true }), null).kind === 'skip' &&
+    api.readFront({ nodes: [first, header(null, { visible: true })] }, null).panels.length === 0)
+
   const empty = api.placeFront({}, api.readFront({ nodes: [text('x', 'Bare tekst uten overskrifter')] }, null))
   check('a graph without stories gives an empty placement', empty.more.length === 0 && empty.lead === null && empty.texts.length === 1)
 }
