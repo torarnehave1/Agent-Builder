@@ -34,7 +34,8 @@ import { fileURLToPath } from 'url'
 const AGENT = 'https://agent.vegvisr.org'
 const KG = 'https://knowledge.vegvisr.org'
 const CEILING = 95 * 1024 * 1024
-const LADDER = [20, 23, 26]
+// CRF 28 added 2026-11-13: Krise-siden's 5½-minute 1080p videos are ~109 MB at CRF 26.
+const LADDER = [20, 23, 26, 28]
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const manifestPath = process.argv[2]
@@ -76,6 +77,11 @@ state.course = state.course || {}
 state.files = state.files || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
+// A library (product.kind "library", 2026-11-13) is a set of standalone videos — Krise-siden, the
+// Teknikkbibliotek: «Video N av M», «Om <tittel>», no «Du strikker»/«Dette trenger du». A course
+// keeps every prompt and label exactly as before, so its cached summaries stay valid.
+const LIBRARY = (m.product && m.product.kind) === 'library'
+const stepWord = LIBRARY ? 'Video' : 'Steg'
 
 const slugify = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
   .replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -219,7 +225,7 @@ async function summarize(lesson) {
   const t = state.transcripts[lesson.lesson_id]
   const text = transcriptMarkdown(t)
   const instruction = [
-    `Du lager en kort oversikt som står OVER en kursvideo i «${m.title}» (${m.source.product}), så deltakeren vet hva videoen går gjennom før hun ser den.`,
+    `Du lager en kort oversikt som står OVER en ${LIBRARY ? 'hjelpevideo' : 'kursvideo'} i «${m.title}» (${m.source.product}), så deltakeren vet hva videoen går gjennom før hun ser den.`,
     `Videoen heter «${lesson.title}». Under er den automatiske transkripsjonen med tidsstempler [mm:ss].`,
     'Svar BARE med JSON, uten forklaring og uten kodeblokk, på formen:',
     '{"intro": "én setning på norsk, du-form, varm og konkret", "points": [{"at": "mm:ss", "text": "kort punkt, maks 12 ord"}], "keywords": ["3-6 stikkord, små bokstaver"], "hashtags": ["3-5 hashtags uten #, små bokstaver, ett ord hver, norsk"]}',
@@ -281,12 +287,20 @@ async function courseImage() {
 // «Om kurset»: one description for the shop, the product page and the course card (plan S2/S5/S6).
 async function describeCourse() {
   const lessonsText = m.lessons.map((l, i) => {
-    const head = `### Steg ${i + 1}: ${l.title}`
+    const head = `### ${stepWord} ${i + 1}: ${l.title}`
     if (l.type !== 'video') return `${head}\n${l.info || ''}`
     const t = state.transcripts[l.lesson_id]
     return `${head}\n${t ? transcriptMarkdown(t) : ''}`
   }).join('\n\n')
-  const prompt = [
+  const prompt = LIBRARY ? [
+    `Du skriver beskrivelsen av «${m.title}» i ${m.source.product} (Stine Oksvold Design): en samling frittstående hjelpevideoer, ikke et kurs. Den brukes på siden og på kortet.`,
+    'Under er alle videoene, med automatisk transkripsjon.',
+    'Svar BARE med JSON, uten forklaring og uten kodeblokk, på formen:',
+    '{"tagline": "én kort setning, maks 10 ord", "about": "2-3 setninger, du-form, varm og konkret: når du trenger disse videoene", "helps_with": ["ett punkt per problem videoene løser, kort"], "for_whom": "hvem samlingen passer for, én setning", "keywords": ["3-6 stikkord, små bokstaver"], "hashtags": ["3-5 hashtags uten #, små bokstaver, ett ord hver"]}',
+    'Bare fakta som står i videoene. Ingen priser.',
+    '',
+    lessonsText,
+  ].join('\n') : [
     `Du skriver kursbeskrivelsen for «${m.title}» i ${m.source.product} (Stine Oksvold Design). Den brukes i nettbutikken, på produktsiden og på kurskortet.`,
     'Under er alle stegene i kurset, med automatisk transkripsjon av videoene.',
     'Svar BARE med JSON, uten forklaring og uten kodeblokk, på formen:',
@@ -299,7 +313,7 @@ async function describeCourse() {
   const hash = crypto.createHash('sha256').update(`${SUMMARY_MODEL}|${prompt}`).digest('hex').slice(0, 16)
   if (state.course.about && state.course.about.hash === hash) { log('course description cached'); return state.course.about }
   const data = await askJson(prompt, 1200, 'course description')
-  if (!data.about || !Array.isArray(data.you_need)) throw new Error('course description is missing about or you_need')
+  if (!data.about || !Array.isArray(LIBRARY ? data.helps_with : data.you_need)) throw new Error(`course description is missing about or ${LIBRARY ? 'helps_with' : 'you_need'}`)
   state.course.about = { hash, data, model: SUMMARY_MODEL, at: new Date().toISOString() }
   save()
   log('course description written')
@@ -324,6 +338,25 @@ async function uploadPdf(lesson) {
 const minutes = (s) => Math.max(1, Math.round(s / 60))
 function aboutMarkdown(d, steps, totalS) {
   const tag = (h) => `#${String(h).replace(/^#/, '').replace(/\s+/g, '').toLowerCase()}`
+  if (LIBRARY) return [
+    `**${d.tagline}**`,
+    '',
+    d.about,
+    '',
+    '**Hjelp når**',
+    ...d.helps_with.map((x) => `- ${x}`),
+    '',
+    `**Passer for:** ${d.for_whom}`,
+    '',
+    `**${steps.length} videoer** · **ca. ${minutes(totalS)} min**`,
+    '',
+    '**Videoene**',
+    ...steps.map((st, i) => `${i + 1}. ${st.title}${st.duration_s ? ` (${minutes(st.duration_s)} min)` : ''}`),
+    '',
+    `**Stikkord:** ${(d.keywords || []).join(' · ')}`,
+    '',
+    (d.hashtags || []).map(tag).join(' '),
+  ].join('\n')
   return [
     `**${d.tagline}**`,
     '',
@@ -389,7 +422,7 @@ async function saveGraph() {
   const accessText = product.access && product.access.type === 'membership' ? 'Inkludert i medlemskapet Den lille strikkeskolen' : (product.prices[0] ? `${product.prices[0].amount} kr` : '')
   const nodes = [{
     id: 'produkt', label: 'Produkt', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 0 },
-    info: `**Kurs · ${total} steg · ca. ${minutes(totalS)} min video**${accessText ? `\n\n${accessText}` : ''}\n\nStatus: ${product.status}. Dette er produktnoden: metadata.product styrer tilgang, kort og nettbutikk.`,
+    info: `**${LIBRARY ? `Videosamling · ${total} videoer` : `Kurs · ${total} steg`} · ca. ${minutes(totalS)} min video**${accessText ? `\n\n${accessText}` : ''}\n\nStatus: ${product.status}. Dette er produktnoden: metadata.product styrer tilgang, kort og nettbutikk.`,
     metadata: { product },
   }]
   const edges = []
@@ -400,13 +433,13 @@ async function saveGraph() {
     edges.push({ source: prev, target: 'kursbilde', type: 'next', label: 'next' }); prev = 'kursbilde'
   }
   if (about) {
-    nodes.push({ id: 'om-kurset', label: 'Om kurset', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, steps, totalS), metadata: { about: { ...about, source: 'automatic' } } })
+    nodes.push({ id: 'om-kurset', label: LIBRARY ? `Om ${m.title}` : 'Om kurset', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, steps, totalS), metadata: { about: { ...about, source: 'automatic' } } })
     edges.push({ source: prev, target: 'om-kurset', type: 'next', label: 'next' }); prev = 'om-kurset'
   }
   m.lessons.forEach((lesson, i) => {
     const order = i + 1
     const nid = `l${String(order).padStart(2, '0')}-${slugify(lesson.title)}`
-    const stepLabel = `Steg ${order} av ${total} – ${lesson.title}`
+    const stepLabel = `${stepWord} ${order} av ${total} – ${lesson.title}`
     const base = { id: nid, label: stepLabel, visible: true, bibl: [], position: { x: 0, y: order * 120 } }
     const lessonMeta = { lesson_id: lesson.lesson_id, order, type: lesson.type }
     if (lesson.type === 'video') {
@@ -415,7 +448,7 @@ async function saveGraph() {
       if (sm) {
         const sid = `${nid}-oppsummering`
         nodes.push({
-          id: sid, label: `Om steg ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: -300, y: order * 120 },
+          id: sid, label: `Om ${stepWord.toLowerCase()} ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: -300, y: order * 120 },
           info: summaryMarkdown(sm.data),
           metadata: { summary: { lesson_id: lesson.lesson_id, of: nid, model: sm.model, keywords: sm.data.keywords || [], hashtags: sm.data.hashtags || [], source: 'automatic' } },
         })
@@ -427,7 +460,7 @@ async function saveGraph() {
       if (t) {
         const tid = `${nid}-transkripsjon`
         nodes.push({
-          id: tid, label: `Transkripsjon – steg ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
+          id: tid, label: `Transkripsjon – ${stepWord.toLowerCase()} ${order}: ${lesson.title}`, type: 'fulltext', visible: true, bibl: [], position: { x: 300, y: order * 120 },
           info: `_Automatisk transkribert (Whisper). Kan inneholde feil._\n\n${transcriptMarkdown(t)}`,
           metadata: { transcript: { lesson_id: lesson.lesson_id, of: nid, model: t.model, language: t.language, segments: t.segments, duration_s: t.duration_s, source: 'automatic', glossary: m.glossary || null, prompt_hash: t.prompt_hash, replacements: Object.keys(glossary.replacements || {}).length } },
         })
@@ -446,7 +479,7 @@ async function saveGraph() {
   })
   const body = {
     id, override: !!state.graphId, world: m.world,
-    graphData: { metadata: { title: m.title, description: (about && about.tagline) || `Kurs i ${m.source.product} (${m.source.module}).`, metaArea: m.metaArea, createdBy: actor, version: 0 }, nodes, edges },
+    graphData: { metadata: { title: m.title, description: (about && about.tagline) || `${LIBRARY ? 'Hjelpevideoer' : 'Kurs'} i ${m.source.product} (${m.source.module}).`, metaArea: m.metaArea, createdBy: actor, version: 0 }, nodes, edges },
   }
   const r = await fetch(`${KG}/saveGraphWithHistory`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': token }, body: JSON.stringify(body) })
   const j = await r.json().catch(() => ({}))

@@ -1,0 +1,74 @@
+{
+  "world": "sodesign.no",
+  "slug": "krise-siden",
+  "title": "Krise-siden",
+  "album": "Krise-siden",
+  "folder": "kurs/krise-siden",
+  "metaArea": "#STRIKKESKOLEN #KRISESIDEN",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "library",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Hjelp"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Krise-siden",
+    "category_id": 2149435731
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/krise-siden/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2155656044,
+      "title": "Hjelp jeg har mistet en maske!",
+      "type": "video",
+      "file": "2155656044-hjelp-jeg-har-mistet-en-maske.mp4"
+    },
+    {
+      "lesson_id": 2155656047,
+      "title": "Når du har for få masker på pinnen",
+      "type": "video",
+      "file": "2155656047-nar-du-har-for-fa-masker-pa-pinnen.mp4"
+    },
+    {
+      "lesson_id": 2155656048,
+      "title": "Når du har for mange masker på pinnen",
+      "type": "video",
+      "file": "2155656048-nar-du-har-for-mange-masker-pa-pinnen.mp4"
+    },
+    {
+      "lesson_id": 2155656054,
+      "title": "Rett opp i mønsterfeil med maskesting",
+      "type": "video",
+      "file": "2155656054-rett-opp-i-monsterfeil-med-maskesting.mp4"
+    },
+    {
+      "lesson_id": 2155658366,
+      "title": "To måter å rekke opp på",
+      "type": "video",
+      "file": "2155658366-to-mater-a-rekke-opp-pa.mp4"
+    },
+    {
+      "lesson_id": 2155778636,
+      "title": "Det er knute på garnet",
+      "type": "video",
+      "file": "2155778636-det-er-knute-pa-garnet.mp4"
+    },
+    {
+      "lesson_id": 2155778790,
+      "title": "Hvordan feste med for kort tråd",
+      "type": "video",
+      "file": "2155778790-hvordan-feste-med-for-kort-trad.mp4"
+    }
+  ]
+}

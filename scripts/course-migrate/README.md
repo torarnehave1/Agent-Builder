@@ -26,7 +26,7 @@ salgsside, S6 medlemsside, S7 leksjon) og UX-anbefalingene i graf `6e6ca7de` (ux
 
 `run.sh` gjør alt etter nedlasting, og kan kjøres på nytt når som helst:
 
-1. **komprimer** (CRF 20 → 23 → 26 til under 95 MB, faststart)
+1. **komprimer** (CRF 20 → 23 → 26 → 28 til under 95 MB, faststart)
 2. **last opp** til `<mappe>/NN-<slug>.mp4` i albumet, med metadata på fila; albumet eies av founderen
 3. **sjekk** at hver video svarer på byte-ranges (iPhone)
 4. **transkriber** (Whisper, norsk) — ordlista `glossary/<navn>.json` retter feilhøringer og fjerner oppdiktede linjer
@@ -34,6 +34,12 @@ salgsside, S6 medlemsside, S7 leksjon) og UX-anbefalingene i graf `6e6ca7de` (ux
 6. **PDF-er** til `<mappe>/<navn>.pdf`
 7. **kursbilde** og **Om kurset**
 8. **kursgrafen** i World-en
+
+## Videosamling i stedet for kurs
+
+`"product": { "kind": "library" }` i manifestet gir en samling frittstående videoer (Krise-siden,
+Teknikkbiblioteket): «Video N av M», «Om <tittel>» med «Hjelp når» og «Passer for», uten
+«Du strikker» og «Dette trenger du». Første samling: `krise-siden.json` → graf `09fef4b0` (13.11.2026).
 
 ## Gjenbruk og kostnad
 
