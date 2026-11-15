@@ -3359,7 +3359,8 @@ export default {
           const r = await executeTool(contactsReadRoute, input, env, {})
           return new Response(JSON.stringify({ success: true, ...r }), { headers: corsHeaders })
         } catch (e) {
-          const status = /No interaction|has no recording|contact_logs table|contacts table/i.test(e.message) ? 404
+          const status = /No interaction|No recording|has no recording|contact_logs table|contacts table/i.test(e.message) ? 404
+            : /takes at most/.test(e.message) ? 400
             : /required/.test(e.message) ? 400 : 502
           return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
         }

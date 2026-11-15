@@ -12280,12 +12280,14 @@ async function executeAddContactNote(input, env) {
   return { success: true, logId: String(data._id || data.id || ''), contactId: String(row._id), name, loggedAt, note }
 }
 
-// Transcribe a Contact Hub recording ON THE SERVER and keep the text in two places: a fulltext
-// node in a graph, and appended to the interaction's own note (what "Transkriber" in Contact Hub
-// does). Exists for the MCP server, which has no browser for the chat's transcribe_audio path.
+// Transcribe one of the user's recordings ON THE SERVER — a Contact Hub interaction's, or one
+// that is only in the audio portfolio (2026-11-15) — and keep the text in a fulltext node in a
+// graph; for an interaction also appended to its own note (what "Transkriber" in Contact Hub
+// does). WebM, MP4/M4A, WAV and MP3 are split when they are over the Whisper limit. Exists for the MCP server, which has no browser for the chat's transcribe_audio path.
 // The recording is chosen by its interaction id; whose table is read is decided by userId, which
 // the door takes from the verified caller — never a body field.
 const SERVER_TRANSCRIPT_MARK = '--- Transkripsjon (Agent-Builder) ---'
+const SERVER_TRANSCRIBE_MAX_BYTES = 80 * 1024 * 1024
 
 async function executeTranscribeContactRecording(input, env) {
   const { userId } = input
@@ -12293,10 +12295,15 @@ async function executeTranscribeContactRecording(input, env) {
   if (!raw) throw new Error('recordingId is required (from list_recordings or get_contact_logs)')
   if (!userId || String(userId).includes('@')) throw new Error('Contact-log transcription requires the internal user id')
 
-  const { logsTableId } = await resolveContactTableIds(userId, env)
-  if (!logsTableId) throw new Error('No contact_logs table found for this user')
+  // Someone who has never opened ContactHub has no contact_logs table — and can still have
+  // recordings in the audio portfolio, so a missing table only rules out the interaction path.
+  const { logsTableId } = await resolveContactTableIds(userId, env).catch(() => ({ logsTableId: null }))
   let row = null
+  // A recording that is in the audio portfolio but on NO interaction (an upload, a group
+  // conversation, a Zoom file): transcribed just the same, minus the ContactHub note.
+  let portfolioOnly = null
   if (raw.startsWith('contactlog:')) {
+    if (!logsTableId) throw new Error('No contact_logs table found for this user')
     const byId = await drizzleFetch(env, '/query', { tableId: logsTableId, where: { _id: raw.slice('contactlog:'.length) }, limit: 1 })
     row = (byId.records || byId.rows || [])[0] || null
   } else {
@@ -12306,19 +12313,27 @@ async function executeTranscribeContactRecording(input, env) {
     const portfolio = profile?.email ? await fetchAllPortfolioRecordings(env, profile.email).catch(() => []) : []
     const hit = portfolio.find(r => r.recordingId === raw)
     if (hit?.r2Url) {
-      const logs = await fetchContactLogRecordings(env, logsTableId)
+      const logs = logsTableId ? await fetchContactLogRecordings(env, logsTableId).catch(() => []) : []
       row = logs.find(l => l.recording_url === hit.r2Url) || null
-      if (!row) throw new Error(`Recording ${raw} is in the audio portfolio but not on any ContactHub interaction`)
+      if (!row) portfolioOnly = hit
     }
   }
-  if (!row) throw new Error(`No interaction with recording id ${raw}`)
-  const logId = row._id || row.id
-  if (!row.recording_url) throw new Error(`Interaction ${logId} has no recording`)
+  if (!row && !portfolioOnly) throw new Error(`No recording with id ${raw} — neither on a ContactHub interaction nor in the audio portfolio`)
+  const logId = row ? (row._id || row.id) : null
+  const recordingUrl = row ? row.recording_url : portfolioOnly.r2Url
+  if (!recordingUrl) throw new Error(`Interaction ${logId} has no recording`)
 
-  const audioRes = await fetch(row.recording_url)
+  const audioRes = await fetch(recordingUrl)
   if (!audioRes.ok) throw new Error(`Could not download the recording (${audioRes.status})`)
+  // The whole file is held in memory while it is split (a Worker has 128 MB), so a recording
+  // beyond this is refused up front instead of taking the Worker down half-way.
+  const declaredBytes = Number(audioRes.headers.get('content-length')) || 0
+  if (declaredBytes > SERVER_TRANSCRIBE_MAX_BYTES) {
+    try { await audioRes.body?.cancel() } catch { /* nothing to release */ }
+    throw new Error(`The recording is ${(declaredBytes / 1048576).toFixed(0)} MB; server transcription takes at most ${SERVER_TRANSCRIBE_MAX_BYTES / 1048576} MB. Nothing was transcribed.`)
+  }
   const buf = new Uint8Array(await audioRes.arrayBuffer())
-  const fileName = (String(row.recording_url).split('/').pop() || 'audio.webm').split('?')[0]
+  const fileName = (String(recordingUrl).split('/').pop() || 'audio.webm').split('?')[0]
   const tx = await transcribeAudioBytes(env, buf, {
     fileName,
     contentType: audioRes.headers.get('content-type') || 'audio/webm',
@@ -12326,19 +12341,22 @@ async function executeTranscribeContactRecording(input, env) {
   })
   if (!tx.text) throw new Error('Whisper returned no text for this recording')
 
-  const contactName = row.contact_name || 'Ukjent kontakt'
-  const when = row.logged_at ? new Date(row.logged_at) : new Date()
+  // What the transcript is OF: the contact for an interaction, the recording's own name otherwise.
+  const contactName = row ? (row.contact_name || 'Ukjent kontakt') : null
+  const subject = contactName || portfolioOnly.displayName || portfolioOnly.fileName || 'Opptak'
+  const stamp = row ? row.logged_at : portfolioOnly.createdAt
+  const when = stamp ? new Date(stamp) : new Date()
   const dateLabel = when.toLocaleDateString('nb-NO', { timeZone: 'Europe/Oslo', day: 'numeric', month: 'long', year: 'numeric' })
   const timeLabel = when.toLocaleTimeString('nb-NO', { timeZone: 'Europe/Oslo', hour: '2-digit', minute: '2-digit' })
-  const title = `Transkripsjon – ${contactName} – ${dateLabel}`
+  const title = `Transkripsjon – ${subject} – ${dateLabel}`
   const nodeId = crypto.randomUUID()
   const node = {
     id: nodeId,
     label: `# ${title}`,
     type: 'fulltext',
-    info: `**${contactName}** · ${dateLabel} kl. ${timeLabel} · ${tx.chunks} del${tx.chunks === 1 ? '' : 'er'}\n\n${tx.text}`,
+    info: `**${subject}** · ${dateLabel} kl. ${timeLabel} · ${tx.chunks} del${tx.chunks === 1 ? '' : 'er'}\n\n${tx.text}`,
     color: '#4A90D9',
-    bibl: [row.recording_url],
+    bibl: [recordingUrl],
     visible: true,
   }
 
@@ -12365,8 +12383,10 @@ async function executeTranscribeContactRecording(input, env) {
         graphData: {
           metadata: {
             title,
-            description: `Transkripsjon av samtalen med ${contactName}, ${dateLabel} kl. ${timeLabel}.`,
-            metaArea: '#TRANSKRIPSJON #SAMTALE',
+            description: row
+              ? `Transkripsjon av samtalen med ${contactName}, ${dateLabel} kl. ${timeLabel}.`
+              : `Transkripsjon av opptaket «${subject}», ${dateLabel} kl. ${timeLabel}.`,
+            metaArea: row ? '#TRANSKRIPSJON #SAMTALE' : '#TRANSKRIPSJON',
             category: '#Transcription #Audio',
             createdBy: env.__kgActing || '',
             version: 0,
@@ -12382,9 +12402,10 @@ async function executeTranscribeContactRecording(input, env) {
   }
 
   // 2. The interaction's own note — the same place Contact Hub's "Transkriber" writes. Not twice.
-  const oldNotes = String(row.notes || '')
+  //    A portfolio-only recording has no interaction, so there is no note to write.
+  const oldNotes = String(row?.notes || '')
   let notesUpdated = false
-  if (!oldNotes.includes(SERVER_TRANSCRIPT_MARK)) {
+  if (row && !oldNotes.includes(SERVER_TRANSCRIPT_MARK)) {
     const notes = `${oldNotes ? `${oldNotes}\n\n` : ''}${SERVER_TRANSCRIPT_MARK}\n${tx.text}`
     await drizzleFetch(env, '/update', { tableId: logsTableId, id: logId, record: { notes } })
     notesUpdated = true
@@ -12394,17 +12415,21 @@ async function executeTranscribeContactRecording(input, env) {
   return {
     success: true,
     message:
-      `Transcribed the recording with ${contactName} (${dateLabel} kl. ${timeLabel}): ${tx.chunks} part(s), ` +
+      `Transcribed ${row ? `the recording with ${contactName}` : `the audio-portfolio recording "${subject}"`} (${dateLabel} kl. ${timeLabel}): ${tx.chunks} part(s), ` +
       `${tx.text.length} characters${tx.failed ? `, ${tx.failed} part(s) FAILED` : ''}. ` +
       `Saved as node ${nodeId} in graph ${graphId} (${viewerUrl}). ` +
-      (notesUpdated ? 'Also added to the interaction note in ContactHub.' : 'The interaction note already had a transcript; left unchanged.'),
+      (!row
+        ? 'The recording is on no ContactHub interaction, so no interaction note was written.'
+        : notesUpdated ? 'Also added to the interaction note in ContactHub.' : 'The interaction note already had a transcript; left unchanged.'),
     graphId,
     nodeId,
     viewerUrl,
-    recordingId: `contactlog:${logId}`,
-    contactId: row.contact_id || null,
+    recordingId: row ? `contactlog:${logId}` : raw,
+    source: row ? 'contacthub' : 'audio-portfolio',
+    recordingName: row ? null : subject,
+    contactId: row ? (row.contact_id || null) : null,
     contactName,
-    loggedAt: row.logged_at || null,
+    loggedAt: (row ? row.logged_at : portfolioOnly.createdAt) || null,
     chunks: tx.chunks,
     failedChunks: tx.failed,
     chars: tx.text.length,

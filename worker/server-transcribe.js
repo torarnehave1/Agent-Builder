@@ -11,6 +11,8 @@
 // Memory: a Worker has 128 MB. The pieces are Blobs built from views into the one download, and
 // only CONCURRENCY of them are in flight at once, so a 57 MB file stays well under the limit.
 
+import { splitAudio } from './audio-split.js'
+
 export const WHISPER_MAX_BYTES = 24 * 1024 * 1024
 export const CHUNK_BYTES = 8 * 1024 * 1024
 const CONCURRENCY = 4
@@ -136,20 +138,32 @@ async function whisper(env, blob, fileName, language) {
 }
 
 /**
- * Transcribe audio bytes. WebM over the Whisper limit is split at Cluster boundaries; anything
- * else must fit in one call. Returns { text, chunks, failed, durationMs }.
+ * Transcribe audio bytes. A file over the Whisper limit is split without re-encoding: WebM at
+ * Cluster boundaries, MP4/M4A, WAV and MP3 by audio-split.js; any other format must fit in one
+ * call. Returns { text, chunks, failed }.
  * text is "[mm:ss] …" paragraphs, one per piece, like the chat's browser transcription.
  */
 export async function transcribeAudioBytes(env, buf, { fileName = 'audio.webm', contentType = 'audio/webm', language = 'no' } = {}) {
   let pieces
+  let pieceExt = null
   if (buf.length <= WHISPER_MAX_BYTES) {
     pieces = [{ parts: [buf], bytes: buf.length, startMs: 0 }]
   } else if (isWebm(buf)) {
     pieces = splitWebm(buf, CHUNK_BYTES)
   } else {
-    throw new Error(`The file is ${(buf.length / 1048576).toFixed(1)} MB and not WebM; only WebM can be split on the server (Whisper takes at most 24 MB).`)
+    // MP4/M4A, WAV, MP3 (audio-split.js). The pieces are files of that kind, whatever the
+    // recording was named, so the name and type sent to Whisper come from the splitter.
+    const split = splitAudio(buf, CHUNK_BYTES)
+    if (!split) {
+      throw new Error(`The file is ${(buf.length / 1048576).toFixed(1)} MB and not WebM, MP4/M4A, WAV or MP3; only those can be split on the server (Whisper takes at most 24 MB).`)
+    }
+    pieces = split.pieces
+    pieceExt = split.ext
+    contentType = split.contentType
+    const tooBig = pieces.find(p => p.bytes > WHISPER_MAX_BYTES)
+    if (tooBig) throw new Error(`A ${split.format} piece is ${(tooBig.bytes / 1048576).toFixed(1)} MB and cannot be made smaller; Whisper takes at most 24 MB.`)
   }
-  const ext = (fileName.split('.').pop() || 'webm').toLowerCase()
+  const ext = pieceExt || (fileName.split('.').pop() || 'webm').toLowerCase()
   const results = new Array(pieces.length)
   let next = 0
   const worker = async () => {
