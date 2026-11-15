@@ -14289,19 +14289,27 @@ async function executeUploadPortfolioRecording(input, env) {
     else return { success: false, error: 'Could not resolve user identity to an email.' }
   }
   const fname = filename || 'agent-recording.m4a'
+  // 80 MB: what transcribe_contact_recording takes, and what fits in this worker's memory.
+  const MAX_BYTES = 80 * 1024 * 1024
+  const tooBig = (n) => ({ success: false, error: `The audio is ${(n / 1048576).toFixed(1)} MB — a recording takes at most 80 MB.` })
   // 1. bytes
   let bytes
   try {
     if (base64) bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
     else {
+      if (!/^https:\/\//i.test(String(sourceUrl))) return { success: false, error: 'sourceUrl must be an https URL.' }
       const r = await fetch(sourceUrl)
       if (!r.ok) return { success: false, error: `Could not fetch sourceUrl (${r.status})` }
+      // Refuse before downloading when the server says how large it is.
+      const declared = Number(r.headers.get('content-length')) || 0
+      if (declared > MAX_BYTES) { try { await r.body?.cancel() } catch {} return tooBig(declared) }
       bytes = new Uint8Array(await r.arrayBuffer())
     }
   } catch (e) {
     return { success: false, error: `Could not read audio bytes: ${e.message}` }
   }
   if (!bytes || bytes.byteLength === 0) return { success: false, error: 'Empty audio.' }
+  if (bytes.byteLength > MAX_BYTES) return tooBig(bytes.byteLength)
   // 2. upload bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2)
   const up = await env.NORWEGIAN_AUDIO.fetch('https://norwegian-transcription-worker/upload', {
     method: 'POST', headers: { 'X-File-Name': encodeURIComponent(fname) }, body: bytes,

@@ -3366,6 +3366,60 @@ export default {
         }
       }
 
+      // POST /contacts/recordings/import — copy an audio file from an https URL into the caller's
+      // audio portfolio (2026-11-15).
+      //
+      // The MCP server's import_recording_from_url reaches this; it runs upload_portfolio_recording,
+      // the executor the Agent-Builder chat uses, so there is one implementation of "bytes -> R2 ->
+      // portfolio metadata". Whose portfolio is written is decided by the verified caller. The
+      // stored file name is reduced to ASCII letters, digits, dot, dash and underscore because the
+      // upload worker uses it in the R2 key as sent; the name the person sees stays as given.
+      if (pathname === '/contacts/recordings/import' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const body = await request.json().catch(() => ({}))
+        const bad = (error) => new Response(JSON.stringify({ success: false, error }), { status: 400, headers: corsHeaders })
+        const sourceUrl = typeof body.url === 'string' ? body.url.trim() : ''
+        let parsed
+        try { parsed = new URL(sourceUrl) } catch { parsed = null }
+        if (!parsed || parsed.protocol !== 'https:') return bad('url must be an https URL of an audio file. Nothing was imported.')
+        let rawName = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : ''
+        if (!rawName) {
+          try { rawName = decodeURIComponent(parsed.pathname.split('/').pop() || '') } catch { rawName = parsed.pathname.split('/').pop() || '' }
+        }
+        const AUDIO_EXT = ['m4a', 'mp3', 'wav', 'webm', 'flac', 'ogg', 'opus']
+        const fromUrlExt = (parsed.pathname.match(/\.([a-z0-9]{2,5})$/i) || [])[1]
+        let ext = ((rawName.match(/\.([a-z0-9]{2,5})$/i) || [])[1] || fromUrlExt || '').toLowerCase()
+        if (!AUDIO_EXT.includes(ext)) {
+          return bad(`The file must be one of ${AUDIO_EXT.map((e) => '.' + e).join(', ')} — give name with its extension if the URL has none. Nothing was imported.`)
+        }
+        const displayName = (rawName.replace(/\.[a-z0-9]{2,5}$/i, '').trim() || 'Imported recording').slice(0, 200)
+        const safeStem = displayName.normalize('NFKD').replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 120) || 'recording'
+        const tags = (Array.isArray(body.tags) ? body.tags : []).filter((t) => typeof t === 'string' && t.trim()).map((t) => t.trim().slice(0, 60)).slice(0, 10)
+        try {
+          const r = await executeTool('upload_portfolio_recording', {
+            userId: callerAuth.userId,
+            ...(callerAuth.email ? { userEmail: callerAuth.email } : {}),
+            sourceUrl,
+            filename: `${safeStem}.${ext}`,
+            displayName,
+            tags: ['url-import', ...tags],
+          }, env, {})
+          if (!r || r.success === false) return bad(r?.error || 'The import failed. Nothing was saved.')
+          // The caller is told what it needs for the next step; the public audio URL stays here.
+          return new Response(JSON.stringify({
+            success: true,
+            recordingId: r.recordingId || null,
+            name: displayName,
+            fileName: r.fileName || `${safeStem}.${ext}`,
+          }), { headers: corsHeaders })
+        } catch (e) {
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status: 502, headers: corsHeaders })
+        }
+      }
+
       // POST /contacts/notes/add — save a note on one contact (a contact_log row of type 'Note').
       //
       // The MCP server's add_contact_note reaches this. Whose book is written is decided by the
