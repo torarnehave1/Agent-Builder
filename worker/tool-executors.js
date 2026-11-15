@@ -10111,7 +10111,55 @@ async function executeSendEmail(input, env) {
 // `cursor` while more remain. Reading only the first page hid every recording past the 200th:
 // on 2026-09-14 that was the newest 17 of 217, including one saved in Audio Studio minutes
 // earlier — so the agent could neither find nor transcribe the recordings a user had just made.
-async function fetchAllPortfolioRecordings(env, email) {
+//
+// 2026-11-15: that legacy listing is also slow — it walks EVERY user's keys and reads each full
+// record (transcripts included) one after another, so listing 20 recordings took tens of seconds.
+// The portfolio worker has a fast path for one owner (`order=newest`): key names only, newest
+// first, the requested page read in parallel, and with `fields=light` no transcripts. Use it;
+// keep the legacy listing only as the fallback for a portfolio worker without the fast path or a
+// portfolio the fast path cannot see (keys saved under another spelling of the e-mail).
+
+// One newest-first page of ONE owner's recordings. Returns null when the fast path is not
+// available (error, or a portfolio worker that ignores `order` and answers in the legacy shape).
+async function fetchPortfolioPage(env, email, { offset = 0, limit = 50, light = true } = {}) {
+  const params = new URLSearchParams({
+    userEmail: email, ownerEmail: email, userRole: 'Superadmin',
+    order: 'newest', limit: String(limit), offset: String(offset),
+  })
+  if (light) params.set('fields', 'light')
+  let res
+  try {
+    res = await env.AUDIO_PORTFOLIO.fetch(`https://audio-portfolio-worker/list-recordings?${params}`)
+  } catch {
+    return null
+  }
+  if (!res.ok) return null
+  const data = await res.json().catch(() => null)
+  if (!data || !Array.isArray(data.recordings) || typeof data.nextOffset !== 'number') return null
+  return {
+    recordings: data.recordings,
+    total: Number(data.total) || 0,
+    nextOffset: data.nextOffset,
+    hasMore: Boolean(data.hasMore) && data.nextOffset > offset,
+  }
+}
+
+// Every recording of one owner, newest first. `light` (default) leaves out transcripts,
+// diarization and analysis and sets hasTranscript — pass light:false when the text is needed.
+async function fetchAllPortfolioRecordings(env, email, { light = true } = {}) {
+  const first = await fetchPortfolioPage(env, email, { offset: 0, limit: 200, light })
+  if (!first || first.total === 0) return fetchAllPortfolioRecordingsLegacy(env, email)
+  const all = [...first.recordings]
+  let page = first
+  for (let i = 0; i < 25 && page.hasMore; i++) {
+    page = await fetchPortfolioPage(env, email, { offset: page.nextOffset, limit: 200, light })
+    if (!page) break
+    all.push(...page.recordings)
+  }
+  return all
+}
+
+async function fetchAllPortfolioRecordingsLegacy(env, email) {
   const all = []
   let cursor = null
   for (let page = 0; page < 25; page++) {
@@ -10147,13 +10195,23 @@ async function executeListRecordings(input, env) {
 
   // Agent-worker is a trusted internal service (service binding) — always use
   // Superadmin + ownerEmail to bypass broken user index and scan KV directly
-  let allRecordings = await fetchAllPortfolioRecordings(env, userEmail)
+  // light:false — this listing searches the transcript text and reports its length and preview.
+  // The user's own and the Sonic Wisdom portfolio are independent, so read them at the same time.
+  const sonicEmail = 'sonic-wisdom@vegvisr.org'
+  const includeSonic = userEmail.toLowerCase() !== sonicEmail
+  const [ownRecordings, sonicResult] = await Promise.all([
+    fetchAllPortfolioRecordings(env, userEmail, { light: false }),
+    includeSonic
+      ? fetchAllPortfolioRecordings(env, sonicEmail, { light: false }).then((r) => ({ ok: true, recordings: r }), () => ({ ok: false }))
+      : Promise.resolve({ ok: false }),
+  ])
+  let allRecordings = ownRecordings
 
   // Also include Sonic Wisdom recordings (saved under sonic-wisdom@vegvisr.org)
-  const sonicEmail = 'sonic-wisdom@vegvisr.org'
-  if (userEmail.toLowerCase() !== sonicEmail) {
+  if (includeSonic) {
     try {
-      const sonicRecordings = (await fetchAllPortfolioRecordings(env, sonicEmail)).map(r => ({ ...r, source: 'Sonic Wisdom' }))
+      if (!sonicResult.ok) throw new Error('Sonic Wisdom fetch failed')
+      const sonicRecordings = sonicResult.recordings.map(r => ({ ...r, source: 'Sonic Wisdom' }))
       allRecordings = allRecordings.concat(sonicRecordings)
     } catch (e) {
       // Sonic Wisdom fetch failed — continue with user's recordings only
@@ -10587,14 +10645,16 @@ async function executeVemotionListAudio(input, env) {
   if (!email) throw new Error('You must be logged in to list your recordings.')
   // Contact-log recordings (conversations) are saved to the same portfolio, tagged "contacts" —
   // never offered as soundtrack material.
-  let recordings = (await fetchAllPortfolioRecordings(env, email))
-    .filter((r) => !(Array.isArray(r.tags) && r.tags.includes('contacts')) && !String(r.fileName || r.r2Key || '').includes('contact-log'))
-  if (input?.vemotionOnly) recordings = recordings.filter((r) => Array.isArray(r.tags) && r.tags.includes('vemotion'))
+  const startedAt = Date.now()
   const q = String(input?.query || '').trim().toLowerCase()
-  if (q) recordings = recordings.filter((r) => `${r.displayName || ''} ${r.fileName || ''} ${(r.tags || []).join(' ')}`.toLowerCase().includes(q))
-  recordings.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))
+  const vemotionOnly = Boolean(input?.vemotionOnly)
   const limit = Math.min(Math.max(Number(input?.limit) || 50, 1), 200)
-  const items = recordings.slice(0, limit).map((r) => ({
+  const wanted = (r) =>
+    !(Array.isArray(r.tags) && r.tags.includes('contacts')) && !String(r.fileName || r.r2Key || '').includes('contact-log')
+    && (!vemotionOnly || (Array.isArray(r.tags) && r.tags.includes('vemotion')))
+    && (!q || `${r.displayName || ''} ${r.fileName || ''} ${(r.tags || []).join(' ')}`.toLowerCase().includes(q))
+  const byNewest = (a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))
+  const toItem = (r) => ({
     name: r.displayName || r.fileName || 'recording',
     r2Url: r.r2Url || null,
     r2Key: r.r2Key || null,
@@ -10602,12 +10662,48 @@ async function executeVemotionListAudio(input, env) {
     format: r.audioFormat || null,
     tags: r.tags || [],
     createdAt: r.createdAt || null,
-  })).filter((r) => r.r2Url)
+  })
+
+  // "My latest recordings" (no filter): read newest-first pages and stop as soon as `limit`
+  // usable recordings are in hand — one small page in the usual case, instead of the whole
+  // portfolio. A few extra per page absorb the conversation recordings that are skipped.
+  if (!q && !vemotionOnly) {
+    const pageSize = Math.min(Math.max(limit + 10, 10), 200)
+    const found = []
+    let page = await fetchPortfolioPage(env, email, { offset: 0, limit: pageSize })
+    if (page && page.total > 0) {
+      for (let i = 0; i < 25; i++) {
+        found.push(...page.recordings.filter((r) => wanted(r) && r.r2Url))
+        if (found.length >= limit || !page.hasMore) break
+        page = await fetchPortfolioPage(env, email, { offset: page.nextOffset, limit: 200 })
+        if (!page) break
+      }
+      if (page) {
+        const items = found.sort(byNewest).slice(0, limit).map(toItem)
+        // Everything was read only when the pages ran out; otherwise the exact count of usable
+        // recordings is not known, and saying a number would be a guess.
+        const complete = !page.hasMore
+        return {
+          message: `${complete ? `${found.length} recording(s)` : `The ${items.length} newest recording(s); more exist (the portfolio holds ${page.total} entries, conversation recordings included)`}${complete && found.length > items.length ? `, the ${items.length} newest listed` : ''}. An audio layer takes r2Url, and layerDuration = duration.`,
+          count: items.length,
+          ...(complete ? { total: found.length } : { hasMore: true, portfolioEntries: page.total }),
+          recordings: items,
+          tookMs: Date.now() - startedAt,
+        }
+      }
+    }
+  }
+
+  // Filtered listing (query / vemotionOnly), or the fast path was not available: the whole
+  // portfolio, without transcripts.
+  const recordings = (await fetchAllPortfolioRecordings(env, email)).filter(wanted).sort(byNewest)
+  const items = recordings.slice(0, limit).map(toItem).filter((r) => r.r2Url)
   return {
     message: `${recordings.length} recording(s)${q ? ` matching "${input.query}"` : ''}${recordings.length > items.length ? `, the ${items.length} newest listed` : ''}. An audio layer takes r2Url, and layerDuration = duration.`,
     count: items.length,
     total: recordings.length,
     recordings: items,
+    tookMs: Date.now() - startedAt,
   }
 }
 
