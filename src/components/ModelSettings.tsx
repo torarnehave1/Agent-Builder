@@ -154,6 +154,33 @@ const MODELS = [
     badgeColor: 'bg-zinc-500/20 text-zinc-200',
   },
   {
+    id: 'gemini/gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash',
+    description: 'Google, fast and low-cost. Uses your own Gemini API key (User Dashboard → API Keys). Same curated AgentChat toolbox as the OpenAI and xAI models.',
+    inputCost: 0.30,
+    outputCost: 2.50,
+    badge: 'Google',
+    badgeColor: 'bg-blue-500/20 text-blue-300',
+  },
+  {
+    id: 'gemini/gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro',
+    description: 'Google, stronger reasoning. Uses your own Gemini API key (User Dashboard → API Keys). Same curated AgentChat toolbox as the OpenAI and xAI models.',
+    inputCost: 1.25,
+    outputCost: 10.00,
+    badge: 'Google',
+    badgeColor: 'bg-blue-500/20 text-blue-300',
+  },
+  {
+    id: 'kimi/kimi-k3.1-pro',
+    name: 'Kimi K3.1 Pro',
+    description: 'Moonshot AI flagship, 1M context, always reasons. Runs through Cloudflare\'s model catalog and is paid from the account\'s prepaid AI Gateway credits. Same curated AgentChat toolbox as the OpenAI and xAI models.',
+    inputCost: 2.00,
+    outputCost: 10.00,
+    badge: 'Moonshot',
+    badgeColor: 'bg-violet-500/20 text-violet-300',
+  },
+  {
     id: '@cf/bytedance/stable-diffusion-xl-lightning',
     name: 'SDXL Lightning',
     description: 'Stable Diffusion XL Lightning. Every message becomes an image prompt.',
@@ -230,7 +257,7 @@ export default function ModelSettings({ model, onChange, resolvedTheme = 'dark' 
       <div className="max-w-xl mx-auto">
         <h2 className={`text-base font-semibold mb-1 ${isLight ? 'text-slate-900' : 'text-white'}`}>Model</h2>
         <p className={`text-xs mb-5 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
-          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude, OpenAI, and xAI models use the SSE chat path.
+          Select a model. Workers AI models use a persistent WebSocket agent hosted on Cloudflare. Claude, OpenAI, xAI, Gemini and Kimi models use the SSE chat path.
         </p>
 
         <div className="flex flex-col gap-3">
