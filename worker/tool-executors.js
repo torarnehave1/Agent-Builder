@@ -19830,10 +19830,15 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
         actionsPerformed: (result.actions || []).map(a => ({
           tool: a.tool, success: a.success, summary: a.summary || a.error,
         })),
-        message,
-        viewUrl: result.graphId
+        message: result.world
+          ? `${message} Stored in ${result.world}'s own storage, as asked. Link: ${result.viewUrl} (the public gnew-viewer cannot open World graphs — do not give that link).`
+          : message,
+        // create_graph picks the link (editor for a World graph); a hard-coded gnew-viewer link here
+        // sent the architect to a page that refuses World graphs (noahart.studio, 2026-11-16).
+        ...(result.world ? { world: result.world } : {}),
+        viewUrl: result.viewUrl || (result.graphId
           ? `https://www.vegvisr.org/gnew-viewer?graphId=${result.graphId}`
-          : undefined,
+          : undefined),
       }
     }
     case 'delegate_to_bot': {

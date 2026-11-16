@@ -71,7 +71,7 @@ const KG_SUBAGENT_SYSTEM_PROMPT = `You are a Knowledge Graph specialist. You cre
 - ALWAYS read before writing to understand current state
 - Track node IDs and graph IDs from tool results — use exact IDs, never guess or hallucinate
 - When creating from perplexity_search results, include citations in a "## Sources" section and populate bibl array
-- Format graph results as markdown links: \`[Title](https://www.vegvisr.org/gnew-viewer?graphId=THE_ID)\`
+- Format graph results as markdown links using the \`viewUrl\` the create_graph result returned: \`[Title](viewUrl)\`. A graph stored in a World gets an editor.vegvisr.org link because the public gnew-viewer cannot read World graphs — never replace it with a gnew-viewer link. Only when no viewUrl was returned (an existing platform graph), use \`https://www.vegvisr.org/gnew-viewer?graphId=THE_ID\`.
 - metaArea should be ALL CAPS (e.g. "NEUROSCIENCE", "AI TECHNOLOGY")
 - category uses hashtags (e.g. "#Health #Neuroscience")
 - Do not narrate internal progress as user-facing output (for example: "I have not done anything concrete yet" or "now I will start"). Perform the write operations, then summarize what was actually changed.
@@ -176,6 +176,10 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
   let userMessage = `## Task\n${task}`
   if (graphId) userMessage += `\n\n## Context\n- graphId: ${graphId}`
   if (nodeId) userMessage += `\n- nodeId: ${nodeId}`
+  // Say the World in the text too. It is injected into create_graph by code below; without this
+  // line the model saw "stored in <world>'s own storage" in the result, found no World in its task,
+  // and reported its correct write as a mistake it could not undo (noahart.studio, 2026-11-16).
+  if (world) userMessage += `\n- world: ${world} — a new graph is stored in this World's own storage. That is what was asked for; create_graph sets it automatically.`
 
   const messages = [{ role: 'user', content: userMessage }]
   const tools = getKgSubagentTools()
@@ -227,6 +231,9 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     if (data.stop_reason === 'end_turn') {
       const text = (data.content || []).filter(c => c.type === 'text').map(b => b.text).join('\n')
       const resolvedGraphId = graphId || actions.find(a => a.graphId)?.graphId
+      // The link the tool chose (editor for a World graph, gnew-viewer for a platform one) travels
+      // as data, so the orchestrator never has to rebuild it from a template (2026-11-16).
+      const created = actions.find(a => a.tool === 'create_graph' && a.viewUrl)
       log(`end_turn — summary: ${text.slice(0, 200)} | tokens in=${inputTokens} out=${outputTokens}`)
       const verification = await verifyGraphHasNodes(resolvedGraphId, env, log)
       const contentWasAsked = taskAskedForNodes(task)
@@ -242,6 +249,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
         actions,
         model,
         graphId: resolvedGraphId,
+        ...(created ? { viewUrl: created.viewUrl } : {}),
+        ...(created?.world ? { world: created.world } : {}),
         nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
         inputTokens,
         outputTokens,
@@ -310,6 +319,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
             graphId: result.graphId || toolUse.input.graphId,
             nodeId: toolUse.input.nodeId || result.nodeId,
             summary: result.message || `${toolUse.name} ok`,
+            ...(result.viewUrl ? { viewUrl: result.viewUrl } : {}),
+            ...(result.world ? { world: result.world } : {}),
           })
 
           // Truncate large results to keep subagent context manageable
@@ -380,6 +391,7 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     summaryParts.push(`${verification.nodeCount} nodes`)
   }
 
+  const createdAtEnd = actions.find(a => a.tool === 'create_graph' && a.viewUrl)
   return {
     success: verification.valid || maxTurnsEmptyButFine,
     summary: verification.valid
@@ -391,6 +403,8 @@ async function runKgSubagent(input, env, onProgress, executeTool) {
     actions,
     model,
     graphId: resolvedGraphId,
+    ...(createdAtEnd ? { viewUrl: createdAtEnd.viewUrl } : {}),
+    ...(createdAtEnd?.world ? { world: createdAtEnd.world } : {}),
     nodeId: nodeId || actions.find(a => a.nodeId)?.nodeId,
     inputTokens,
     outputTokens,
