@@ -6,9 +6,13 @@
 // The template (the same shape as «Enkel hals strikkekurs», graph 27d21ff6):
 //   produkt          fulltext, metadata.product {kind, slug, status, access, lessons, videos, duration_s, …}
 //   kursbilde        portfolio-image, path = the card image
-//   om-kurset        fulltext, metadata.about {tagline, about, you_make, for_whom, level, you_need, …}
-//   <lesson>         per step: metadata.lesson {order, type: video|text, title, key, duration_s, pdf}
-//                    video = realtime-video with path; text = fulltext with info
+//   om-kurset        kursbeskrivelse, metadata.about {tagline, about, you_make, for_whom, level, you_need, …}
+//   <lesson>         kurs-steg, per step: metadata.lesson {order, type: video|text, title, key, duration_s, pdf}
+//                    video = path holds the video; text = info holds the text
+// The two node types (2026-11-16) are registered platform types, so a course's description and
+// steps can be picked out by type (Garnet, a course layout). This module and Min side still find
+// the nodes by id and metadata, never by type, so a course made before that date — om-kurset as
+// fulltext, steps as realtime-video / fulltext — keeps working unchanged.
 //   <lesson>-oppsummering / <lesson>-transkripsjon   joined to the step BY ID (Min side reads them so)
 //
 // Rules this module owns so nobody else has to:
@@ -24,6 +28,8 @@
 // as /world-photos/token. The KG worker checks again as the acting user.
 
 export const COURSE_META_AREA = '#KURS'
+export const ABOUT_NODE_TYPE = 'kursbeskrivelse'
+export const LESSON_NODE_TYPE = 'kurs-steg'
 const AUDIO = 'https://openai.vegvisr.org/audio'
 const LLM = 'https://anthropic.vegvisr.org/chat'
 const SUMMARY_MODEL = 'claude-sonnet-5-5'
@@ -160,7 +166,7 @@ export function newCourseGraph(input, { createdBy, world }) {
   if (input.image_url) {
     nodes.push({ id: 'kursbilde', label: title, type: 'portfolio-image', path: input.image_url, info: `![${title}](${input.image_url})`, visible: true, bibl: [], position: { x: 0, y: 60 }, metadata: { image: { key: input.image_key || null, kind: 'course-image' } } })
   }
-  nodes.push({ id: 'om-kurset', label: 'Om kurset', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, [], 0), metadata: { about } })
+  nodes.push({ id: 'om-kurset', label: 'Om kurset', type: ABOUT_NODE_TYPE, visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, [], 0), metadata: { about } })
   const metaArea = [COURSE_META_AREA, ...(String(input.metaArea || '').split(/\s+/).filter(Boolean))]
   const g = {
     metadata: {
@@ -247,14 +253,14 @@ export function addLesson(g, input) {
   let id = `l${String(n0).padStart(2, '0')}-${slugify(title)}`
   while (byId(g, id)) id = `${id}-${Math.random().toString(36).slice(2, 6)}`
   const lesson = { order: 10000, type, title }
-  const node = { id, label: title, visible: true, bibl: [], position: { x: 0, y: 0 } }
+  const node = { id, label: title, type: LESSON_NODE_TYPE, visible: true, bibl: [], position: { x: 0, y: 0 } }
   if (type === 'video') {
     Object.assign(lesson, { key: input.key || null, bytes: input.bytes ? Number(input.bytes) : null, duration_s: Math.round(Number(input.duration_s || 0)), ...(input.sha256 ? { sha256: input.sha256 } : {}) })
-    Object.assign(node, { type: 'realtime-video', path: input.video_url, info: '' })
+    Object.assign(node, { path: input.video_url, info: '' })
   } else {
     const pdf = input.pdf_url ? { key: input.pdf_key || null, name: input.pdf_name || 'oppskrift.pdf', url: input.pdf_url } : null
     lesson.pdf = pdf
-    Object.assign(node, { type: 'fulltext', info: textWithPdf(input.text || '', pdf) })
+    Object.assign(node, { info: textWithPdf(input.text || '', pdf) })
   }
   node.metadata = { lesson }
   g.nodes.push(node)

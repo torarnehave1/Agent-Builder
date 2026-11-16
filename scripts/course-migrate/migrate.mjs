@@ -433,9 +433,13 @@ async function saveGraph() {
     edges.push({ source: prev, target: 'kursbilde', type: 'next', label: 'next' }); prev = 'kursbilde'
   }
   if (about) {
-    nodes.push({ id: 'om-kurset', label: LIBRARY ? `Om ${m.title}` : 'Om kurset', type: 'fulltext', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, steps, totalS), metadata: { about: { ...about, source: 'automatic' } } })
+    nodes.push({ id: 'om-kurset', label: LIBRARY ? `Om ${m.title}` : 'Om kurset', type: LIBRARY ? 'fulltext' : 'kursbeskrivelse', visible: true, bibl: [], position: { x: 0, y: 90 }, info: aboutMarkdown(about, steps, totalS), metadata: { about: { ...about, source: 'automatic' } } })
     edges.push({ source: prev, target: 'om-kurset', type: 'next', label: 'next' }); prev = 'om-kurset'
   }
+  // A course's steps are kurs-steg nodes and its description a kursbeskrivelse node (registered
+  // platform types, 2026-11-16; the same as worker/world-course.js makes). A video collection
+  // (LIBRARY) is not a course and keeps the plain types.
+  const STEP_TYPE = LIBRARY ? null : 'kurs-steg'
   m.lessons.forEach((lesson, i) => {
     const order = i + 1
     const nid = `l${String(order).padStart(2, '0')}-${slugify(lesson.title)}`
@@ -455,7 +459,7 @@ async function saveGraph() {
         edges.push({ source: prev, target: sid, type: 'next', label: 'next' })
         prev = sid
       }
-      nodes.push({ ...base, type: 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
+      nodes.push({ ...base, type: STEP_TYPE || 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
       const t = state.transcripts[lesson.lesson_id]
       if (t) {
         const tid = `${nid}-transkripsjon`
@@ -472,7 +476,7 @@ async function saveGraph() {
     } else {
       const f = state.files[lesson.lesson_id]
       const pdfNote = f ? `\n\n**[Last ned oppskriften (PDF)](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
-      nodes.push({ ...base, type: 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null) } } })
+      nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null) } } })
     }
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
     prev = nid

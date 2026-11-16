@@ -151,6 +151,11 @@ check('product counts follow: 3 steps, 2 videos, 500 s', p.lessons === 3 && p.vi
 check('the PDF becomes a grant', p.grants.some((x) => x.type === 'file' && x.ref === 'kurs/enkel-lue/enkel-lue.pdf'), JSON.stringify(p.grants))
 check('labels are «Steg N av M – …»', g.nodes.find((n) => n.id === fellAv).label === 'Steg 3 av 3 – Fell av', g.nodes.find((n) => n.id === fellAv).label)
 const about = g.nodes.find((n) => n.id === 'om-kurset').info
+// Node types (2026-11-16): the description and the steps carry their own registered types, so a
+// course can be picked out by type; the summary and transcript beside a step stay plain text.
+check('«Om kurset» is a kursbeskrivelse node', g.nodes.find((n) => n.id === 'om-kurset').type === 'kursbeskrivelse', g.nodes.find((n) => n.id === 'om-kurset').type)
+check('a text step is a kurs-steg node with its text', g.nodes.find((n) => n.id === 'l01-oppskriften').type === 'kurs-steg' && g.nodes.find((n) => n.id === 'l01-oppskriften').info.includes('Her er oppskriften.'), g.nodes.find((n) => n.id === 'l01-oppskriften').type)
+check('a video step is a kurs-steg node with its video in path', g.nodes.find((n) => n.id === fellAv).type === 'kurs-steg' && g.nodes.find((n) => n.id === fellAv).path.endsWith('03-fell-av.mp4'), g.nodes.find((n) => n.id === fellAv).type)
 check('«Om kurset» lists the steps and counts', /\*\*3 steg\*\*/.test(about) && /1\. Oppskriften\n2\. Legg opp \(5 min\)\n3\. Fell av \(3 min\)/.test(about), about)
 
 // ---- 4. stale version is refused ------------------------------------------------------------------
