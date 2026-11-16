@@ -28,6 +28,8 @@ import {
   type RunResult,
 } from '../lib/automationToGraph';
 import type { AutomationDraft } from '../lib/logToAutomation';
+import { listFlows, loadFlow, flowEditorUrl, type FlowSummary, type LoadedFlow } from '../lib/flowGraph';
+import { FlowHeaderNode, FlowStepNode, FlowStepDetails, kindStyle } from './nodes/flow/FlowNodes';
 
 interface Props {
   userEmail: string;
@@ -45,6 +47,19 @@ const AUTOMATION_NODE_TYPES: NodeTypes = {
   notify: NotifyNode,
   note: NoteNode,
 };
+
+// VEGR Flows are shown here read-only (2026-11-16): flows-worker runs them, not this tab.
+const FLOW_NODE_TYPES: NodeTypes = {
+  flowHeader: FlowHeaderNode,
+  flowStep: FlowStepNode,
+};
+
+function flowMinimapColor(node: Node): string {
+  if (node.type === 'flowHeader') return '#a855f7';
+  return kindStyle(String((node.data as { kind?: string })?.kind || 'note')).hex;
+}
+
+const noop = () => {};
 
 function minimapColor(node: Node): string {
   return STEP_COLORS[(node.type || 'note') as StepType] || '#64748b';
@@ -66,6 +81,10 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
   const [status, setStatus] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [summaries, setSummaries] = useState<AutomationSummary[]>([]);
+  const [flowSummaries, setFlowSummaries] = useState<FlowSummary[]>([]);
+  /** A VEGR Flow open for viewing. While set, the canvas shows it and nothing can be saved or run. */
+  const [flow, setFlow] = useState<LoadedFlow | null>(null);
+  const [flowSelected, setFlowSelected] = useState<Node | null>(null);
   const [loadingList, setLoadingList] = useState(false);
   const [runForReal, setRunForReal] = useState(false);
   const [running, setRunning] = useState(false);
@@ -119,6 +138,8 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
   }, []);
 
   const handleNew = useCallback(() => {
+    setFlow(null);
+    setFlowSelected(null);
     setNodes(seedNodes());
     setEdges([]);
     setSelectedNode(null);
@@ -228,6 +249,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
   useEffect(() => {
     if (!draft) return;
     const { nodes: n, edges: e } = specToReactFlow(draft);
+    setFlow(null);
     setNodes(n.length ? n : seedNodes());
     setEdges(e);
     setSelectedNode(null);
@@ -248,9 +270,12 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
     setPickerOpen(true);
     setLoadingList(true);
     try {
-      setSummaries(await listAutomations());
-    } catch {
-      setSummaries([]);
+      const [automations, flows] = await Promise.all([
+        listAutomations().catch(() => [] as AutomationSummary[]),
+        listFlows().catch(() => [] as FlowSummary[]),
+      ]);
+      setSummaries(automations);
+      setFlowSummaries(flows);
     } finally {
       setLoadingList(false);
     }
@@ -261,6 +286,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
     setStatus('Loading…');
     try {
       const loaded = await loadAutomation(id);
+      setFlow(null);
       setNodes(loaded.nodes.length ? loaded.nodes : seedNodes());
       setEdges(loaded.edges);
       setSelectedNode(null);
@@ -270,6 +296,20 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       setTitle(loaded.meta.title);
       setDescription(loaded.meta.description || '');
       setStatus('Loaded');
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'Load failed');
+    }
+  }, []);
+
+  const handleOpenFlow = useCallback(async (id: string) => {
+    setPickerOpen(false);
+    setStatus('Loading…');
+    try {
+      const loaded = await loadFlow(id);
+      setFlow(loaded);
+      setFlowSelected(null);
+      setRunResult(null);
+      setStatus(null);
     } catch (err) {
       setStatus(err instanceof Error ? err.message : 'Load failed');
     }
@@ -288,6 +328,35 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
       {/* Canvas */}
       <div className="flex flex-1 flex-col min-w-0">
         {/* Toolbar */}
+        {flow ? (
+          <div className="flex items-center gap-2 px-4 h-[44px] border-b border-white/10 bg-slate-950/70 flex-shrink-0">
+            <span className="rounded bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[10px] font-semibold text-purple-200">VEGR Flow · view only</span>
+            <span className="text-[13px] text-white truncate max-w-[320px]" title={flow.description}>{flow.title}</span>
+            <button
+              type="button"
+              onClick={openPicker}
+              className="rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[12px] text-white/80 hover:bg-white/10"
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              onClick={handleNew}
+              className="rounded-md border border-white/10 bg-white/5 px-3 py-1 text-[12px] text-white/80 hover:bg-white/10"
+            >
+              New
+            </button>
+            {status && <span className="text-[11px] text-white/50">{status}</span>}
+            <a
+              href={flowEditorUrl(flow.id, flow.world)}
+              target="_blank"
+              rel="noreferrer"
+              className="ml-auto text-[11px] text-sky-400 hover:underline"
+            >
+              Open in editor ↗
+            </a>
+          </div>
+        ) : (
         <div className="flex items-center gap-2 px-4 h-[44px] border-b border-white/10 bg-slate-950/70 flex-shrink-0">
           <input
             value={title}
@@ -352,9 +421,10 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
             </a>
           )}
         </div>
+        )}
 
         {/* Run parameters — what this automation asks for each time it runs. */}
-        {inputs.length > 0 && (
+        {!flow && inputs.length > 0 && (
           <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-purple-950/20 flex-shrink-0 overflow-x-auto">
             <span className="text-[11px] text-purple-300/80 flex-shrink-0" title="Declared on the Start step">
               ⚙ This run
@@ -379,6 +449,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
         )}
 
         {/* Describe-it bar: plain language → the agent builds the automation onto the canvas */}
+        {!flow && (
         <div className="flex items-center gap-2 px-4 py-2 border-b border-white/10 bg-slate-900/40 flex-shrink-0">
           <span className="text-[11px] text-white/40 flex-shrink-0">✨ Describe</span>
           <input
@@ -397,9 +468,23 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
             {building ? 'Building…' : 'Build'}
           </button>
         </div>
+        )}
 
         <ReactFlowProvider>
           <div className="flex flex-1 min-h-0 relative">
+            {flow ? (
+              <ContractCanvas
+                key={`flow-${flow.id}`}
+                initialNodes={flow.nodes}
+                initialEdges={flow.edges}
+                nodeTypes={FLOW_NODE_TYPES}
+                minimapNodeColor={flowMinimapColor}
+                onNodeSelect={setFlowSelected}
+                onNodesChange={noop}
+                onEdgesChange={noop}
+                readOnly
+              />
+            ) : (
             <ContractCanvas
               initialNodes={displayNodes}
               initialEdges={edges}
@@ -411,12 +496,29 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
               onDropNode={(type, position) => addNodeAt(type as StepType, position)}
               onDeleteNodes={handleDeleteNodes}
             />
+            )}
           </div>
         </ReactFlowProvider>
       </div>
 
       {/* Right rail: palette + inspector */}
       <div className="w-[280px] flex-shrink-0 border-l border-white/10 bg-slate-950/85 overflow-y-auto flex flex-col">
+        {flow ? (
+        <div className="flex-1 px-3 py-4 space-y-5">
+          <section>
+            <SectionLabel>STEP</SectionLabel>
+            <FlowStepDetails node={flowSelected} />
+          </section>
+          <div className="border-t border-white/8" />
+          <section>
+            <SectionLabel>HOW IT RUNS</SectionLabel>
+            <div className="text-[11px] text-white/55 space-y-1.5">
+              <p>A VEGR Flow runs in flows-worker, not in the automation runner: approval steps pause the run, and sends go only to ContactHub contacts after a yes.</p>
+              <p>It is started over the MCP tool run_flow, e.g. by asking Claude to run «{flow.title}». This view does not run or change it.</p>
+            </div>
+          </section>
+        </div>
+        ) : (
         <div className="flex-1 px-3 py-4 space-y-5">
           <section>
             <SectionLabel>DRAG TO ADD</SectionLabel>
@@ -471,6 +573,7 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
             </>
           )}
         </div>
+        )}
       </div>
 
       {/* Open picker */}
@@ -495,6 +598,25 @@ export default function AutomationTab({ userEmail, userId, draft, onDraftApplied
                 </button>
               ))}
             </div>
+            {!loadingList && flowSummaries.length > 0 && (
+              <>
+                <div className="text-sm font-semibold text-white mt-5 mb-1">VEGR Flows</div>
+                <div className="text-[11px] text-white/40 mb-2">View only — run by flows-worker.</div>
+                <div className="space-y-1">
+                  {flowSummaries.map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => handleOpenFlow(f.id)}
+                      className="w-full text-left rounded-lg border border-purple-500/20 bg-purple-500/5 px-3 py-2 hover:bg-purple-500/10"
+                    >
+                      <div className="text-[13px] text-white">{f.title}{f.world && <span className="ml-2 text-[10px] text-purple-300/70">{f.world}</span>}</div>
+                      {f.description && <div className="text-[11px] text-white/50 truncate">{f.description}</div>}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

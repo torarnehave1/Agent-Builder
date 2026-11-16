@@ -1,0 +1,162 @@
+/**
+ * VEGR Flows in the Automations tab — READ-ONLY (2026-11-16).
+ *
+ * A VEGR Flow is a graph with one `flow` node and `flow-step` nodes joined by labelled edges
+ * (next / approved / rejected / error). It is NOT an automation: flows-worker runs it (over the
+ * MCP tool run_flow), with approval steps and sends limited to ContactHub contacts — the
+ * automation runner has neither. So this file only lists and draws flows; nothing here saves or
+ * runs one. The step shape is flows-worker/compile.js (vegvisr-frontend): metadata.kind is
+ * action | agent | approval | route | wait | loop | subflow | note.
+ */
+import type { Node, Edge } from '@xyflow/react';
+import { kgAuthHeaders } from './kgAuth';
+import { KG_API } from './automationToGraph';
+
+export interface FlowSummary {
+  id: string;
+  title: string;
+  description: string;
+  world?: string;
+}
+
+export interface FlowStepData {
+  label: string;
+  kind: string;
+  info: string;
+  toolName?: string;
+  forEach?: string;
+  maxItems?: number;
+  params?: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  timeout?: string;
+  approver?: string;
+  previewTool?: string;
+  [key: string]: unknown;
+}
+
+export interface FlowHeaderData {
+  label: string;
+  info: string;
+  status?: string;
+  limits?: Record<string, unknown>;
+  inputs?: Record<string, string>;
+  triggers?: Array<{ id?: string; type?: string; [k: string]: unknown }>;
+  [key: string]: unknown;
+}
+
+export interface LoadedFlow {
+  id: string;
+  title: string;
+  description: string;
+  world: string | null;
+  nodes: Node[];
+  edges: Edge[];
+}
+
+/**
+ * Flows: graphs tagged with a FLOWS area (#VEGRAIFLOWS, #FLOWS), filtered by the server
+ * (metaArea), then kept only if they really hold a `flow` node — an area tag alone does not make
+ * a graph a flow.
+ */
+export async function listFlows(): Promise<FlowSummary[]> {
+  const params = new URLSearchParams({ offset: '0', limit: '100', metaArea: 'FLOWS' });
+  const res = await fetch(`${KG_API}/getknowgraphsummaries?${params}`, { headers: kgAuthHeaders() });
+  if (!res.ok) throw new Error(`List failed: ${res.status}`);
+  const data = (await res.json()) as {
+    results?: Array<{ id: string; title?: string; nodeTypes?: string[]; world?: string; metadata?: Record<string, unknown> }>;
+  };
+  return (data.results || [])
+    .filter((g) => Array.isArray(g.nodeTypes) && g.nodeTypes.includes('flow'))
+    .map((g) => ({
+      id: g.id,
+      title: (g.metadata?.title as string) || g.title || g.id,
+      description: (g.metadata?.description as string) || '',
+      ...(g.world ? { world: g.world } : {}),
+    }));
+}
+
+// Graph positions are laid out ~200 apart, closer than a step card is wide; spread them out.
+const SPREAD_X = 1.6;
+const SPREAD_Y = 1.25;
+
+const EDGE_COLORS: Record<string, string> = {
+  approved: 'rgba(52,211,153,0.7)',
+  rejected: 'rgba(244,63,94,0.7)',
+  error: 'rgba(251,146,60,0.8)',
+};
+
+/** Load a flow graph and draw it: the flow node as the header, each flow-step by its kind. */
+export async function loadFlow(id: string): Promise<LoadedFlow> {
+  const res = await fetch(`${KG_API}/getknowgraph?id=${encodeURIComponent(id)}`, { headers: kgAuthHeaders() });
+  if (!res.ok) throw new Error(`Load failed: ${res.status}`);
+  const world = res.headers.get('X-Graph-World');
+  const graph = (await res.json()) as {
+    metadata?: Record<string, unknown>;
+    nodes?: Array<{ id: string; type?: string; label?: string; info?: string; position?: { x?: number; y?: number }; metadata?: Record<string, any> }>;
+    edges?: Array<{ id?: string; source: string; target: string; label?: string }>;
+  };
+  const kgNodes = graph.nodes || [];
+  if (!kgNodes.some((n) => n.type === 'flow')) throw new Error('This graph has no flow node — it is not a VEGR Flow.');
+
+  const nodes: Node[] = kgNodes
+    .filter((n) => n.type === 'flow' || n.type === 'flow-step')
+    .map((n) => {
+      const m = n.metadata || {};
+      const position = { x: (n.position?.x ?? 0) * SPREAD_X, y: (n.position?.y ?? 0) * SPREAD_Y };
+      if (n.type === 'flow') {
+        const data: FlowHeaderData = {
+          label: n.label || 'Flow', info: n.info || '', status: m.status, limits: m.limits, inputs: m.inputs, triggers: m.triggers,
+        };
+        return { id: n.id, type: 'flowHeader', position, data, draggable: false };
+      }
+      const data: FlowStepData = {
+        label: n.label || n.id,
+        kind: String(m.kind || 'note'),
+        info: n.info || '',
+        toolName: m.toolName,
+        forEach: m.forEach,
+        maxItems: m.maxItems,
+        params: m.params,
+        payload: m.payload,
+        timeout: m.timeout,
+        approver: m.approver,
+        previewTool: m.preview?.toolName,
+      };
+      return { id: n.id, type: 'flowStep', position, data, draggable: false };
+    });
+
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges: Edge[] = (graph.edges || [])
+    .filter((e) => ids.has(e.source) && ids.has(e.target))
+    .map((e, i) => {
+      const label = e.label && e.label !== 'next' ? e.label : undefined;
+      const stroke = (label && EDGE_COLORS[label]) || 'rgba(148,163,184,0.5)';
+      return {
+        // Two edges can join the same pair (next + error): the index keeps their ids apart.
+        id: `${e.id || `${e.source}_${e.target}`}#${i}`,
+        source: e.source,
+        target: e.target,
+        label,
+        style: { stroke, strokeWidth: 1.5 },
+        labelStyle: { fill: '#e2e8f0', fontSize: 10 },
+        labelBgStyle: { fill: '#0f172a' },
+        animated: false,
+      };
+    });
+
+  const m = graph.metadata || {};
+  return {
+    id,
+    title: (m.title as string) || 'Untitled flow',
+    description: (m.description as string) || '',
+    world,
+    nodes,
+    edges,
+  };
+}
+
+/** Where the graph opens for editing: the World's own editor for a World graph. */
+export function flowEditorUrl(id: string, world: string | null): string {
+  const base = world ? `https://editor.${world.toLowerCase()}` : 'https://editor.vegvisr.org';
+  return `${base}/?graphId=${encodeURIComponent(id)}`;
+}

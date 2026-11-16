@@ -37,6 +37,8 @@ interface Props {
   // Defaults preserve the original contract-editor behaviour.
   nodeTypes?: NodeTypes;
   minimapNodeColor?: (node: Node) => string;
+  /** View only: no connecting, deleting or dragging (a VEGR Flow shown in the Automations tab). */
+  readOnly?: boolean;
 }
 
 const CONTRACT_NODE_TYPES: NodeTypes = {
@@ -73,6 +75,7 @@ export default function ContractCanvas({
   onDeleteNodes,
   nodeTypes: nodeTypesProp,
   minimapNodeColor,
+  readOnly = false,
 }: Props) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
@@ -179,7 +182,9 @@ export default function ContractCanvas({
         onPaneClick={handlePaneClick}
         onNodeDragStop={onNodeDragStop ? () => onNodeDragStop() : undefined}
         onNodesDelete={onDeleteNodes}
-        deleteKeyCode={['Backspace', 'Delete']}
+        deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+        nodesConnectable={!readOnly}
+        nodesDraggable={!readOnly}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.3 }}
