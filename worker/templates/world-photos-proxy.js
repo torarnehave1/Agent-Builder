@@ -60,6 +60,12 @@ export default {
         return await handleList(request, env, url)
       }
       if (path === '/photos/upload' && method === 'POST') return await handleUpload(request, env)
+      // Upload in parts, for files larger than one request may carry. Matched before delivery, so
+      // an object whose key starts with "multipart/" is not reachable at /photos/multipart/….
+      if (path === '/photos/multipart/create' && method === 'POST') return await handleMultipartCreate(request, env)
+      if (path === '/photos/multipart/part' && method === 'PUT') return await handleMultipartPart(request, env, url)
+      if (path === '/photos/multipart/complete' && method === 'POST') return await handleMultipartComplete(request, env)
+      if (path === '/photos/multipart/abort' && method === 'POST') return await handleMultipartAbort(request, env)
       if (path === '/photos/trash' && method === 'POST') return await handleTrash(request, env)
       if (path === '/photos/restore' && method === 'POST') return await handleRestore(request, env)
       if (path === '/photos/trash/list' && method === 'GET') return await handleTrashList(request, env)
@@ -168,6 +174,8 @@ async function handleCheck(request, env) {
     albums_bound: !!env.PHOTO_ALBUMS,
     delivery_base: env.DELIVERY_BASE || null,
     version: 'v2',
+    // Callers ask before sending a file in parts; a proxy from before 2026-11-13 has no such field.
+    multipart: true,
   }
   // A KV round-trip, so "bound" is not mistaken for "works".
   if (env.PHOTO_ALBUMS) {
@@ -310,41 +318,149 @@ async function handleUpload(request, env) {
   // `meta` (2026-10-16): a small JSON object stored on the object itself as R2 custom metadata, so
   // a file names its course, lesson and checksum even without the graph that lists it. Values
   // become strings; the whole set is capped at 2 KB.
-  let customMetadata
-  const rawMeta = form.get('meta')
-  if (rawMeta) {
-    let parsed
-    try { parsed = JSON.parse(String(rawMeta)) } catch { return json({ error: 'meta must be a JSON object' }, 400) }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return json({ error: 'meta must be a JSON object' }, 400)
-    customMetadata = {}
-    for (const [k, v] of Object.entries(parsed)) {
-      if (v === null || v === undefined) continue
-      customMetadata[String(k).slice(0, 64)] = String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, 512)
-    }
-    if (JSON.stringify(customMetadata).length > 2048) return json({ error: 'meta is larger than 2 KB' }, 400)
-  }
+  const metaResult = parseMeta(form.get('meta'))
+  if (metaResult.error) return json({ error: metaResult.error }, 400)
+  const customMetadata = metaResult.customMetadata
 
   await env.PHOTOS_BUCKET.put(key, file.stream(), {
     httpMetadata: { contentType: file.type || 'application/octet-stream' },
     ...(customMetadata ? { customMetadata } : {}),
   })
 
-  const album = normalizeName(form.get('album'))
-  if (album && env.PHOTO_ALBUMS) {
-    const record = await readAlbum(env, album)
-    const existing = record || { name: album, images: [] }
-    const actor = String(form.get('actor') || '') || null
-    const owner = String(form.get('owner') || '') || null
-    await writeAlbum(env, album, buildAlbumRecord({
-      name: album,
-      images: [...new Set([...(existing.images || []), key])],
-      existing,
-      createdBy: owner || (existing.createdBy ?? actor),
-      auditEntry: auditEntryFor('add_images', actor, { added: 1 }),
-    }))
-  }
+  const album = await fileIntoAlbum(env, key, form.get('album'), form.get('actor'), form.get('owner'))
 
   return json({ key, url: `${env.DELIVERY_BASE || ''}/photos/${key}`, album: album || null, meta: customMetadata || null })
+}
+
+// `meta` as sent by a caller (a JSON string, or an object) -> R2 custom metadata, or an error text.
+function parseMeta(rawMeta) {
+  if (!rawMeta) return { customMetadata: undefined }
+  let parsed = rawMeta
+  if (typeof rawMeta !== 'object') {
+    try { parsed = JSON.parse(String(rawMeta)) } catch { return { error: 'meta must be a JSON object' } }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: 'meta must be a JSON object' }
+  const customMetadata = {}
+  for (const [k, v] of Object.entries(parsed)) {
+    if (v === null || v === undefined) continue
+    customMetadata[String(k).slice(0, 64)] = String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, 512)
+  }
+  if (JSON.stringify(customMetadata).length > 2048) return { error: 'meta is larger than 2 KB' }
+  return { customMetadata }
+}
+
+// Adds one stored key to an album record. Returns the normalized album name, or '' when none.
+async function fileIntoAlbum(env, key, rawAlbum, rawActor, rawOwner) {
+  const album = normalizeName(rawAlbum)
+  if (!album || !env.PHOTO_ALBUMS) return album
+  const record = await readAlbum(env, album)
+  const existing = record || { name: album, images: [] }
+  const actor = String(rawActor || '') || null
+  const owner = String(rawOwner || '') || null
+  await writeAlbum(env, album, buildAlbumRecord({
+    name: album,
+    images: [...new Set([...(existing.images || []), key])],
+    existing,
+    createdBy: owner || (existing.createdBy ?? actor),
+    auditEntry: auditEntryFor('add_images', actor, { added: 1 }),
+  }))
+  return album
+}
+
+// ---- upload in parts (2026-11-13) ------------------------------------------------------------
+// One request to a Worker may carry about 100 MB, and a course video can be larger than that at a
+// quality worth keeping. These four routes are R2's own multipart upload, one call each:
+//   POST /photos/multipart/create    {key, contentType?, meta?}                  -> {key, uploadId}
+//   PUT  /photos/multipart/part?key=&uploadId=&partNumber=   raw bytes           -> {partNumber, etag}
+//   POST /photos/multipart/complete  {key, uploadId, parts, album?, actor?, owner?}
+//                                    -> the same answer as /photos/upload, plus size
+//   POST /photos/multipart/abort     {key, uploadId}
+// R2's rules apply unchanged: every part but the last is the same size and at least 5 MiB. Content
+// type and meta are fixed at create; the album is filed at complete, when the object exists.
+// All four need the `upload` scope, as /photos/upload does.
+
+async function handleMultipartCreate(request, env) {
+  const denied = await authorize(request, env, 'upload')
+  if (denied) return denied
+  if (!env.PHOTOS_BUCKET) return json({ error: 'no bucket bound' }, 500)
+  const body = await readJson(request)
+  if (!body) return json({ error: 'invalid JSON body' }, 400)
+  const key = String(body.key || '').replace(/^\/+/, '')
+  if (!key) return json({ error: 'no key' }, 400)
+  const metaResult = parseMeta(body.meta)
+  if (metaResult.error) return json({ error: metaResult.error }, 400)
+  const upload = await env.PHOTOS_BUCKET.createMultipartUpload(key, {
+    httpMetadata: { contentType: String(body.contentType || 'application/octet-stream') },
+    ...(metaResult.customMetadata ? { customMetadata: metaResult.customMetadata } : {}),
+  })
+  return json({ key: upload.key, uploadId: upload.uploadId })
+}
+
+async function handleMultipartPart(request, env, url) {
+  const denied = await authorize(request, env, 'upload')
+  if (denied) return denied
+  if (!env.PHOTOS_BUCKET) return json({ error: 'no bucket bound' }, 500)
+  const key = String(url.searchParams.get('key') || '').replace(/^\/+/, '')
+  const uploadId = url.searchParams.get('uploadId') || ''
+  const partNumber = Number(url.searchParams.get('partNumber'))
+  if (!key || !uploadId) return json({ error: 'key and uploadId are required' }, 400)
+  if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+    return json({ error: 'partNumber must be a whole number from 1 to 10000' }, 400)
+  }
+  if (!request.body) return json({ error: 'no body' }, 400)
+  const upload = env.PHOTOS_BUCKET.resumeMultipartUpload(key, uploadId)
+  let part
+  try {
+    part = await upload.uploadPart(partNumber, request.body)
+  } catch (err) {
+    return json({ error: 'part refused', detail: String(err && err.message ? err.message : err) }, 400)
+  }
+  return json({ partNumber: part.partNumber, etag: part.etag })
+}
+
+async function handleMultipartComplete(request, env) {
+  const denied = await authorize(request, env, 'upload')
+  if (denied) return denied
+  if (!env.PHOTOS_BUCKET) return json({ error: 'no bucket bound' }, 500)
+  const body = await readJson(request)
+  if (!body) return json({ error: 'invalid JSON body' }, 400)
+  const key = String(body.key || '').replace(/^\/+/, '')
+  const uploadId = String(body.uploadId || '')
+  const parts = Array.isArray(body.parts) ? body.parts : []
+  if (!key || !uploadId) return json({ error: 'key and uploadId are required' }, 400)
+  if (!parts.length) return json({ error: 'parts is empty' }, 400)
+  const upload = env.PHOTOS_BUCKET.resumeMultipartUpload(key, uploadId)
+  let object
+  try {
+    object = await upload.complete(parts.map((p) => ({ partNumber: Number(p.partNumber), etag: String(p.etag) })))
+  } catch (err) {
+    return json({ error: 'complete refused', detail: String(err && err.message ? err.message : err) }, 400)
+  }
+  const album = await fileIntoAlbum(env, key, body.album, body.actor, body.owner)
+  return json({
+    key,
+    url: `${env.DELIVERY_BASE || ''}/photos/${key}`,
+    album: album || null,
+    meta: (object && object.customMetadata && Object.keys(object.customMetadata).length ? object.customMetadata : null),
+    size: object ? object.size : null,
+  })
+}
+
+async function handleMultipartAbort(request, env) {
+  const denied = await authorize(request, env, 'upload')
+  if (denied) return denied
+  if (!env.PHOTOS_BUCKET) return json({ error: 'no bucket bound' }, 500)
+  const body = await readJson(request)
+  if (!body) return json({ error: 'invalid JSON body' }, 400)
+  const key = String(body.key || '').replace(/^\/+/, '')
+  const uploadId = String(body.uploadId || '')
+  if (!key || !uploadId) return json({ error: 'key and uploadId are required' }, 400)
+  try {
+    await env.PHOTOS_BUCKET.resumeMultipartUpload(key, uploadId).abort()
+  } catch (err) {
+    return json({ error: 'abort refused', detail: String(err && err.message ? err.message : err) }, 400)
+  }
+  return json({ aborted: true, key })
 }
 
 async function handleList(request, env, url) {

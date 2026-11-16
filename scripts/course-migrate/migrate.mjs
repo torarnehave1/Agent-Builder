@@ -36,6 +36,11 @@ const KG = 'https://knowledge.vegvisr.org'
 const CEILING = 95 * 1024 * 1024
 // CRF 28 added 2026-11-13: Krise-siden's 5½-minute 1080p videos are ~109 MB at CRF 26.
 const LADDER = [20, 23, 26, 28]
+// Upload in parts (2026-11-13): «Strikk flette» is 8½ minutes and about 160 MB even at CRF 28. A
+// World photos proxy that answers `multipart: true` on /__photos/check takes a file of any size in
+// parts, so the video stays at the first step of the ladder. 32 MiB per part: R2 wants at least
+// 5 MiB and equal sizes, a Worker request carries about 100 MB.
+const PART = 32 * 1024 * 1024
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const manifestPath = process.argv[2]
@@ -75,6 +80,7 @@ state.transcripts = state.transcripts || {}
 state.summaries = state.summaries || {}
 state.course = state.course || {}
 state.files = state.files || {}
+state.compressed = state.compressed || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
 // A library (product.kind "library", 2026-11-13) is a set of standalone videos — Krise-siden, the
@@ -89,9 +95,13 @@ const sha256 = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).dig
 const duration = (p) => Number(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', p]).toString().trim())
 
 // ---- compress ---------------------------------------------------------------------------------
-function ensureCompressed(lesson) {
+function ensureCompressed(lesson, multipart) {
   const out = path.join(m.videoDir, lesson.file)
   if (fs.existsSync(out) && fs.statSync(out).size <= CEILING) return out
+  // A file over the ceiling is only reused when this routine made it at the first step: one left
+  // behind by a run that gave up at the last step is the lowest quality, not the one to keep.
+  const made = state.compressed[lesson.lesson_id]
+  if (multipart && fs.existsSync(out) && made && made.crf === LADDER[0] && made.bytes === fs.statSync(out).size) return out
   const original = path.join(path.dirname(m.videoDir), lesson.file)
   if (!fs.existsSync(original)) throw new Error(`no original for ${lesson.title}: ${original} (download it from Kajabi first)`)
   fs.mkdirSync(m.videoDir, { recursive: true })
@@ -101,8 +111,11 @@ function ensureCompressed(lesson) {
       '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-movflags', '+faststart', tmp])
     const size = fs.statSync(tmp).size
     log(`compressed ${lesson.title} at CRF ${crf}: ${(size / 1e6).toFixed(1)} MB`)
-    if (size <= CEILING || crf === LADDER[LADDER.length - 1]) {
+    if (size <= CEILING || multipart || crf === LADDER[LADDER.length - 1]) {
       fs.renameSync(tmp, out)
+      state.compressed[lesson.lesson_id] = { crf, bytes: size }
+      save()
+      if (multipart) return out
       if (size > CEILING) throw new Error(`${lesson.title} is still ${(size / 1e6).toFixed(1)} MB at CRF ${crf}`)
       return out
     }
@@ -122,6 +135,60 @@ async function mintToken() {
   return j
 }
 
+// Whether this World's proxy takes a file in parts. Asked once per run.
+let multipartOk = null
+async function proxyTakesParts() {
+  if (multipartOk === null) {
+    const r = await fetch(`${await currentBase()}/__photos/check`)
+    const j = await r.json().catch(() => ({}))
+    multipartOk = r.ok && j.multipart === true
+    log(`photos proxy: upload in parts ${multipartOk ? 'available' : 'not available'}`)
+  }
+  return multipartOk
+}
+
+// One file in parts. A token lives five minutes, so every call mints its own. Answers what
+// /photos/upload answers. A failed part is tried three times; a failed upload is aborted, so no
+// half-sent file is left in the founder's bucket.
+async function uploadInParts(key, file, type, meta, title) {
+  const call = async (route, init) => {
+    const t = await mintToken()
+    const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/photos/multipart/${route}`, {
+      ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${t.token}` },
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(`${route.split('?')[0]} for ${title} failed (${r.status}): ${j.error || 'unknown'}${j.detail ? ` — ${j.detail}` : ''}`)
+    return { ...j, owner: t.owner }
+  }
+  const post = (route, body) => call(route, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const { uploadId } = await post('create', { key, contentType: type, meta })
+  try {
+    const blob = await fs.openAsBlob(file, { type })
+    const count = Math.ceil(blob.size / PART)
+    const parts = []
+    for (let n = 1; n <= count; n += 1) {
+      const body = blob.slice((n - 1) * PART, Math.min(n * PART, blob.size))
+      const route = `part?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${n}`
+      let part = null
+      for (let attempt = 1; !part; attempt += 1) {
+        try { part = await call(route, { method: 'PUT', body }) } catch (err) {
+          if (attempt === 3) throw err
+          log(`part ${n} of ${title} failed, trying again: ${err.message}`)
+        }
+      }
+      parts.push({ partNumber: part.partNumber, etag: part.etag })
+      log(`sent part ${n} of ${count}: ${title}`)
+    }
+    const t = await mintToken()
+    const done = await post('complete', { key, uploadId, parts, album: m.album, actor, owner: t.owner || undefined })
+    if (done.size !== blob.size) throw new Error(`${title}: the proxy stored ${done.size} bytes, the file is ${blob.size}`)
+    return done
+  } catch (err) {
+    await post('abort', { key, uploadId }).catch(() => {})
+    throw err
+  }
+}
+
 async function upload(lesson, order, file) {
   const key = `${m.folder}/${String(order).padStart(2, '0')}-${slugify(lesson.title)}.mp4`
   const done = state.uploads[lesson.lesson_id]
@@ -133,16 +200,21 @@ async function upload(lesson, order, file) {
     duration_s: Math.round(duration(file)), sha256: digest,
     source: `${m.source.system}:${m.source.product_id}/${m.source.category_id}/${lesson.lesson_id}`,
   }
-  const fd = new FormData()
-  fd.append('file', await fs.openAsBlob(file, { type: 'video/mp4' }), path.basename(key))
-  fd.append('key', key)
-  fd.append('album', m.album)
-  fd.append('actor', actor)
-  if (t.owner) fd.append('owner', t.owner)
-  fd.append('meta', JSON.stringify(meta))
-  const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/photos/upload`, { method: 'POST', headers: { Authorization: `Bearer ${t.token}` }, body: fd })
-  const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(`upload of ${lesson.title} failed (${r.status}): ${j.error || 'unknown'}`)
+  let j
+  if (fs.statSync(file).size > CEILING) {
+    j = await uploadInParts(key, file, 'video/mp4', meta, lesson.title)
+  } else {
+    const fd = new FormData()
+    fd.append('file', await fs.openAsBlob(file, { type: 'video/mp4' }), path.basename(key))
+    fd.append('key', key)
+    fd.append('album', m.album)
+    fd.append('actor', actor)
+    if (t.owner) fd.append('owner', t.owner)
+    fd.append('meta', JSON.stringify(meta))
+    const r = await fetch(`${t.deliveryBase.replace(/\/+$/, '')}/photos/upload`, { method: 'POST', headers: { Authorization: `Bearer ${t.token}` }, body: fd })
+    j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(`upload of ${lesson.title} failed (${r.status}): ${j.error || 'unknown'}`)
+  }
   state.uploads[lesson.lesson_id] = { key, url: j.url, sha256: digest, bytes: fs.statSync(file).size, duration_s: meta.duration_s, at: new Date().toISOString() }
   save()
   log(`uploaded ${lesson.title} -> ${j.url}`)
@@ -475,7 +547,7 @@ async function saveGraph() {
       }
     } else {
       const f = state.files[lesson.lesson_id]
-      const pdfNote = f ? `\n\n**[Last ned oppskriften (PDF)](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
+      const pdfNote = f ? `\n\n**[${lesson.pdfLabel || 'Last ned oppskriften (PDF)'}](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
       nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null) } } })
     }
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
@@ -513,7 +585,7 @@ let order = 0
 for (const lesson of m.lessons) {
   order += 1
   if (lesson.type !== 'video') continue
-  const file = ensureCompressed(lesson)
+  const file = ensureCompressed(lesson, await proxyTakesParts())
   const u = await upload(lesson, order, file)
   await verifyRange(u)
   log(`range ok: ${lesson.title}`)

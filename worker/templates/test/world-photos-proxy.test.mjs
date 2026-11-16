@@ -15,8 +15,51 @@ const SECRET = 'test-upload-secret'
 
 function fakeBucket() {
   const store = new Map()
+  const uploads = new Map()
+  // R2's multipart upload, as far as the proxy uses it. A part body is a stream (request.body).
+  const multipart = (key, uploadId) => ({
+    key,
+    uploadId,
+    async uploadPart(partNumber, body) {
+      const u = uploads.get(uploadId)
+      if (!u || u.key !== key) throw new Error('no such upload')
+      const bytes = new Uint8Array(await new Response(body).arrayBuffer())
+      const etag = `part-${partNumber}-${bytes.length}`
+      u.parts.set(partNumber, { bytes, etag })
+      return { partNumber, etag }
+    },
+    async complete(parts) {
+      const u = uploads.get(uploadId)
+      if (!u || u.key !== key) throw new Error('no such upload')
+      const chunks = parts.map((p) => {
+        const stored = u.parts.get(p.partNumber)
+        if (!stored || stored.etag !== p.etag) throw new Error(`part ${p.partNumber} does not match`)
+        return stored.bytes
+      })
+      const body = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0))
+      let at = 0
+      for (const c of chunks) { body.set(c, at); at += c.length }
+      const object = { body, httpMetadata: u.httpMetadata, customMetadata: u.customMetadata, size: body.length, uploaded: new Date('2026-11-13T00:00:00Z'), etag: 'etag-' + key }
+      store.set(key, object)
+      uploads.delete(uploadId)
+      return { key, size: object.size, customMetadata: object.customMetadata }
+    },
+    async abort() {
+      if (!uploads.has(uploadId)) throw new Error('no such upload')
+      uploads.delete(uploadId)
+    },
+  })
   const api = {
     _store: store,
+    _uploads: uploads,
+    async createMultipartUpload(key, opts = {}) {
+      const uploadId = `upload-${uploads.size + 1}`
+      uploads.set(uploadId, { key, parts: new Map(), httpMetadata: opts.httpMetadata || {}, customMetadata: opts.customMetadata || {} })
+      return multipart(key, uploadId)
+    },
+    resumeMultipartUpload(key, uploadId) {
+      return multipart(key, uploadId)
+    },
     async put(key, body, opts = {}) {
       const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body
       store.set(key, {
@@ -339,4 +382,86 @@ test('unknown routes are 404', async () => {
   const env = makeEnv()
   assert.equal((await call(env, '/nope')).status, 404)
   assert.equal((await call(env, '/photos/')).status, 400)
+})
+
+// ---- upload in parts (2026-11-13) ---------------------------------------------------------------
+
+const jsonPost = (env, path, body, headers = withSecret()) =>
+  call(env, path, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+const putPart = (env, key, uploadId, n, bytes, headers = withSecret()) =>
+  call(env, `/photos/multipart/part?key=${encodeURIComponent(key)}&uploadId=${uploadId}&partNumber=${n}`, { method: 'PUT', headers, body: bytes })
+
+test('check reports that upload in parts is available', async () => {
+  const check = await (await call(makeEnv(), '/__photos/check')).json()
+  assert.equal(check.multipart, true)
+  assert.equal(check.version, 'v2')
+})
+
+test('a file sent in parts is stored whole, with its type, meta and album', async () => {
+  const env = makeEnv()
+  const key = 'kurs/x/03-strikk-flette.mp4'
+  const created = await jsonPost(env, '/photos/multipart/create', { key, contentType: 'video/mp4', meta: { course: 'x', order: 3 } })
+  assert.equal(created.status, 200)
+  const { uploadId } = await created.json()
+  assert.ok(uploadId)
+
+  const one = await (await putPart(env, key, uploadId, 1, new Uint8Array([1, 2, 3]))).json()
+  const two = await (await putPart(env, key, uploadId, 2, new Uint8Array([4, 5]))).json()
+  assert.equal(one.partNumber, 1)
+  assert.ok(two.etag)
+  assert.equal(env.PHOTOS_BUCKET._store.has(key), false, 'nothing is delivered before complete')
+
+  const done = await jsonPost(env, '/photos/multipart/complete', { key, uploadId, parts: [one, two], album: 'Kurs X', actor: 'a@example.test', owner: 'founder@example.test' })
+  assert.equal(done.status, 200)
+  const out = await done.json()
+  assert.equal(out.url, `https://cdn.example.test/photos/${key}`)
+  assert.equal(out.size, 5)
+  assert.deepEqual(out.meta, { course: 'x', order: '3' })
+  assert.equal(out.album, 'Kurs X')
+
+  const stored = env.PHOTOS_BUCKET._store.get(key)
+  assert.deepEqual([...stored.body], [1, 2, 3, 4, 5])
+  assert.equal(stored.httpMetadata.contentType, 'video/mp4')
+  const album = JSON.parse(env.PHOTO_ALBUMS._store.get('album:Kurs X'))
+  assert.deepEqual(album.images, [key])
+  assert.equal(album.createdBy, 'founder@example.test')
+
+  const served = await call(env, `/photos/${key}`)
+  assert.equal(served.status, 200)
+  assert.equal(served.headers.get('content-type'), 'video/mp4')
+})
+
+test('every multipart route needs the upload scope', async () => {
+  const env = makeEnv()
+  const none = {}
+  assert.equal((await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4' }, none)).status, 401)
+  assert.equal((await putPart(env, 'a.mp4', 'upload-1', 1, new Uint8Array([1]), none)).status, 401)
+  assert.equal((await jsonPost(env, '/photos/multipart/complete', { key: 'a.mp4', uploadId: 'u', parts: [{ partNumber: 1, etag: 'e' }] }, none)).status, 401)
+  assert.equal((await jsonPost(env, '/photos/multipart/abort', { key: 'a.mp4', uploadId: 'u' }, none)).status, 401)
+
+  const exp = Math.floor(Date.now() / 1000) + 60
+  const readOnly = { Authorization: `Bearer ${await signToken({ scope: ['read'], exp, hostname: 'cdn.example.test' })}` }
+  assert.equal((await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4' }, readOnly)).status, 401)
+  const otherWorld = { Authorization: `Bearer ${await signToken({ scope: ['upload'], exp, hostname: 'cdn.other.test' })}` }
+  assert.equal((await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4' }, otherWorld)).status, 401)
+  const upload = { Authorization: `Bearer ${await signToken({ scope: ['upload'], exp, hostname: 'cdn.example.test' })}` }
+  assert.equal((await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4' }, upload)).status, 200)
+})
+
+test('bad multipart input is a 400, and abort discards the upload', async () => {
+  const env = makeEnv()
+  assert.equal((await jsonPost(env, '/photos/multipart/create', {})).status, 400)
+  assert.equal((await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4', meta: [1] })).status, 400)
+  assert.equal((await call(env, '/photos/multipart/create', { method: 'POST', headers: withSecret(), body: '{' })).status, 400)
+
+  const { uploadId } = await (await jsonPost(env, '/photos/multipart/create', { key: 'a.mp4' })).json()
+  assert.equal((await putPart(env, 'a.mp4', uploadId, 0, new Uint8Array([1]))).status, 400)
+  assert.equal((await putPart(env, 'a.mp4', 'no-such', 1, new Uint8Array([1]))).status, 400)
+  assert.equal((await jsonPost(env, '/photos/multipart/complete', { key: 'a.mp4', uploadId, parts: [] })).status, 400)
+  assert.equal((await jsonPost(env, '/photos/multipart/complete', { key: 'a.mp4', uploadId, parts: [{ partNumber: 1, etag: 'wrong' }] })).status, 400)
+
+  const aborted = await jsonPost(env, '/photos/multipart/abort', { key: 'a.mp4', uploadId })
+  assert.equal(aborted.status, 200)
+  assert.equal(env.PHOTOS_BUCKET._uploads.size, 0)
+  assert.equal(env.PHOTOS_BUCKET._store.has('a.mp4'), false)
 })

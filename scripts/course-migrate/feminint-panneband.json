@@ -1,0 +1,77 @@
+{
+  "world": "sodesign.no",
+  "slug": "feminint-panneband",
+  "title": "Feminint pannebånd strikkekurs",
+  "album": "Feminint pannebånd",
+  "folder": "kurs/feminint-panneband",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3232755
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/feminint-panneband/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154756047,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på feminint pannebånd. Last den ned og ha den tilgjengelig når du følger kurset.",
+      "pdf": "Feminint_panneband.pdf"
+    },
+    {
+      "lesson_id": 2154849556,
+      "title": "Garn og garnalternativer",
+      "type": "text",
+      "info": "Her kan du laste ned en PDF som gir deg forslag til forskjellige garnalternativer. Her foreslås både 3 dobbelt, dobbel og enkel tråd.",
+      "pdf": "Garnalternativer_feminint_panneband.pdf",
+      "pdfLabel": "Last ned garnalternativene (PDF)"
+    },
+    {
+      "lesson_id": 2154756044,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2154756044-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2154756045,
+      "title": "Patentstrikk",
+      "type": "video",
+      "file": "2154756045-patentstrikk.mp4"
+    },
+    {
+      "lesson_id": 2154756049,
+      "title": "Strikk flette",
+      "type": "video",
+      "file": "2154756049-strikk-flette.mp4"
+    },
+    {
+      "lesson_id": 2154756050,
+      "title": "Fell av",
+      "type": "video",
+      "file": "2154756050-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2154756051,
+      "title": "Fest tråder og sy sammen",
+      "type": "video",
+      "file": "2154756051-fest-trader-og-sy-sammen.mp4"
+    }
+  ]
+}
