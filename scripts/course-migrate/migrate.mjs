@@ -36,6 +36,9 @@ const KG = 'https://knowledge.vegvisr.org'
 const CEILING = 95 * 1024 * 1024
 // CRF 28 added 2026-11-13: Krise-siden's 5½-minute 1080p videos are ~109 MB at CRF 26.
 const LADDER = [20, 23, 26, 28]
+// One level for the whole school (decided 2026-11-17): CRF 23 wherever the proxy takes a file in
+// parts. Measured on «Strikk flette» (8½ min, 1080p): 457 MB at CRF 20, 288 MB at CRF 23.
+const FIXED_CRF = 23
 // Upload in parts (2026-11-13): «Strikk flette» is 8½ minutes and about 160 MB even at CRF 28. A
 // World photos proxy that answers `multipart: true` on /__photos/check takes a file of any size in
 // parts, so the video stays at the first step of the ladder. 32 MiB per part: R2 wants at least
@@ -97,21 +100,24 @@ const duration = (p) => Number(execFileSync('ffprobe', ['-v', 'error', '-show_en
 // ---- compress ---------------------------------------------------------------------------------
 function ensureCompressed(lesson, multipart) {
   const out = path.join(m.videoDir, lesson.file)
-  if (fs.existsSync(out) && fs.statSync(out).size <= CEILING) return out
-  // A file over the ceiling is only reused when this routine made it at the first step: one left
-  // behind by a run that gave up at the last step is the lowest quality, not the one to keep.
+  // A file this routine made is reused only at the level in force; one made at another level is
+  // made again. A file with no record is from before the record existed and is kept if it fits.
   const made = state.compressed[lesson.lesson_id]
-  if (multipart && fs.existsSync(out) && made && made.crf === LADDER[0] && made.bytes === fs.statSync(out).size) return out
+  const wanted = multipart ? [FIXED_CRF] : LADDER
+  if (fs.existsSync(out)) {
+    const size = fs.statSync(out).size
+    if (made ? (wanted.includes(made.crf) && made.bytes === size && (multipart || size <= CEILING)) : size <= CEILING) return out
+  }
   const original = path.join(path.dirname(m.videoDir), lesson.file)
   if (!fs.existsSync(original)) throw new Error(`no original for ${lesson.title}: ${original} (download it from Kajabi first)`)
   fs.mkdirSync(m.videoDir, { recursive: true })
-  for (const crf of LADDER) {
+  for (const crf of wanted) {
     const tmp = `${out}.tmp.mp4`
     execFileSync('ffmpeg', ['-nostdin', '-loglevel', 'error', '-y', '-i', original, '-map', '0:v:0', '-map', '0:a:0?',
       '-c:v', 'libx264', '-preset', 'slow', '-crf', String(crf), '-pix_fmt', 'yuv420p', '-c:a', 'copy', '-movflags', '+faststart', tmp])
     const size = fs.statSync(tmp).size
     log(`compressed ${lesson.title} at CRF ${crf}: ${(size / 1e6).toFixed(1)} MB`)
-    if (size <= CEILING || multipart || crf === LADDER[LADDER.length - 1]) {
+    if (size <= CEILING || multipart || crf === wanted[wanted.length - 1]) {
       fs.renameSync(tmp, out)
       state.compressed[lesson.lesson_id] = { crf, bytes: size }
       save()

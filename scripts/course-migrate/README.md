@@ -26,7 +26,7 @@ salgsside, S6 medlemsside, S7 leksjon) og UX-anbefalingene i graf `6e6ca7de` (ux
 
 `run.sh` gjør alt etter nedlasting, og kan kjøres på nytt når som helst:
 
-1. **komprimer** (CRF 20, faststart; svarer ikke World-ens proxy `multipart: true` på `/__photos/check`, går den videre 23 → 26 → 28 til under 95 MB)
+1. **komprimer** (fast CRF 23, faststart; svarer ikke World-ens proxy `multipart: true` på `/__photos/check`, brukes trappen 20 → 23 → 26 → 28 til under 95 MB)
    - filer over 95 MB lastes opp i deler på 32 MiB (`/photos/multipart/*`, 2026-11-13)
 2. **last opp** til `<mappe>/NN-<slug>.mp4` i albumet, med metadata på fila; albumet eies av founderen
 3. **sjekk** at hver video svarer på byte-ranges (iPhone)
