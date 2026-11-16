@@ -5,6 +5,8 @@
 //   "ollama/…"  Ollama (local dev only)
 //   "openai/…"  OpenAI
 //   "grok/…"    Grok (xAI)
+//   "gemini/…"  Google Gemini (through gemini-worker, the user's own key)
+//   "kimi/…"    Moonshot Kimi (through Cloudflare's model catalog)
 //   "claude-…"  Anthropic (no prefix — the bare id)
 //
 // This exists because chat logs that omit the provider hide a real failure mode. On 2026-08-17 the
@@ -21,6 +23,8 @@ export function providerOf(id?: string): string {
   if (id.startsWith('ollama/')) return 'Ollama (local)';
   if (id.startsWith('openai/')) return 'OpenAI';
   if (id.startsWith('grok/')) return 'Grok (xAI)';
+  if (id.startsWith('gemini/')) return 'Google Gemini';
+  if (id.startsWith('kimi/')) return 'Moonshot Kimi (Cloudflare model catalog)';
   if (id.startsWith('claude-')) return 'Anthropic';
   if (id === 'auto') return 'Anthropic (automatic choice per message)';
   return `(unrecognised prefix: ${id.split('/')[0]})`;

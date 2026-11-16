@@ -12,6 +12,7 @@ import { executeTool } from './tool-executors.js'
 import { restrictToolsToAgent, refusedToolResult } from './agent-tool-allowlist.js'
 import { DEFAULT_MODEL, MODELS, acceptsSampling } from './models.js'
 import { routeModel } from './model-router.js'
+import { OPENAI_MODEL_PREFIX, isOpenAICompatibleModel, resolveChatProvider } from './chat-providers.js'
 import { repairToolPairing } from './message-history.js'
 import { detectFunctionalGaps, detectDeadEndpoints, fetchNodeHtmlForGate, executeValidateHtmlSyntax } from './html-builder-subagent.js'
 
@@ -105,6 +106,11 @@ function calculateCost(model, inputTokens, outputTokens) {
     // xAI Grok chat path. Keep provider-prefixed IDs in session stats.
     'grok/grok-4.5':             { in: 2.00, out: 6.00 },
     'grok/grok-4.3':             { in: 1.25, out: 2.50 },
+    // Gemini through gemini-worker (the user's own key) and Kimi through Cloudflare's model
+    // catalog. Prices as listed in Cloudflare's catalog 2026-11-16.
+    'gemini/gemini-2.5-flash':   { in: 0.30, out: 2.50 },
+    'gemini/gemini-2.5-pro':     { in: 1.25, out: 10.00 },
+    'kimi/kimi-k3.1-pro':        { in: 2.00, out: 10.00 },
     // Fast path
     'fast-path':                 { in: 0, out: 0 },
   }
@@ -191,8 +197,6 @@ function createEventLog(env, { sessionId, userId, log }) {
   }
 }
 
-const OPENAI_MODEL_PREFIX = 'openai/'
-const GROK_MODEL_PREFIX = 'grok/'
 const OPENAI_AGENT_TOOL_NAMES = [
   // Knowledge graph core
   'read_graph', 'read_graph_content', 'read_node', 'list_graphs', 'list_meta_areas', 'search_graphs',
@@ -353,23 +357,6 @@ export function isSequentialTool(name, operationMap = {}) {
   return !!method && method !== 'GET' && method !== 'HEAD'
 }
 
-function isOpenAIModel(model) {
-  return typeof model === 'string' && model.startsWith(OPENAI_MODEL_PREFIX)
-}
-
-function isGrokModel(model) {
-  return typeof model === 'string' && model.startsWith(GROK_MODEL_PREFIX)
-}
-
-function isOpenAICompatibleModel(model) {
-  return isOpenAIModel(model) || isGrokModel(model)
-}
-
-function stripProviderModelPrefix(model, prefix) {
-  return String(model || '').startsWith(prefix)
-    ? String(model).slice(prefix.length)
-    : String(model || '')
-}
 
 /**
  * Load and merge all tools: hardcoded + OpenAPI dynamic + web_search
@@ -1211,27 +1198,10 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
   writer = trackSentText(writer)
   const maxTurns = options.maxTurns || 6
   const guideLines = []
-  const selectedModel = options.model || `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
-  const provider = isGrokModel(selectedModel)
-    ? {
-        name: 'grok',
-        label: 'Grok',
-        binding: env.GROK_WORKER,
-        bindingName: 'GROK_WORKER',
-        url: 'https://grok.vegvisr.org/chat',
-        prefix: GROK_MODEL_PREFIX,
-        maxTokenField: 'max_tokens',
-      }
-    : {
-        name: 'openai',
-        label: 'OpenAI',
-        binding: env.OPENAI_WORKER,
-        bindingName: 'OPENAI_WORKER',
-        url: 'https://openai.vegvisr.org/chat',
-        prefix: OPENAI_MODEL_PREFIX,
-        maxTokenField: 'max_completion_tokens',
-      }
-  const providerModel = stripProviderModelPrefix(selectedModel, provider.prefix)
+  const selectedModel = isOpenAICompatibleModel(options.model) ? options.model : `${OPENAI_MODEL_PREFIX}gpt-5.6-luna`
+  // Which provider answers, by the id's prefix: openai/ · grok/ · gemini/ · kimi/ (chat-providers.js).
+  const provider = resolveChatProvider(selectedModel, env)
+  const providerModel = provider.providerModel
   const authContext = options?.authContext || null
   const planMode = options.mode === 'plan'
   const startTime = Date.now()
@@ -1266,7 +1236,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
   const wal = createEventLog(env, { sessionId, userId, log })
 
   try {
-    if (!provider.binding) throw new Error(`${provider.bindingName} service binding is not configured.`)
+    if (!provider.configured) throw new Error(provider.missing)
 
     let { allTools, operationMap } = await loadAllTools(env)
     const knownToolNames = new Set([...allTools, ...TOOL_DEFINITIONS].map((tool) => tool.name))
@@ -1323,16 +1293,6 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       turn++
       writer.write(encoder.encode(`event: thinking\ndata: ${JSON.stringify({ turn })}\n\n`))
 
-      const requestBody = {
-        userId,
-        model: providerModel,
-        messages: compactOpenAIToolMessages(openAIMessages),
-        temperature: 0.3,
-        tools: openAITools,
-        tool_choice: 'auto',
-        [provider.maxTokenField]: 4096,
-      }
-
       // Write-ahead: the intent to call the model lands before the call is made,
       // so a turn that never returns is still visible as status='started'.
       const modelEvent = await wal.begin('model_call', selectedModel, {
@@ -1344,13 +1304,13 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         mode: planMode ? 'plan' : 'auto',
       })
 
-      const response = await provider.binding.fetch(provider.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
+      const response = await provider.send({
+        userId,
+        messages: compactOpenAIToolMessages(openAIMessages),
+        temperature: 0.3,
+        tools: openAITools,
       })
-
-      const data = await response.json().catch(() => ({}))
+      const data = response.data || {}
       modelEvent.settle(response.ok ? 'ok' : 'error', response.ok
         ? {
             finish_reason: data.choices?.[0]?.finish_reason ?? null,
@@ -1388,6 +1348,9 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         role: 'assistant',
         content: assistantText || null,
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        // Only for a provider that asks for its reasoning back between tool steps (Kimi).
+        ...(provider.keepReasoning && toolCalls.length && typeof message.reasoning_content === 'string' && message.reasoning_content
+          ? { reasoning_content: message.reasoning_content } : {}),
       })
 
       if (!toolCalls.length) {
@@ -1408,7 +1371,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
         const toolEvent = await wal.begin('tool_call', toolName, { turn, input })
 
         if (!openAIAllowedTools.has(toolName)) {
-          const message = `The OpenAI AgentChat path did not expose "${toolName}" in this request. Available OpenAI tools include: ${Array.from(openAIAllowedTools).slice(0, 40).join(', ')}${openAIAllowedTools.size > 40 ? ', ...' : ''}.`
+          const message = `The ${provider.label} AgentChat path did not expose "${toolName}" in this request. Available ${provider.label} tools include: ${Array.from(openAIAllowedTools).slice(0, 40).join(', ')}${openAIAllowedTools.size > 40 ? ', ...' : ''}.`
           toolEvent.settle('blocked', `not exposed on the ${provider.name} path`)
           writer.write(encoder.encode(`event: tool_result\ndata: ${JSON.stringify({ callId: call.id, tool: toolName, success: false, summary: message })}\n\n`))
           openAIMessages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: message }) })
