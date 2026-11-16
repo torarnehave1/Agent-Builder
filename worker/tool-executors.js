@@ -3914,6 +3914,41 @@ async function executeCreateNode(input, env) {
   }
 }
 
+// One source+target pair may carry several edges with different labels: VEGR Flows route on the
+// label, and a step can have both a "next" and an "error" edge to the same target (flow graph
+// Stillerom, kalender -> logg). The old executor keyed edges on `${source}_${target}` and
+// relabelled that edge, so adding "error" next to "next" destroyed the success path (2026-11-16).
+//  - an edge on the pair already has this label (or no label was asked for) -> exists
+//  - an edge on the pair has an empty label -> relabel that edge (the only way to label an edge
+//    written without one, since there is no patch_edge tool — 2026-09-04)
+//  - otherwise append a new edge; the first edge on a pair keeps the `${s}_${t}` id, further ones
+//    get `${s}_${t}_${label}` (plus -2, -3 … if taken). Mutates `edges`.
+export function planEdgeAdd(edges, sourceId, targetId, label) {
+  const onPair = edges.filter(e => e && e.source === sourceId && e.target === targetId)
+  if (onPair.length) {
+    const same = !label ? onPair[0] : onPair.find(e => (e.label || '') === label)
+    if (same) return { action: 'exists', edge: same }
+    const unlabelled = onPair.find(e => !e.label)
+    if (unlabelled) {
+      unlabelled.label = label
+      if (!unlabelled.id) unlabelled.id = uniqueEdgeId(edges, `${sourceId}_${targetId}`)
+      return { action: 'relabelled', edge: unlabelled }
+    }
+  }
+  const base = onPair.length ? `${sourceId}_${targetId}_${label}` : `${sourceId}_${targetId}`
+  const edge = { id: uniqueEdgeId(edges, base), source: sourceId, target: targetId, label }
+  edges.push(edge)
+  return { action: 'added', edge }
+}
+
+function uniqueEdgeId(edges, base) {
+  const taken = new Set(edges.map(e => e && e.id).filter(Boolean))
+  if (!taken.has(base)) return base
+  let n = 2
+  while (taken.has(`${base}-${n}`)) n++
+  return `${base}-${n}`
+}
+
 async function executeAddEdge(input, env) {
   const getRes = await env.KG_WORKER.fetch(
     `https://knowledge-graph-worker/getknowgraph?id=${encodeURIComponent(input.graphId)}`
@@ -3933,27 +3968,14 @@ async function executeAddEdge(input, env) {
     throw new Error(`${missing.join(' and ')} not found in graph. Valid node IDs: ${validIds}`)
   }
 
-  const edgeId = `${input.sourceId}_${input.targetId}`
+  if (!Array.isArray(graphData.edges)) graphData.edges = []
   const label = input.label || ''
-  const existingEdge = graphData.edges.find(e => e.id === edgeId)
-  let action = 'added'
-  if (existingEdge) {
-    // Upsert the label rather than refusing outright. An edge written by some other path may
-    // carry no label at all, and with no remove_edge/patch_edge tool this was the only way to
-    // fix one — i.e. it could not be fixed through the app at all (2026-09-04).
-    if (!label || existingEdge.label === label) {
-      return { graphId: input.graphId, edgeId, label: existingEdge.label || '', message: 'Edge already exists' }
-    }
-    existingEdge.label = label
-    action = 'relabelled'
-  } else {
-    graphData.edges.push({
-      id: edgeId,
-      source: input.sourceId,
-      target: input.targetId,
-      label
-    })
+  const plan = planEdgeAdd(graphData.edges, input.sourceId, input.targetId, label)
+  if (plan.action === 'exists') {
+    return { graphId: input.graphId, edgeId: plan.edge.id, label: plan.edge.label || '', message: 'Edge already exists' }
   }
+  const edgeId = plan.edge.id
+  const action = plan.action
 
   const saveRes = await env.KG_WORKER.fetch('https://knowledge-graph-worker/saveGraphWithHistory', {
     method: 'POST',
