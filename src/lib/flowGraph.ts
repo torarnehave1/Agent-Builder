@@ -125,6 +125,12 @@ export async function loadFlow(id: string): Promise<LoadedFlow> {
       return { id: n.id, type: 'flowStep', position, data, draggable: false };
     });
 
+  // Flows written by a tool often store every step at 0,0 (six of nine flows, 2026-11-16), and
+  // drawn as stored they all lie on one spot. Unless every node has a position of its own, the
+  // flow is laid out in rows by its edges instead.
+  const seen = new Set(nodes.map((n) => `${n.position.x},${n.position.y}`));
+  if (seen.size < nodes.length) layoutByEdges(nodes, graph.edges || []);
+
   // Two edges can join the same pair (a step's "next" and "error" both lead to the log step).
   // Drawn separately they lie exactly on top of each other and only one label shows, so one line
   // is drawn per pair, labelled with every route it carries ("next · error").
@@ -163,6 +169,55 @@ export async function loadFlow(id: string): Promise<LoadedFlow> {
     nodes,
     edges,
   };
+}
+
+const ROW_GAP = 150;
+const COL_GAP = 270;
+
+/**
+ * Rows by distance from the start: the flow header (or, without one, every step nothing points
+ * to) is row 0, each step goes one row below the first step that reaches it, and the steps of a
+ * row sit side by side, centred. A step nothing reaches goes in a last row. Changes positions in
+ * place; the graph itself is not touched.
+ */
+export function layoutByEdges(nodes: Node[], kgEdges: Array<{ source: string; target: string }>): void {
+  const ids = new Set(nodes.map((n) => n.id));
+  const out = new Map<string, string[]>();
+  const incoming = new Set<string>();
+  for (const e of kgEdges) {
+    if (!ids.has(e.source) || !ids.has(e.target) || e.source === e.target) continue;
+    out.set(e.source, [...(out.get(e.source) || []), e.target]);
+    incoming.add(e.target);
+  }
+  const header = nodes.find((n) => n.type === 'flowHeader');
+  const row = new Map<string, number>();
+  const walk = (starts: string[], at: number) => {
+    const queue = starts.filter((s) => !row.has(s));
+    for (const s of queue) row.set(s, at);
+    while (queue.length) {
+      const id = queue.shift()!;
+      for (const t of out.get(id) || []) {
+        if (row.has(t)) continue;
+        row.set(t, (row.get(id) || 0) + 1);
+        queue.push(t);
+      }
+    }
+  };
+  // The header first; then any step nothing points to (a flow whose header has no edge to its
+  // first step) starts the row below it.
+  if (header) walk([header.id], 0);
+  walk(nodes.filter((n) => n.type !== 'flowHeader' && !incoming.has(n.id)).map((n) => n.id), header ? 1 : 0);
+  const last = Math.max(0, ...row.values()) + 1;
+  const rows = new Map<number, Node[]>();
+  for (const n of nodes) {
+    const r = row.has(n.id) ? row.get(n.id)! : last;
+    rows.set(r, [...(rows.get(r) || []), n]);
+  }
+  for (const [r, list] of rows) {
+    list.forEach((n, i) => {
+      n.position = { x: (i - (list.length - 1) / 2) * COL_GAP, y: r * ROW_GAP };
+    });
+  }
 }
 
 /** Where the graph opens for editing: the World's own editor for a World graph. */
