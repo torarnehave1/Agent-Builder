@@ -125,24 +125,34 @@ export async function loadFlow(id: string): Promise<LoadedFlow> {
       return { id: n.id, type: 'flowStep', position, data, draggable: false };
     });
 
+  // Two edges can join the same pair (a step's "next" and "error" both lead to the log step).
+  // Drawn separately they lie exactly on top of each other and only one label shows, so one line
+  // is drawn per pair, labelled with every route it carries ("next · error").
   const ids = new Set(nodes.map((n) => n.id));
-  const edges: Edge[] = (graph.edges || [])
-    .filter((e) => ids.has(e.source) && ids.has(e.target))
-    .map((e, i) => {
-      const label = e.label && e.label !== 'next' ? e.label : undefined;
-      const stroke = (label && EDGE_COLORS[label]) || 'rgba(148,163,184,0.5)';
-      return {
-        // Two edges can join the same pair (next + error): the index keeps their ids apart.
-        id: `${e.id || `${e.source}_${e.target}`}#${i}`,
-        source: e.source,
-        target: e.target,
-        label,
-        style: { stroke, strokeWidth: 1.5 },
-        labelStyle: { fill: '#e2e8f0', fontSize: 10 },
-        labelBgStyle: { fill: '#0f172a' },
-        animated: false,
-      };
-    });
+  const byPair = new Map<string, { source: string; target: string; labels: string[] }>();
+  for (const e of graph.edges || []) {
+    if (!ids.has(e.source) || !ids.has(e.target)) continue;
+    const key = `${e.source}\u0000${e.target}`;
+    const pair = byPair.get(key) || { source: e.source, target: e.target, labels: [] };
+    const l = (e.label || 'next').trim() || 'next';
+    if (!pair.labels.includes(l)) pair.labels.push(l);
+    byPair.set(key, pair);
+  }
+  const edges: Edge[] = [...byPair.values()].map((p) => {
+    const only = p.labels.length === 1 ? p.labels[0] : null;
+    const label = only === 'next' ? undefined : p.labels.join(' · ');
+    const stroke = (only && EDGE_COLORS[only]) || 'rgba(148,163,184,0.5)';
+    return {
+      id: `${p.source}->${p.target}`,
+      source: p.source,
+      target: p.target,
+      label,
+      style: { stroke, strokeWidth: 1.5 },
+      labelStyle: { fill: '#e2e8f0', fontSize: 10 },
+      labelBgStyle: { fill: '#0f172a' },
+      animated: false,
+    };
+  });
 
   const m = graph.metadata || {};
   return {
