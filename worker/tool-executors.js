@@ -17751,12 +17751,20 @@ async function executeMcpCall(input, env) {
   // `success === false`, so without this the chip renders "(success)" on a failed call —
   // exactly the non-throwing failure reported as success that Lesson 1 forbids.
   const failed = Boolean(result.isError)
+  // The loop cuts a tool result at 12,000 characters. A tool that answers with rows in
+  // structuredContent often lists the same rows in its text too, so both halves were sent and the
+  // rows were cut halfway: on 2026-11-17 a model read part of graph_index's 96 rows and made up the
+  // rest. With structured data present, a long text is shortened to its summary.
+  const TEXT_WITH_DATA = 1500
+  const text = !failed && result.structuredContent && textOut.length > TEXT_WITH_DATA
+    ? textOut.slice(0, TEXT_WITH_DATA) + ' … [text shortened; the full data is in structured]'
+    : textOut
   return {
     success: !failed,
     server: serverName,
     tool: toolName,
     is_error: failed,
-    text: textOut || null,
+    text: text || null,
     structured: result.structuredContent || null,
     ...(failed ? { error: textOut || 'MCP tool reported an error' } : {}),
     message: failed
