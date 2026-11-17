@@ -1,0 +1,81 @@
+{
+  "world": "sodesign.no",
+  "slug": "mitt-forste-panneband",
+  "title": "Mitt første pannebånd",
+  "album": "Mitt første pannebånd",
+  "folder": "kurs/mitt-forste-panneband",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2153545080
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/mitt-forste-panneband/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2170349293,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til pannebåndet. Last den ned og ha den gjerne foran deg når du følger kurset. Gå videre i kurset for å lære hvordan du leser oppskriften.\n\nLykke til!",
+      "pdf": "Mitt_f_rste_panneba_nd.pdf"
+    },
+    {
+      "lesson_id": 2170349357,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2170349357-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2170349750,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2170349750-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2170349652,
+      "title": "Legg opp",
+      "type": "video",
+      "file": "2170349652-legg-opp.mp4"
+    },
+    {
+      "lesson_id": 2170349733,
+      "title": "Strikk rette masker frem og tilbake",
+      "type": "video",
+      "file": "2170349733-strikk-rette-masker-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2170350075,
+      "title": "Fell av masker",
+      "type": "video",
+      "file": "2170350075-fell-av-masker.mp4"
+    },
+    {
+      "lesson_id": 2170351144,
+      "title": "Sy sammen",
+      "type": "video",
+      "file": "2170351144-sy-sammen.mp4"
+    },
+    {
+      "lesson_id": 2170351785,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2170351785-fest-trader.mp4"
+    }
+  ]
+}
