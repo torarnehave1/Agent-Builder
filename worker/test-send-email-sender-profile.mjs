@@ -158,6 +158,28 @@ const run = async (env, input) => { try { return await executeTool('send_email',
   check('own sender unaffected by grants', r2.success && sent.at(-1).body.userEmail === 'someone@example.com' && !r2.basis, JSON.stringify(r2))
 }
 
+// 8. Sent copy (2026-11-17): after a delivered send the chat asks dev-worker (KG_WORKER) to file a
+//    copy in the sender's Sent folder; its answer lands in the result. Never fails the send.
+{
+  const { env } = makeEnv()
+  const calls = []
+  env.KG_WORKER = { async fetch(url, init) { calls.push({ url, body: JSON.parse(init.body) }); return new Response(JSON.stringify({ filed: true, sentFolder: 'Sent' })) } }
+  const r = await run(env, { ...MAIL, userId: 'owner-uuid', fromEmail: 'post@universi.no' })
+  check('sent copy requested from dev-worker over the binding', calls.length === 1 && calls[0].url === 'https://knowledge-graph-worker/internal/file-sent-copy' && calls[0].body.address === 'post@universi.no' && calls[0].body.subject === MAIL.subject, JSON.stringify(calls))
+  check('result reports the filed copy', r.success === true && r.sentCopy === 'filed in Sent' && /Sent copy: filed in Sent/.test(r.message), JSON.stringify(r))
+}
+{
+  const { env } = makeEnv()
+  env.KG_WORKER = { async fetch() { throw new Error('binding down') } }
+  const r = await run(env, { ...MAIL, userId: 'owner-uuid', fromEmail: 'post@universi.no' })
+  check('a failing copy never fails the send', r.success === true && r.sentCopy === 'not filed: binding down', JSON.stringify(r))
+}
+{
+  const { env } = makeEnv()
+  const r = await run(env, { ...MAIL, userId: 'owner-uuid', fromEmail: 'post@universi.no' })
+  check('no binding: send succeeds and says why no copy', r.success === true && /KG_WORKER binding is missing/.test(r.sentCopy), JSON.stringify(r))
+}
+
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} FAILED` : '\nPASS — send_email finds a World sender in its own profile for a Superadmin, and nowhere else.')
 process.exit(failures ? 1 : 0)

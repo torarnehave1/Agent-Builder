@@ -10116,14 +10116,56 @@ async function executeSendEmail(input, env) {
     throw new Error(`Failed to send email: ${result.error || result.details || responseText}`)
   }
 
+  const sentCopy = await fileChatSentCopy(env, { account, toEmail, subject, html, result })
+
   return {
     success: true,
     from: account.email,
     to: toEmail,
     subject,
     sender_profile: profile.email,
+    sentCopy,
     ...(grantNote ? { sent_by: callerProfile.email, basis: 'grant' } : {}),
-    message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}".${resolvedProfileNote ? ` ${resolvedProfileNote}` : ''}`
+    message: `Email sent successfully from ${account.email} to ${toEmail} with subject "${subject}". Sent copy: ${sentCopy}.${resolvedProfileNote ? ` ${resolvedProfileNote}` : ''}`
+  }
+}
+
+/**
+ * Put a copy of a mail the chat just sent in the sender's own Sent folder (2026-11-17).
+ *
+ * Cloudflare Email Sending and the Gmail relay deliver straight to the recipient and never touch
+ * the sender's mailbox, so without this a mail sent from the chat existed in nobody's Sent folder —
+ * while the same mail sent over MCP did get its copy. One IMAP implementation, not two: dev-worker
+ * (knowledge-graph-worker, bound here as KG_WORKER) owns it in imap-service.js and answers
+ * /internal/file-sent-copy over the binding only. It uses the password set_mailbox_password stored.
+ *
+ * Best-effort by contract: the mail is already delivered, so this returns a short status string and
+ * never throws. No stored mailbox password is the normal case for most senders and says so plainly.
+ */
+async function fileChatSentCopy(env, { account, toEmail, subject, html, result }) {
+  if (!env.KG_WORKER?.fetch) return 'not filed: the KG_WORKER binding is missing'
+  // Only a real RFC 5322 id goes into the copy's header; email-worker's Gmail path can return a
+  // made-up `msg_…` token that is not one.
+  const rawId = String(result?.result?.messageId || result?.messageId || '')
+  const messageId = rawId.includes('@') ? (rawId.startsWith('<') ? rawId : `<${rawId}>`) : null
+  try {
+    const res = await env.KG_WORKER.fetch('https://knowledge-graph-worker/internal/file-sent-copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        address: account.email,
+        toEmail,
+        subject,
+        html,
+        fromName: account.name || undefined,
+        messageId,
+      }),
+    })
+    const r = await res.json().catch(() => ({}))
+    if (r.filed) return `filed in ${r.sentFolder}`
+    return `not filed: ${r.reason || r.error || `status ${res.status}`}`
+  } catch (e) {
+    return `not filed: ${e.message}`
   }
 }
 
