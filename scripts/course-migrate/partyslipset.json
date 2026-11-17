@@ -1,0 +1,99 @@
+{
+  "world": "sodesign.no",
+  "slug": "partyslipset",
+  "title": "Partyslipset",
+  "album": "Partyslipset",
+  "folder": "kurs/partyslipset",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2150258185
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/partyslipset/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2157561402,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Partyslipset.",
+      "pdf": "Partyslipset.pdf"
+    },
+    {
+      "lesson_id": 2157542173,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2157542173-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2157532359,
+      "title": "Legg opp masker for magic loop",
+      "type": "video",
+      "file": "2157532359-legg-opp-masker-for-magic-loop.mp4"
+    },
+    {
+      "lesson_id": 2157532364,
+      "title": "Fordel maskene på pinnene",
+      "type": "video",
+      "file": "2157532364-fordel-maskene-pa-pinnene.mp4"
+    },
+    {
+      "lesson_id": 2157542156,
+      "title": "Stripemønster",
+      "type": "video",
+      "file": "2157542156-stripemonster.mp4"
+    },
+    {
+      "lesson_id": 2157747472,
+      "title": "Strømpepinner",
+      "type": "video",
+      "file": "2157747472-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2157542159,
+      "title": "Øk masker",
+      "type": "video",
+      "file": "2157542159-ok-masker.mp4"
+    },
+    {
+      "lesson_id": 2157542161,
+      "title": "Fordel maskene på pinnene ettersom du øker",
+      "type": "video",
+      "file": "2157542161-fordel-maskene-pa-pinnene-ettersom-du-oker.mp4"
+    },
+    {
+      "lesson_id": 2157542167,
+      "title": "Fell til spiss",
+      "type": "video",
+      "file": "2157542167-fell-til-spiss.mp4"
+    },
+    {
+      "lesson_id": 2157542168,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2157542168-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2157542171,
+      "title": "Damp slipset",
+      "type": "video",
+      "file": "2157542171-damp-slipset.mp4"
+    }
+  ]
+}
