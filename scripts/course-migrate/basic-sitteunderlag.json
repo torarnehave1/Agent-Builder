@@ -1,0 +1,105 @@
+{
+  "world": "sodesign.no",
+  "slug": "basic-sitteunderlag",
+  "title": "Basic sitteunderlag strikkekurs",
+  "album": "Basic sitteunderlag strikkekurs",
+  "folder": "kurs/basic-sitteunderlag",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2149909061
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/basic-sitteunderlag/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2156708922,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på Basic sitteunderlag. Last den ned og ha den gjerne tilgjengelig når du følger kurset.",
+      "pdf": "Basic_sitteunderlag.pdf"
+    },
+    {
+      "lesson_id": 2156706510,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2156706510-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2156706512,
+      "title": "Utstyrsliste",
+      "type": "video",
+      "file": "2156706512-utstyrsliste.mp4"
+    },
+    {
+      "lesson_id": 2156706514,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2156706514-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2156709121,
+      "title": "Strikk rette masker",
+      "type": "video",
+      "file": "2156709121-strikk-rette-masker.mp4"
+    },
+    {
+      "lesson_id": 2156709048,
+      "title": "Snu og strikk tilbake",
+      "type": "video",
+      "file": "2156709048-snu-og-strikk-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2156734555,
+      "title": "Hva betyr ´en pinne´?",
+      "type": "video",
+      "file": "2156734555-hva-betyr-en-pinne.mp4"
+    },
+    {
+      "lesson_id": 2156734559,
+      "title": "Hvordan strikke striper",
+      "type": "video",
+      "file": "2156734559-hvordan-strikke-striper.mp4"
+    },
+    {
+      "lesson_id": 2156871593,
+      "title": "Tilleggs-informasjon :)",
+      "type": "video",
+      "file": "2156871593-tilleggs-informasjon.mp4"
+    },
+    {
+      "lesson_id": 2156871683,
+      "title": "Fell av masker",
+      "type": "video",
+      "file": "2156871683-fell-av-masker.mp4"
+    },
+    {
+      "lesson_id": 2156911836,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2156911836-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2157071873,
+      "title": "Tov sitteunderlaget",
+      "type": "video",
+      "file": "2157071873-tov-sitteunderlaget.mp4"
+    }
+  ]
+}
