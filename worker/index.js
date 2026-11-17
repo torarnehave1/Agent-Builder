@@ -2470,7 +2470,7 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext, knowledgeScope } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext, knowledgeScope, exactModel } = body
         const planMode = mode === 'plan'
         // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
         const authContext = authToken
@@ -2679,7 +2679,9 @@ export default {
           streamingAgentLoop(writer, encoder, chatMessages, systemPrompt, effectiveUserId, env, {
             model: agentModel,
             // Route per message only for the picker's own choice; a saved agent's model is explicit.
-            autoRoute: agentModel === model && isRoutable(model),
+            // exactModel: the caller's choice is the model, not a ceiling (Garnet's chat, where
+            // picking Opus and getting Haiku read as a fault, 2026-11-17). 'auto' still routes.
+            autoRoute: agentModel === model && isRoutable(model) && !(exactModel === true && model !== 'auto'),
             maxTurns: maxTurns || 25,
             mode: planMode ? 'plan' : 'auto',
             toolFilter,
