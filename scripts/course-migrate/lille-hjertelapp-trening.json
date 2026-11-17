@@ -1,0 +1,75 @@
+{
+  "world": "sodesign.no",
+  "slug": "lille-hjertelapp-trening",
+  "title": "Lille hjertelapp trening",
+  "album": "Lille hjertelapp trening",
+  "folder": "kurs/lille-hjertelapp-trening",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Trening"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2150597895
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/lille-hjertelapp-trening/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2182696561,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på Lille hjertelapp :)",
+      "pdf": "Lille_hjertelapp_.pdf"
+    },
+    {
+      "lesson_id": 2158849985,
+      "title": "Legg opp og strikk riller",
+      "type": "video",
+      "file": "2158849985-legg-opp-og-strikk-riller.mp4"
+    },
+    {
+      "lesson_id": 2158849989,
+      "title": "Mønsterrapport - pinne 1 og 2",
+      "type": "video",
+      "file": "2158849989-monsterrapport-pinne-1-og-2.mp4"
+    },
+    {
+      "lesson_id": 2158849992,
+      "title": "Hullmønster - del 1",
+      "type": "video",
+      "file": "2158849992-hullmonster-del-1.mp4"
+    },
+    {
+      "lesson_id": 2158849997,
+      "title": "Hullmønster - del 2",
+      "type": "video",
+      "file": "2158849997-hullmonster-del-2.mp4"
+    },
+    {
+      "lesson_id": 2158850000,
+      "title": "Hullmønster - del 3",
+      "type": "video",
+      "file": "2158850000-hullmonster-del-3.mp4"
+    },
+    {
+      "lesson_id": 2158850004,
+      "title": "Avslutt lappen",
+      "type": "video",
+      "file": "2158850004-avslutt-lappen.mp4"
+    }
+  ]
+}
