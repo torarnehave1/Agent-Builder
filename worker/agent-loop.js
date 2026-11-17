@@ -1239,6 +1239,7 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     if (!provider.configured) throw new Error(provider.missing)
 
     let { allTools, operationMap } = await loadAllTools(env)
+    const everyTool = allTools
     const knownToolNames = new Set([...allTools, ...TOOL_DEFINITIONS].map((tool) => tool.name))
     allTools = allTools.filter((tool) => OPENAI_AGENT_TOOLS.has(tool.name))
     // Grok/OpenAI must not route chat work through the Claude-only chat subagent.
@@ -1258,6 +1259,16 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
       ...allTools.filter((tool) => tool.name !== 'delegate_to_chat' && tool.name !== 'delegate_to_contact'),
       ...TOOL_DEFINITIONS.filter((tool) => (chatToolNames.has(tool.name) || contactToolNames.has(tool.name)) && !existingToolNames.has(tool.name)),
     ]
+    // A locked work context (index.js EXCLUSIVE_CONTEXTS, e.g. 'VEGR.AI MCP Server' → mcp_call only)
+    // holds on this path too. Until 2026-11-17 only the Claude path read toolFilter, so GPT, Grok,
+    // Gemini and Kimi got the whole curated toolbox in a context that promised one tool, and
+    // mcp_call was not in that toolbox at all.
+    const locked = Array.isArray(options.toolFilter) && options.toolFilter.length > 0
+    if (locked) {
+      const allowed = new Set(options.toolFilter)
+      allTools = everyTool.filter((tool) => allowed.has(tool.name))
+      log(`tool filter applied: ${options.toolFilter.length} allowed → ${allTools.length} tools`)
+    }
     const openAIAllowedTools = new Set(allTools.map((tool) => tool.name))
     const openAITools = allTools.map(toOpenAITool)
 
@@ -1265,7 +1276,9 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     // On 2026-10-15 Grok, asked for save_component (not in its list), called
     // save_world_founder_template(html:"test") instead and overwrote the shared console template.
     // The prompt already told it to name the missing tool; it substituted anyway. So: code, not prompt.
-    const missingNamed = missingRequestedTools(getLatestUserText(messages), knownToolNames, openAIAllowedTools)
+    // Not under a lock: there a named tool is usually an MCP tool reached through mcp_call (e.g.
+    // list_contacts exists on both sides), and the lock prompt already handles real out-of-scope asks.
+    const missingNamed = locked ? [] : missingRequestedTools(getLatestUserText(messages), knownToolNames, openAIAllowedTools)
     if (missingNamed.length) {
       const list = missingNamed.map((n) => '`' + n + '`').join(', ')
       const stopMsg = `Stopped before doing anything: you asked for ${list}, which ${missingNamed.length === 1 ? 'is' : 'are'} not available on the ${provider.label} path. No other tool was run in ${missingNamed.length === 1 ? 'its' : 'their'} place. Switch the model to Claude, or ask for ${list} to be added to the ${provider.label} tool list.`
@@ -1278,7 +1291,9 @@ async function streamingOpenAIAgentLoop(writer, encoder, messages, systemPrompt,
     const openAIToolPrompt =
       `${systemPrompt}\n\n` +
       `## ${provider.label} AgentChat Tooling\n` +
-      `You are running through the ${provider.label} provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n` +
+      (locked
+        ? `You are running through the ${provider.label} provider path, locked by the work context to: ${allTools.map((t) => t.name).join(', ')}.\n`
+        : `You are running through the ${provider.label} provider path. This path exposes an expanded but curated AgentChat toolbox (${allTools.length} tools) across knowledge graphs, HTML editing, media, Vemotion, data, calendar, email, capability workers, subagents, and Proff lookup.\n`) +
       `Use the available function tools when they are needed, and call them again whenever the user repeats a request — never answer from an earlier tool result. If a user asks for a capability that is not in this ${provider.label} tool list, name the specific missing tool so it can be added to this path; do not tell the user to switch models.` +
       (taskSlot ? `\n\n${taskSlot}` : '')
 
