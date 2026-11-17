@@ -46,6 +46,7 @@ for (const [model, binding, url, tokenField, tokens, bare] of [
   const r = await p.send({ userId: 'u1', messages: [{ role: 'user', content: 'x' }], tools: [{ type: 'function' }], temperature: 0.3 })
   check('kimi: runs moonshotai/kimi-k3.1-pro through the default gateway', seen?.id === 'moonshotai/kimi-k3.1-pro' && seen.opts?.gateway?.id === 'default', JSON.stringify(seen))
   check('kimi: sends only the model\'s own fields (no userId, no model)', !('userId' in seen.input) && !('model' in seen.input) && seen.input.max_tokens === 8192 && seen.input.tool_choice === 'auto', JSON.stringify(Object.keys(seen.input)))
+  check('kimi: sends no temperature (K3.1 Pro allows only 1)', !('temperature' in seen.input), JSON.stringify(seen.input))
   check('kimi: returns ok + data and asks for its reasoning back', r.ok === true && p.keepReasoning === true)
   const named = resolveChatProvider('kimi/kimi-k3.1-pro', { ...env, AI_GATEWAY_ID: 'vegr' })
   await named.send({ messages: [], tools: [], temperature: 0.3 })

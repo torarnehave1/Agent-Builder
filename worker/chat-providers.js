@@ -110,13 +110,16 @@ export function resolveChatProvider(model, env) {
       keepReasoning: true,
       configured: typeof ai?.run === 'function',
       missing: 'The Workers AI binding (AI) is not configured.',
-      async send({ messages, tools, temperature }) {
+      async send({ messages, tools }) {
         try {
           // No userId and nothing else beside the model's own fields: AI Gateway rejects fields a
-          // third-party model does not accept.
+          // third-party model does not accept. No temperature either: Kimi K3.1 Pro allows only 1
+          // and refused the loop's 0.3 ("invalid temperature: only 1 is allowed", seen through the
+          // REST API 2026-11-17; the binding showed only "7003: User Input Error"), so every Kimi
+          // chat failed. Left out, the model uses its own default.
           const data = await ai.run(
             catalogId,
-            { messages, tools, tool_choice: 'auto', temperature, max_tokens: p.maxTokens },
+            { messages, tools, tool_choice: 'auto', max_tokens: p.maxTokens },
             { gateway: { id: env.AI_GATEWAY_ID || 'default' } },
           )
           if (!data || typeof data !== 'object' || !Array.isArray(data.choices)) {
