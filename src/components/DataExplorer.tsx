@@ -1,6 +1,18 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getApiToken } from '../lib/auth';
 
 const DRIZZLE_API = 'https://drizzle.vegvisr.org';
+
+// drizzle-worker requires login (2026-11-17): every browser call carries the signed-in user's
+// token, and the raw-SQL / d1-tables / databases routes this explorer uses are Superadmin-only.
+// `Authorization` is already on drizzle-worker's CORS allow-list.
+const drizzleHeaders = (withJson = true): Record<string, string> => {
+  const token = getApiToken();
+  return {
+    ...(withJson ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
 
 // Preset queries per database — shown as a dropdown in the SQL bar
 const PRESET_QUERIES: Record<string, { label: string; sql: string }[]> = {
@@ -148,7 +160,7 @@ export default function DataExplorer() {
 
   // Fetch available databases on mount
   useEffect(() => {
-    fetch(`${DRIZZLE_API}/databases`)
+    fetch(`${DRIZZLE_API}/databases`, { headers: drizzleHeaders(false) })
       .then(r => r.json())
       .then(data => setDatabases(data.databases || []))
       .catch(() => setDatabases(['vegvisr_org']));
@@ -164,9 +176,9 @@ export default function DataExplorer() {
     setSqlInput('');
     try {
       const [d1Data, appData] = await Promise.all([
-        fetch(`${DRIZZLE_API}/d1-tables?database=${dbName}`).then(r => r.json()).catch(() => ({ tables: [] })),
+        fetch(`${DRIZZLE_API}/d1-tables?database=${dbName}`, { headers: drizzleHeaders(false) }).then(r => r.json()).catch(() => ({ tables: [] })),
         dbName === 'vegvisr_org'
-          ? fetch(`${DRIZZLE_API}/tables?database=${dbName}`).then(r => r.json()).catch(() => ({ tables: [] }))
+          ? fetch(`${DRIZZLE_API}/tables?database=${dbName}`, { headers: drizzleHeaders(false) }).then(r => r.json()).catch(() => ({ tables: [] }))
           : Promise.resolve({ tables: [] }),
       ]);
       setD1Tables(d1Data.tables || []);
@@ -204,7 +216,7 @@ export default function DataExplorer() {
       // Check if it's an app table with schema info
       const appMeta = appTables.find(a => a.tableName === tableName);
       if (appMeta) {
-        const detailRes = await fetch(`${DRIZZLE_API}/table/${appMeta.id}?database=${selectedDb}`);
+        const detailRes = await fetch(`${DRIZZLE_API}/table/${appMeta.id}?database=${selectedDb}`, { headers: drizzleHeaders(false) });
         if (detailRes.ok) {
           const detail = await detailRes.json();
           setTableColumns(detail.columns || []);
@@ -216,7 +228,7 @@ export default function DataExplorer() {
       // Query the table data
       const res = await fetch(`${DRIZZLE_API}/raw-query?database=${selectedDb}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: drizzleHeaders(),
         body: JSON.stringify({ sql: query }),
       });
       const data = await res.json();
@@ -241,7 +253,7 @@ export default function DataExplorer() {
     try {
       const res = await fetch(`${DRIZZLE_API}/raw-query?database=${selectedDb}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: drizzleHeaders(),
         body: JSON.stringify({ sql: sqlInput.trim() }),
       });
       const data = await res.json();
