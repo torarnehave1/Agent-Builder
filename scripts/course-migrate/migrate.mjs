@@ -399,18 +399,20 @@ async function describeCourse() {
 }
 
 // PDFs (the recipe): looked up next to the originals (<videoDir>/..), uploaded once per checksum.
-async function uploadPdf(lesson) {
-  const file = path.join(path.dirname(m.videoDir), lesson.pdf)
-  if (!fs.existsSync(file)) { log(`PDF not downloaded yet: ${lesson.pdf}`); return null }
+// A lesson has one `pdf`; further files of the same lesson go in `extraPdfs: [{ file, label }]` and are
+// kept in the state under `<lesson id>:<file>`.
+async function uploadPdf(lesson, name = lesson.pdf, stateKey = lesson.lesson_id) {
+  const file = path.join(path.dirname(m.videoDir), name)
+  if (!fs.existsSync(file)) { log(`PDF not downloaded yet: ${name}`); return null }
   const digest = sha256(file)
-  const have = state.files[lesson.lesson_id]
-  if (have && have.sha256 === digest) { log(`PDF already uploaded: ${lesson.pdf}`); return have }
-  const key = `${m.folder}/${slugify(lesson.pdf.replace(/\.pdf$/i, ''))}.pdf`
+  const have = state.files[stateKey]
+  if (have && have.sha256 === digest) { log(`PDF already uploaded: ${name}`); return have }
+  const key = `${m.folder}/${slugify(name.replace(/\.pdf$/i, ''))}.pdf`
   await uploadFile(key, file, 'application/pdf', { course: m.slug, kind: 'pdf', lesson: lesson.title, lesson_id: lesson.lesson_id, sha256: digest, source: `${m.source.system}:${m.source.product_id}/${m.source.category_id}/${lesson.lesson_id}` })
-  state.files[lesson.lesson_id] = { key, sha256: digest, bytes: fs.statSync(file).size, name: lesson.pdf }
+  state.files[stateKey] = { key, sha256: digest, bytes: fs.statSync(file).size, name }
   save()
   log(`PDF uploaded: ${key}`)
-  return state.files[lesson.lesson_id]
+  return state.files[stateKey]
 }
 
 const minutes = (s) => Math.max(1, Math.round(s / 60))
@@ -554,7 +556,10 @@ async function saveGraph() {
     } else {
       const f = state.files[lesson.lesson_id]
       const pdfNote = f ? `\n\n**[${lesson.pdfLabel || 'Last ned oppskriften (PDF)'}](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
-      nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${pdfNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null) } } })
+      const extras = (lesson.extraPdfs || []).map((x) => ({ x, f: state.files[`${lesson.lesson_id}:${x.file}`], url: pdfUrls[`${lesson.lesson_id}:${x.file}`] })).filter((e) => e.f)
+      const extraNote = extras.map((e) => `\n\n**[${e.x.label || e.f.name}](${e.url})**`).join('')
+      const extraMeta = extras.length ? { extraPdfs: extras.map((e) => ({ key: e.f.key, sha256: e.f.sha256, bytes: e.f.bytes, name: e.f.name, label: e.x.label || null })) } : {}
+      nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${pdfNote}${extraNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null), ...extraMeta } } })
     }
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
     prev = nid
@@ -598,7 +603,10 @@ for (const lesson of m.lessons) {
   await transcribe(lesson, file)
   await summarize(lesson)
 }
-for (const lesson of m.lessons) if (lesson.pdf) await uploadPdf(lesson)
+for (const lesson of m.lessons) {
+  if (lesson.pdf) await uploadPdf(lesson)
+  for (const x of lesson.extraPdfs || []) await uploadPdf(lesson, x.file, `${lesson.lesson_id}:${x.file}`)
+}
 await courseImage()
 await describeCourse()
 await ensureAlbumOwner()

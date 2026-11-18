@@ -1,0 +1,112 @@
+{
+  "world": "sodesign.no",
+  "slug": "mini-leaves-skjerf",
+  "title": "Mini Leaves - skjerf",
+  "album": "Mini Leaves - skjerf",
+  "folder": "kurs/mini-leaves-skjerf",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2158795843
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/mini-leaves-skjerf/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2192271386,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på Mini Leaves - skjerfet. Trykk på Nedlasting for å laste den ned.\n\nHer ligger også oppskrift på Autumn Leaves - skjerfet. Det strikkes på akkurat samme måte, men med tykkere pinner og garn.\n\nLast ned oppskriften å ha den foran deg når du følger kurset :)",
+      "pdf": "Mini_Leaves_-_skjerf.pdf",
+      "pdfLabel": "Last ned oppskriften på Mini Leaves - skjerf (PDF)",
+      "extraPdfs": [
+        {
+          "file": "Autumn_Leaves.pdf",
+          "label": "Last ned oppskriften på Autumn Leaves - skjerf (PDF)"
+        }
+      ]
+    },
+    {
+      "lesson_id": 2192271395,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2192271395-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2192271396,
+      "title": "Pinne 1",
+      "type": "video",
+      "file": "2192271396-pinne-1.mp4"
+    },
+    {
+      "lesson_id": 2192271398,
+      "title": "Pinne 2",
+      "type": "video",
+      "file": "2192271398-pinne-2.mp4"
+    },
+    {
+      "lesson_id": 2192271400,
+      "title": "Pinne 1 og 2, med farge 2",
+      "type": "video",
+      "file": "2192271400-pinne-1-og-2-med-farge-2.mp4"
+    },
+    {
+      "lesson_id": 2192271403,
+      "title": "Etabler perlestrikk",
+      "type": "video",
+      "file": "2192271403-etabler-perlestrikk.mp4"
+    },
+    {
+      "lesson_id": 2192271404,
+      "title": "Underveis",
+      "type": "video",
+      "file": "2192271404-underveis.mp4"
+    },
+    {
+      "lesson_id": 2192462787,
+      "title": "Halvveis",
+      "type": "video",
+      "file": "2192462787-halvveis.mp4"
+    },
+    {
+      "lesson_id": 2192462788,
+      "title": "Fell",
+      "type": "video",
+      "file": "2192462788-fell.mp4"
+    },
+    {
+      "lesson_id": 2192463026,
+      "title": "Fell av",
+      "type": "video",
+      "file": "2192463026-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2192463029,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2192463029-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2192463032,
+      "title": "Vask/skyll",
+      "type": "video",
+      "file": "2192463032-vask-skyll.mp4"
+    }
+  ]
+}
