@@ -47,6 +47,8 @@ const PART = 32 * 1024 * 1024
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const manifestPath = process.argv[2]
+const DRY = process.argv.includes('--dry')
+const ADOPT = process.argv.includes('--adopt')
 if (!manifestPath) { console.error('usage: node migrate.mjs <manifest.json>'); process.exit(2) }
 const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
 const token = process.env.VEGVISR_TOKEN
@@ -564,16 +566,87 @@ async function saveGraph() {
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
     prev = nid
   })
+  // A course that already has a graph is updated node by node (architect decision 2026-11-18):
+  // only the nodes whose generated content changed are written, and a node somebody has edited
+  // since this routine last wrote it is left alone and reported. Nothing else in the graph —
+  // other nodes, edges, order — is touched.
+  if (state.graphId) return updateGraph(id, nodes)
   const body = {
-    id, override: !!state.graphId, world: m.world,
+    id, override: false, world: m.world,
     graphData: { metadata: { title: m.title, description: (about && about.tagline) || `${LIBRARY ? 'Hjelpevideoer' : 'Kurs'} i ${m.source.product} (${m.source.module}).`, metaArea: m.metaArea, createdBy: actor, version: 0 }, nodes, edges },
   }
+  if (DRY) { log(`dry run: would create the course graph with ${nodes.length} nodes`); return id }
   const r = await fetch(`${KG}/saveGraphWithHistory`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': token }, body: JSON.stringify(body) })
   const j = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(`saving the course graph failed (${r.status}): ${j.error || JSON.stringify(j).slice(0, 200)}`)
   state.graphId = id
+  state.written = Object.fromEntries(nodes.map((n) => [n.id, fingerprint(n, n)]))
   save()
   log(`course graph ${id} saved (version ${j.newVersion}) in ${m.world}`)
+  return id
+}
+
+// What this routine owns in a node: label, type, info, path and the metadata keys it writes.
+// Keys somebody else added to metadata are not compared and are kept on a write.
+const canonical = (v) => Array.isArray(v) ? v.map(canonical)
+  : (v && typeof v === 'object') ? Object.fromEntries(Object.keys(v).sort().filter((k) => v[k] !== undefined).map((k) => [k, canonical(v[k])])) : v
+// transcript.replacements only counts the entries in the word file; a new entry is not a change
+// to the node, so it is left out of the comparison.
+function owned(node, generated) {
+  const meta = {}
+  for (const k of Object.keys(generated.metadata || {})) meta[k] = (node.metadata || {})[k] ?? null
+  if (meta.transcript) { meta.transcript = { ...meta.transcript }; delete meta.transcript.replacements }
+  return { label: node.label || '', type: node.type || '', info: node.info || '', path: node.path || null, ...Object.fromEntries(Object.entries(meta).map(([k, v]) => [`metadata.${k}`, v])) }
+}
+function fingerprint(node, generated) {
+  return crypto.createHash('sha256').update(JSON.stringify(canonical(owned(node, generated)))).digest('hex')
+}
+// Which of the owned fields differ between the node as it stands and the node as generated.
+function differing(node, generated) {
+  const a = owned(node, generated); const b = owned(generated, generated)
+  return Object.keys(b).filter((k) => JSON.stringify(canonical(a[k])) !== JSON.stringify(canonical(b[k])))
+}
+
+async function updateGraph(id, nodes) {
+  const r = await fetch(`${KG}/getknowgraph?id=${id}`, { headers: { 'X-API-Token': token } })
+  const live = await r.json().catch(() => ({}))
+  if (!r.ok || !Array.isArray(live.nodes)) throw new Error(`reading the course graph ${id} failed (${r.status}): ${live.error || 'no nodes'}`)
+  let version = Number((live.metadata && live.metadata.version) || 0)
+  const byId = new Map(live.nodes.map((n) => [n.id, n]))
+  state.written = state.written || {}
+  // A graph at version 1 has been saved once, by this routine: every node is as it wrote it.
+  const untouched = version === 1
+  const out = { unchanged: [], updated: [], edited: [], unknown: [], missing: [] }
+  const why = {}
+  for (const g of nodes) {
+    const l = byId.get(g.id)
+    if (!l) { out.missing.push(g.id); continue }
+    const want = fingerprint(g, g)
+    const have = fingerprint(l, g)
+    if (have === want) { state.written[g.id] = want; out.unchanged.push(g.id); continue }
+    // --adopt: take the node as it stands now as this routine's own. Used once for the courses
+    // built before the routine kept a record, after their history is checked.
+    why[g.id] = differing(l, g).join(', ')
+    if ((ADOPT || untouched) && !state.written[g.id]) state.written[g.id] = have
+    if (!state.written[g.id]) { out.unknown.push(g.id); continue }
+    if (state.written[g.id] !== have) { out.edited.push(g.id); continue }
+    if (DRY) { out.updated.push(g.id); continue }
+    const fields = { label: g.label, type: g.type, info: g.info, metadata: { ...(l.metadata || {}), ...(g.metadata || {}) } }
+    if (g.path !== undefined) fields.path = g.path
+    const pr = await fetch(`${KG}/patchNode`, { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-API-Token': token }, body: JSON.stringify({ graphId: id, nodeId: g.id, fields, expectedVersion: version }) })
+    const pj = await pr.json().catch(() => ({}))
+    if (!pr.ok) { save(); throw new Error(`updating node ${g.id} failed (${pr.status}): ${pj.error || JSON.stringify(pj).slice(0, 200)}`) }
+    version = pj.newVersion
+    state.written[g.id] = want
+    save()
+    out.updated.push(g.id)
+  }
+  if (!DRY) save()
+  log(`course graph ${id}${DRY ? ' (dry run, nothing written)' : ''}: ${out.updated.length} ${DRY ? 'would be updated' : 'updated'}, ${out.unchanged.length} unchanged, version ${version}`)
+  for (const n of out.updated) log(`  ${DRY ? 'would update' : 'updated'}: ${n} (${why[n]})`)
+  for (const n of out.edited) log(`  LEFT ALONE, edited by hand since the routine wrote it: ${n} (${why[n]})`)
+  for (const n of out.unknown) log(`  LEFT ALONE, differs and the routine has no record of what it wrote: ${n} (${why[n]})`)
+  for (const n of out.missing) log(`  NOT ADDED, the graph has no such node: ${n}`)
   return id
 }
 

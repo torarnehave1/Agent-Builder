@@ -16,4 +16,4 @@ d1() {
 export VEGVISR_TOKEN=$(d1 "SELECT emailVerificationToken AS v FROM config WHERE email='torarnehave@gmail.com'")
 export VEGVISR_USER_ID=$(d1 "SELECT user_id AS v FROM config WHERE email='torarnehave@gmail.com'")
 export VEGVISR_EMAIL=torarnehave@gmail.com
-node "$HERE/migrate.mjs" "${1:A}"
+node "$HERE/migrate.mjs" "${1:A}" "${@:2}"
