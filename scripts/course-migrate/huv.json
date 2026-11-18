@@ -1,0 +1,105 @@
+{
+  "world": "sodesign.no",
+  "slug": "huv",
+  "title": "Huv strikkekurs",
+  "album": "Huv strikkekurs",
+  "folder": "kurs/huv",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2153671134
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/huv/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2170830544,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Huv. Last den ned og ha den foran deg når du følger kurset.",
+      "pdf": "HUV.pdf"
+    },
+    {
+      "lesson_id": 2170830549,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2170830549-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2170830580,
+      "title": "Garn og utstyr",
+      "type": "video",
+      "file": "2170830580-garn-og-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2170830581,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2170830581-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2170830582,
+      "title": "Strikk den første omgangen",
+      "type": "video",
+      "file": "2170830582-strikk-den-forste-omgangen.mp4"
+    },
+    {
+      "lesson_id": 2170830583,
+      "title": "Fortsett rundt med rett og vrang",
+      "type": "video",
+      "file": "2170830583-fortsett-rundt-med-rett-og-vrang.mp4"
+    },
+    {
+      "lesson_id": 2174774214,
+      "title": "Strikk den første omgangen i diagrammet",
+      "type": "video",
+      "file": "2174774214-strikk-den-forste-omgangen-i-diagrammet.mp4"
+    },
+    {
+      "lesson_id": 2170830589,
+      "title": "Strikk og fell som diagrammet viser",
+      "type": "video",
+      "file": "2170830589-strikk-og-fell-som-diagrammet-viser.mp4"
+    },
+    {
+      "lesson_id": 2171090955,
+      "title": "Bytt til strømpepinner",
+      "type": "video",
+      "file": "2171090955-bytt-til-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2170830590,
+      "title": "Strikk den siste omgangen i diagrammet",
+      "type": "video",
+      "file": "2170830590-strikk-den-siste-omgangen-i-diagrammet.mp4"
+    },
+    {
+      "lesson_id": 2170830593,
+      "title": "Klipp tråden og dra den gjennom maskene",
+      "type": "video",
+      "file": "2170830593-klipp-traden-og-dra-den-gjennom-maskene.mp4"
+    },
+    {
+      "lesson_id": 2170830594,
+      "title": "Fest trådene",
+      "type": "video",
+      "file": "2170830594-fest-tradene.mp4"
+    }
+  ]
+}
