@@ -54,7 +54,11 @@
     "pinja": "pinna",
     "rundpinje": "rundpinne",
     "rundpinjen": "rundpinnen",
-    "strømpepinjer": "strømpepinner"
+    "strømpepinjer": "strømpepinner",
+    "Sannesgarn": "Sandnes Garn",
+    "Sandneskarn": "Sandnes Garn",
+    "Sandnesgarn": "Sandnes Garn",
+    "Sandnes garn": "Sandnes Garn"
   },
   "drop_phrases": [
     "Undertekster av Ai-Media",
