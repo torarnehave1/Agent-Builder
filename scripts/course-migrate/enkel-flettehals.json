@@ -1,0 +1,111 @@
+{
+  "world": "sodesign.no",
+  "slug": "enkel-flettehals",
+  "title": "Enkel flettehals",
+  "album": "Enkel flettehals",
+  "folder": "kurs/enkel-flettehals",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2152738636
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/enkel-flettehals/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2167295741,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her laster du ned oppskriften til Enkel flettehals. Ha den tilgjengelig når du følger kurset :)",
+      "pdf": "Enkel_flettehals.pdf"
+    },
+    {
+      "lesson_id": 2167295752,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2167295752-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2167295774,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2167295774-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2167296022,
+      "title": "Legg opp med dobbel tråd",
+      "type": "video",
+      "file": "2167296022-legg-opp-med-dobbel-trad.mp4"
+    },
+    {
+      "lesson_id": 2167296324,
+      "title": "Første pinne",
+      "type": "video",
+      "file": "2167296324-forste-pinne.mp4"
+    },
+    {
+      "lesson_id": 2167298045,
+      "title": "Andre pinne",
+      "type": "video",
+      "file": "2167298045-andre-pinne.mp4"
+    },
+    {
+      "lesson_id": 2167298407,
+      "title": "Pinne 3, 4 og 5",
+      "type": "video",
+      "file": "2167298407-pinne-3-4-og-5.mp4"
+    },
+    {
+      "lesson_id": 2167299108,
+      "title": "Pinne 6 - Flette",
+      "type": "video",
+      "file": "2167299108-pinne-6-flette.mp4"
+    },
+    {
+      "lesson_id": 2167299224,
+      "title": "Gjenta",
+      "type": "video",
+      "file": "2167299224-gjenta.mp4"
+    },
+    {
+      "lesson_id": 2167299422,
+      "title": "Fell av",
+      "type": "video",
+      "file": "2167299422-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2167299619,
+      "title": "Sy sammen",
+      "type": "video",
+      "file": "2167299619-sy-sammen.mp4"
+    },
+    {
+      "lesson_id": 2167299796,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2167299796-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2167299801,
+      "title": "Brett halsen",
+      "type": "video",
+      "file": "2167299801-brett-halsen.mp4"
+    }
+  ]
+}
