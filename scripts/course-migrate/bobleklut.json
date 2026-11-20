@@ -1,0 +1,116 @@
+{
+  "world": "sodesign.no",
+  "slug": "bobleklut",
+  "title": "Bobleklut strikkekurs",
+  "album": "Bobleklut strikkekurs",
+  "folder": "kurs/bobleklut",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Hjem"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2157888366
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/bobleklut/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2188599065,
+      "title": "Velkommen",
+      "type": "video",
+      "file": "2188599065-velkommen.mp4"
+    },
+    {
+      "lesson_id": 2188599560,
+      "title": "Legg opp",
+      "type": "video",
+      "file": "2188599560-legg-opp.mp4"
+    },
+    {
+      "lesson_id": 2188601180,
+      "title": "Strikk 1 pinne rett",
+      "type": "video",
+      "file": "2188601180-strikk-1-pinne-rett.mp4"
+    },
+    {
+      "lesson_id": 2188604395,
+      "title": "Strikk 1. pinne i mønsteret",
+      "type": "video",
+      "file": "2188604395-strikk-1-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188607255,
+      "title": "Strikk 2. pinne i mønsteret",
+      "type": "video",
+      "file": "2188607255-strikk-2-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188608749,
+      "title": "Strikk 3. pinne i mønsteret",
+      "type": "video",
+      "file": "2188608749-strikk-3-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188609193,
+      "title": "Strikk 4. pinne i mønsteret",
+      "type": "video",
+      "file": "2188609193-strikk-4-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188610405,
+      "title": "Strikk 5. og 6. pinne i mønsteret",
+      "type": "video",
+      "file": "2188610405-strikk-5-og-6-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188610695,
+      "title": "Strikk 7.-12. pinne i mønsteret",
+      "type": "video",
+      "file": "2188610695-strikk-7-12-pinne-i-monsteret.mp4"
+    },
+    {
+      "lesson_id": 2188627215,
+      "title": "Gjenta rapporten i høyden 5 ganger",
+      "type": "video",
+      "file": "2188627215-gjenta-rapporten-i-hoyden-5-ganger.mp4"
+    },
+    {
+      "lesson_id": 2188659277,
+      "title": "Noen tips på veien",
+      "type": "video",
+      "file": "2188659277-noen-tips-pa-veien.mp4"
+    },
+    {
+      "lesson_id": 2188659286,
+      "title": "Avslutt med 1 pinne vrang",
+      "type": "video",
+      "file": "2188659286-avslutt-med-1-pinne-vrang.mp4"
+    },
+    {
+      "lesson_id": 2188659290,
+      "title": "Fell av",
+      "type": "video",
+      "file": "2188659290-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2188659302,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2188659302-fest-trader.mp4"
+    }
+  ]
+}
