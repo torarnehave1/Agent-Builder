@@ -1,0 +1,117 @@
+{
+  "world": "sodesign.no",
+  "slug": "basic-sokker",
+  "title": "Basic sokker strikkekurs",
+  "album": "Basic sokker strikkekurs",
+  "folder": "kurs/basic-sokker",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Sokker"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2150456738
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/basic-sokker/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2158320457,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på Basic sokker. Last den ned og ha den tilgjengelig når du følger kurset.",
+      "pdf": "Basic_sokker.pdf"
+    },
+    {
+      "lesson_id": 2158320465,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2158320465-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2158320468,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2158320468-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2158320470,
+      "title": "Legg opp masker på strømpepinner",
+      "type": "video",
+      "file": "2158320470-legg-opp-masker-pa-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2158324947,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2158324947-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2158336890,
+      "title": "Hæl - Del 1",
+      "type": "video",
+      "file": "2158336890-hael-del-1.mp4"
+    },
+    {
+      "lesson_id": 2158336893,
+      "title": "Hæl - Del 2",
+      "type": "video",
+      "file": "2158336893-hael-del-2.mp4"
+    },
+    {
+      "lesson_id": 2158402341,
+      "title": "Strikk opp masker",
+      "type": "video",
+      "file": "2158402341-strikk-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2158402996,
+      "title": "Juster maskeantallet",
+      "type": "video",
+      "file": "2158402996-juster-maskeantallet.mp4"
+    },
+    {
+      "lesson_id": 2158402992,
+      "title": "Strikk fot",
+      "type": "video",
+      "file": "2158402992-strikk-fot.mp4"
+    },
+    {
+      "lesson_id": 2158425339,
+      "title": "Fell til tå Del 1",
+      "type": "video",
+      "file": "2158425339-fell-til-ta-del-1.mp4"
+    },
+    {
+      "lesson_id": 2158481143,
+      "title": "Fell til tå Del 2",
+      "type": "video",
+      "file": "2158481143-fell-til-ta-del-2.mp4"
+    },
+    {
+      "lesson_id": 2158481564,
+      "title": "Dra tråden gjennom maskene",
+      "type": "video",
+      "file": "2158481564-dra-traden-gjennom-maskene.mp4"
+    },
+    {
+      "lesson_id": 2158510414,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2158510414-fest-trader.mp4"
+    }
+  ]
+}
