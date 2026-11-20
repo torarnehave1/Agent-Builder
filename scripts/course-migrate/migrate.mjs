@@ -522,6 +522,15 @@ async function saveGraph() {
   // platform types, 2026-11-16; the same as worker/world-course.js makes). A video collection
   // (LIBRARY) is not a course and keeps the plain types.
   const STEP_TYPE = LIBRARY ? null : 'kurs-steg'
+  // The download links and pdf metadata of one lesson, text or video.
+  function pdfParts(lesson) {
+    const f = state.files[lesson.lesson_id]
+    const pdfNote = f ? `\n\n**[${lesson.pdfLabel || 'Last ned oppskriften (PDF)'}](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
+    const extras = (lesson.extraPdfs || []).map((x) => ({ x, f: state.files[`${lesson.lesson_id}:${x.file}`], url: pdfUrls[`${lesson.lesson_id}:${x.file}`] })).filter((e) => e.f)
+    const extraNote = extras.map((e) => `\n\n**[${e.x.label || e.f.name}](${e.url})**`).join('')
+    const extraMeta = extras.length ? { extraPdfs: extras.map((e) => ({ key: e.f.key, sha256: e.f.sha256, bytes: e.f.bytes, name: e.f.name, label: e.x.label || null })) } : {}
+    return { note: `${pdfNote}${extraNote}`, meta: { pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null), ...extraMeta } }
+  }
   m.lessons.forEach((lesson, i) => {
     const order = i + 1
     const nid = `l${String(order).padStart(2, '0')}-${slugify(lesson.title)}`
@@ -541,7 +550,11 @@ async function saveGraph() {
         edges.push({ source: prev, target: sid, type: 'next', label: 'next' })
         prev = sid
       }
-      nodes.push({ ...base, type: STEP_TYPE || 'realtime-video', path: urls[lesson.lesson_id], info: '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s } } })
+      // A video lesson can carry the recipe too (Bobleklut: the PDF sits under «Nedlasting» on the
+      // Velkommen video). Only such a lesson gets the link and the pdf metadata, so the video nodes
+      // of every other course stay byte-for-byte what they were.
+      const vp = (lesson.pdf || (lesson.extraPdfs || []).length) ? pdfParts(lesson) : null
+      nodes.push({ ...base, type: STEP_TYPE || 'realtime-video', path: urls[lesson.lesson_id], info: vp ? vp.note.trim() : '', metadata: { lesson: { ...lessonMeta, key: u.key, sha256: u.sha256, bytes: u.bytes, duration_s: u.duration_s, ...(vp ? vp.meta : {}) } } })
       const t = state.transcripts[lesson.lesson_id]
       if (t) {
         const tid = `${nid}-transkripsjon`
@@ -556,12 +569,8 @@ async function saveGraph() {
         return
       }
     } else {
-      const f = state.files[lesson.lesson_id]
-      const pdfNote = f ? `\n\n**[${lesson.pdfLabel || 'Last ned oppskriften (PDF)'}](${pdfUrls[lesson.lesson_id]})**` : (lesson.pdf ? `\n\n_PDF: ${lesson.pdf} — ikke lastet opp ennå._` : '')
-      const extras = (lesson.extraPdfs || []).map((x) => ({ x, f: state.files[`${lesson.lesson_id}:${x.file}`], url: pdfUrls[`${lesson.lesson_id}:${x.file}`] })).filter((e) => e.f)
-      const extraNote = extras.map((e) => `\n\n**[${e.x.label || e.f.name}](${e.url})**`).join('')
-      const extraMeta = extras.length ? { extraPdfs: extras.map((e) => ({ key: e.f.key, sha256: e.f.sha256, bytes: e.f.bytes, name: e.f.name, label: e.x.label || null })) } : {}
-      nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${pdfNote}${extraNote}`, metadata: { lesson: { ...lessonMeta, pdf: f ? { key: f.key, sha256: f.sha256, bytes: f.bytes, name: f.name } : (lesson.pdf || null), ...extraMeta } } })
+      const p = pdfParts(lesson)
+      nodes.push({ ...base, type: STEP_TYPE || 'fulltext', info: `${lesson.info || ''}${p.note}`, metadata: { lesson: { ...lessonMeta, ...p.meta } } })
     }
     edges.push({ source: prev, target: nid, type: 'next', label: 'next' })
     prev = nid
