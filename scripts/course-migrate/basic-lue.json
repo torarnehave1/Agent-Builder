@@ -1,0 +1,129 @@
+{
+  "world": "sodesign.no",
+  "slug": "basic-lue",
+  "title": "Basic lue",
+  "album": "Basic lue",
+  "folder": "kurs/basic-lue",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3232757
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/basic-lue/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154459205,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Basic lue.",
+      "pdf": "Basic_lue.pdf"
+    },
+    {
+      "lesson_id": 2154459209,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2154459209-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154459244,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2154459244-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2154459247,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2154459247-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2154459250,
+      "title": "Hvordan strikke rette og vrange masker",
+      "type": "video",
+      "file": "2154459250-hvordan-strikke-rette-og-vrange-masker.mp4"
+    },
+    {
+      "lesson_id": 2154459314,
+      "title": "Fortsett videre med rette og vrange masker",
+      "type": "video",
+      "file": "2154459314-fortsett-videre-med-rette-og-vrange-masker.mp4"
+    },
+    {
+      "lesson_id": 2154459320,
+      "title": "Se forskjell på rette og vrange masker",
+      "type": "video",
+      "file": "2154459320-se-forskjell-pa-rette-og-vrange-masker.mp4"
+    },
+    {
+      "lesson_id": 2154459325,
+      "title": "Hvordan rekke opp ved å strikke tilbake",
+      "type": "video",
+      "file": "2154459325-hvordan-rekke-opp-ved-a-strikke-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2154459331,
+      "title": "Hvordan rette opp en maske fra tidligere omgang",
+      "type": "video",
+      "file": "2154459331-hvordan-rette-opp-en-maske-fra-tidligere-omgang.mp4"
+    },
+    {
+      "lesson_id": 2154459333,
+      "title": "Starte på et nytt nøste",
+      "type": "video",
+      "file": "2154459333-starte-pa-et-nytt-noste.mp4"
+    },
+    {
+      "lesson_id": 2154459335,
+      "title": "Fellinger: strikk 2 rett, 2 vrang sammen",
+      "type": "video",
+      "file": "2154459335-fellinger-strikk-2-rett-2-vrang-sammen.mp4"
+    },
+    {
+      "lesson_id": 2154459340,
+      "title": "Strikk 2 rett sammen, 1 rett",
+      "type": "video",
+      "file": "2154459340-strikk-2-rett-sammen-1-rett.mp4"
+    },
+    {
+      "lesson_id": 2154459380,
+      "title": "Hvordan strikke på strømpepinner",
+      "type": "video",
+      "file": "2154459380-hvordan-strikke-pa-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2154459449,
+      "title": "Strikk 2 rett sammen hele omgangen",
+      "type": "video",
+      "file": "2154459449-strikk-2-rett-sammen-hele-omgangen.mp4"
+    },
+    {
+      "lesson_id": 2154459467,
+      "title": "Klipp tråden og dra den gjennom maskene",
+      "type": "video",
+      "file": "2154459467-klipp-traden-og-dra-den-gjennom-maskene.mp4"
+    },
+    {
+      "lesson_id": 2154459471,
+      "title": "Fest trådene",
+      "type": "video",
+      "file": "2154459471-fest-tradene.mp4"
+    }
+  ]
+}
