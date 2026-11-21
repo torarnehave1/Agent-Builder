@@ -1,0 +1,151 @@
+# agent-worker as deployed from GitHub Actions (.github/workflows/deploy-agent-worker.yml).
+#
+# Rebuilt on 2026-11-21 from the live worker's own settings (Cloudflare API), because
+# worker/wrangler.toml is kept out of git. That local file is untouched and still works for
+# `npx wrangler deploy` from a PC; this one is only read with --config wrangler.ci.toml.
+#
+# No secrets here, and no var values:
+#   * secrets (ANTHROPIC_API_KEY, CLOUDFLARE_API_TOKEN, …) live in Cloudflare and are kept by
+#     every deploy;
+#   * plain-text vars (CF_ACCOUNT_ID, CF_API_TOKEN, COACHING_REPORT_SENDERS, FRONTEND_BASE_URL,
+#     GITHUB_APP_CLIENT_ID, INSTAGRAM_APP_ID, WORKER_NAME) are kept as they are on the dashboard
+#     by keep_vars, so their values never enter git.
+# A binding added to the worker later must be added here too, or the next Actions deploy drops it.
+# No [[migrations]]: the VegvisrAgent Durable Object already exists on the live worker, and a
+# deploy without migrations leaves it as it is (wrangler warns about this; the warning is expected).
+
+name = "agent-worker"
+main = "index.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+keep_vars = true
+workers_dev = true
+preview_urls = true
+
+routes = [
+  { pattern = "agent.vegvisr.org/*", zone_name = "vegvisr.org" },
+]
+
+[observability.logs]
+enabled = true
+invocation_logs = true
+head_sampling_rate = 1
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "VegvisrAgent"
+class_name = "VegvisrAgent"
+
+[[kv_namespaces]]
+binding = "WORLD_TEMPLATES"
+id = "4c0210ec2a3343d19ae47e38078f5263"
+
+[[d1_databases]]
+binding = "DB"
+database_id = "507d1efd-1dda-45ef-971f-52d2c8e8afe8"
+
+[[d1_databases]]
+binding = "CALENDAR_DB"
+database_id = "ebdf13a5-f969-4048-8407-b4970805a4b2"
+
+[[d1_databases]]
+binding = "CHAT_DB"
+database_id = "1abe2080-33ae-442b-9552-5203caa6c0e0"
+
+[[d1_databases]]
+binding = "STATS_DB"
+database_id = "d500865b-a53a-40b4-9784-8bd288f51575"
+
+[[services]]
+binding = "ALBUMS_WORKER"
+service = "vegvisr-albums-worker"
+
+[[services]]
+binding = "ANTHROPIC"
+service = "anthropic-worker"
+
+[[services]]
+binding = "API_WORKER"
+service = "vegvisr-api-worker"
+
+[[services]]
+binding = "AUDIO_PORTFOLIO"
+service = "audio-portfolio-worker"
+
+[[services]]
+binding = "BILLING_WORKER"
+service = "billing-worker"
+
+[[services]]
+binding = "BRAND_WORKER"
+service = "brand-worker"
+
+[[services]]
+binding = "CALENDAR_WORKER"
+service = "calendar-worker"
+
+[[services]]
+binding = "CHAT_WORKER"
+service = "group-chat-worker"
+
+[[services]]
+binding = "COACHING_WORKER"
+service = "coaching-report-worker"
+
+[[services]]
+binding = "DRIZZLE_WORKER"
+service = "drizzle-worker"
+
+[[services]]
+binding = "EMAIL_WORKER"
+service = "email-worker"
+
+[[services]]
+binding = "GEMINI_WORKER"
+service = "gemini-worker"
+
+[[services]]
+binding = "GROK_WORKER"
+service = "grok-worker"
+
+[[services]]
+binding = "KG_WORKER"
+service = "knowledge-graph-worker"
+
+[[services]]
+binding = "NORWEGIAN_AUDIO"
+service = "norwegian-transcription-worker"
+
+[[services]]
+binding = "OPENAI_WORKER"
+service = "openai-worker"
+
+[[services]]
+binding = "PERPLEXITY"
+service = "perplexity-worker"
+
+[[services]]
+binding = "PHOTOS_WORKER"
+service = "vegvisr-photos-worker"
+
+[[services]]
+binding = "REALTIME_WORKER"
+service = "realtime-worker"
+
+[[services]]
+binding = "USER_KEYS_WORKER"
+service = "user-keys-worker"
+
+[[services]]
+binding = "VEMOTION_WORKER"
+service = "vemotion-worker"
+
+[[services]]
+binding = "VIDEOSTREAM_WORKER"
+service = "videostream-worker"
+
+[[services]]
+binding = "VOICE_WORKER"
+service = "voice-worker"

@@ -1,0 +1,89 @@
+# Deploys agent-worker (worker/, served at agent.vegvisr.org) from GitHub:
+# tests → the owner's approval → wrangler deploy → live check. The same pattern as
+# deploy-dev-worker.yml in vegvisr-frontend, so it can all be done from a phone.
+#
+# WHY THE APPROVAL IS NOT OPTIONAL
+# agent-worker holds four D1 databases, a KV namespace, a Durable Object and some twenty service
+# bindings. Whatever can push to master — including an assistant with GitHub write access — could
+# otherwise put code in front of all of that within minutes. So:
+#
+#   * the deploy job runs in the `agent-production` environment, which has a required reviewer;
+#   * CLOUDFLARE_API_TOKEN exists ONLY as a secret of that environment. It must never be added as
+#     a repository secret: a repository secret is readable by any workflow file on master, and
+#     removing one line from this file would then skip the approval.
+#
+# The config is worker/wrangler.ci.toml (bindings without secrets; vars kept on the dashboard).
+# worker/wrangler.toml stays local and out of git, as before.
+name: Deploy agent-worker
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'worker/**'
+      - '.github/workflows/deploy-agent-worker.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-agent-worker
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
+      - run: npm ci --ignore-scripts
+      - name: 1/3 unit tests
+        # The package's own test list, minus test-provision-world-graphs, which needs a bundle
+        # built in vegvisr-frontend on the owner's disk and is skipped (exit 1) anywhere else.
+        run: |
+          node -e '
+            const steps = require("./package.json").scripts.test.split("&&").map(s => s.trim())
+              .filter(s => s && !s.includes("test-provision-world-graphs"))
+            const { execSync } = require("child_process")
+            for (const s of steps) { console.log("::group::" + s); execSync(s, { stdio: "inherit" }); console.log("::endgroup::") }
+          '
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: agent-production
+    defaults:
+      run:
+        working-directory: worker
+    env:
+      CLOUDFLARE_ACCOUNT_ID: 5d9b2060ef095c777711a8649c24914e
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --ignore-scripts
+
+      - name: Check the Cloudflare token is set
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Environment secret CLOUDFLARE_API_TOKEN is missing in the agent-production environment"
+            exit 1
+          fi
+
+      - name: 2/3 deploy
+        run: npx --yes wrangler@4 deploy --config wrangler.ci.toml
+
+      - name: 3/3 live check
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://agent.vegvisr.org/)
+          echo "agent.vegvisr.org answered HTTP $code"
+          case "$code" in 5*|000) echo "::error::agent-worker does not answer after the deploy"; exit 1;; esac
