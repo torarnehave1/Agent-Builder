@@ -11,7 +11,7 @@
 // Memory: a Worker has 128 MB. The pieces are Blobs built from views into the one download, and
 // only CONCURRENCY of them are in flight at once, so a 57 MB file stays well under the limit.
 
-import { splitAudio } from './audio-split.js'
+import { splitAudio, planMp4FromMoov } from './audio-split.js'
 
 export const WHISPER_MAX_BYTES = 24 * 1024 * 1024
 export const CHUNK_BYTES = 8 * 1024 * 1024
@@ -164,21 +164,28 @@ export async function transcribeAudioBytes(env, buf, { fileName = 'audio.webm', 
     if (tooBig) throw new Error(`A ${split.format} piece is ${(tooBig.bytes / 1048576).toFixed(1)} MB and cannot be made smaller; Whisper takes at most 24 MB.`)
   }
   const ext = pieceExt || (fileName.split('.').pop() || 'webm').toLowerCase()
+  return whisperPieces(env, pieces, { ext, contentType, language, concurrency: CONCURRENCY, partsOf: (p) => p.parts })
+}
+
+// Send pieces to Whisper, `concurrency` at a time, and join the text. partsOf(piece) gives the
+// piece's bytes (may be async: the range path fetches them only now, so they are freed as soon
+// as that piece is sent).
+async function whisperPieces(env, pieces, { ext, contentType, language, concurrency, partsOf }) {
   const results = new Array(pieces.length)
   let next = 0
   const worker = async () => {
     while (next < pieces.length) {
       const i = next++
       const piece = pieces[i]
-      const blob = new Blob(piece.parts, { type: contentType })
       try {
+        const blob = new Blob(await partsOf(piece), { type: contentType })
         results[i] = { ok: true, text: await whisper(env, blob, `part_${i + 1}.${ext}`, language) }
       } catch (e) {
         results[i] = { ok: false, text: `[Feil i denne delen: ${e.message}]` }
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pieces.length) }, worker))
+  await Promise.all(Array.from({ length: Math.min(concurrency, pieces.length) }, worker))
   const text = pieces
     .map((p, i) => (results[i].text ? `[${formatClock(p.startMs)}] ${results[i].text}` : ''))
     .filter(Boolean)
@@ -188,4 +195,64 @@ export async function transcribeAudioBytes(env, buf, { fileName = 'audio.webm', 
     chunks: pieces.length,
     failed: results.filter(r => !r.ok).length,
   }
+}
+
+// ── Large MP4/M4A by HTTP Range (2026-11-21) ──────────────────────────────────────────────────
+// A Zoom recording of a 90-minute group conversation is 85–90 MB: more than transcribeAudioBytes
+// can hold (the whole file + the pieces in flight, in a Worker's 128 MB). Here the file is never
+// downloaded whole: the top-level box headers are read with small Range requests, then the moov
+// index (about 1–3 MB), and each piece's sample bytes are fetched only when that piece goes to
+// Whisper. In memory at once: the index plus RANGE_CONCURRENCY pieces of ≤ CHUNK_BYTES.
+export const RANGE_CONCURRENCY = 2
+const MAX_MOOV_BYTES = 32 * 1024 * 1024
+
+async function fetchRange(fetchFn, url, start, end) { // [start, end)
+  const res = await fetchFn(url, { headers: { Range: `bytes=${start}-${end - 1}` } })
+  if (res.status !== 206) {
+    try { await res.body?.cancel() } catch { /* nothing to release */ }
+    throw new Error(`the server did not answer a Range request (HTTP ${res.status})`)
+  }
+  const buf = new Uint8Array(await res.arrayBuffer())
+  if (buf.length !== end - start) throw new Error(`Range ${start}-${end - 1} returned ${buf.length} bytes`)
+  return buf
+}
+
+/**
+ * Transcribe a plain MP4/M4A at `url` of `totalBytes` bytes without holding it in memory.
+ * The URL must answer Range requests with 206 (R2 does). Same result shape as transcribeAudioBytes.
+ */
+export async function transcribeMp4FromUrl(env, url, totalBytes, { language = 'no', fetchFn = fetch } = {}) {
+  const u32 = (b, p) => ((b[p] << 24) >>> 0) + (b[p + 1] << 16) + (b[p + 2] << 8) + b[p + 3]
+  let moov = null
+  let p = 0
+  let boxes = 0
+  while (p + 8 <= totalBytes) {
+    if (++boxes > 64) throw new Error('MP4 has too many top-level boxes to read by range')
+    const h = await fetchRange(fetchFn, url, p, Math.min(p + 16, totalBytes))
+    let size = u32(h, 0)
+    const type = String.fromCharCode(h[4], h[5], h[6], h[7])
+    if (boxes === 1 && !['ftyp', 'moov', 'mdat', 'free', 'wide', 'skip'].includes(type)) {
+      throw new Error('the file is not MP4/M4A')
+    }
+    if (size === 1) size = u32(h, 8) * 4294967296 + u32(h, 12)
+    else if (size === 0) size = totalBytes - p
+    if (size < 8) throw new Error('MP4 box with an impossible size')
+    if (type === 'moof') throw new Error('fragmented MP4 cannot be split by range')
+    if (type === 'moov') moov = { start: p, end: Math.min(p + size, totalBytes) }
+    p += size
+  }
+  if (!moov) throw new Error('MP4 has no moov box (the recording is incomplete) — cannot split')
+  if (moov.end - moov.start > MAX_MOOV_BYTES) throw new Error('the MP4 index is too large')
+  const moovBytes = await fetchRange(fetchFn, url, moov.start, moov.end)
+  const pieces = planMp4FromMoov(moovBytes, totalBytes, CHUNK_BYTES)
+  const tooBig = pieces.find(pc => pc.bytes > WHISPER_MAX_BYTES)
+  if (tooBig) throw new Error(`An MP4/M4A piece is ${(tooBig.bytes / 1048576).toFixed(1)} MB and cannot be made smaller; Whisper takes at most 24 MB.`)
+  const partsOf = async (piece) => {
+    const out = []
+    for (const part of piece.parts) {
+      out.push(part instanceof Uint8Array ? part : await fetchRange(fetchFn, url, part.start, part.end))
+    }
+    return out
+  }
+  return whisperPieces(env, pieces, { ext: 'm4a', contentType: 'audio/mp4', language, concurrency: RANGE_CONCURRENCY, partsOf })
 }

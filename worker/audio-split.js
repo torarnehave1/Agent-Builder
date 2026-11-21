@@ -130,7 +130,29 @@ export function splitMp4(buf, maxBytes) {
   const track = audioTrack(buf, moov)
   if (!track) throw new Error('MP4 has no audio track')
   if (top.some((b) => b.type === 'moof')) return splitFragmentedMp4(buf, top, moov, track, maxBytes)
+  return planPlainMp4(buf, track, maxBytes, buf.length, (start, end) => buf.subarray(start, end))
+}
 
+/**
+ * The same split as splitMp4, from the moov box alone (2026-11-21). moovBytes is the whole moov
+ * box; fileLength is the size of the file it came from. The sample data is NOT read: each piece's
+ * parts are its small generated headers (Uint8Array) and { start, end } byte ranges of the file,
+ * to be fetched with HTTP Range when the piece is sent. This is what lets a recording far larger
+ * than a Worker's 128 MB be transcribed: only the index and one piece at a time are in memory.
+ * Plain (non-fragmented) MP4 only — a fragmented file has no single index to plan from.
+ */
+export function planMp4FromMoov(moovBytes, fileLength, maxBytes) {
+  const moov = mp4Boxes(moovBytes, 0, moovBytes.length)[0]
+  if (!moov || moov.type !== 'moov') throw new Error('planMp4FromMoov needs the moov box')
+  const track = audioTrack(moovBytes, moov)
+  if (!track) throw new Error('MP4 has no audio track')
+  return planPlainMp4(moovBytes, track, maxBytes, fileLength, (start, end) => ({ start, end }))
+}
+
+// The plain-MP4 split. buf holds at least the moov box (all index reads are within it); sample
+// offsets are file offsets, checked against fileLength and handed to dataRef(start, end), which
+// returns a view into the file (splitMp4) or a byte range to fetch later (planMp4FromMoov).
+function planPlainMp4(buf, track, maxBytes, fileLength, dataRef) {
   const { stbl, timescale } = track
   const stsd = child(buf, stbl, 'stsd')
   const stts = child(buf, stbl, 'stts')
@@ -188,7 +210,7 @@ export function splitMp4(buf, maxBytes) {
     let pieceTicks = 0
     while (to < usable) {
       const size = sizeOf(to)
-      if (offsets[to] + size > buf.length) break // truncated file: stop at the last whole sample
+      if (offsets[to] + size > fileLength) break // truncated file: stop at the last whole sample
       if (to > from && dataBytes + size > maxBytes) break
       dataBytes += size
       pieceTicks += durations[to]
@@ -203,12 +225,12 @@ export function splitMp4(buf, maxBytes) {
       const size = sizeOf(i)
       sizes[i - from] = size
       if (offsets[i] !== runEnd) { // not contiguous (another track's data in between)
-        if (runEnd > runStart) data.push(buf.subarray(runStart, runEnd))
+        if (runEnd > runStart) data.push(dataRef(runStart, runEnd))
         runStart = offsets[i]
       }
       runEnd = offsets[i] + size
     }
-    if (runEnd > runStart) data.push(buf.subarray(runStart, runEnd))
+    if (runEnd > runStart) data.push(dataRef(runStart, runEnd))
 
     const moovBytes = buildMoov({ timescale, stsd: stsdBytes, sizes, durations: durations.subarray(from, to), totalDuration: pieceTicks })
     new DataView(moovBytes.buffer).setUint32(moovBytes.length - 4, PIECE_FTYP.length + moovBytes.length + 8)

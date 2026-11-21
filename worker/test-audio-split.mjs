@@ -143,5 +143,52 @@ if (!hasFfmpeg) {
   fs.rmSync(tmp, { recursive: true, force: true })
 }
 
+// ── Large MP4/M4A by HTTP Range (2026-11-21) ─────────────────────────────────────────────────
+// transcribeMp4FromUrl must send Whisper exactly the pieces splitMp4 makes from the whole file,
+// while reading only the box headers, the moov box and each piece's own bytes — never the file
+// whole. Checked on real m4a files with the index at the end (ffmpeg's default, as in Zoom
+// files) and at the start (+faststart), each large enough for several 8 MB pieces.
+if (hasFfmpeg) {
+  const { transcribeMp4FromUrl, CHUNK_BYTES } = await import('./server-transcribe.js')
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'range-'))
+  const join2 = (parts) => Buffer.concat(parts.map((a) => Buffer.from(a.buffer, a.byteOffset, a.length)))
+  for (const faststart of [false, true]) {
+    const name = `range m4a (moov ${faststart ? 'first' : 'last'})`
+    const src = path.join(tmp, `r${faststart ? 1 : 0}.m4a`)
+    execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'anoisesrc=d=720:c=pink:r=44100', '-ac', '2', '-c:a', 'aac', '-b:a', '320k', ...(faststart ? ['-movflags', '+faststart'] : []), src])
+    const file = new Uint8Array(fs.readFileSync(src))
+    const expected = splitMp4(file, CHUNK_BYTES).map((p) => join2(p.parts))
+    const sent = []
+    const env = { OPENAI_WORKER: { fetch: async (url, init) => {
+      const blob = init.body.get('file')
+      sent.push({ name: blob.name, bytes: Buffer.from(await blob.arrayBuffer()) })
+      return { ok: true, status: 200, json: async () => ({ text: `del ${sent.length}` }) }
+    } } }
+    const ranges = []
+    const fetchFn = async (url, init) => {
+      const m = /^bytes=(\d+)-(\d+)$/.exec(init?.headers?.Range || '')
+      if (!m) return { status: 200, body: { cancel: async () => {} }, arrayBuffer: async () => { throw new Error('whole file requested') } }
+      const a = Number(m[1]); const b = Math.min(Number(m[2]), file.length - 1)
+      ranges.push(b - a + 1)
+      const slice = file.slice(a, b + 1)
+      return { status: 206, body: { cancel: async () => {} }, arrayBuffer: async () => slice.buffer }
+    }
+    const tx = await transcribeMp4FromUrl(env, 'https://audio.example/x.m4a', file.length, { fetchFn })
+    sent.sort((x, y) => Number(x.name.match(/\d+/)[0]) - Number(y.name.match(/\d+/)[0]))
+    check(`${name}: several pieces`, expected.length >= 3 && tx.chunks === expected.length && tx.failed === 0, `${tx.chunks} vs ${expected.length} pieces, ${(file.length / 1048576).toFixed(1)} MB`)
+    check(`${name}: each piece byte-identical to splitting the whole file`, sent.length === expected.length && sent.every((s, i) => s.bytes.equals(expected[i])))
+    check(`${name}: text joined in order`, /^\[00:00\] del \d/.test(tx.text) && tx.text.split('\n\n').length === expected.length, tx.text.slice(0, 120))
+    const largest = Math.max(...ranges)
+    check(`${name}: never more than one piece read at a time`, largest <= CHUNK_BYTES + 1024 && ranges.reduce((a, b) => a + b, 0) < file.length * 1.05, `largest range ${largest}`)
+  }
+  {
+    let msg = ''
+    const fetchFn = async () => ({ status: 200, body: { cancel: async () => {} }, arrayBuffer: async () => new ArrayBuffer(0) })
+    try { await transcribeMp4FromUrl({}, 'https://x/y.m4a', 90e6, { fetchFn }) } catch (e) { msg = e.message }
+    check('range m4a: a server without Range support is refused clearly', /did not answer a Range request/.test(msg), msg)
+  }
+  fs.rmSync(tmp, { recursive: true, force: true })
+}
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nAll audio-split checks passed.')
