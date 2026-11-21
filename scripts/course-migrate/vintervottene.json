@@ -1,0 +1,129 @@
+{
+  "world": "sodesign.no",
+  "slug": "vintervottene",
+  "title": "Vintervottene",
+  "album": "Vintervottene",
+  "folder": "kurs/vintervottene",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3232742
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/vintervottene/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154571916,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Vintervottene. Last den ned og ha den tilgjengelig når du følger kurset.",
+      "pdf": "Vintervottene.pdf"
+    },
+    {
+      "lesson_id": 2154571912,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2154571912-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154571923,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2154571923-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2154571930,
+      "title": "Garn og garnalternativer",
+      "type": "video",
+      "file": "2154571930-garn-og-garnalternativer.mp4"
+    },
+    {
+      "lesson_id": 10787188,
+      "title": "Legg opp på 5 pinner",
+      "type": "video",
+      "file": "10787188-legg-opp-pa-5-pinner.mp4"
+    },
+    {
+      "lesson_id": 10787192,
+      "title": "Perlestrikk",
+      "type": "video",
+      "file": "10787192-perlestrikk.mp4"
+    },
+    {
+      "lesson_id": 10787196,
+      "title": "Strikk videre rett",
+      "type": "video",
+      "file": "10787196-strikk-videre-rett.mp4"
+    },
+    {
+      "lesson_id": 10787201,
+      "title": "Øk masker og fortsett med glattstrikk",
+      "type": "video",
+      "file": "10787201-ok-masker-og-fortsett-med-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 10787203,
+      "title": "Strikk inn en tråd til tommel",
+      "type": "video",
+      "file": "10787203-strikk-inn-en-trad-til-tommel.mp4"
+    },
+    {
+      "lesson_id": 10787207,
+      "title": "Tips til hvordan du kan telle omganger",
+      "type": "video",
+      "file": "10787207-tips-til-hvordan-du-kan-telle-omganger.mp4"
+    },
+    {
+      "lesson_id": 10787209,
+      "title": "Fell på toppen av votten",
+      "type": "video",
+      "file": "10787209-fell-pa-toppen-av-votten.mp4"
+    },
+    {
+      "lesson_id": 10787221,
+      "title": "Strikk tommel",
+      "type": "video",
+      "file": "10787221-strikk-tommel.mp4"
+    },
+    {
+      "lesson_id": 10787223,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "10787223-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 10787238,
+      "title": "Vott nr.2/ Venstre vott",
+      "type": "video",
+      "file": "10787238-vott-nr-2-venstre-vott.mp4"
+    },
+    {
+      "lesson_id": 10787240,
+      "title": "Dekorer vottene",
+      "type": "video",
+      "file": "10787240-dekorer-vottene.mp4"
+    },
+    {
+      "lesson_id": 10787241,
+      "title": "Tov vottene",
+      "type": "video",
+      "file": "10787241-tov-vottene.mp4"
+    }
+  ]
+}

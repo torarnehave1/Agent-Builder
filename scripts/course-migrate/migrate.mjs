@@ -286,6 +286,8 @@ function transcriptMarkdown(t) {
 }
 
 // ---- language model ---------------------------------------------------------------------------
+// The model thinks before it answers and the thinking counts against max_tokens (21.11.2026: 726 of
+// 1200 went to thinking and the JSON was cut off), so the limits leave room for both.
 async function askJson(prompt, maxTokens, what) {
   const r = await fetch(LLM, {
     method: 'POST',
@@ -296,7 +298,7 @@ async function askJson(prompt, maxTokens, what) {
   const raw = (j.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('').trim()
   let data
   try { data = JSON.parse(raw.replace(/^```(json)?|```$/g, '').trim()) } catch { data = null }
-  if (!r.ok || !data) throw new Error(`${what} failed (${r.status}): ${j.error || raw.slice(0, 200)}`)
+  if (!r.ok || !data) throw new Error(`${what} failed (${r.status}, stop: ${j.stop_reason || '?'}, ${raw.length} chars, blocks: ${(j.content || []).map((c) => c.type).join('+') || 'none'}, usage: ${JSON.stringify(j.usage || {})}): ${j.error || `${raw.slice(0, 200)} … ${raw.slice(-200)}`}`)
   return data
 }
 
@@ -316,7 +318,7 @@ async function summarize(lesson) {
   const sourceHash = crypto.createHash('sha256').update(`${SUMMARY_MODEL}|${instruction}`).digest('hex').slice(0, 16)
   const have = state.summaries[lesson.lesson_id]
   if (have && have.source_hash === sourceHash) { log(`summary cached: ${lesson.title}`); return have }
-  const data = await askJson(instruction, 900, `summary of ${lesson.title}`)
+  const data = await askJson(instruction, 3000, `summary of ${lesson.title}`)
   if (!Array.isArray(data.points)) throw new Error(`summary of ${lesson.title} has no points`)
   // Checked, not trusted: every point starts at a real moment of THIS video, in order, at most 8.
   const secs = (at) => { const mm = /^(\d{1,2}):(\d{2})$/.exec(String(at || '')); return mm ? Number(mm[1]) * 60 + Number(mm[2]) : NaN }
@@ -392,7 +394,7 @@ async function describeCourse() {
   // Keyed on the whole prompt: a changed instruction or transcript writes it again, nothing else does.
   const hash = crypto.createHash('sha256').update(`${SUMMARY_MODEL}|${prompt}`).digest('hex').slice(0, 16)
   if (state.course.about && state.course.about.hash === hash) { log('course description cached'); return state.course.about }
-  const data = await askJson(prompt, 1200, 'course description')
+  const data = await askJson(prompt, 4000, 'course description')
   if (!data.about || !Array.isArray(LIBRARY ? data.helps_with : data.you_need)) throw new Error(`course description is missing about or ${LIBRARY ? 'helps_with' : 'you_need'}`)
   state.course.about = { hash, data, model: SUMMARY_MODEL, at: new Date().toISOString() }
   save()
