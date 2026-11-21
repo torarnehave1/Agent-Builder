@@ -1,0 +1,135 @@
+{
+  "world": "sodesign.no",
+  "slug": "montering-fjelldressen",
+  "title": "Montering Fjelldressen",
+  "album": "Montering Fjelldressen",
+  "folder": "kurs/montering-fjelldressen",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2151691641
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/montering-fjelldressen/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2171360236,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskrift på Fjelldressen.",
+      "pdf": "Fjelldressen.pdf"
+    },
+    {
+      "lesson_id": 2163084909,
+      "title": "Tråkle en tråd",
+      "type": "video",
+      "file": "2163084909-trakle-en-trad.mp4"
+    },
+    {
+      "lesson_id": 2163084991,
+      "title": "Sy med symaskin",
+      "type": "video",
+      "file": "2163084991-sy-med-symaskin.mp4"
+    },
+    {
+      "lesson_id": 2163085475,
+      "title": "Klipp opp",
+      "type": "video",
+      "file": "2163085475-klipp-opp.mp4"
+    },
+    {
+      "lesson_id": 2163085559,
+      "title": "Sy inn halsen",
+      "type": "video",
+      "file": "2163085559-sy-inn-halsen.mp4"
+    },
+    {
+      "lesson_id": 2163085574,
+      "title": "Strikk opp masker til stolper",
+      "type": "video",
+      "file": "2163085574-strikk-opp-masker-til-stolper.mp4"
+    },
+    {
+      "lesson_id": 2165394527,
+      "title": "Strikk stolpe",
+      "type": "video",
+      "file": "2165394527-strikk-stolpe.mp4"
+    },
+    {
+      "lesson_id": 2165579454,
+      "title": "Fell av maskene på stolpen",
+      "type": "video",
+      "file": "2165579454-fell-av-maskene-pa-stolpen.mp4"
+    },
+    {
+      "lesson_id": 2165650024,
+      "title": "Stolpe med knappehull del 1",
+      "type": "video",
+      "file": "2165650024-stolpe-med-knappehull-del-1.mp4"
+    },
+    {
+      "lesson_id": 2165650101,
+      "title": "Stolpe med knappehull del 2",
+      "type": "video",
+      "file": "2165650101-stolpe-med-knappehull-del-2.mp4"
+    },
+    {
+      "lesson_id": 2165650329,
+      "title": "Stolpe med knappehull del 3",
+      "type": "video",
+      "file": "2165650329-stolpe-med-knappehull-del-3.mp4"
+    },
+    {
+      "lesson_id": 2165650416,
+      "title": "Stolpe med knappehull del 4",
+      "type": "video",
+      "file": "2165650416-stolpe-med-knappehull-del-4.mp4"
+    },
+    {
+      "lesson_id": 2165678921,
+      "title": "Strikk opp masker til belegg",
+      "type": "video",
+      "file": "2165678921-strikk-opp-masker-til-belegg.mp4"
+    },
+    {
+      "lesson_id": 2165679402,
+      "title": "Strikk ferdig belegg",
+      "type": "video",
+      "file": "2165679402-strikk-ferdig-belegg.mp4"
+    },
+    {
+      "lesson_id": 2165680762,
+      "title": "Sy fast belegg",
+      "type": "video",
+      "file": "2165680762-sy-fast-belegg.mp4"
+    },
+    {
+      "lesson_id": 2165681014,
+      "title": "Sy fast knapper",
+      "type": "video",
+      "file": "2165681014-sy-fast-knapper.mp4"
+    },
+    {
+      "lesson_id": 2165681878,
+      "title": "Siste finish",
+      "type": "video",
+      "file": "2165681878-siste-finish.mp4"
+    }
+  ]
+}
