@@ -41,7 +41,7 @@ import { listVemotionLibrary, getVemotionLibraryItem, vemotionCurveAppendix } fr
 import { getVemotionMediaInfo, listVemotionVideos, importVemotionVideo } from './vemotion-media.js'
 import { setDrawingPace } from './vemotion-timing.js'
 import { signWorldGraphToken, publicJwkOf } from './world-graph-token.js'
-import { transcribeAudioBytes } from './server-transcribe.js'
+import { transcribeAudioBytes, transcribeMp4FromUrl } from './server-transcribe.js'
 
 // ── Graph operations ──────────────────────────────────────────────
 
@@ -12352,6 +12352,16 @@ async function executeAddContactNote(input, env) {
 // the door takes from the verified caller — never a body field.
 const SERVER_TRANSCRIPT_MARK = '--- Transkripsjon (Agent-Builder) ---'
 const SERVER_TRANSCRIBE_MAX_BYTES = 80 * 1024 * 1024
+// A larger MP4/M4A (a Zoom recording of a long group conversation) is transcribed by HTTP Range
+// instead (2026-11-21): only its index and one piece at a time are in memory, so the ceiling is
+// time, not memory. 400 MB is many hours of Zoom audio.
+const SERVER_TRANSCRIBE_RANGE_MAX_BYTES = 400 * 1024 * 1024
+// The file's own extension decides when it has an audio one; the content type only when not.
+const isMp4Name = (name, type) => {
+  const ext = (/\.([a-z0-9]{2,4})$/i.exec(String(name || '')) || [])[1]?.toLowerCase()
+  if (ext && ['m4a', 'mp4', 'm4v', 'mov', 'webm', 'wav', 'mp3', 'ogg', 'flac', 'opus'].includes(ext)) return ['m4a', 'mp4', 'm4v', 'mov'].includes(ext)
+  return /audio\/(mp4|x-m4a|m4a)|video\/mp4/i.test(String(type || ''))
+}
 
 async function executeTranscribeContactRecording(input, env) {
   const { userId } = input
@@ -12389,20 +12399,31 @@ async function executeTranscribeContactRecording(input, env) {
 
   const audioRes = await fetch(recordingUrl)
   if (!audioRes.ok) throw new Error(`Could not download the recording (${audioRes.status})`)
-  // The whole file is held in memory while it is split (a Worker has 128 MB), so a recording
-  // beyond this is refused up front instead of taking the Worker down half-way.
+  // Up to 80 MB the whole file is held in memory while it is split (a Worker has 128 MB). A
+  // larger MP4/M4A is read by Range instead; anything else beyond 80 MB is refused up front
+  // instead of taking the Worker down half-way.
   const declaredBytes = Number(audioRes.headers.get('content-length')) || 0
+  const fileName = (String(recordingUrl).split('/').pop() || 'audio.webm').split('?')[0]
+  const audioType = audioRes.headers.get('content-type') || ''
+  let tx
   if (declaredBytes > SERVER_TRANSCRIBE_MAX_BYTES) {
     try { await audioRes.body?.cancel() } catch { /* nothing to release */ }
-    throw new Error(`The recording is ${(declaredBytes / 1048576).toFixed(0)} MB; server transcription takes at most ${SERVER_TRANSCRIBE_MAX_BYTES / 1048576} MB. Nothing was transcribed.`)
+    const mb = (declaredBytes / 1048576).toFixed(0)
+    if (!isMp4Name(fileName, audioType)) {
+      throw new Error(`The recording is ${mb} MB; server transcription takes at most ${SERVER_TRANSCRIBE_MAX_BYTES / 1048576} MB, except MP4/M4A, which can be up to ${SERVER_TRANSCRIBE_RANGE_MAX_BYTES / 1048576} MB. Nothing was transcribed.`)
+    }
+    if (declaredBytes > SERVER_TRANSCRIBE_RANGE_MAX_BYTES) {
+      throw new Error(`The recording is ${mb} MB; server transcription of MP4/M4A takes at most ${SERVER_TRANSCRIBE_RANGE_MAX_BYTES / 1048576} MB. Nothing was transcribed.`)
+    }
+    tx = await transcribeMp4FromUrl(env, recordingUrl, declaredBytes, { language: input.language || 'no' })
+  } else {
+    const buf = new Uint8Array(await audioRes.arrayBuffer())
+    tx = await transcribeAudioBytes(env, buf, {
+      fileName,
+      contentType: audioType || 'audio/webm',
+      language: input.language || 'no',
+    })
   }
-  const buf = new Uint8Array(await audioRes.arrayBuffer())
-  const fileName = (String(recordingUrl).split('/').pop() || 'audio.webm').split('?')[0]
-  const tx = await transcribeAudioBytes(env, buf, {
-    fileName,
-    contentType: audioRes.headers.get('content-type') || 'audio/webm',
-    language: input.language || 'no',
-  })
   if (!tx.text) throw new Error('Whisper returned no text for this recording')
 
   // What the transcript is OF: the contact for an interaction, the recording's own name otherwise.
@@ -14339,6 +14360,79 @@ async function executeUploadAudio(input, env) {
 // Upload a recording to the Audio Portfolio — mirrors the frontend AudioPortfolio.vue direct-upload:
 // (1) bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2) -> {r2Key, audioUrl};
 // (2) audio-portfolio-worker /save-recording metadata. Then it shows in the portfolio view + list_recordings.
+// A file larger than this worker can hold (2026-11-21): read from the source and sent on to
+// norwegian-transcription-worker's multipart upload in fixed parts (R2 wants every part but the
+// last the same size, at least 5 MB), so only one part is in memory at a time. Lands in the same
+// shared bucket and under the same kind of key as /upload. Returns { ok, data } | { ok:false, error }.
+const PORTFOLIO_STREAM_MAX_BYTES = 400 * 1024 * 1024
+const PORTFOLIO_PART_BYTES = 10 * 1024 * 1024
+const AUDIO_TYPES = { m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mpeg', wav: 'audio/wav', webm: 'audio/webm', flac: 'audio/flac', ogg: 'audio/ogg' }
+
+async function uploadAudioInParts(env, res, fname, size) {
+  const ext = (String(fname).split('.').pop() || '').toLowerCase()
+  const sourceType = String(res.headers.get('content-type') || '').split(';')[0].trim()
+  const contentType = AUDIO_TYPES[ext] || (/^audio\//.test(sourceType) ? sourceType : 'audio/mp4')
+  const audio = env.NORWEGIAN_AUDIO
+  const post = async (path, body, query = '') => {
+    const r = await audio.fetch(`https://norwegian-transcription-worker${path}${query}`, {
+      method: 'POST',
+      headers: body instanceof Uint8Array ? {} : { 'Content-Type': 'application/json' },
+      body: body instanceof Uint8Array ? body : JSON.stringify(body),
+    })
+    const data = await r.json().catch(() => ({}))
+    if (!r.ok || data.success === false) throw new Error(data.error || `${path} failed (${r.status})`)
+    return data
+  }
+  let init
+  try {
+    init = await post('/upload/init', { filename: encodeURIComponent(fname), contentType, size })
+  } catch (e) {
+    try { await res.body?.cancel() } catch {}
+    return { ok: false, error: `audio upload failed: ${e.message}` }
+  }
+  const { key, uploadId } = init
+  const parts = []
+  let received = 0
+  try {
+    const reader = res.body.getReader()
+    let buf = new Uint8Array(PORTFOLIO_PART_BYTES)
+    let fill = 0
+    const sendPart = async (bytes) => {
+      const n = parts.length + 1
+      const q = `?key=${encodeURIComponent(key)}&uploadId=${encodeURIComponent(uploadId)}&partNumber=${n}`
+      const d = await post('/upload/part', bytes, q)
+      parts.push({ partNumber: n, etag: d.part?.etag })
+    }
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      received += value.byteLength
+      if (received > PORTFOLIO_STREAM_MAX_BYTES) throw new Error(`the file is larger than ${PORTFOLIO_STREAM_MAX_BYTES / 1048576} MB`)
+      let off = 0
+      while (off < value.byteLength) {
+        const take = Math.min(PORTFOLIO_PART_BYTES - fill, value.byteLength - off)
+        buf.set(value.subarray(off, off + take), fill)
+        fill += take
+        off += take
+        if (fill === PORTFOLIO_PART_BYTES) {
+          await sendPart(buf)
+          buf = new Uint8Array(PORTFOLIO_PART_BYTES)
+          fill = 0
+        }
+      }
+    }
+    if (fill > 0) await sendPart(buf.subarray(0, fill))
+    if (!received) throw new Error('Empty audio.')
+    const done = await post('/upload/complete', { key, uploadId, parts, name: fname, size: received, contentType })
+    if (!done.audioUrl) throw new Error('the upload finished without an address')
+    return { ok: true, data: { ...done, r2Key: done.r2Key || key, size: received, contentType } }
+  } catch (e) {
+    try { await res.body?.cancel() } catch {}
+    try { await post('/upload/abort', { key, uploadId }) } catch { /* the upload expires by itself */ }
+    return { ok: false, error: `audio upload failed after ${(received / 1048576).toFixed(1)} MB: ${e.message}` }
+  }
+}
+
 async function executeUploadPortfolioRecording(input, env) {
   if (!env.NORWEGIAN_AUDIO) return { success: false, error: 'NORWEGIAN_AUDIO service binding is not configured' }
   if (!env.AUDIO_PORTFOLIO) return { success: false, error: 'AUDIO_PORTFOLIO service binding is not configured' }
@@ -14353,11 +14447,13 @@ async function executeUploadPortfolioRecording(input, env) {
     else return { success: false, error: 'Could not resolve user identity to an email.' }
   }
   const fname = filename || 'agent-recording.m4a'
-  // 80 MB: what transcribe_contact_recording takes, and what fits in this worker's memory.
+  // 80 MB: what fits in this worker's memory when the file is held whole. A larger file whose
+  // size the source states is passed on in parts instead (2026-11-21), up to PORTFOLIO_STREAM_MAX_BYTES.
   const MAX_BYTES = 80 * 1024 * 1024
-  const tooBig = (n) => ({ success: false, error: `The audio is ${(n / 1048576).toFixed(1)} MB — a recording takes at most 80 MB.` })
+  const tooBig = (n) => ({ success: false, error: `The audio is ${(n / 1048576).toFixed(1)} MB — a recording takes at most 80 MB, or ${PORTFOLIO_STREAM_MAX_BYTES / 1048576} MB when the source states its size.` })
   // 1. bytes
   let bytes
+  let upData = null
   try {
     if (base64) bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
     else {
@@ -14366,25 +14462,33 @@ async function executeUploadPortfolioRecording(input, env) {
       if (!r.ok) return { success: false, error: `Could not fetch sourceUrl (${r.status})` }
       // Refuse before downloading when the server says how large it is.
       const declared = Number(r.headers.get('content-length')) || 0
-      if (declared > MAX_BYTES) { try { await r.body?.cancel() } catch {} return tooBig(declared) }
-      bytes = new Uint8Array(await r.arrayBuffer())
+      if (declared > PORTFOLIO_STREAM_MAX_BYTES) { try { await r.body?.cancel() } catch {} return tooBig(declared) }
+      if (declared > MAX_BYTES) {
+        const streamed = await uploadAudioInParts(env, r, fname, declared)
+        if (!streamed.ok) return { success: false, error: streamed.error }
+        upData = streamed.data
+      } else {
+        bytes = new Uint8Array(await r.arrayBuffer())
+      }
     }
   } catch (e) {
     return { success: false, error: `Could not read audio bytes: ${e.message}` }
   }
-  if (!bytes || bytes.byteLength === 0) return { success: false, error: 'Empty audio.' }
-  if (bytes.byteLength > MAX_BYTES) return tooBig(bytes.byteLength)
-  // 2. upload bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2)
-  const up = await env.NORWEGIAN_AUDIO.fetch('https://norwegian-transcription-worker/upload', {
-    method: 'POST', headers: { 'X-File-Name': encodeURIComponent(fname) }, body: bytes,
-  })
-  const upData = await up.json().catch(() => ({}))
-  if (!up.ok || !upData.audioUrl) return { success: false, error: upData.error || `audio upload failed (${up.status})` }
+  if (!upData) {
+    if (!bytes || bytes.byteLength === 0) return { success: false, error: 'Empty audio.' }
+    if (bytes.byteLength > MAX_BYTES) return tooBig(bytes.byteLength)
+    // 2. upload bytes -> norwegian-transcription-worker /upload (audio.vegvisr.org R2)
+    const up = await env.NORWEGIAN_AUDIO.fetch('https://norwegian-transcription-worker/upload', {
+      method: 'POST', headers: { 'X-File-Name': encodeURIComponent(fname) }, body: bytes,
+    })
+    upData = await up.json().catch(() => ({}))
+    if (!up.ok || !upData.audioUrl) return { success: false, error: upData.error || `audio upload failed (${up.status})` }
+  }
   // 3. register metadata -> audio-portfolio-worker /save-recording (same payload shape as the frontend)
   const rec = {
     userEmail, fileName: fname,
     displayName: displayName || fname.replace(/\.[^/.]+$/, ''),
-    fileSize: upData.size || bytes.byteLength,
+    fileSize: upData.size || bytes?.byteLength || 0,
     duration: duration || 0,
     r2Key: upData.r2Key, r2Url: upData.audioUrl,
     transcriptionText: '', category: category || 'other',

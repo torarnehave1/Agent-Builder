@@ -112,10 +112,26 @@ function world({ hasContactHub = true, audioBytes = 2000, contentLength } = {}) 
   check('unknown id: refused, nothing downloaded', /No recording with id rec_nope/.test(msg) && seen.downloads.length === 0, msg)
 }
 {
+  // Not MP4 (the WebM on the interaction) and over 80 MB: still refused (2026-11-21).
   const { env, seen } = world({ contentLength: 200 * 1024 * 1024 })
   let msg = ''
+  try { await executeTool('transcribe_contact_recording', { userId: USER_ID, recordingId: 'rec_contact' }, env) } catch (e) { msg = e.message }
+  check('too large WebM: refused before transcribing, nothing saved', /200 MB; server transcription takes at most 80 MB, except MP4/.test(msg) && seen.whisper === 0 && seen.graphs.length === 0, msg)
+}
+{
+  // MP4/M4A over the 400 MB Range ceiling: refused.
+  const { env, seen } = world({ contentLength: 401 * 1024 * 1024 })
+  let msg = ''
   try { await executeTool('transcribe_contact_recording', { userId: USER_ID, recordingId: 'rec_group' }, env) } catch (e) { msg = e.message }
-  check('too large: refused before transcribing, nothing saved', /200 MB; server transcription takes at most 80 MB/.test(msg) && seen.whisper === 0 && seen.graphs.length === 0, msg)
+  check('too large m4a: refused over 400 MB, nothing saved', /401 MB; server transcription of MP4\/M4A takes at most 400 MB/.test(msg) && seen.whisper === 0 && seen.graphs.length === 0, msg)
+}
+{
+  // MP4/M4A of 85 MB: goes the Range way (this fake server has no Range, so it says that —
+  // the full Range path is checked against real files in test-audio-split.mjs).
+  const { env, seen } = world({ contentLength: 85 * 1024 * 1024 })
+  let msg = ''
+  try { await executeTool('transcribe_contact_recording', { userId: USER_ID, recordingId: 'rec_group' }, env) } catch (e) { msg = e.message }
+  check('85 MB m4a: taken to the Range path, not refused for size', /did not answer a Range request/.test(msg) && seen.whisper === 0, msg)
 }
 
 fs.unlinkSync(path.join(tmp, 'node_modules'))
