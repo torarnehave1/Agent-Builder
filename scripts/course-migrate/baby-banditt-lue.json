@@ -1,0 +1,147 @@
+{
+  "world": "sodesign.no",
+  "slug": "baby-banditt-lue",
+  "title": "Baby banditt lue - strikkekurs",
+  "album": "Baby banditt lue - strikkekurs",
+  "folder": "kurs/baby-banditt-lue",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3232743
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/baby-banditt-lue/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154756008,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her laster du ned oppskriften. Det er lurt å ha den tilgjengelig når du følger kurset.",
+      "pdf": "Baby_Banditt.pdf"
+    },
+    {
+      "lesson_id": 2154756009,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2154756009-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154756010,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2154756010-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2154756012,
+      "title": "Garn og garnalternativer",
+      "type": "video",
+      "file": "2154756012-garn-og-garnalternativer.mp4"
+    },
+    {
+      "lesson_id": 2154756014,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2154756014-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2154756016,
+      "title": "Innføring i rette og vrange masker",
+      "type": "video",
+      "file": "2154756016-innforing-i-rette-og-vrange-masker.mp4"
+    },
+    {
+      "lesson_id": 2154756017,
+      "title": "Strikk hals",
+      "type": "video",
+      "file": "2154756017-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2154756019,
+      "title": "Fell masker på halsen",
+      "type": "video",
+      "file": "2154756019-fell-masker-pa-halsen.mp4"
+    },
+    {
+      "lesson_id": 2154756023,
+      "title": "Fell 10 masker under haka",
+      "type": "video",
+      "file": "2154756023-fell-10-masker-under-haka.mp4"
+    },
+    {
+      "lesson_id": 2154756024,
+      "title": "Strikk videre frem og tilbake",
+      "type": "video",
+      "file": "2154756024-strikk-videre-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2154756026,
+      "title": "Strikk pinne 1-3",
+      "type": "video",
+      "file": "2154756026-strikk-pinne-1-3.mp4"
+    },
+    {
+      "lesson_id": 2154756028,
+      "title": "Toppen av lua",
+      "type": "video",
+      "file": "2154756028-toppen-av-lua.mp4"
+    },
+    {
+      "lesson_id": 2154756029,
+      "title": "Fell av maskene på toppen av lua",
+      "type": "video",
+      "file": "2154756029-fell-av-maskene-pa-toppen-av-lua.mp4"
+    },
+    {
+      "lesson_id": 2154756032,
+      "title": "Sy sammen",
+      "type": "video",
+      "file": "2154756032-sy-sammen.mp4"
+    },
+    {
+      "lesson_id": 2154756033,
+      "title": "Plukk opp masker til kant rundt ansiktet",
+      "type": "video",
+      "file": "2154756033-plukk-opp-masker-til-kant-rundt-ansiktet.mp4"
+    },
+    {
+      "lesson_id": 2154756035,
+      "title": "Strikk kanten",
+      "type": "video",
+      "file": "2154756035-strikk-kanten.mp4"
+    },
+    {
+      "lesson_id": 2154756039,
+      "title": "Fell av med løs avfellingskant",
+      "type": "video",
+      "file": "2154756039-fell-av-med-los-avfellingskant.mp4"
+    },
+    {
+      "lesson_id": 2154756041,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2154756041-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2154756042,
+      "title": "Lag dusk",
+      "type": "video",
+      "file": "2154756042-lag-dusk.mp4"
+    }
+  ]
+}
