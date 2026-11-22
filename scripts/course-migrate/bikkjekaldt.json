@@ -1,0 +1,141 @@
+{
+  "world": "sodesign.no",
+  "slug": "bikkjekaldt",
+  "title": "Bikkjekaldt strikkekurs",
+  "album": "Bikkjekaldt strikkekurs",
+  "folder": "kurs/bikkjekaldt",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2149909064
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/bikkjekaldt/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2155846701,
+      "title": "Løft av første maske",
+      "type": "video",
+      "file": "2155846701-loft-av-forste-maske.mp4"
+    },
+    {
+      "lesson_id": 2156708884,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften på Bikkjekaldt - settet. Last den ned og ha den gjerne foran deg når du følger kurset.",
+      "pdf": "Bikkjekaldt.pdf"
+    },
+    {
+      "lesson_id": 2156708903,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2156708903-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2156708909,
+      "title": "Smalt pannebånd - legg opp masker",
+      "type": "video",
+      "file": "2156708909-smalt-panneband-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2156708914,
+      "title": "Bredt pannebånd",
+      "type": "video",
+      "file": "2156708914-bredt-panneband.mp4"
+    },
+    {
+      "lesson_id": 2157070197,
+      "title": "Smalt pannebånd - strikke rundt på strømpepinner",
+      "type": "video",
+      "file": "2157070197-smalt-panneband-strikke-rundt-pa-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2157072798,
+      "title": "Pannebånd - fell av masker",
+      "type": "video",
+      "file": "2157072798-panneband-fell-av-masker.mp4"
+    },
+    {
+      "lesson_id": 2157072799,
+      "title": "Pannebånd - sy sammen",
+      "type": "video",
+      "file": "2157072799-panneband-sy-sammen.mp4"
+    },
+    {
+      "lesson_id": 2157072802,
+      "title": "Hals - legg opp masker",
+      "type": "video",
+      "file": "2157072802-hals-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2157072803,
+      "title": "Hals - strikk vrangbord",
+      "type": "video",
+      "file": "2157072803-hals-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2157098833,
+      "title": "Hals - Strikk 2 omganger glattstrikk",
+      "type": "video",
+      "file": "2157098833-hals-strikk-2-omganger-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2157072805,
+      "title": "Hals - fell masker oppover. Første fellerunde",
+      "type": "video",
+      "file": "2157072805-hals-fell-masker-oppover-forste-fellerunde.mp4"
+    },
+    {
+      "lesson_id": 2157099576,
+      "title": "Hals - Fortsett og fell oppover på halsen",
+      "type": "video",
+      "file": "2157099576-hals-fortsett-og-fell-oppover-pa-halsen.mp4"
+    },
+    {
+      "lesson_id": 2157103864,
+      "title": "Hals - Brettekant og videre glattstrikk",
+      "type": "video",
+      "file": "2157103864-hals-brettekant-og-videre-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2157103920,
+      "title": "Hals - fell av masker",
+      "type": "video",
+      "file": "2157103920-hals-fell-av-masker.mp4"
+    },
+    {
+      "lesson_id": 2157103985,
+      "title": "Hals - Sy inn brettekanten",
+      "type": "video",
+      "file": "2157103985-hals-sy-inn-brettekanten.mp4"
+    },
+    {
+      "lesson_id": 2157103990,
+      "title": "Hals - Fest tråder",
+      "type": "video",
+      "file": "2157103990-hals-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2157104038,
+      "title": "Tov Bikkjekaldt - settet",
+      "type": "video",
+      "file": "2157104038-tov-bikkjekaldt-settet.mp4"
+    }
+  ]
+}
