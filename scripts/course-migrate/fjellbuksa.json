@@ -1,0 +1,148 @@
+{
+  "world": "sodesign.no",
+  "slug": "fjellbuksa",
+  "title": "Fjellbuksa",
+  "album": "Fjellbuksa",
+  "folder": "kurs/fjellbuksa",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2151094720
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/fjellbuksa/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2160790961,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her kan du laste ned oppskriften på Fjellbuksa.",
+      "pdf": "Fjellbuksa_-_barn.pdf",
+      "pdfLabel": "Last ned oppskriften på Fjellbuksa – barn (PDF)",
+      "extraPdfs": [
+        {
+          "file": "Fjellbuksa_-_baby.pdf",
+          "label": "Last ned oppskriften på Fjellbuksa – baby (PDF)"
+        }
+      ]
+    },
+    {
+      "lesson_id": 2160790969,
+      "title": "Legg opp masker til ben",
+      "type": "video",
+      "file": "2160790969-legg-opp-masker-til-ben.mp4"
+    },
+    {
+      "lesson_id": 2160790970,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2160790970-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2160790971,
+      "title": "Skift til pinne 4 og øk masker",
+      "type": "video",
+      "file": "2160790971-skift-til-pinne-4-og-ok-masker.mp4"
+    },
+    {
+      "lesson_id": 2160790973,
+      "title": "Mønster del 1",
+      "type": "video",
+      "file": "2160790973-monster-del-1.mp4"
+    },
+    {
+      "lesson_id": 2161037721,
+      "title": "Mønster del 2",
+      "type": "video",
+      "file": "2161037721-monster-del-2.mp4"
+    },
+    {
+      "lesson_id": 2161036359,
+      "title": "Øk masker oppover benet",
+      "type": "video",
+      "file": "2161036359-ok-masker-oppover-benet.mp4"
+    },
+    {
+      "lesson_id": 2161106304,
+      "title": "Hvordan frigjøre pinnen din til bein nummer 2.",
+      "type": "video",
+      "file": "2161106304-hvordan-frigjore-pinnen-din-til-bein-nummer-2.mp4"
+    },
+    {
+      "lesson_id": 2161106950,
+      "title": "Strikk begge ben inn på samme pinne",
+      "type": "video",
+      "file": "2161106950-strikk-begge-ben-inn-pa-samme-pinne.mp4"
+    },
+    {
+      "lesson_id": 2161151327,
+      "title": "Fell masker foran og bak",
+      "type": "video",
+      "file": "2161151327-fell-masker-foran-og-bak.mp4"
+    },
+    {
+      "lesson_id": 2161209538,
+      "title": "Fortsett med glattstrikk",
+      "type": "video",
+      "file": "2161209538-fortsett-med-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2161209563,
+      "title": "Strikk forhøyning bak",
+      "type": "video",
+      "file": "2161209563-strikk-forhoyning-bak.mp4"
+    },
+    {
+      "lesson_id": 2161268139,
+      "title": "Strikk én omgang rett",
+      "type": "video",
+      "file": "2161268139-strikk-n-omgang-rett.mp4"
+    },
+    {
+      "lesson_id": 2161269483,
+      "title": "Løpegang i livet",
+      "type": "video",
+      "file": "2161269483-lopegang-i-livet.mp4"
+    },
+    {
+      "lesson_id": 2161419405,
+      "title": "Fell av masker",
+      "type": "video",
+      "file": "2161419405-fell-av-masker.mp4"
+    },
+    {
+      "lesson_id": 2161486013,
+      "title": "Sy brettekanten",
+      "type": "video",
+      "file": "2161486013-sy-brettekanten.mp4"
+    },
+    {
+      "lesson_id": 2161577064,
+      "title": "Sett i strikk",
+      "type": "video",
+      "file": "2161577064-sett-i-strikk.mp4"
+    },
+    {
+      "lesson_id": 2161638745,
+      "title": "Damp buksa",
+      "type": "video",
+      "file": "2161638745-damp-buksa.mp4"
+    }
+  ]
+}
