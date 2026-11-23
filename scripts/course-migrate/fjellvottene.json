@@ -1,0 +1,219 @@
+{
+  "world": "sodesign.no",
+  "slug": "fjellvottene",
+  "title": "Fjellvottene strikkekurs",
+  "album": "Fjellvottene strikkekurs",
+  "folder": "kurs/fjellvottene",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3232763
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/fjellvottene/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154756055,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Fjellvottene. Last den ned og ha den foran deg når du følger kurset :)",
+      "pdf": "Fjellvottene.pdf"
+    },
+    {
+      "lesson_id": 2154756057,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2154756057-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154756059,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2154756059-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2154756064,
+      "title": "Finn din størrelse",
+      "type": "video",
+      "file": "2154756064-finn-din-storrelse.mp4"
+    },
+    {
+      "lesson_id": 2154756067,
+      "title": "Strikkefasthet",
+      "type": "video",
+      "file": "2154756067-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2154756069,
+      "title": "Hvordan måle strikkefasthet på vottene",
+      "type": "video",
+      "file": "2154756069-hvordan-male-strikkefasthet-pa-vottene.mp4"
+    },
+    {
+      "lesson_id": 2154756071,
+      "title": "Garn og garnalternativer",
+      "type": "video",
+      "file": "2154756071-garn-og-garnalternativer.mp4"
+    },
+    {
+      "lesson_id": 2154756142,
+      "title": "Legg opp masker venstre vott",
+      "type": "video",
+      "file": "2154756142-legg-opp-masker-venstre-vott.mp4"
+    },
+    {
+      "lesson_id": 2154756145,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2154756145-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2154756149,
+      "title": "Se forskjell på rette og vrange masker",
+      "type": "video",
+      "file": "2154756149-se-forskjell-pa-rette-og-vrange-masker.mp4"
+    },
+    {
+      "lesson_id": 2154756150,
+      "title": "Bytt til pinne 3 og øk ut masker",
+      "type": "video",
+      "file": "2154756150-bytt-til-pinne-3-og-ok-ut-masker.mp4"
+    },
+    {
+      "lesson_id": 2154756151,
+      "title": "Fordel maskene",
+      "type": "video",
+      "file": "2154756151-fordel-maskene.mp4"
+    },
+    {
+      "lesson_id": 2154756152,
+      "title": "Mønsterstrikk omgang 1",
+      "type": "video",
+      "file": "2154756152-monsterstrikk-omgang-1.mp4"
+    },
+    {
+      "lesson_id": 2154756154,
+      "title": "Mønsterstrikk omgang 2",
+      "type": "video",
+      "file": "2154756154-monsterstrikk-omgang-2.mp4"
+    },
+    {
+      "lesson_id": 2154756157,
+      "title": "Lange maskesprang, tvinn tråden på baksiden",
+      "type": "video",
+      "file": "2154756157-lange-maskesprang-tvinn-traden-pa-baksiden.mp4"
+    },
+    {
+      "lesson_id": 2154756155,
+      "title": "Tommelkile",
+      "type": "video",
+      "file": "2154756155-tommelkile.mp4"
+    },
+    {
+      "lesson_id": 2154756159,
+      "title": "Strikk inn en kontrasttråd",
+      "type": "video",
+      "file": "2154756159-strikk-inn-en-kontrasttrad.mp4"
+    },
+    {
+      "lesson_id": 2154756161,
+      "title": "Fell masker etter tommelkile",
+      "type": "video",
+      "file": "2154756161-fell-masker-etter-tommelkile.mp4"
+    },
+    {
+      "lesson_id": 2154756164,
+      "title": "Fortsett med mønsterstrikk",
+      "type": "video",
+      "file": "2154756164-fortsett-med-monsterstrikk.mp4"
+    },
+    {
+      "lesson_id": 2154756168,
+      "title": "Fell på toppen av votten, del 1",
+      "type": "video",
+      "file": "2154756168-fell-pa-toppen-av-votten-del-1.mp4"
+    },
+    {
+      "lesson_id": 2154756171,
+      "title": "Fell på toppen av votten, del 2",
+      "type": "video",
+      "file": "2154756171-fell-pa-toppen-av-votten-del-2.mp4"
+    },
+    {
+      "lesson_id": 2154756172,
+      "title": "Strikk siste omgang på toppen av votten",
+      "type": "video",
+      "file": "2154756172-strikk-siste-omgang-pa-toppen-av-votten.mp4"
+    },
+    {
+      "lesson_id": 2154756187,
+      "title": "Strikk tommel - dra ut kontrasttråden og sett maskene på pinnen",
+      "type": "video",
+      "file": "2154756187-strikk-tommel-dra-ut-kontrasttraden-og-sett-maskene-pa-pinnen.mp4"
+    },
+    {
+      "lesson_id": 2154756215,
+      "title": "Plukk opp én maske på hver side, eller øk ut ved Y",
+      "type": "video",
+      "file": "2154756215-plukk-opp-n-maske-pa-hver-side-eller-ok-ut-ved-y.mp4"
+    },
+    {
+      "lesson_id": 2154756217,
+      "title": "Midtstill mønster",
+      "type": "video",
+      "file": "2154756217-midtstill-monster.mp4"
+    },
+    {
+      "lesson_id": 2154756219,
+      "title": "Toppen av tommel",
+      "type": "video",
+      "file": "2154756219-toppen-av-tommel.mp4"
+    },
+    {
+      "lesson_id": 2154756223,
+      "title": "Strikk høyre vott - vrangbord",
+      "type": "video",
+      "file": "2154756223-strikk-hoyre-vott-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2154756225,
+      "title": "Mønster høyre vott",
+      "type": "video",
+      "file": "2154756225-monster-hoyre-vott.mp4"
+    },
+    {
+      "lesson_id": 2154756227,
+      "title": "Resten av høyre vott",
+      "type": "video",
+      "file": "2154756227-resten-av-hoyre-vott.mp4"
+    },
+    {
+      "lesson_id": 2154756230,
+      "title": "Fest trådene og sy igjen hull",
+      "type": "video",
+      "file": "2154756230-fest-tradene-og-sy-igjen-hull.mp4"
+    },
+    {
+      "lesson_id": 2154756231,
+      "title": "Damp vottene",
+      "type": "video",
+      "file": "2154756231-damp-vottene.mp4"
+    }
+  ]
+}
