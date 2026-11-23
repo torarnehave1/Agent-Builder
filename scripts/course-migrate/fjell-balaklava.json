@@ -1,0 +1,202 @@
+{
+  "world": "sodesign.no",
+  "slug": "fjell-balaklava",
+  "title": "Fjell-balaklava strikkekurs",
+  "album": "Fjell-balaklava strikkekurs",
+  "folder": "kurs/fjell-balaklava",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Tilbehør"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2151403750
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/fjell-balaklava/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2161959337,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her laster du ned oppskriften til Fjell-balaklava",
+      "pdf": "Fjell-balaklava.pdf"
+    },
+    {
+      "lesson_id": 2161959353,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2161959353-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2161959357,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2161959357-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2161959360,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2161959360-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2165858097,
+      "title": "Strikk riller nederst",
+      "type": "video",
+      "file": "2165858097-strikk-riller-nederst.mp4"
+    },
+    {
+      "lesson_id": 2165859665,
+      "title": "Mønster A",
+      "type": "video",
+      "file": "2165859665-monster-a.mp4"
+    },
+    {
+      "lesson_id": 2165888532,
+      "title": "Bytt til farge 2 og fell jevnt fordelt",
+      "type": "video",
+      "file": "2165888532-bytt-til-farge-2-og-fell-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 2165875840,
+      "title": "Mønster B og tvinn tråden på baksiden",
+      "type": "video",
+      "file": "2165875840-monster-b-og-tvinn-traden-pa-baksiden.mp4"
+    },
+    {
+      "lesson_id": 2165888611,
+      "title": "Fell masker i mønster B del 1",
+      "type": "video",
+      "file": "2165888611-fell-masker-i-monster-b-del-1.mp4"
+    },
+    {
+      "lesson_id": 2165908307,
+      "title": "Fell masker i mønster B del 2",
+      "type": "video",
+      "file": "2165908307-fell-masker-i-monster-b-del-2.mp4"
+    },
+    {
+      "lesson_id": 2165909206,
+      "title": "Fortsett med farge 2 og fell jevnt fordelt",
+      "type": "video",
+      "file": "2165909206-fortsett-med-farge-2-og-fell-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 2165909229,
+      "title": "Mønster C (kun for størrelse 3 år til 3XL)",
+      "type": "video",
+      "file": "2165909229-monster-c-kun-for-storrelse-3-ar-til-3xl.mp4"
+    },
+    {
+      "lesson_id": 2165963226,
+      "title": "Fortsettelse mønster C (bytt til en kortere pinne)",
+      "type": "video",
+      "file": "2165963226-fortsettelse-monster-c-bytt-til-en-kortere-pinne.mp4"
+    },
+    {
+      "lesson_id": 2165909492,
+      "title": "Etter mønster C (For størrelse 6 år til 3XL)",
+      "type": "video",
+      "file": "2165909492-etter-monster-c-for-storrelse-6-ar-til-3xl.mp4"
+    },
+    {
+      "lesson_id": 2165909551,
+      "title": "Om du kun ønsker en hals",
+      "type": "video",
+      "file": "2165909551-om-du-kun-onsker-en-hals.mp4"
+    },
+    {
+      "lesson_id": 2165909605,
+      "title": "Strikk vrangbord over halsen",
+      "type": "video",
+      "file": "2165909605-strikk-vrangbord-over-halsen.mp4"
+    },
+    {
+      "lesson_id": 2165909648,
+      "title": "Fell av masker under haka",
+      "type": "video",
+      "file": "2165909648-fell-av-masker-under-haka.mp4"
+    },
+    {
+      "lesson_id": 2165909669,
+      "title": "Strikk glattstrikk frem og tilbake",
+      "type": "video",
+      "file": "2165909669-strikk-glattstrikk-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2165910076,
+      "title": "To måter å avslutte på toppen av lua",
+      "type": "video",
+      "file": "2165910076-to-mater-a-avslutte-pa-toppen-av-lua.mp4"
+    },
+    {
+      "lesson_id": 2165910329,
+      "title": "1: Mask sammen",
+      "type": "video",
+      "file": "2165910329-1-mask-sammen.mp4"
+    },
+    {
+      "lesson_id": 2165910353,
+      "title": "2: Fell av og sy sammen",
+      "type": "video",
+      "file": "2165910353-2-fell-av-og-sy-sammen.mp4"
+    },
+    {
+      "lesson_id": 2165910374,
+      "title": "Strikk opp masker rundt ansiktet",
+      "type": "video",
+      "file": "2165910374-strikk-opp-masker-rundt-ansiktet.mp4"
+    },
+    {
+      "lesson_id": 2165910460,
+      "title": "Strikk kant rundt ansiktet",
+      "type": "video",
+      "file": "2165910460-strikk-kant-rundt-ansiktet.mp4"
+    },
+    {
+      "lesson_id": 2166392066,
+      "title": "Fell av maskene",
+      "type": "video",
+      "file": "2166392066-fell-av-maskene.mp4"
+    },
+    {
+      "lesson_id": 2165910477,
+      "title": "Sy fast kanten",
+      "type": "video",
+      "file": "2165910477-sy-fast-kanten.mp4"
+    },
+    {
+      "lesson_id": 2165910568,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2165910568-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2165910590,
+      "title": "Damp plagget",
+      "type": "video",
+      "file": "2165910590-damp-plagget.mp4"
+    },
+    {
+      "lesson_id": 2165910619,
+      "title": "Lag og sy i dusk om ønskelig",
+      "type": "text",
+      "info": "Om du ønsker kan du lage eller kjøpe en dusk som du kan sy fast i toppen",
+      "pdf": ""
+    }
+  ]
+}
