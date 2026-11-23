@@ -82,12 +82,14 @@ function buildTranscript(messages) {
   }
 }
 
-async function fetchSessionMessages({ sessionId, userId }) {
+async function fetchSessionMessages({ sessionId, userId, env }) {
   const url = `${CHAT_HISTORY_API}/messages?sessionId=${encodeURIComponent(sessionId)}&decrypt=1&limit=${MESSAGE_FETCH_LIMIT}`
-  const res = await fetch(url, {
+  // Through the API_WORKER service binding: a plain fetch from this worker to api.vegvisr.org
+  // (same zone) is answered 522 by Cloudflare, so every analysis failed (found 2026-11-23).
+  const res = await env.API_WORKER.fetch(new Request(url, {
     method: 'GET',
     headers: { 'x-user-id': userId, 'Content-Type': 'application/json' },
-  })
+  }))
   if (!res.ok) {
     const text = await res.text().catch(() => '')
     throw new Error(`chat-history /messages failed: ${res.status} ${text.slice(0, 200)}`)
@@ -123,7 +125,7 @@ export async function analyzeSession({ sessionId, userId, env }) {
   if (!sessionId) throw new Error('sessionId required')
   if (!userId) throw new Error('userId required')
 
-  const rawMessages = await fetchSessionMessages({ sessionId, userId })
+  const rawMessages = await fetchSessionMessages({ sessionId, userId, env })
   const { text: transcript, messageCount, transcriptChars, truncatedMessages } = buildTranscript(rawMessages)
 
   if (!transcript) {
@@ -152,7 +154,7 @@ export async function analyzeSessionDialog({ sessionId, userId, history, message
   if (!userId) throw new Error('userId required')
   if (!message || typeof message !== 'string') throw new Error('message required')
 
-  const rawMessages = await fetchSessionMessages({ sessionId, userId })
+  const rawMessages = await fetchSessionMessages({ sessionId, userId, env })
   const { text: transcript, messageCount, transcriptChars } = buildTranscript(rawMessages)
 
   const safeHistory = Array.isArray(history)
