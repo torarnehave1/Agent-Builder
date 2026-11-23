@@ -2212,6 +2212,8 @@ export default function AgentChat({ userId, userEmail, graphId, onGraphChange, a
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId,
+          // /bot-chat answers only a signed-in caller (2026-11-23).
+          authToken: getApiToken() || undefined,
           botId: mentionedBot.id,
           message: botMessage,
           conversationHistory: messages.filter(m => !m.images).map(m => ({ role: m.role, content: m.content })),

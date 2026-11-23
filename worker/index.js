@@ -2397,9 +2397,19 @@ export default {
       // Uses runChatbotSubagent for full tool execution (same as group chat bots)
       if (pathname === '/bot-chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, botId, message, conversationHistory } = body
-        if (!userId || !botId || !message) {
-          return new Response(JSON.stringify({ error: 'userId, botId, and message required' }), { status: 400, headers: corsHeaders })
+        const { botId, message, conversationHistory, authToken: botAuthToken } = body
+        // Identity from the caller's credential only, never body.userId (2026-11-23, as /chat).
+        const botAuth = botAuthToken
+          ? await resolveAuthorizedCallerWithCredentials({ authToken: botAuthToken }, env)
+          : await resolveAuthorizedCaller(request, env)
+        const userId = botAuth?.authenticated ? botAuth.userId : null
+        if (!userId) {
+          return new Response(JSON.stringify({
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
+        if (!botId || !message) {
+          return new Response(JSON.stringify({ error: 'botId and message required' }), { status: 400, headers: corsHeaders })
         }
 
         // Load bot config directly from CHAT_DB (avoids auth issues with Clerk userIds)
@@ -2747,7 +2757,13 @@ export default {
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || bodyUserId
+        // Identity from the caller's credential only, never body.userId (2026-11-23, as /chat).
+        const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+        if (!effectiveUserId) {
+          return new Response(JSON.stringify({
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
         if (!effectiveUserId || !sessionId) {
           return new Response(JSON.stringify({ error: 'sessionId and userId are required' }), { status: 400, headers: corsHeaders })
         }
@@ -2768,7 +2784,13 @@ export default {
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || bodyUserId
+        // Identity from the caller's credential only, never body.userId (2026-11-23, as /chat).
+        const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+        if (!effectiveUserId) {
+          return new Response(JSON.stringify({
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
         if (!effectiveUserId || !sessionId || !message) {
           return new Response(JSON.stringify({ error: 'sessionId, userId, and message are required' }), { status: 400, headers: corsHeaders })
         }
@@ -2797,7 +2819,13 @@ export default {
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || bodyUserId
+        // Identity from the caller's credential only, never body.userId (2026-11-23, as /chat).
+        const effectiveUserId = authContext?.authenticated ? authContext.userId : null
+        if (!effectiveUserId) {
+          return new Response(JSON.stringify({
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
         if (!effectiveUserId) {
           return new Response(JSON.stringify({ error: 'userId is required' }), { status: 400, headers: corsHeaders })
         }

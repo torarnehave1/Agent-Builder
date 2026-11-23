@@ -46,6 +46,10 @@ console.error = () => {}
 
 for (const [path, body] of [
   ['/execute', { agentId: 'agent_kg_html_builder', task: 'build a page', userId: 'victim-user-id' }],
+  ['/bot-chat', { userId: 'victim-user-id', botId: 'b1', message: 'hi' }],
+  ['/analyze-session', { sessionId: 's1', userId: 'victim-user-id' }],
+  ['/analyze-session/chat', { sessionId: 's1', userId: 'victim-user-id', message: 'hi' }],
+  ['/meeting-graph', { transcript: 'text', userId: 'victim-user-id' }],
   ['/chat', { userId: 'victim-user-id', messages: [{ role: 'user', content: 'hi' }] }],
   ['/chat', { userId: 'victim@example.com', authToken: 'made-up-token', messages: [{ role: 'user', content: 'hi' }] }],
   ['/automation/run', { graphId: 'g1', dryRun: false, userId: 'victim@example.com', callerEmail: 'victim@example.com' }],

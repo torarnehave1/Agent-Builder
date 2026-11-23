@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getApiToken } from '../lib/auth';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -68,10 +69,10 @@ export default function SessionAnalysisPanel({ userId, onClose }: Props) {
     try {
       const res = await fetch(`${AGENT_API}/analyze-session`, {
         method: 'POST',
-        // x-user-id intentionally not sent — endpoint reads userId from body.
+        // The endpoint takes identity from authToken (2026-11-23); x-user-id is not sent.
         // Adding it triggers a CORS preflight failure against agent.vegvisr.org.
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: sid, userId }),
+        body: JSON.stringify({ sessionId: sid, userId, authToken: getApiToken() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -97,9 +98,9 @@ export default function SessionAnalysisPanel({ userId, onClose }: Props) {
     try {
       const res = await fetch(`${AGENT_API}/analyze-session/chat`, {
         method: 'POST',
-        // x-user-id intentionally not sent — endpoint reads userId from body.
+        // The endpoint takes identity from authToken (2026-11-23); x-user-id is not sent.
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: selectedId, userId, history: dialog, message: text }),
+        body: JSON.stringify({ sessionId: selectedId, userId, authToken: getApiToken() || undefined, history: dialog, message: text }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
