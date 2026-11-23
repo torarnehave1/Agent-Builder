@@ -21,8 +21,10 @@ for lesson in manifest["lessons"]:
         print(f"have {lesson['file']}"); continue
     if len(urls) != 1:
         sys.exit(f"{lesson['title']}: expected one video link, found {len(urls)}")
-    r = subprocess.run(["curl", "-sS", "--fail", "--retry", "3", "-C", "-", "-o", out, urls[0]], capture_output=True, text=True)
+    r = subprocess.run(["curl", "-sS", "--fail", "--retry", "5", "--retry-all-errors", "--retry-delay", "10", "-C", "-", "-o", out, urls[0]], capture_output=True, text=True)
     if r.returncode != 0:
+        if os.path.exists(out):
+            os.remove(out)  # a partial file would crash the compress step in run.sh
         sys.exit(f"{lesson['title']}: download failed ({r.returncode})")
     h = hashlib.sha256()
     with open(out, "rb") as f:
