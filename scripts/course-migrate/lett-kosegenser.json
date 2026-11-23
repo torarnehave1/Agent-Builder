@@ -1,0 +1,214 @@
+{
+  "world": "sodesign.no",
+  "slug": "lett-kosegenser",
+  "title": "Lett kosegenser strikkekurs",
+  "album": "Lett kosegenser strikkekurs",
+  "folder": "kurs/lett-kosegenser",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2154765843
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/lett-kosegenser/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2182664480,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskrift på Lett kosegenser til barn og voksen. Last den ned og ha den gjerne foran deg når du følger kurset :)",
+      "pdf": "Lett_kosegenser.pdf",
+      "pdfLabel": "Last ned oppskriften på Lett kosegenser – voksen (PDF)",
+      "extraPdfs": [
+        {
+          "file": "Lett_kosegenser_barn.pdf",
+          "label": "Last ned oppskriften på Lett kosegenser – barn (PDF)"
+        }
+      ]
+    },
+    {
+      "lesson_id": 2182665960,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2182665960-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2183865884,
+      "title": "Størrelsesguide",
+      "type": "video",
+      "file": "2183865884-storrelsesguide.mp4"
+    },
+    {
+      "lesson_id": 2182665962,
+      "title": "Garn og utstyr",
+      "type": "video",
+      "file": "2182665962-garn-og-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2182665964,
+      "title": "Legg opp",
+      "type": "video",
+      "file": "2182665964-legg-opp.mp4"
+    },
+    {
+      "lesson_id": 2183867305,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2183867305-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2183867840,
+      "title": "Fortsett rundt i glattstrikk",
+      "type": "video",
+      "file": "2183867840-fortsett-rundt-i-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2183896727,
+      "title": "Del arbeidet i 2",
+      "type": "video",
+      "file": "2183896727-del-arbeidet-i-2.mp4"
+    },
+    {
+      "lesson_id": 2183910225,
+      "title": "Strikk bakstykket frem og tilbake",
+      "type": "video",
+      "file": "2183910225-strikk-bakstykket-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2183911030,
+      "title": "Strikk ferdig bakstykket og fell av alle masker",
+      "type": "video",
+      "file": "2183911030-strikk-ferdig-bakstykket-og-fell-av-alle-masker.mp4"
+    },
+    {
+      "lesson_id": 2183969062,
+      "title": "Forstykket",
+      "type": "video",
+      "file": "2183969062-forstykket.mp4"
+    },
+    {
+      "lesson_id": 2183974071,
+      "title": "Fell av de midterste maskene til hals",
+      "type": "video",
+      "file": "2183974071-fell-av-de-midterste-maskene-til-hals.mp4"
+    },
+    {
+      "lesson_id": 2184018256,
+      "title": "Strikk høyre forstykke",
+      "type": "video",
+      "file": "2184018256-strikk-hoyre-forstykke.mp4"
+    },
+    {
+      "lesson_id": 2184018634,
+      "title": "Fell på halssiden",
+      "type": "video",
+      "file": "2184018634-fell-pa-halssiden.mp4"
+    },
+    {
+      "lesson_id": 2184018885,
+      "title": "Fell av alle maskene på høyre forstykke",
+      "type": "video",
+      "file": "2184018885-fell-av-alle-maskene-pa-hoyre-forstykke.mp4"
+    },
+    {
+      "lesson_id": 2185130878,
+      "title": "Strikk venstre forstykke",
+      "type": "video",
+      "file": "2185130878-strikk-venstre-forstykke.mp4"
+    },
+    {
+      "lesson_id": 2185145356,
+      "title": "Fell av venstre forstykke",
+      "type": "video",
+      "file": "2185145356-fell-av-venstre-forstykke.mp4"
+    },
+    {
+      "lesson_id": 2185145957,
+      "title": "Sy sammen på skulder med kastesting",
+      "type": "video",
+      "file": "2185145957-sy-sammen-pa-skulder-med-kastesting.mp4"
+    },
+    {
+      "lesson_id": 2185148842,
+      "title": "Sy sammen på skulder - maskesting",
+      "type": "video",
+      "file": "2185148842-sy-sammen-pa-skulder-maskesting.mp4"
+    },
+    {
+      "lesson_id": 2185265999,
+      "title": "Strikk opp masker til hals, del 1",
+      "type": "video",
+      "file": "2185265999-strikk-opp-masker-til-hals-del-1.mp4"
+    },
+    {
+      "lesson_id": 2185292076,
+      "title": "Strikk opp masker til hals, del 2",
+      "type": "video",
+      "file": "2185292076-strikk-opp-masker-til-hals-del-2.mp4"
+    },
+    {
+      "lesson_id": 2185293409,
+      "title": "Tilleggsvideo - plukk opp masker med heklenål",
+      "type": "video",
+      "file": "2185293409-tilleggsvideo-plukk-opp-masker-med-heklenal.mp4"
+    },
+    {
+      "lesson_id": 2185294869,
+      "title": "Strikk hals",
+      "type": "video",
+      "file": "2185294869-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2185295226,
+      "title": "Fell av halsen",
+      "type": "video",
+      "file": "2185295226-fell-av-halsen.mp4"
+    },
+    {
+      "lesson_id": 2185326087,
+      "title": "Erm - strikk opp masker og strikk rundt",
+      "type": "video",
+      "file": "2185326087-erm-strikk-opp-masker-og-strikk-rundt.mp4"
+    },
+    {
+      "lesson_id": 2190142356,
+      "title": "Bytt til strømpepinner og fell masker",
+      "type": "video",
+      "file": "2190142356-bytt-til-strompepinner-og-fell-masker.mp4"
+    },
+    {
+      "lesson_id": 2190145546,
+      "title": "Strikk vrangbord på erm",
+      "type": "video",
+      "file": "2190145546-strikk-vrangbord-pa-erm.mp4"
+    },
+    {
+      "lesson_id": 2190299979,
+      "title": "Fell av masker på erm",
+      "type": "video",
+      "file": "2190299979-fell-av-masker-pa-erm.mp4"
+    },
+    {
+      "lesson_id": 2190821976,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2190821976-fest-trader.mp4"
+    }
+  ]
+}
