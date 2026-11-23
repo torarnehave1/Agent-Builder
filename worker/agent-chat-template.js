@@ -533,7 +533,7 @@ export const AGENT_CHAT_TEMPLATE = `<!DOCTYPE html>
           userCtx.role = roleData.role || 'user';
         } catch (e) {}
         currentUser = userCtx;
-        authToken = data.token || null;
+        authToken = data.apiToken || data.token || null;
         localStorage.setItem('userStore', JSON.stringify({ user: currentUser, token: authToken }));
         if (authToken) localStorage.setItem('token', authToken);
         updateLoginButton(); hideLoginModal(); loadGraphSelector();
@@ -720,7 +720,9 @@ export const AGENT_CHAT_TEMPLATE = `<!DOCTYPE html>
           body: JSON.stringify({
             userId: userId,
             messages: messages,
-            graphId: GRAPH_ID || undefined
+            graphId: GRAPH_ID || undefined,
+            // /chat answers only a signed-in caller (2026-11-23): the login token goes with it.
+            authToken: authToken || undefined
           })
         });
 

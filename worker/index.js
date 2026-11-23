@@ -2476,12 +2476,20 @@ export default {
         const authContext = authToken
           ? await resolveAuthorizedCallerWithCredentials({ authToken }, env)
           : await resolveAuthorizedCaller(request, env)
-        const effectiveUserId = authContext.userId || userId
+        // Who chats comes from the caller's own credential, never from body.userId (2026-11-23,
+        // the same rule /execute got 2026-11-06). With the fallback, a made-up token and any
+        // userId got a full agent answer on the platform's model keys — seen from vegr.ai.
+        const effectiveUserId = authContext?.authenticated ? authContext.userId : null
         console.log(`[/chat] graphId=${graphId} activeHtmlNodeId=${activeHtmlNodeId} agentId=${agentId}`)
 
-        if (!effectiveUserId || !userMessages || !Array.isArray(userMessages)) {
+        if (!effectiveUserId) {
           return new Response(JSON.stringify({
-            error: 'userId and messages[] are required'
+            error: 'Unauthorized — sign in, or send authToken (your emailVerificationToken).'
+          }), { status: 401, headers: corsHeaders })
+        }
+        if (!userMessages || !Array.isArray(userMessages)) {
+          return new Response(JSON.stringify({
+            error: 'messages[] is required'
           }), { status: 400, headers: corsHeaders })
         }
 
