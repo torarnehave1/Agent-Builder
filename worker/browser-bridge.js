@@ -6,10 +6,13 @@ import { resolveAuthorizedCallerWithCredentials } from './auth.js'
 
 const CMD_TIMEOUT_MS = 60_000 // long enough for a person to approve a site in the extension
 
+const ev = (self, e) => { self.events.push({ t: new Date().toISOString(), ...e }); self.events = self.events.slice(-15) }
+
 export class BrowserBridge extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env)
     this.pending = new Map() // id -> { resolve, timer }
+    this.events = [] // last events, for /browser/status
   }
 
   async fetch(request) {
@@ -19,8 +22,13 @@ export class BrowserBridge extends DurableObject {
       // Several connections may exist at once (two Chrome profiles, or an old half-open socket that
       // still looks open). None is closed: commands go to the one that spoke last (see freshest()).
       this.ctx.acceptWebSocket(pair[1])
+      ev(this, { e: 'connected' })
       pair[1].serializeAttachment({ at: Date.now() })
       return new Response(null, { status: 101, webSocket: pair[0], headers: { 'Sec-WebSocket-Protocol': 'vegr.v1' } })
+    }
+    if (url.pathname === '/diag') {
+      const at = (w) => { try { return w.deserializeAttachment()?.at || 0 } catch { return 0 } }
+      return Response.json({ sockets: this.ctx.getWebSockets().map((w) => ({ lastHeardSecAgo: Math.round((Date.now() - at(w)) / 1000) })), pending: this.pending.size, events: this.events })
     }
     if (url.pathname === '/status') {
       return Response.json({ connected: this.ctx.getWebSockets().length > 0 })
@@ -34,6 +42,7 @@ export class BrowserBridge extends DurableObject {
         const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'The browser did not answer within 60 seconds.' }) }, CMD_TIMEOUT_MS)
         this.pending.set(id, { resolve, timer })
       })
+      ev(this, { e: 'cmd', action, sockets: sockets.length })
       try { sockets[0].send(JSON.stringify({ type: 'cmd', id, action, params: params || {} })) } catch (e) {
         const p = this.pending.get(id); if (p) { clearTimeout(p.timer); this.pending.delete(id) }
         return Response.json({ ok: false, error: `Could not reach the browser: ${e?.message || e}` })
@@ -55,11 +64,12 @@ export class BrowserBridge extends DurableObject {
     try { m = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message)) } catch { return }
     if (m.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return }
     if (m.type === 'result' && m.id) {
+      ev(this, { e: 'result', ok: !!m.ok, known: this.pending.has(m.id) })
       const p = this.pending.get(m.id)
       if (p) { clearTimeout(p.timer); this.pending.delete(m.id); p.resolve({ ok: !!m.ok, ...(m.ok ? { data: m.data } : { error: m.error || 'Failed in the browser.' }) }) }
     }
   }
-  webSocketClose() {}
+  webSocketClose(_ws, code) { ev(this, { e: 'closed', code }) }
   webSocketError() {}
 }
 
@@ -82,5 +92,10 @@ export async function browserStatus(env, userId) {
 }
 export async function browserCommand(env, userId, action, params) {
   const r = await stub(env, userId).fetch(new Request('https://bridge/cmd', { method: 'POST', body: JSON.stringify({ action, params }) }))
+  return r.json()
+}
+
+export async function browserDiag(env, userId) {
+  const r = await stub(env, userId).fetch('https://bridge/diag')
   return r.json()
 }

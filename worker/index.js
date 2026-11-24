@@ -27,7 +27,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
-import { BrowserBridge, handleBrowserWs } from './browser-bridge.js'
+import { BrowserBridge, handleBrowserWs, browserDiag } from './browser-bridge.js'
 import { handleConverse, handleConverseTurns, handleConverseUsage } from './converse.js'
 import { handleWorldCustomer } from './world-customer.js'
 import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
@@ -334,6 +334,11 @@ export default {
     }
 
     if (pathname === '/browser/ws') return handleBrowserWs(request, env)
+    if (pathname === '/browser/diag' && request.method === 'GET') {
+      const a = await resolveAuthorizedCallerWithCredentials({ authToken: (request.headers.get('X-API-Token') || '').trim() }, env).catch(() => null)
+      if (!a?.authenticated || !a.userId) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
+      return new Response(JSON.stringify(await browserDiag(env, a.userId)), { headers: corsHeaders })
+    }
 
     // Route WebSocket + agent requests to VegvisrAgent Durable Object
     const agentResponse = await routeAgentRequest(request, env)
