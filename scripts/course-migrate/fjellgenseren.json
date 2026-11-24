@@ -1,0 +1,230 @@
+{
+  "world": "sodesign.no",
+  "slug": "fjellgenseren",
+  "title": "Fjellgenseren strikkekurs",
+  "album": "Fjellgenseren strikkekurs",
+  "folder": "kurs/fjellgenseren",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3230707
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/fjellgenseren/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 10779797,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriftene på Fjellgenseren til voksen og barn (PDF).\n\nLegg merke til at oppskriften for voksen inneholder 2 forskjellige varianter. Se gjerne video om hvordan du forstår oppskriften for forklaring på hvorfor, og hvordan du finner ut hvilken du burde følge.\n\nLast den ned og ha den tilgjengelig når du følger kurset.\n\nLykke til!",
+      "pdf": "Fjellgenseren.pdf",
+      "pdfLabel": "Last ned oppskriften på Fjellgenseren – voksen (PDF)",
+      "extraPdfs": [
+        {
+          "file": "Fjellgenseren_Barn.pdf",
+          "label": "Last ned oppskriften på Fjellgenseren – barn (PDF)"
+        },
+        {
+          "file": "Fjellgenseren_baby.pdf",
+          "label": "Last ned oppskriften på Fjellgenseren – baby (PDF)"
+        }
+      ]
+    },
+    {
+      "lesson_id": 2154600773,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2154600773-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154600815,
+      "title": "Garn og utstyr",
+      "type": "video",
+      "file": "2154600815-garn-og-utstyr.mp4"
+    },
+    {
+      "lesson_id": 10779798,
+      "title": "Hvordan finne din størrelse",
+      "type": "video",
+      "file": "10779798-hvordan-finne-din-storrelse.mp4"
+    },
+    {
+      "lesson_id": 2154600810,
+      "title": "Hva er strikkefasthet",
+      "type": "video",
+      "file": "2154600810-hva-er-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2154600811,
+      "title": "Hvordan måle strikkefasthet",
+      "type": "video",
+      "file": "2154600811-hvordan-male-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2154601002,
+      "title": "Garnalternativer",
+      "type": "video",
+      "file": "2154601002-garnalternativer.mp4"
+    },
+    {
+      "lesson_id": 10779799,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "10779799-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 10787085,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "10787085-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 10787092,
+      "title": "Mønsterstrikk",
+      "type": "video",
+      "file": "10787092-monsterstrikk.mp4"
+    },
+    {
+      "lesson_id": 10787100,
+      "title": "Fortsett videre med glattstrikk",
+      "type": "video",
+      "file": "10787100-fortsett-videre-med-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 10787103,
+      "title": "Hvordan begynne på et nytt nøste",
+      "type": "video",
+      "file": "10787103-hvordan-begynne-pa-et-nytt-noste.mp4"
+    },
+    {
+      "lesson_id": 10787110,
+      "title": "Fell til ermehull",
+      "type": "video",
+      "file": "10787110-fell-til-ermehull.mp4"
+    },
+    {
+      "lesson_id": 10787114,
+      "title": "Legg opp til ermer",
+      "type": "video",
+      "file": "10787114-legg-opp-til-ermer.mp4"
+    },
+    {
+      "lesson_id": 10787119,
+      "title": "Øk 6 masker jevnt fordelt",
+      "type": "video",
+      "file": "10787119-ok-6-masker-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 10787121,
+      "title": "Ermet - mønsterstrikk og økninger",
+      "type": "video",
+      "file": "10787121-ermet-monsterstrikk-og-okninger.mp4"
+    },
+    {
+      "lesson_id": 10787123,
+      "title": "Tips: Bytt til liten rundpinne",
+      "type": "video",
+      "file": "10787123-tips-bytt-til-liten-rundpinne.mp4"
+    },
+    {
+      "lesson_id": 10787125,
+      "title": "Fell til ermehull på ermet",
+      "type": "video",
+      "file": "10787125-fell-til-ermehull-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 10787132,
+      "title": "Strikk ermer og bol inn på samme pinne",
+      "type": "video",
+      "file": "10787132-strikk-ermer-og-bol-inn-pa-samme-pinne.mp4"
+    },
+    {
+      "lesson_id": 10787137,
+      "title": "Fell jevnt fordelt på omgangen",
+      "type": "video",
+      "file": "10787137-fell-jevnt-fordelt-pa-omgangen.mp4"
+    },
+    {
+      "lesson_id": 10787140,
+      "title": "Strikk mønster B",
+      "type": "video",
+      "file": "10787140-strikk-monster-b.mp4"
+    },
+    {
+      "lesson_id": 10787141,
+      "title": "Fell masker etter mønster B",
+      "type": "video",
+      "file": "10787141-fell-masker-etter-monster-b.mp4"
+    },
+    {
+      "lesson_id": 10787145,
+      "title": "Mønster C - Fjellmønsteret",
+      "type": "video",
+      "file": "10787145-monster-c-fjellmonsteret.mp4"
+    },
+    {
+      "lesson_id": 10787147,
+      "title": "Fell etter mønster C",
+      "type": "video",
+      "file": "10787147-fell-etter-monster-c.mp4"
+    },
+    {
+      "lesson_id": 10787150,
+      "title": "Strikk mønster D",
+      "type": "video",
+      "file": "10787150-strikk-monster-d.mp4"
+    },
+    {
+      "lesson_id": 10787153,
+      "title": "Strikk mønster E",
+      "type": "video",
+      "file": "10787153-strikk-monster-e.mp4"
+    },
+    {
+      "lesson_id": 10787155,
+      "title": "Fell masker og bytt til liten rundpinne",
+      "type": "video",
+      "file": "10787155-fell-masker-og-bytt-til-liten-rundpinne.mp4"
+    },
+    {
+      "lesson_id": 10787158,
+      "title": "Strikk hals",
+      "type": "video",
+      "file": "10787158-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 10787177,
+      "title": "Sy sammen under ermene",
+      "type": "video",
+      "file": "10787177-sy-sammen-under-ermene.mp4"
+    },
+    {
+      "lesson_id": 10787178,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "10787178-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 10787179,
+      "title": "Damp genseren",
+      "type": "video",
+      "file": "10787179-damp-genseren.mp4"
+    }
+  ]
+}
