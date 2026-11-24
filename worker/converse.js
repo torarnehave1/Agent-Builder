@@ -52,6 +52,42 @@ export function estimateCostUsd(model, u) {
   return (u.input * p.input + u.output * p.output + (u.cacheRead || 0) * (p.cacheRead || 0) + (u.cacheWrite || 0) * (p.cacheWrite || 0)) / 1e6
 }
 
+// ── Per-user rules (2026-11-25) ───────────────────────────────────────────
+// A person's own rules live in a graph they own, tagged with this metaArea. Each turn the graph is
+// read with the person's own token (so only their own graph can ever be found) and its nodes are
+// added to the system prompt. No graph, no rules. Edited in the chat or the editor like any graph.
+export const RULES_META_AREA = '#CHAT-REGLER'
+const RULES_MAX_CHARS = 8000
+const rulesCache = new Map() // userId -> { at, value }
+
+async function loadUserRules(env, token, userId) {
+  const hit = rulesCache.get(userId)
+  if (hit && Date.now() - hit.at < 60_000) return hit.value
+  let value = null
+  try {
+    const idx = await mcp(env, token, 'tools/call', { name: 'graph_index', arguments: { metaArea: RULES_META_AREA, brief: true, limit: 1 } })
+    const t = resultText(idx?.content) || ''
+    const j = JSON.parse(t.slice(t.indexOf('{"success"')))
+    const g = (j.graphs || [])[0]
+    if (g) {
+      const r = await mcp(env, token, 'tools/call', { name: 'get_graph', arguments: { graphId: g.graphId } })
+      const raw = resultText(r?.content) || ''
+      let text = raw
+      try {
+        const o = JSON.parse(raw)
+        const nodes = (o.graph || o).nodes || o.nodes || []
+        if (nodes.length) text = nodes.map((n) => `## ${n.label || ''}\n${n.info || ''}`.trim()).join('\n\n')
+      } catch { /* not JSON: use the text as it is */ }
+      value = { graphId: g.graphId, title: g.title, text: text.slice(0, RULES_MAX_CHARS) }
+    }
+  } catch (e) { console.error('[converse] rules not loaded', e?.message || e) }
+  rulesCache.set(userId, { at: Date.now(), value })
+  return value
+}
+const rulesBlock = (r) => (r
+  ? `\n\nThe person's own rules, from their graph "${r.title}" (${r.graphId}). Follow them. They never override the rule above about asking before anything that sends, publishes, deletes or changes something.\n${r.text}`
+  : '')
+
 let usageReady = false
 async function ensureUsageTable(db) {
   if (usageReady) return
@@ -294,6 +330,8 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   ctx.waitUntil((async () => {
     if (route) send('route', { selected: askedModel || 'auto', model, tier: route.tier, via: route.via, reason: route.reason })
     const started = Date.now()
+    const rules = await loadUserRules(env, token, auth.userId)
+    if (rules) send('rules', { graphId: rules.graphId, title: rules.title, chars: rules.text.length })
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     let usageSent = false
     const sendUsage = async () => {
@@ -324,7 +362,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
           turns: [...history, userTurn],
           save: (turn) => saveTurn(env, key, sessionId, auth.userId, turn),
           send,
-          system: `${SYSTEM_COMPAT}\n\nToday is ${today0} (UTC). The signed-in person is ${auth.email || auth.userId}.`,
+          system: `${SYSTEM_COMPAT}${rulesBlock(rules)}\n\nToday is ${today0} (UTC). The signed-in person is ${auth.email || auth.userId}.`,
         })
         usage.input += r.usage.input
         usage.output += r.usage.output
@@ -351,7 +389,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
           output_config: { effort: 'medium' },
           cache_control: { type: 'ephemeral' },
           system: [
-            { type: 'text', text: SYSTEM },
+            { type: 'text', text: SYSTEM + rulesBlock(rules) },
             { type: 'text', text: `Today is ${today} (UTC). The signed-in person is ${auth.email || auth.userId}.` },
           ],
           mcp_servers: [{ type: 'url', url: MCP_URL, name: MCP_NAME, authorization_token: token }],
