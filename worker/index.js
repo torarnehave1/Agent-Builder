@@ -27,6 +27,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { BrowserBridge, handleBrowserWs } from './browser-bridge.js'
 import { handleConverse, handleConverseTurns, handleConverseUsage } from './converse.js'
 import { handleWorldCustomer } from './world-customer.js'
 import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
@@ -331,6 +332,8 @@ export default {
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsHeaders })
     }
+
+    if (pathname === '/browser/ws') return handleBrowserWs(request, env)
 
     // Route WebSocket + agent requests to VegvisrAgent Durable Object
     const agentResponse = await routeAgentRequest(request, env)
@@ -5265,4 +5268,4 @@ export default {
 }
 
 // Durable Object export — required for Cloudflare Workers to instantiate VegvisrAgent
-export { VegvisrAgent }
+export { VegvisrAgent, BrowserBridge }
