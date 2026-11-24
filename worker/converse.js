@@ -382,71 +382,89 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
       let stopReason = null
       let said = false
       for (let round = 0; round <= MAX_RESUMES; round++) {
-        const stream = client.beta.messages.stream({
-          model,
-          max_tokens: MAX_TOKENS,
-          betas: ['mcp-client-2025-11-20'],
-          thinking: { type: 'adaptive', display: 'summarized' },
-          output_config: { effort: 'medium' },
-          cache_control: { type: 'ephemeral' },
-          system: [
-            { type: 'text', text: SYSTEM + rulesBlock(rules) },
-            { type: 'text', text: `Today is ${today} (UTC). The signed-in person is ${auth.email || auth.userId}.` },
-          ],
-          mcp_servers: [{ type: 'url', url: MCP_URL, name: MCP_NAME, authorization_token: token }],
-          tools: [
-            { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' },
-            { type: 'mcp_toolset', mcp_server_name: MCP_NAME, default_config: { defer_loading: true } },
-          ],
-          messages,
-        })
+        // The MCP connector lists the server's tools before the model starts; that call sometimes fails
+        // with "MCP server closed connection mid-response" (HTTP 400). Nothing has been streamed then, so the
+        // round is simply tried once more.
+        let final
+        for (let attempt = 0; ; attempt++) {
+          let streamed = false
+          try {
+            const stream = client.beta.messages.stream({
+              model,
+              max_tokens: MAX_TOKENS,
+              betas: ['mcp-client-2025-11-20'],
+              thinking: { type: 'adaptive', display: 'summarized' },
+              output_config: { effort: 'medium' },
+              cache_control: { type: 'ephemeral' },
+              system: [
+                { type: 'text', text: SYSTEM + rulesBlock(rules) },
+                { type: 'text', text: `Today is ${today} (UTC). The signed-in person is ${auth.email || auth.userId}.` },
+              ],
+              mcp_servers: [{ type: 'url', url: MCP_URL, name: MCP_NAME, authorization_token: token }],
+              tools: [
+                { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' },
+                { type: 'mcp_toolset', mcp_server_name: MCP_NAME, default_config: { defer_loading: true } },
+              ],
+              messages,
+            })
 
-        // Blocks by index: a tool call is announced when its input is complete.
-        const open = new Map()
-        const names = new Map()
-        for await (const ev of stream) {
-          if (ev.type === 'message_start') {
-            send('model_choice', { model: ev.message?.model || model })
-          } else if (ev.type === 'content_block_start') {
-            const b = ev.content_block
-            if (b.type === 'thinking') send('thinking', {})
-            else if (b.type === 'mcp_tool_use' || b.type === 'server_tool_use') {
-              open.set(ev.index, { id: b.id, name: b.name, json: '', input: b.input })
-              names.set(b.id, b.name)
-            } else if (b.type === 'mcp_tool_result') {
-              const text = textOf(b.content)
-              send('tool_result', {
-                callId: b.tool_use_id, tool: names.get(b.tool_use_id) || 'tool', success: !b.is_error,
-                summary: text.length > 240 ? text.slice(0, 240) + '…' : text,
-                result: text.slice(0, 200000),
-              })
-            } else if (b.type === 'tool_search_tool_result') {
-              const refs = Array.isArray(b.content?.tool_references) ? b.content.tool_references.map((r) => r.tool_name).filter(Boolean) : []
-              send('tool_result', {
-                callId: b.tool_use_id, tool: 'tool_search', success: b.content?.type !== 'tool_search_tool_result_error',
-                summary: refs.length ? refs.join(', ') : (b.content?.error_code || ''),
-                result: JSON.stringify(b.content).slice(0, 200000),
-              })
+            // Blocks by index: a tool call is announced when its input is complete.
+            const open = new Map()
+            const names = new Map()
+            for await (const ev of stream) {
+                if (ev.type !== 'message_start') streamed = true
+              if (ev.type === 'message_start') {
+                send('model_choice', { model: ev.message?.model || model })
+              } else if (ev.type === 'content_block_start') {
+                const b = ev.content_block
+                if (b.type === 'thinking') send('thinking', {})
+                else if (b.type === 'mcp_tool_use' || b.type === 'server_tool_use') {
+                  open.set(ev.index, { id: b.id, name: b.name, json: '', input: b.input })
+                  names.set(b.id, b.name)
+                } else if (b.type === 'mcp_tool_result') {
+                  const text = textOf(b.content)
+                  send('tool_result', {
+                    callId: b.tool_use_id, tool: names.get(b.tool_use_id) || 'tool', success: !b.is_error,
+                    summary: text.length > 240 ? text.slice(0, 240) + '…' : text,
+                    result: text.slice(0, 200000),
+                  })
+                } else if (b.type === 'tool_search_tool_result') {
+                  const refs = Array.isArray(b.content?.tool_references) ? b.content.tool_references.map((r) => r.tool_name).filter(Boolean) : []
+                  send('tool_result', {
+                    callId: b.tool_use_id, tool: 'tool_search', success: b.content?.type !== 'tool_search_tool_result_error',
+                    summary: refs.length ? refs.join(', ') : (b.content?.error_code || ''),
+                    result: JSON.stringify(b.content).slice(0, 200000),
+                  })
+                }
+              } else if (ev.type === 'content_block_delta') {
+                const d = ev.delta
+                if (d.type === 'text_delta') send('delta', { text: d.text })
+                else if (d.type === 'thinking_delta') send('thinking_delta', { text: d.thinking })
+                else if (d.type === 'input_json_delta') {
+                  const o = open.get(ev.index)
+                  if (o) o.json += d.partial_json
+                }
+              } else if (ev.type === 'content_block_stop') {
+                const o = open.get(ev.index)
+                if (o) {
+                  let input = o.input || {}
+                  try { if (o.json) input = JSON.parse(o.json) } catch { /* shown without its input */ }
+                  send('tool_call', { callId: o.id, tool: o.name === 'tool_search_tool_bm25' ? 'tool_search' : o.name, input })
+                  open.delete(ev.index)
+                }
+              }
             }
-          } else if (ev.type === 'content_block_delta') {
-            const d = ev.delta
-            if (d.type === 'text_delta') send('delta', { text: d.text })
-            else if (d.type === 'thinking_delta') send('thinking_delta', { text: d.thinking })
-            else if (d.type === 'input_json_delta') {
-              const o = open.get(ev.index)
-              if (o) o.json += d.partial_json
+            final = await stream.finalMessage()
+            break
+          } catch (e) {
+            if (attempt < 2 && !streamed && e?.status === 400 && /MCP server/i.test(e?.message || '')) {
+              console.error('[converse] MCP connector failed, retrying', e.message)
+              await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)))
+              continue
             }
-          } else if (ev.type === 'content_block_stop') {
-            const o = open.get(ev.index)
-            if (o) {
-              let input = o.input || {}
-              try { if (o.json) input = JSON.parse(o.json) } catch { /* shown without its input */ }
-              send('tool_call', { callId: o.id, tool: o.name === 'tool_search_tool_bm25' ? 'tool_search' : o.name, input })
-              open.delete(ev.index)
-            }
+            throw e
           }
         }
-        const final = await stream.finalMessage()
         usage.input += final.usage?.input_tokens || 0
         usage.output += final.usage?.output_tokens || 0
         usage.cacheRead += final.usage?.cache_read_input_tokens || 0
