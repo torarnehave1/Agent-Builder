@@ -134,10 +134,10 @@ export function toClaudeMessages(turns) {
       if (typeof m.content === 'string' && m.content.trim()) lines.push(m.content.trim())
       for (const c of m.tool_calls || []) {
         callNames.set(c.id, c.function?.name)
-        lines.push(`[Tool call: ${c.function?.name}(${c.function?.arguments || '{}'})]`)
+        lines.push(`(Earlier in this conversation the tool ${c.function?.name} was used with ${c.function?.arguments || '{}'}.)`)
       }
     } else if (m.role === 'tool') {
-      lines.push(`[Result of ${callNames.get(m.tool_call_id) || 'tool'}]\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
+      lines.push(`(It returned:)\n${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`)
     }
     if (lines.length) out.push({ role: 'assistant', content: lines.join('\n\n').trimEnd() })
   }

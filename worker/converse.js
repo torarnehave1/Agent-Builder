@@ -123,11 +123,38 @@ async function seedFromChatHistory(env, token, sessionId) {
 // family, for one. The call is carried out here against the same MCP server, as the same person.
 async function runDirectCalls(env, token, blocks, send) {
   const results = []
+  // A direct call is made without the tool's schema, so its arguments are a guess. The schema is
+  // checked here first: a wrong guess gets the schema back at once instead of a bare refusal from
+  // the server (seen 2026-11-24: `to` for `toEmail`, three refused calls before one went through).
+  let catalog = null
+  const schemaOf = async (name) => {
+    if (!catalog) {
+      const listed = await mcp(env, token, 'tools/list', {}).catch(() => null)
+      catalog = new Map((Array.isArray(listed?.tools) ? listed.tools : []).map((t) => [t.name, t]))
+    }
+    return catalog.get(name) || null
+  }
   for (const b of blocks) {
     const name = String(b.name || '').replace(new RegExp(`^${MCP_NAME}_`), '')
     send('tool_call', { callId: b.id, tool: name, input: b.input || {} })
     try {
-      const r = await mcp(env, token, 'tools/call', { name, arguments: b.input && typeof b.input === 'object' ? b.input : {} })
+      const tool = await schemaOf(name)
+      const input = b.input && typeof b.input === 'object' ? b.input : {}
+      const props = tool?.inputSchema?.properties || {}
+      const unknown = Object.keys(input).filter((k) => !(k in props))
+      const missing = (tool?.inputSchema?.required || []).filter((k) => !(k in input))
+      if (!tool || unknown.length || missing.length) {
+        const why = !tool
+          ? `No tool "${name}" on the VEGR.AI MCP server. Find the right one with the tool search.`
+          : `Not run: the arguments do not fit ${name}.` +
+            (missing.length ? ` Missing: ${missing.join(', ')}.` : '') +
+            (unknown.length ? ` Not accepted: ${unknown.join(', ')}.` : '') +
+            ` Nothing was done. Call it again with arguments that follow this schema:\n${JSON.stringify(tool.inputSchema)}`
+        results.push({ type: 'tool_result', tool_use_id: b.id, content: why, is_error: true })
+        send('tool_result', { callId: b.id, tool: name, success: false, summary: why.split('\n')[0].slice(0, 240) })
+        continue
+      }
+      const r = await mcp(env, token, 'tools/call', { name, arguments: input })
       const text = resultText(r?.content) || (r?.structuredContent ? JSON.stringify(r.structuredContent) : '(the tool returned no text)')
       results.push({ type: 'tool_result', tool_use_id: b.id, content: text, ...(r?.isError ? { is_error: true } : {}) })
       const first = text.split('\n')[0]
