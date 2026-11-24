@@ -34,7 +34,7 @@ function parseRpc(text) {
   return JSON.parse(body)
 }
 // Through the KG_WORKER binding: a plain fetch to the same zone is answered 522.
-async function mcp(env, token, method, params) {
+export async function mcp(env, token, method, params) {
   const fetcher = env.KG_WORKER?.fetch ? env.KG_WORKER.fetch.bind(env.KG_WORKER) : fetch
   const res = await fetcher(MCP_URL, {
     method: 'POST',
@@ -78,7 +78,7 @@ const textOfBlocks = (content) =>
   typeof content === 'string'
     ? content
     : (Array.isArray(content) ? content : []).filter((b) => b && b.type === 'text').map((b) => b.text).join('\n')
-const resultText = (content) =>
+export const resultText = (content) =>
   typeof content === 'string' ? content : (Array.isArray(content) ? content : []).map((c) => (c && typeof c.text === 'string' ? c.text : '')).filter(Boolean).join('\n\n')
 
 /** True for a turn this file wrote. */
@@ -98,6 +98,7 @@ export function toCompatMessages(turns, { images }) {
           if (b.type === 'text') parts.push({ type: 'text', text: b.text })
           else if (b.type === 'image' && b.source?.type === 'url' && images) parts.push({ type: 'image_url', image_url: { url: b.source.url } })
           else if (b.type === 'document') parts.push({ type: 'text', text: '[A PDF was attached here. This model cannot read PDF files; say so if the answer depends on it.]' })
+          else if (b.type === 'tool_result') parts.push({ type: 'text', text: `[Result of a tool call${b.is_error ? ' — FAILED' : ''}]\n${resultText(b.content)}` })
         }
         out.push({ role: 'user', content: parts.every((p) => p.type === 'text') ? parts.map((p) => p.text).join('\n\n') : parts })
       }
@@ -107,7 +108,7 @@ export function toCompatMessages(turns, { images }) {
       const names = new Map()
       for (const b of Array.isArray(turn.content) ? turn.content : []) {
         if (b.type === 'text' && b.text) lines.push(b.text)
-        else if (b.type === 'mcp_tool_use') {
+        else if (b.type === 'mcp_tool_use' || b.type === 'tool_use') {
           names.set(b.id, b.name)
           lines.push(`[Tool call: ${b.name}(${JSON.stringify(b.input || {})})]`)
         } else if (b.type === 'mcp_tool_result') lines.push(`[Result of ${names.get(b.tool_use_id) || 'tool'}${b.is_error ? ' — FAILED' : ''}]\n${resultText(b.content)}`)
@@ -153,7 +154,7 @@ function loadedNames(turns) {
       for (const c of m.tool_calls || []) add(c.function?.name)
       for (const n of turn.content.found || []) add(n)
     } else if (turn.role === 'assistant' && Array.isArray(turn.content)) {
-      for (const b of turn.content) if (b.type === 'mcp_tool_use') add(b.name)
+      for (const b of turn.content) if (b.type === 'mcp_tool_use' || b.type === 'tool_use') add(String(b.name || '').replace(/^vegr_/, ''))
     }
   }
   return names

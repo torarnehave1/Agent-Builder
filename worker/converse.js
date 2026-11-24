@@ -15,7 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { isOpenAICompatibleModel } from './chat-providers.js'
-import { runCompat, toClaudeMessages } from './converse-compat.js'
+import { runCompat, toClaudeMessages, mcp, resultText } from './converse-compat.js'
 
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
 const MCP_NAME = 'vegr'
@@ -23,7 +23,7 @@ const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history'
 const MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])
 export const CONVERSE_DEFAULT_MODEL = 'claude-opus-5-5'
 const MAX_TOKENS = 32000
-const MAX_RESUMES = 6 // pause_turn: the API's own tool loop stops after 10 steps and is resumed
+const MAX_RESUMES = 14 // a round ends on pause_turn (the API's own tool loop, 10 steps) or on tool calls this worker runs
 const MAX_ROW_BYTES = 1_500_000 // a D1 value holds 2 MB
 
 const SYSTEM = `You are the VEGR.AI assistant. You work for the signed-in person through the tools of the VEGR.AI MCP server ("${MCP_NAME}"), which act as that person: their knowledge graphs, e-mail, SMS, chat groups, contacts, calendar, images, video and Realtime meeting rooms.
@@ -118,6 +118,51 @@ async function seedFromChatHistory(env, token, sessionId) {
   }
 }
 
+// A tool call the model made directly (a `tool_use` block) rather than through the MCP connector.
+// It happens when the conversation already shows the tool in use — after a turn by another model
+// family, for one. The call is carried out here against the same MCP server, as the same person.
+async function runDirectCalls(env, token, blocks, send) {
+  const results = []
+  for (const b of blocks) {
+    const name = String(b.name || '').replace(new RegExp(`^${MCP_NAME}_`), '')
+    send('tool_call', { callId: b.id, tool: name, input: b.input || {} })
+    try {
+      const r = await mcp(env, token, 'tools/call', { name, arguments: b.input && typeof b.input === 'object' ? b.input : {} })
+      const text = resultText(r?.content) || (r?.structuredContent ? JSON.stringify(r.structuredContent) : '(the tool returned no text)')
+      results.push({ type: 'tool_result', tool_use_id: b.id, content: text, ...(r?.isError ? { is_error: true } : {}) })
+      const first = text.split('\n')[0]
+      send('tool_result', { callId: b.id, tool: name, success: !r?.isError, summary: first.length > 240 ? first.slice(0, 240) + '…' : first })
+    } catch (err) {
+      const msg = err?.message || String(err)
+      results.push({ type: 'tool_result', tool_use_id: b.id, content: msg, is_error: true })
+      send('tool_result', { callId: b.id, tool: name, success: false, summary: msg })
+    }
+  }
+  return results
+}
+
+// A stored assistant turn may end in tool calls that never got their results (the turn was cut
+// off, or was made before this worker ran such calls). The API refuses a conversation like that,
+// so each one gets a result saying it was not run.
+function closeDanglingCalls(messages) {
+  const out = []
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i]
+    out.push(m)
+    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
+    const calls = m.content.filter((b) => b && b.type === 'tool_use')
+    if (!calls.length) continue
+    const next = messages[i + 1]
+    const answered = new Set(
+      next && next.role === 'user' && Array.isArray(next.content) ? next.content.filter((b) => b && b.type === 'tool_result').map((b) => b.tool_use_id) : [],
+    )
+    const missing = calls.filter((c) => !answered.has(c.id))
+    if (missing.length)
+      out.push({ role: 'user', content: missing.map((c) => ({ type: 'tool_result', tool_use_id: c.id, is_error: true, content: 'Not run: the turn ended before this tool call was carried out. Call it again if it is still needed.' })) })
+  }
+  return out
+}
+
 const textOf = (content) =>
   typeof content === 'string'
     ? content
@@ -181,11 +226,12 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
         return
       }
       // Turns another model family made are read as text; Claude's own go back unchanged.
-      const messages = toClaudeMessages([...history, userTurn])
+      const messages = closeDanglingCalls(toClaudeMessages([...history, userTurn]))
 
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
       const today = new Date().toISOString().slice(0, 10)
       let stopReason = null
+      let said = false
       for (let round = 0; round <= MAX_RESUMES; round++) {
         const stream = client.beta.messages.stream({
           model,
@@ -260,9 +306,19 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
         const turn = { role: 'assistant', content: final.content }
         messages.push(turn)
         await saveTurn(env, key, sessionId, auth.userId, turn)
+        const direct = final.content.filter((b) => b.type === 'tool_use')
+        if (stopReason === 'tool_use' && direct.length) {
+          const results = { role: 'user', content: await runDirectCalls(env, token, direct, send) }
+          messages.push(results)
+          await saveTurn(env, key, sessionId, auth.userId, results)
+          said = said || final.content.some((b) => b.type === 'text' && b.text.trim())
+          continue
+        }
+        said = said || final.content.some((b) => b.type === 'text' && b.text.trim())
         if (stopReason !== 'pause_turn') break
-        send('delta', { text: '' })
       }
+      if (!said && stopReason === 'end_turn') send('error', { error: 'The model ended the turn without writing an answer. Ask again.' })
+      if (stopReason === 'tool_use') send('error', { error: 'The work is not finished: it stopped after many tool steps. Ask it to continue.' })
       if (stopReason === 'refusal') send('error', { error: 'The model declined this request.' })
       else if (stopReason === 'max_tokens') send('error', { error: 'The answer was cut off at the length limit. Ask it to continue.' })
       else if (stopReason === 'pause_turn') send('error', { error: 'The work is not finished: it stopped after many tool steps. Ask it to continue.' })
@@ -282,4 +338,24 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   return new Response(readable, {
     headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
   })
+}
+
+// GET /converse/turns?sessionId= — the stored conversation, for its owner only (X-API-Token).
+// What the model actually has in front of it: the app reads it to show a conversation again,
+// and it is how a missing or odd answer is looked into.
+export async function handleConverseTurns(request, env, corsHeaders) {
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: corsHeaders })
+  const token = (request.headers.get('X-API-Token') || '').trim()
+  const auth = token ? await resolveAuthorizedCallerWithCredentials({ authToken: token }, env) : await resolveAuthorizedCaller(request, env)
+  if (!auth?.authenticated || !auth.userId) return json({ error: 'Unauthorized — send X-API-Token.' }, 401)
+  const sessionId = new URL(request.url).searchParams.get('sessionId')
+  if (!sessionId) return json({ error: 'sessionId is required' }, 400)
+  await ensureTable(env.DB)
+  const key = await turnKey(env)
+  const { results } = await env.DB.prepare(
+    'SELECT id, role, iv, ciphertext, created_at FROM converse_turns WHERE session_id = ? AND user_id = ? ORDER BY id',
+  ).bind(sessionId, auth.userId).all()
+  const turns = []
+  for (const r of results || []) turns.push({ id: r.id, role: r.role, createdAt: r.created_at, content: await unseal(key, r) })
+  return json({ sessionId, turns })
 }
