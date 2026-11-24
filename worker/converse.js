@@ -36,11 +36,13 @@ export const DAILY_LIMIT_SUPERADMIN_USD = 20
 // skill (cached 2026-11-03): opus-5-5 $4/$20, cache read $0.20; sonnet-5-5 $2/$10, cache read
 // $0.10; haiku-5-5 $0.10/$0.50 for prompts up to 100K. Cache write = 1.25x input (5-minute cache,
 // the documented standard). Not established, so left null (the turn then stores a null cost):
-// Haiku cache-read price, and every GPT/Grok/Gemini/Kimi model (prices not in this repo).
+// the exact Haiku cache-read price (an upper bound is used, see below), and every GPT/Grok/Gemini/Kimi model (prices not in this repo).
 export const PRICES = {
   'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
   'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
-  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: null, cacheWrite: 0.125 },
+  // cacheRead for Haiku is NOT published in the source above: it is set to the full input price, an
+  // upper bound (a real read costs less), so the daily cap can never be undercounted on Haiku.
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: 0.1, cacheWrite: 0.125 },
 }
 export function estimateCostUsd(model, u) {
   const p = PRICES[model]
