@@ -16,16 +16,17 @@ export class BrowserBridge extends DurableObject {
     const url = new URL(request.url)
     if (url.pathname === '/ws') {
       const pair = new WebSocketPair()
-      // One extension at a time: a new connection replaces the old one.
-      for (const ws of this.ctx.getWebSockets()) { try { ws.close(1000, 'replaced') } catch { /* closed */ } }
+      // Several connections may exist at once (two Chrome profiles, or an old half-open socket that
+      // still looks open). None is closed: commands go to the one that spoke last (see freshest()).
       this.ctx.acceptWebSocket(pair[1])
+      pair[1].serializeAttachment({ at: Date.now() })
       return new Response(null, { status: 101, webSocket: pair[0], headers: { 'Sec-WebSocket-Protocol': 'vegr.v1' } })
     }
     if (url.pathname === '/status') {
       return Response.json({ connected: this.ctx.getWebSockets().length > 0 })
     }
     if (url.pathname === '/cmd' && request.method === 'POST') {
-      const sockets = this.ctx.getWebSockets()
+      const sockets = this.freshest()
       if (!sockets.length) return Response.json({ ok: false, error: 'No browser is connected. Install and sign in to the VEGR.AI Chrome extension, then try again.' })
       const { action, params } = await request.json()
       const id = crypto.randomUUID()
@@ -42,7 +43,14 @@ export class BrowserBridge extends DurableObject {
     return new Response('Not found', { status: 404 })
   }
 
+  // Open sockets, the one heard from most recently first.
+  freshest() {
+    const at = (w) => { try { return w.deserializeAttachment()?.at || 0 } catch { return 0 } }
+    return this.ctx.getWebSockets().sort((a, b) => at(b) - at(a))
+  }
+
   webSocketMessage(ws, message) {
+    try { ws.serializeAttachment({ at: Date.now() }) } catch { /* closed */ }
     let m
     try { m = JSON.parse(typeof message === 'string' ? message : new TextDecoder().decode(message)) } catch { return }
     if (m.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return }
