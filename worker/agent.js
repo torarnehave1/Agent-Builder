@@ -304,7 +304,11 @@ This conversation is running on the Workers AI tool path. Use only the tools tha
         messages: await convertToModelMessages(this.messages),
         toolCalls: 'before-last-2-messages',
       }),
-      tools: buildTools(this.env, userId, currentGraphId, authContext, bodyAuthToken),
+      // Tools on this path are for a signed-in Superadmin only (2026-11-24, as /chat): the agent's
+      // name comes from the URL, so anyone could otherwise run every tool as any user id.
+      tools: String(authContext?.role || '').trim().toLowerCase() === 'superadmin' && authContext.authenticated
+        ? buildTools(this.env, authContext.userId || userId, currentGraphId, authContext, bodyAuthToken)
+        : {},
       stopWhen: stepCountIs(5),
       maxTokens: 2048,
       onFinish: async ({ usage, steps }) => {

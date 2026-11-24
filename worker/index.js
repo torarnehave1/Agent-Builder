@@ -2480,7 +2480,8 @@ export default {
       // POST /chat - Streaming conversational agent chat (SSE)
       if (pathname === '/chat' && request.method === 'POST') {
         const body = await request.json()
-        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext, knowledgeScope, exactModel } = body
+        const { userId, messages: userMessages, graphId, model, maxTurns, agentId, activeHtmlNodeId, authToken, mode, workContext: requestedWorkContext, knowledgeScope, exactModel } = body
+        let workContext = requestedWorkContext
         const planMode = mode === 'plan'
         // If authToken provided in body, use it; otherwise fall back to request headers (cookies/auth header)
         const authContext = authToken
@@ -2563,6 +2564,24 @@ export default {
         const EXCLUSIVE_CONTEXT_NOTES = {
           'Cloudflare MCP Server': 'for "cloudflare": `docs`, `search`, AND `execute` — `execute` runs real Cloudflare API calls against the account, e.g. Pages projects, deployments, DNS, domains; pass `use_pages_token` when appropriate',
           'VEGR.AI MCP Server': 'here ALWAYS server "vegr" — VEGR.AI\'s own MCP server (knowledge graphs, images, chat, contacts), running as the signed-in user with exactly the tools and scopes their own Claude connection has. Discover with only `server: "vegr"`; the list is compact, so call `describe_tool` for a tool\'s input schema before calling it. Report errors such as FORBIDDEN_GRAPH or INSUFFICIENT_SCOPE verbatim: they are what this user would see in their own Claude',
+        }
+        // The full toolbox is for Superadmin only (architect's decision 2026-11-24). Everyone else
+        // is put in the locked 'VEGR.AI MCP Server' context whatever the request says, unless it
+        // already asks for something at least as narrow: another locked context (a World founder's
+        // Nodetyper), or a knowledge scope (a gated page's chat, resolved from D1 below). The role
+        // comes from the caller's own credential (config.Role), never from the request. The lock
+        // overrides a saved agent's tool list, and it also keeps the KG fast path below shut, which
+        // listed every graph with a Superadmin header for whoever asked.
+        const callerIsSuperadmin = String(authContext.role || '').trim().toLowerCase() === 'superadmin'
+        const asksForLock = !!(workContext && typeof workContext === 'object' && workContext.title && EXCLUSIVE_CONTEXTS[workContext.title])
+        if (!callerIsSuperadmin && !asksForLock && !normalizeScope(knowledgeScope)) {
+          workContext = {
+            title: 'VEGR.AI MCP Server',
+            description:
+              'Everything the VEGR.AI MCP server offers, through mcp_call with server "vegr": reading, creating and changing the person\'s own graphs and their nodes and metadata, making images, chat, contacts, e-mail and SMS. Agent-Builder\'s own tools are not loaded for this account; that is no reason to decline, because the MCP server has its own tools for the same work. Before saying something cannot be done, list the tools (mcp_call with only server "vegr") and look for one that fits.',
+            capabilities: [{ name: 'mcp_call', summary: 'Every tool of the VEGR.AI MCP server (server "vegr"), as the signed-in person.' }],
+          }
+          console.log(`[chat] non-Superadmin caller (${authContext.role || 'no role'}) — locked to VEGR.AI MCP Server`)
         }
         const exclusiveTools = (workContext && typeof workContext === 'object' && workContext.title)
           ? EXCLUSIVE_CONTEXTS[workContext.title]
