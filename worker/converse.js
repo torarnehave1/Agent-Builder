@@ -14,6 +14,8 @@
 // NOTE: that token is passed to Anthropic, which makes the MCP connection on our behalf.
 import Anthropic from '@anthropic-ai/sdk'
 import { resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { isOpenAICompatibleModel } from './chat-providers.js'
+import { runCompat, toClaudeMessages } from './converse-compat.js'
 
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
 const MCP_NAME = 'vegr'
@@ -33,6 +35,12 @@ How to work:
 - Before anything that sends, publishes, deletes or changes something (an e-mail, an SMS, a post, a graph, a calendar event, a member list), say exactly what will happen and wait for the person's yes in a new message. Use the preview tool first where one exists. Reading needs no permission.
 - Report a tool's error in its own words.
 - Write to the person in the language they write in. Be brief: the answer first, then what it rests on.`
+
+// The same rules for the models that get their tools through search_tools (converse-compat.js).
+const SYSTEM_COMPAT = SYSTEM.replace(
+  '- Find tools with the tool search. Their schemas arrive with them, so call a tool directly once it is loaded.',
+  '- Find tools with search_tools. The tools it returns can then be called directly, and stay available for the rest of the conversation.',
+)
 
 let tableReady = false
 async function ensureTable(db) {
@@ -129,8 +137,9 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   if (!sessionId || typeof sessionId !== 'string') return json({ error: 'sessionId is required' }, 400)
   const userContent = typeof message === 'string' ? message.trim() : Array.isArray(message) ? message : null
   if (!userContent || (Array.isArray(userContent) && !userContent.length)) return json({ error: 'message is required' }, 400)
-  if (!env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY is not configured.' }, 500)
-  const model = MODELS.has(askedModel) ? askedModel : CONVERSE_DEFAULT_MODEL
+  const compat = isOpenAICompatibleModel(askedModel)
+  const model = compat ? askedModel : MODELS.has(askedModel) ? askedModel : CONVERSE_DEFAULT_MODEL
+  if (!compat && !env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY is not configured.' }, 500)
 
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
@@ -155,7 +164,24 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
       }
       const userTurn = { role: 'user', content: userContent }
       await saveTurn(env, key, sessionId, auth.userId, userTurn)
-      const messages = [...history, userTurn]
+      const today0 = new Date().toISOString().slice(0, 10)
+      if (compat) {
+        const r = await runCompat({
+          env, auth, token, model,
+          turns: [...history, userTurn],
+          save: (turn) => saveTurn(env, key, sessionId, auth.userId, turn),
+          send,
+          system: `${SYSTEM_COMPAT}\n\nToday is ${today0} (UTC). The signed-in person is ${auth.email || auth.userId}.`,
+        })
+        usage.input += r.usage.input
+        usage.output += r.usage.output
+        if (r.stopReason === 'pause_turn') send('error', { error: 'The work is not finished: it stopped after many tool steps. Ask it to continue.' })
+        send('usage', { ...usage, model, ms: Date.now() - started })
+        send('done', { stopReason: r.stopReason })
+        return
+      }
+      // Turns another model family made are read as text; Claude's own go back unchanged.
+      const messages = toClaudeMessages([...history, userTurn])
 
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
       const today = new Date().toISOString().slice(0, 10)

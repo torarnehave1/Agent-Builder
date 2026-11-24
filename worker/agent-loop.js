@@ -1071,7 +1071,7 @@ function hasGraphWriteCompletion(messages) {
   return countGraphWriteCompletions(messages) > 0
 }
 
-function sanitizeOpenAIJsonSchema(schema, depth = 0) {
+export function sanitizeOpenAIJsonSchema(schema, depth = 0) {
   if (!schema || typeof schema !== 'object') return { type: 'object', properties: {} }
   if (Array.isArray(schema)) return schema.map((item) => sanitizeOpenAIJsonSchema(item, depth + 1))
 
@@ -1130,7 +1130,7 @@ function toOpenAIMessage(message) {
   return { role: message.role === 'user' ? 'user' : 'user', content }
 }
 
-function parseOpenAIToolArgs(raw) {
+export function parseOpenAIToolArgs(raw) {
   if (!raw) return {}
   if (typeof raw === 'object') return raw
   try {
