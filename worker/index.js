@@ -27,6 +27,7 @@ import { routeAgentRequest } from 'agents'
 import { VegvisrAgent } from './agent.js'
 import { buildFancyElement, buildSectionElement, buildWNoteElement, buildQuoteElement, buildHeaderImage, buildLeftsideImage, buildRightsideImage, buildYoutubeEmbed, extractYoutubeVideoId, imgixUrl, askGemmaSlot, sanitizeTitle } from './element-builders.js'
 import { buildCorsHeaders, applyCorsHeaders, resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
+import { handleConverse } from './converse.js'
 import { handleWorldCustomer } from './world-customer.js'
 import { handleWorldContacts, worldOriginCors } from './world-contacts.js'
 import { handleWorldReports } from './world-reports.js'
@@ -2475,6 +2476,11 @@ export default {
         return new Response(readable, {
           headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' },
         })
+      }
+
+      // POST /converse - the conversation loop with native MCP tools and full server-side history
+      if (pathname === '/converse' && request.method === 'POST') {
+        return handleConverse(request, env, ctx, corsHeaders)
       }
 
       // POST /chat - Streaming conversational agent chat (SSE)
