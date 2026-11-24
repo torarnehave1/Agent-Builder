@@ -18,6 +18,7 @@ import { isOpenAICompatibleModel } from './chat-providers.js'
 import { routeModel } from './model-router.js'
 import { runCompat, toClaudeMessages, mcp, resultText } from './converse-compat.js'
 
+export const RULES_META_AREA = '#CHAT-REGLER'
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
 const MCP_NAME = 'vegr'
 const CHAT_HISTORY_API = 'https://api.vegvisr.org/chat-history'
@@ -56,7 +57,6 @@ export function estimateCostUsd(model, u) {
 // A person's own rules live in a graph they own, tagged with this metaArea. Each turn the graph is
 // read with the person's own token (so only their own graph can ever be found) and its nodes are
 // added to the system prompt. No graph, no rules. Edited in the chat or the editor like any graph.
-export const RULES_META_AREA = '#CHAT-REGLER'
 const RULES_MAX_CHARS = 8000
 const rulesCache = new Map() // userId -> { at, value }
 
@@ -129,7 +129,8 @@ How to work:
 - Names, addresses, links, dates and numbers in your answer are copied from the tool result, not retyped from recollection.
 - Before anything that sends, publishes, deletes or changes something (an e-mail, an SMS, a post, a graph, a calendar event, a member list), say exactly what will happen and wait for the person's yes in a new message. Use the preview tool first where one exists. Reading needs no permission.
 - Report a tool's error in its own words.
-- Write to the person in the language they write in. Be brief: the answer first, then what it rests on.`
+- Write to the person in the language they write in. Be brief: the answer first, then what it rests on.
+- The person keeps their own rules for you in a graph they own, with the meta area ${RULES_META_AREA}: one node per rule. When they ask what the rules are, answer from the rules shown to you below (or from get_graph). When they ask for a rule to be added, changed or removed, say the exact rule text, wait for their yes, then add, update or remove that node in their rules graph with the graph tools, and say that it takes effect within a minute. If no rules graph is shown below, offer to create one (create_graph, meta area ${RULES_META_AREA}) and do so after their yes.`
 
 // The same rules for the models that get their tools through search_tools (converse-compat.js).
 const SYSTEM_COMPAT = SYSTEM.replace(
