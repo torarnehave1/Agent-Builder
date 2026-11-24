@@ -15,6 +15,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { resolveAuthorizedCaller, resolveAuthorizedCallerWithCredentials } from './auth.js'
 import { isOpenAICompatibleModel } from './chat-providers.js'
+import { routeModel } from './model-router.js'
 import { runCompat, toClaudeMessages, mcp, resultText } from './converse-compat.js'
 
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
@@ -266,7 +267,12 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   const userContent = typeof message === 'string' ? message.trim() : Array.isArray(message) ? message : null
   if (!userContent || (Array.isArray(userContent) && !userContent.length)) return json({ error: 'message is required' }, 400)
   const compat = isOpenAICompatibleModel(askedModel)
-  const model = compat ? askedModel : MODELS.has(askedModel) ? askedModel : CONVERSE_DEFAULT_MODEL
+  // 'auto' (or no model): the request decides — Haiku 5.5 for simple, Sonnet 5.5 for complex
+  // (model-router.js, the same classifier /chat uses). A model picked by name is used as picked.
+  const auto = !compat && (!askedModel || askedModel === 'auto')
+  const route = auto ? await routeModel(env, { userId: auth.userId, selected: 'auto', requestText: textOf(userContent) }) : null
+  const model = compat ? askedModel : route ? route.model : MODELS.has(askedModel) ? askedModel : CONVERSE_DEFAULT_MODEL
+  if (route) console.log(`[converse] route: ${model} (${route.tier}, ${route.via}: ${route.reason})`)
   if (!compat && !env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY is not configured.' }, 500)
 
   const limit = auth.role === 'Superadmin' ? DAILY_LIMIT_SUPERADMIN_USD : DAILY_LIMIT_USD
