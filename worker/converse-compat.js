@@ -230,11 +230,11 @@ export async function runCompat({ env, auth, token, model, turns, save, send, sy
           content = hits.length
             ? JSON.stringify({ tools: hits.map((t) => ({ name: t.name, description: firstSentence(t.description) })), note: 'These tools are now available to call directly.' })
             : JSON.stringify({ tools: [], note: `Nothing matched "${input?.query || ''}". Try other words. The server has ${catalog.length} tools.` })
-          send('tool_result', { callId: call.id, tool: 'tool_search', success: true, summary: found.join(', ') })
+          send('tool_result', { callId: call.id, tool: 'tool_search', success: true, summary: found.join(', '), result: String(content).slice(0, 200000) })
         } else if (!byName.has(name)) {
           success = false
           content = JSON.stringify({ error: `No tool "${name}" on the VEGR.AI MCP server. Use search_tools to find the right one.` })
-          send('tool_result', { callId: call.id, tool: name, success: false, summary: `No tool "${name}"` })
+          send('tool_result', { callId: call.id, tool: name, success: false, summary: `No tool "${name}"`, result: content })
         } else {
           const r = await mcp(env, token, 'tools/call', { name, arguments: input && typeof input === 'object' ? input : {} })
           let out = resultText(r?.content) || (r?.structuredContent ? JSON.stringify(r.structuredContent) : '')
@@ -245,12 +245,12 @@ export async function runCompat({ env, auth, token, model, turns, save, send, sy
           }
           content = out || '(the tool returned no text)'
           const first = content.split('\n')[0]
-          send('tool_result', { callId: call.id, tool: name, success, summary: first.length > 240 ? first.slice(0, 240) + '…' : first })
+          send('tool_result', { callId: call.id, tool: name, success, summary: first.length > 240 ? first.slice(0, 240) + '…' : first, result: String(content).slice(0, 200000) })
         }
       } catch (err) {
         success = false
         content = JSON.stringify({ error: err?.message || String(err) })
-        send('tool_result', { callId: call.id, tool: name, success: false, summary: err?.message || String(err) })
+        send('tool_result', { callId: call.id, tool: name, success: false, summary: err?.message || String(err), result: content })
       }
       await keep({ role: 'tool', tool_call_id: call.id, content }, found ? { found } : null)
     }

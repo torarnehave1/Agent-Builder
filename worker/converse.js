@@ -208,18 +208,18 @@ async function runDirectCalls(env, token, blocks, send) {
             (unknown.length ? ` Not accepted: ${unknown.join(', ')}.` : '') +
             ` Nothing was done. Call it again with arguments that follow this schema:\n${JSON.stringify(tool.inputSchema)}`
         results.push({ type: 'tool_result', tool_use_id: b.id, content: why, is_error: true })
-        send('tool_result', { callId: b.id, tool: name, success: false, summary: why.split('\n')[0].slice(0, 240) })
+        send('tool_result', { callId: b.id, tool: name, success: false, summary: why.split('\n')[0].slice(0, 240), result: why })
         continue
       }
       const r = await mcp(env, token, 'tools/call', { name, arguments: input })
       const text = resultText(r?.content) || (r?.structuredContent ? JSON.stringify(r.structuredContent) : '(the tool returned no text)')
       results.push({ type: 'tool_result', tool_use_id: b.id, content: text, ...(r?.isError ? { is_error: true } : {}) })
       const first = text.split('\n')[0]
-      send('tool_result', { callId: b.id, tool: name, success: !r?.isError, summary: first.length > 240 ? first.slice(0, 240) + '…' : first })
+      send('tool_result', { callId: b.id, tool: name, success: !r?.isError, summary: first.length > 240 ? first.slice(0, 240) + '…' : first, result: text.slice(0, 200000) })
     } catch (err) {
       const msg = err?.message || String(err)
       results.push({ type: 'tool_result', tool_use_id: b.id, content: msg, is_error: true })
-      send('tool_result', { callId: b.id, tool: name, success: false, summary: msg })
+      send('tool_result', { callId: b.id, tool: name, success: false, summary: msg, result: msg })
     }
   }
   return results
@@ -290,6 +290,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   const send = (event, data) => writer.write(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)).catch(() => {})
 
   ctx.waitUntil((async () => {
+    if (route) send('route', { selected: askedModel || 'auto', model, tier: route.tier, via: route.via, reason: route.reason })
     const started = Date.now()
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     let usageSent = false
@@ -376,12 +377,14 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
               send('tool_result', {
                 callId: b.tool_use_id, tool: names.get(b.tool_use_id) || 'tool', success: !b.is_error,
                 summary: text.length > 240 ? text.slice(0, 240) + '…' : text,
+                result: text.slice(0, 200000),
               })
             } else if (b.type === 'tool_search_tool_result') {
               const refs = Array.isArray(b.content?.tool_references) ? b.content.tool_references.map((r) => r.tool_name).filter(Boolean) : []
               send('tool_result', {
                 callId: b.tool_use_id, tool: 'tool_search', success: b.content?.type !== 'tool_search_tool_result_error',
                 summary: refs.length ? refs.join(', ') : (b.content?.error_code || ''),
+                result: JSON.stringify(b.content).slice(0, 200000),
               })
             }
           } else if (ev.type === 'content_block_delta') {
