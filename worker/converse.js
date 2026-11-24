@@ -26,6 +26,62 @@ const MAX_TOKENS = 32000
 const MAX_RESUMES = 14 // a round ends on pause_turn (the API's own tool loop, 10 steps) or on tool calls this worker runs
 const MAX_ROW_BYTES = 1_500_000 // a D1 value holds 2 MB
 
+// ── Cost control (2026-11-24) ─────────────────────────────────────────────
+// Daily spend limits in USD, per user, summed over the UTC day. Change them here.
+export const DAILY_LIMIT_USD = 2
+export const DAILY_LIMIT_SUPERADMIN_USD = 20
+
+// USD per million tokens. Source: Anthropic's published API prices as listed in the claude-api
+// skill (cached 2026-11-03): opus-5-5 $4/$20, cache read $0.20; sonnet-5-5 $2/$10, cache read
+// $0.10; haiku-5-5 $0.10/$0.50 for prompts up to 100K. Cache write = 1.25x input (5-minute cache,
+// the documented standard). Not established, so left null (the turn then stores a null cost):
+// Haiku cache-read price, and every GPT/Grok/Gemini/Kimi model (prices not in this repo).
+export const PRICES = {
+  'claude-opus-5-5': { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+  'claude-sonnet-5-5': { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+  'claude-haiku-5-5': { input: 0.1, output: 0.5, cacheRead: null, cacheWrite: 0.125 },
+}
+export function estimateCostUsd(model, u) {
+  const p = PRICES[model]
+  if (!p) return null
+  if (u.cacheRead && p.cacheRead == null) return null
+  if (u.cacheWrite && p.cacheWrite == null) return null
+  return (u.input * p.input + u.output * p.output + (u.cacheRead || 0) * (p.cacheRead || 0) + (u.cacheWrite || 0) * (p.cacheWrite || 0)) / 1e6
+}
+
+let usageReady = false
+async function ensureUsageTable(db) {
+  if (usageReady) return
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS converse_usage (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       user_id TEXT NOT NULL, session_id TEXT NOT NULL, model TEXT NOT NULL,
+       input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
+       cache_read_tokens INTEGER NOT NULL, cache_write_tokens INTEGER NOT NULL,
+       cost_usd REAL, day TEXT NOT NULL,
+       created_at TEXT DEFAULT CURRENT_TIMESTAMP)`,
+  ).run()
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_converse_usage_user_day ON converse_usage (user_id, day)').run()
+  usageReady = true
+}
+async function recordUsage(env, userId, sessionId, model, usage) {
+  const cost = estimateCostUsd(model, usage)
+  try {
+    await ensureUsageTable(env.DB)
+    await env.DB.prepare(
+      `INSERT INTO converse_usage (user_id, session_id, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd, day)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).bind(userId, sessionId, model, usage.input, usage.output, usage.cacheRead || 0, usage.cacheWrite || 0, cost, new Date().toISOString().slice(0, 10)).run()
+  } catch (e) { console.error('[converse] usage not stored', e) }
+  return cost
+}
+async function spentToday(env, userId) {
+  await ensureUsageTable(env.DB)
+  const r = await env.DB.prepare('SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM converse_usage WHERE user_id = ? AND day = ?')
+    .bind(userId, new Date().toISOString().slice(0, 10)).first()
+  return r?.usd || 0
+}
+
 const SYSTEM = `You are the VEGR.AI assistant. You work for the signed-in person through the tools of the VEGR.AI MCP server ("${MCP_NAME}"), which act as that person: their knowledge graphs, e-mail, SMS, chat groups, contacts, calendar, images, video and Realtime meeting rooms.
 
 How to work:
@@ -213,6 +269,15 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   const model = compat ? askedModel : MODELS.has(askedModel) ? askedModel : CONVERSE_DEFAULT_MODEL
   if (!compat && !env.ANTHROPIC_API_KEY) return json({ error: 'ANTHROPIC_API_KEY is not configured.' }, 500)
 
+  const limit = auth.role === 'Superadmin' ? DAILY_LIMIT_SUPERADMIN_USD : DAILY_LIMIT_USD
+  const spent = await spentToday(env, auth.userId).catch(() => 0)
+  if (spent >= limit) {
+    return json({
+      error: `Daglig grense nådd: $${spent.toFixed(2)} brukt av $${limit.toFixed(2)} i dag (UTC). Prøv igjen i morgen, eller be administrator om høyere grense.`,
+      code: 'daily_limit', spentUsd: spent, limitUsd: limit,
+    }, 429)
+  }
+
   const { readable, writable } = new TransformStream()
   const writer = writable.getWriter()
   const enc = new TextEncoder()
@@ -221,6 +286,13 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   ctx.waitUntil((async () => {
     const started = Date.now()
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    let usageSent = false
+    const sendUsage = async () => {
+      if (usageSent) return
+      usageSent = true
+      const costUsd = await recordUsage(env, auth.userId, sessionId, model, usage)
+      send('usage', { ...usage, model, ms: Date.now() - started, costUsd })
+    }
     try {
       await ensureTable(env.DB)
       const key = await turnKey(env)
@@ -247,8 +319,10 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
         })
         usage.input += r.usage.input
         usage.output += r.usage.output
+        usage.cacheRead += r.usage.cacheRead || 0
+        usage.cacheWrite += r.usage.cacheWrite || 0
         if (r.stopReason === 'pause_turn') send('error', { error: 'The work is not finished: it stopped after many tool steps. Ask it to continue.' })
-        send('usage', { ...usage, model, ms: Date.now() - started })
+        await sendUsage()
         send('done', { stopReason: r.stopReason })
         return
       }
@@ -349,13 +423,13 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
       if (stopReason === 'refusal') send('error', { error: 'The model declined this request.' })
       else if (stopReason === 'max_tokens') send('error', { error: 'The answer was cut off at the length limit. Ask it to continue.' })
       else if (stopReason === 'pause_turn') send('error', { error: 'The work is not finished: it stopped after many tool steps. Ask it to continue.' })
-      send('usage', { ...usage, model, ms: Date.now() - started })
+      await sendUsage()
       send('done', { stopReason })
     } catch (err) {
       console.error('[converse] failed', err)
       const status = err?.status ? ` (HTTP ${err.status})` : ''
       send('error', { error: `${err?.message || String(err)}${status}` })
-      send('usage', { ...usage, model, ms: Date.now() - started })
+      await sendUsage()
       send('done', { error: true })
     } finally {
       await writer.close().catch(() => {})
@@ -385,4 +459,26 @@ export async function handleConverseTurns(request, env, corsHeaders) {
   const turns = []
   for (const r of results || []) turns.push({ id: r.id, role: r.role, createdAt: r.created_at, content: await unseal(key, r) })
   return json({ sessionId, turns })
+}
+
+// GET /converse/usage — the caller's own spend: today and this month, per model.
+export async function handleConverseUsage(request, env, corsHeaders) {
+  const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: corsHeaders })
+  const token = (request.headers.get('X-API-Token') || '').trim()
+  const auth = token ? await resolveAuthorizedCallerWithCredentials({ authToken: token }, env) : await resolveAuthorizedCaller(request, env)
+  if (!auth?.authenticated || !auth.userId) return json({ error: 'Unauthorized — send X-API-Token.' }, 401)
+  await ensureUsageTable(env.DB)
+  const today = new Date().toISOString().slice(0, 10)
+  const month = today.slice(0, 7)
+  const q = async (like) => (await env.DB.prepare(
+    `SELECT model, COUNT(*) AS turns, SUM(input_tokens) AS input, SUM(output_tokens) AS output,
+            SUM(cache_read_tokens) AS cacheRead, SUM(cache_write_tokens) AS cacheWrite,
+            SUM(cost_usd) AS costUsd, SUM(CASE WHEN cost_usd IS NULL THEN 1 ELSE 0 END) AS unpricedTurns
+     FROM converse_usage WHERE user_id = ? AND day LIKE ? GROUP BY model`,
+  ).bind(auth.userId, like).all()).results || []
+  const sum = (rows) => rows.reduce((t, r) => t + (r.costUsd || 0), 0)
+  const d = await q(today)
+  const m = await q(`${month}%`)
+  const limit = auth.role === 'Superadmin' ? DAILY_LIMIT_SUPERADMIN_USD : DAILY_LIMIT_USD
+  return json({ today: { byModel: d, costUsd: sum(d) }, month: { byModel: m, costUsd: sum(m) }, dailyLimitUsd: limit })
 }
