@@ -1,0 +1,256 @@
+{
+  "world": "sodesign.no",
+  "slug": "margotgenseren",
+  "title": "Margotgenseren strikkekurs",
+  "album": "Margotgenseren strikkekurs",
+  "folder": "kurs/margotgenseren",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3230758
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/margotgenseren/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2154981889,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Margotgenseren, både til barn og voksen. Last den ned og ha den tilgjengelig når du følger kurset.",
+      "pdf": "Margotgenseren.pdf",
+      "pdfLabel": "Last ned oppskriften på Margotgenseren – voksen (PDF)",
+      "extraPdfs": [
+        {
+          "file": "Margotgenseren_Barn.pdf",
+          "label": "Last ned oppskriften på Margotgenseren – barn (PDF)"
+        }
+      ]
+    },
+    {
+      "lesson_id": 2154981890,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "2154981890-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2154981892,
+      "title": "Hvordan finne din størrelse",
+      "type": "video",
+      "file": "2154981892-hvordan-finne-din-storrelse.mp4"
+    },
+    {
+      "lesson_id": 2154981893,
+      "title": "Hva er strikkefasthet",
+      "type": "video",
+      "file": "2154981893-hva-er-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2154981894,
+      "title": "Hvordan måle strikkefasthet",
+      "type": "video",
+      "file": "2154981894-hvordan-male-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2154981896,
+      "title": "Hva er lurt å tenke på når du skal kjøpe garn",
+      "type": "video",
+      "file": "2154981896-hva-er-lurt-a-tenke-pa-nar-du-skal-kjope-garn.mp4"
+    },
+    {
+      "lesson_id": 2154981897,
+      "title": "Pinner til Margotgenseren",
+      "type": "video",
+      "file": "2154981897-pinner-til-margotgenseren.mp4"
+    },
+    {
+      "lesson_id": 2154981899,
+      "title": "Annet utstyr du trenger",
+      "type": "video",
+      "file": "2154981899-annet-utstyr-du-trenger.mp4"
+    },
+    {
+      "lesson_id": 2154981900,
+      "title": "Garnalternativer",
+      "type": "video",
+      "file": "2154981900-garnalternativer.mp4"
+    },
+    {
+      "lesson_id": 2154981902,
+      "title": "Hvordan regne ut garnmengde med alternativt garn",
+      "type": "video",
+      "file": "2154981902-hvordan-regne-ut-garnmengde-med-alternativt-garn.mp4"
+    },
+    {
+      "lesson_id": 2154981903,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2154981903-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2154981922,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2154981922-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2154981923,
+      "title": "Strikk mønster A",
+      "type": "video",
+      "file": "2154981923-strikk-monster-a.mp4"
+    },
+    {
+      "lesson_id": 2154981924,
+      "title": "Hvordan starte på et nytt nøste",
+      "type": "video",
+      "file": "2154981924-hvordan-starte-pa-et-nytt-noste.mp4"
+    },
+    {
+      "lesson_id": 2154981926,
+      "title": "Fell til ermehull",
+      "type": "video",
+      "file": "2154981926-fell-til-ermehull.mp4"
+    },
+    {
+      "lesson_id": 2154981930,
+      "title": "Legg opp til erme og strikk vrangbord",
+      "type": "video",
+      "file": "2154981930-legg-opp-til-erme-og-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2155095989,
+      "title": "Bytt til strømpepinne 6",
+      "type": "video",
+      "file": "2155095989-bytt-til-strompepinne-6.mp4"
+    },
+    {
+      "lesson_id": 2154981931,
+      "title": "Øk masker på erme",
+      "type": "video",
+      "file": "2154981931-ok-masker-pa-erme.mp4"
+    },
+    {
+      "lesson_id": 2154981933,
+      "title": "Bytt til en liten rundpinne",
+      "type": "video",
+      "file": "2154981933-bytt-til-en-liten-rundpinne.mp4"
+    },
+    {
+      "lesson_id": 2154981965,
+      "title": "Fortsett videre etter økingene er ferdig",
+      "type": "video",
+      "file": "2154981965-fortsett-videre-etter-okingene-er-ferdig.mp4"
+    },
+    {
+      "lesson_id": 2155005401,
+      "title": "Fell til ermehull på ermet",
+      "type": "video",
+      "file": "2155005401-fell-til-ermehull-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 2155005405,
+      "title": "Strikk ermer og bol inn på samme pinne",
+      "type": "video",
+      "file": "2155005405-strikk-ermer-og-bol-inn-pa-samme-pinne.mp4"
+    },
+    {
+      "lesson_id": 2155005406,
+      "title": "Tilpass neste luseomgang",
+      "type": "video",
+      "file": "2155005406-tilpass-neste-luseomgang.mp4"
+    },
+    {
+      "lesson_id": 2155005407,
+      "title": "Fell jevnt fordelt",
+      "type": "video",
+      "file": "2155005407-fell-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 2155005411,
+      "title": "Mønster B",
+      "type": "video",
+      "file": "2155005411-monster-b.mp4"
+    },
+    {
+      "lesson_id": 2155005412,
+      "title": "Farge 3 og mønster C",
+      "type": "video",
+      "file": "2155005412-farge-3-og-monster-c.mp4"
+    },
+    {
+      "lesson_id": 2155005413,
+      "title": "Mønster D",
+      "type": "video",
+      "file": "2155005413-monster-d.mp4"
+    },
+    {
+      "lesson_id": 2155005414,
+      "title": "Mønster E del 1",
+      "type": "video",
+      "file": "2155005414-monster-e-del-1.mp4"
+    },
+    {
+      "lesson_id": 2155019665,
+      "title": "Mønster E del 2.",
+      "type": "video",
+      "file": "2155019665-monster-e-del-2.mp4"
+    },
+    {
+      "lesson_id": 2155019672,
+      "title": "Videre frem til halsen",
+      "type": "video",
+      "file": "2155019672-videre-frem-til-halsen.mp4"
+    },
+    {
+      "lesson_id": 2155019681,
+      "title": "Bytt til pinne 5,5 og strikk hals",
+      "type": "video",
+      "file": "2155019681-bytt-til-pinne-5-5-og-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2155019685,
+      "title": "Fell av halsen",
+      "type": "video",
+      "file": "2155019685-fell-av-halsen.mp4"
+    },
+    {
+      "lesson_id": 2155059830,
+      "title": "Sy sammen under ermene, del 1 - madrass-sting",
+      "type": "video",
+      "file": "2155059830-sy-sammen-under-ermene-del-1-madrass-sting.mp4"
+    },
+    {
+      "lesson_id": 2155059835,
+      "title": "Sy sammen under ermene, del 2 - fra vrangsiden",
+      "type": "video",
+      "file": "2155059835-sy-sammen-under-ermene-del-2-fra-vrangsiden.mp4"
+    },
+    {
+      "lesson_id": 2155242156,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2155242156-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2155242160,
+      "title": "Damp genseren",
+      "type": "video",
+      "file": "2155242160-damp-genseren.mp4"
+    }
+  ]
+}
