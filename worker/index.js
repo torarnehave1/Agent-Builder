@@ -337,7 +337,7 @@ export default {
     if (pathname === '/browser/diag' && request.method === 'GET') {
       const a = await resolveAuthorizedCallerWithCredentials({ authToken: (request.headers.get('X-API-Token') || '').trim() }, env).catch(() => null)
       if (!a?.authenticated || !a.userId) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: corsHeaders })
-      return new Response(JSON.stringify(await browserDiag(env, a.userId)), { headers: corsHeaders })
+      try { return new Response(JSON.stringify(await browserDiag(env, a.userId)), { headers: corsHeaders }) } catch (e) { return new Response(JSON.stringify({ error: String(e?.message || e), stack: String(e?.stack || '').slice(0, 600) }), { status: 500, headers: corsHeaders }) }
     }
 
     // Route WebSocket + agent requests to VegvisrAgent Durable Object

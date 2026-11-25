@@ -5,6 +5,8 @@ import { DurableObject } from 'cloudflare:workers'
 import { resolveAuthorizedCallerWithCredentials } from './auth.js'
 
 const CMD_TIMEOUT_MS = 60_000 // long enough for a person to approve a site in the extension
+const SLOW_TIMEOUT_MS = 180_000 // nb_ask: NotebookLM writes its answer for up to 150 s
+const timeoutFor = (action) => (action === 'nb_ask' ? SLOW_TIMEOUT_MS : CMD_TIMEOUT_MS)
 
 const ev = (self, e) => { self.events.push({ t: new Date().toISOString(), ...e }); self.events = self.events.slice(-15) }
 
@@ -38,8 +40,9 @@ export class BrowserBridge extends DurableObject {
       if (!sockets.length) return Response.json({ ok: false, error: 'No browser is connected. Install and sign in to the VEGR.AI Chrome extension, then try again.' })
       const { action, params } = await request.json()
       const id = crypto.randomUUID()
+      const ms = timeoutFor(action)
       const answer = new Promise((resolve) => {
-        const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: 'The browser did not answer within 60 seconds.' }) }, CMD_TIMEOUT_MS)
+        const timer = setTimeout(() => { this.pending.delete(id); resolve({ ok: false, error: `The browser did not answer within ${ms / 1000} seconds.` }) }, ms)
         this.pending.set(id, { resolve, timer })
       })
       ev(this, { e: 'cmd', action, sockets: sockets.length })
