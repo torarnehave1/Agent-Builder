@@ -6,7 +6,7 @@ import { resolveAuthorizedCallerWithCredentials } from './auth.js'
 
 const CMD_TIMEOUT_MS = 60_000 // long enough for a person to approve a site in the extension
 const SLOW_TIMEOUT_MS = 180_000 // nb_ask: NotebookLM writes its answer for up to 150 s
-const timeoutFor = (action) => (action === 'nb_ask' ? SLOW_TIMEOUT_MS : CMD_TIMEOUT_MS)
+const timeoutFor = (action) => (action === 'nb_ask' || action === 'nb_image' ? SLOW_TIMEOUT_MS : CMD_TIMEOUT_MS)
 
 const ev = (self, e) => { self.events.push({ t: new Date().toISOString(), ...e }); self.events = self.events.slice(-15) }
 
