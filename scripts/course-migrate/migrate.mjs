@@ -132,12 +132,25 @@ function ensureCompressed(lesson, multipart) {
 }
 
 // ---- upload -----------------------------------------------------------------------------------
+// Minted before every upload call, so one dropped connection here used to end a whole run
+// (Duppedress, 2026-11-26: ConnectTimeout, then EPIPE). Minting is safe to repeat: a network
+// error is tried five times with a growing pause; an HTTP refusal is thrown as before.
 async function mintToken() {
-  const r = await fetch(`${AGENT}/world-photos/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ scope: ['upload', 'album', 'read'], world: m.world }),
-  })
+  let r
+  for (let i = 1; ; i++) {
+    try {
+      r = await fetch(`${AGENT}/world-photos/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ scope: ['upload', 'album', 'read'], world: m.world }),
+      })
+      break
+    } catch (e) {
+      if (i >= 5) throw e
+      log(`token: network error (${e.cause?.code || e.message}), try ${i + 1} of 5 in ${i * 10} s`)
+      await new Promise((ok) => setTimeout(ok, i * 10000))
+    }
+  }
   const j = await r.json().catch(() => ({}))
   if (!r.ok || !j.token) throw new Error(`token for ${m.world} refused (${r.status}): ${j.error || 'unknown'}`)
   return j
