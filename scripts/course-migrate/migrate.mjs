@@ -88,6 +88,26 @@ state.files = state.files || {}
 state.compressed = state.compressed || {}
 const save = () => fs.writeFileSync(statePath, JSON.stringify(state, null, 2))
 const log = (...a) => console.log(`[${m.slug}]`, ...a)
+
+// A run makes thousands of calls over hours; one dropped connection used to end it (Duppedress,
+// 2026-11-26: ConnectTimeout, EPIPE, ENOTFOUND on three different hosts). Every fetch here is
+// tried five times on a network error (no answer at all), with a growing pause. An HTTP answer,
+// good or bad, is returned as before. All request bodies in this script are strings, Blobs or
+// FormData, so they can be sent again. Only the host is logged, never the URL.
+const netFetch = globalThis.fetch
+globalThis.fetch = async (url, init) => {
+  for (let i = 1; ; i++) {
+    try {
+      return await netFetch(url, init)
+    } catch (e) {
+      if (i >= 5) throw e
+      let host = '?'
+      try { host = new URL(String(url)).host } catch {}
+      log(`network error on ${host} (${e.cause?.code || e.message}), try ${i + 1} of 5 in ${i * 10} s`)
+      await new Promise((ok) => setTimeout(ok, i * 10000))
+    }
+  }
+}
 // A library (product.kind "library", 2026-11-13) is a set of standalone videos — Krise-siden, the
 // Teknikkbibliotek: «Video N av M», «Om <tittel>», no «Du strikker»/«Dette trenger du». A course
 // keeps every prompt and label exactly as before, so its cached summaries stay valid.
@@ -132,25 +152,12 @@ function ensureCompressed(lesson, multipart) {
 }
 
 // ---- upload -----------------------------------------------------------------------------------
-// Minted before every upload call, so one dropped connection here used to end a whole run
-// (Duppedress, 2026-11-26: ConnectTimeout, then EPIPE). Minting is safe to repeat: a network
-// error is tried five times with a growing pause; an HTTP refusal is thrown as before.
 async function mintToken() {
-  let r
-  for (let i = 1; ; i++) {
-    try {
-      r = await fetch(`${AGENT}/world-photos/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ scope: ['upload', 'album', 'read'], world: m.world }),
-      })
-      break
-    } catch (e) {
-      if (i >= 5) throw e
-      log(`token: network error (${e.cause?.code || e.message}), try ${i + 1} of 5 in ${i * 10} s`)
-      await new Promise((ok) => setTimeout(ok, i * 10000))
-    }
-  }
+  const r = await fetch(`${AGENT}/world-photos/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ scope: ['upload', 'album', 'read'], world: m.world }),
+  })
   const j = await r.json().catch(() => ({}))
   if (!r.ok || !j.token) throw new Error(`token for ${m.world} refused (${r.status}): ${j.error || 'unknown'}`)
   return j
