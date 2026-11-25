@@ -3059,6 +3059,8 @@ export default {
       if (pathname === '/upload-image' && request.method === 'POST') {
         const body = await request.json()
         const { base64, mediaType, filename } = body
+        // Optional: photos-worker /upload adds the image to this album (and makes the album when new).
+        const album = typeof body.album === 'string' ? body.album.trim().slice(0, 80) : ''
 
         if (!base64) {
           return new Response(JSON.stringify({ error: 'base64 is required' }), {
@@ -3088,13 +3090,27 @@ export default {
 
         const formData = new FormData()
         formData.append('file', blob, uploadName)
+        if (album) formData.append('album', album)
 
         // Use service binding (avoids 522 worker-to-worker via public URL)
-        const uploadRes = await env.PHOTOS_WORKER.fetch('https://photos-api.vegvisr.org/upload', {
+        let uploadRes = await env.PHOTOS_WORKER.fetch('https://photos-api.vegvisr.org/upload', {
           method: 'POST',
           headers: { 'X-API-Token': callerAuth.token },
           body: formData
         })
+        // Album names are shared by all users and owned by whoever made them: 403 means another
+        // person owns this name. The image is then saved without an album rather than refused.
+        let albumUsed = album
+        if (album && uploadRes.status === 403) {
+          const plain = new FormData()
+          plain.append('file', blob, uploadName)
+          uploadRes = await env.PHOTOS_WORKER.fetch('https://photos-api.vegvisr.org/upload', {
+            method: 'POST',
+            headers: { 'X-API-Token': callerAuth.token },
+            body: plain
+          })
+          albumUsed = ''
+        }
 
         if (!uploadRes.ok) {
           const errText = await uploadRes.text()
@@ -3108,7 +3124,7 @@ export default {
         const key = uploadData.keys?.[0] || uploadData.key || uploadData.r2Key || uploadName
         const url = uploadData.urls?.[0] || `https://vegvisr.imgix.net/${key}`
 
-        return new Response(JSON.stringify({ key, url }), { headers: corsHeaders })
+        return new Response(JSON.stringify({ key, url, ...(albumUsed ? { album: albumUsed } : {}) }), { headers: corsHeaders })
       }
 
       // POST /analyze - Direct semantic analysis (no agent loop)
