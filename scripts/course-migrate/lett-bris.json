@@ -1,0 +1,291 @@
+{
+  "world": "sodesign.no",
+  "slug": "lett-bris",
+  "title": "Lett Bris strikkekurs",
+  "album": "Lett Bris strikkekurs",
+  "folder": "kurs/lett-bris",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 3230706
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/lett-bris/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 10779794,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Lett Bris. Last den ned og ha en tilgjengelig når du følger kurset :)",
+      "pdf": "Lett_bris.pdf"
+    },
+    {
+      "lesson_id": 10779795,
+      "title": "Hvordan lese oppskriften",
+      "type": "video",
+      "file": "10779795-hvordan-lese-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 10779796,
+      "title": "Utstyrsliste. Garn og tilbehør",
+      "type": "video",
+      "file": "10779796-utstyrsliste-garn-og-tilbehor.mp4"
+    },
+    {
+      "lesson_id": 2155392836,
+      "title": "Utstyrsliste pinner",
+      "type": "video",
+      "file": "2155392836-utstyrsliste-pinner.mp4"
+    },
+    {
+      "lesson_id": 2155392839,
+      "title": "Størrelsesguide",
+      "type": "video",
+      "file": "2155392839-storrelsesguide.mp4"
+    },
+    {
+      "lesson_id": 2155427234,
+      "title": "Hva er strikkefasthet",
+      "type": "video",
+      "file": "2155427234-hva-er-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2155427241,
+      "title": "Hvordan måle strikkefasthet",
+      "type": "video",
+      "file": "2155427241-hvordan-male-strikkefasthet.mp4"
+    },
+    {
+      "lesson_id": 2155427273,
+      "title": "Legg opp masker",
+      "type": "video",
+      "file": "2155427273-legg-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2155427274,
+      "title": "Strikk vrangbord",
+      "type": "video",
+      "file": "2155427274-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2155427277,
+      "title": "Bytt til pinne 7 og strikk fire omganger glattstrikk",
+      "type": "video",
+      "file": "2155427277-bytt-til-pinne-7-og-strikk-fire-omganger-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2155427280,
+      "title": "Mønster del 1",
+      "type": "video",
+      "file": "2155427280-monster-del-1.mp4"
+    },
+    {
+      "lesson_id": 2155427283,
+      "title": "Mønster del 2",
+      "type": "video",
+      "file": "2155427283-monster-del-2.mp4"
+    },
+    {
+      "lesson_id": 2155427287,
+      "title": "Mønster del 3",
+      "type": "video",
+      "file": "2155427287-monster-del-3.mp4"
+    },
+    {
+      "lesson_id": 2155427335,
+      "title": "Hvordan begynne på et nytt nøste",
+      "type": "video",
+      "file": "2155427335-hvordan-begynne-pa-et-nytt-noste.mp4"
+    },
+    {
+      "lesson_id": 2155427342,
+      "title": "Hvis du mister en maske",
+      "type": "video",
+      "file": "2155427342-hvis-du-mister-en-maske.mp4"
+    },
+    {
+      "lesson_id": 2155427346,
+      "title": "Del arbeidet inn i for- og bakstykke",
+      "type": "video",
+      "file": "2155427346-del-arbeidet-inn-i-for-og-bakstykke.mp4"
+    },
+    {
+      "lesson_id": 2155427347,
+      "title": "Strikke bakstykket frem og tilbake",
+      "type": "video",
+      "file": "2155427347-strikke-bakstykket-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2155427351,
+      "title": "Strikk ferdig bakstykket og avslutt på pinne 3",
+      "type": "video",
+      "file": "2155427351-strikk-ferdig-bakstykket-og-avslutt-pa-pinne-3.mp4"
+    },
+    {
+      "lesson_id": 2155427359,
+      "title": "Sett maskene fra bakstykket på en maskeholder e.l",
+      "type": "video",
+      "file": "2155427359-sett-maskene-fra-bakstykket-pa-en-maskeholder-e-l.mp4"
+    },
+    {
+      "lesson_id": 2155427370,
+      "title": "Forstykket: Sett maskene tilbake på pinne 7",
+      "type": "video",
+      "file": "2155427370-forstykket-sett-maskene-tilbake-pa-pinne-7.mp4"
+    },
+    {
+      "lesson_id": 2155427375,
+      "title": "Strikk forstykket frem og tilbake",
+      "type": "video",
+      "file": "2155427375-strikk-forstykket-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2155427380,
+      "title": "Sett av de midterste maskene til hals",
+      "type": "video",
+      "file": "2155427380-sett-av-de-midterste-maskene-til-hals.mp4"
+    },
+    {
+      "lesson_id": 2155427390,
+      "title": "Fell masker på halssiden",
+      "type": "video",
+      "file": "2155427390-fell-masker-pa-halssiden.mp4"
+    },
+    {
+      "lesson_id": 2155427433,
+      "title": "Strikk ferdig det første forstykket",
+      "type": "video",
+      "file": "2155427433-strikk-ferdig-det-forste-forstykket.mp4"
+    },
+    {
+      "lesson_id": 2155427612,
+      "title": "Strikk det andre forstykket",
+      "type": "video",
+      "file": "2155427612-strikk-det-andre-forstykket.mp4"
+    },
+    {
+      "lesson_id": 2155427805,
+      "title": "Strikk ferdig det andre forstykket",
+      "type": "video",
+      "file": "2155427805-strikk-ferdig-det-andre-forstykket.mp4"
+    },
+    {
+      "lesson_id": 2155427912,
+      "title": "Mask sammen på skulder",
+      "type": "video",
+      "file": "2155427912-mask-sammen-pa-skulder.mp4"
+    },
+    {
+      "lesson_id": 2155427918,
+      "title": "Mask sammen den andre skulderen",
+      "type": "video",
+      "file": "2155427918-mask-sammen-den-andre-skulderen.mp4"
+    },
+    {
+      "lesson_id": 2155427944,
+      "title": "Plukk opp masker til hals, del 1",
+      "type": "video",
+      "file": "2155427944-plukk-opp-masker-til-hals-del-1.mp4"
+    },
+    {
+      "lesson_id": 2155427946,
+      "title": "Plukk opp masker til hals, del 2",
+      "type": "video",
+      "file": "2155427946-plukk-opp-masker-til-hals-del-2.mp4"
+    },
+    {
+      "lesson_id": 2155427951,
+      "title": "Bytt til pinne 5 og strikk hals",
+      "type": "video",
+      "file": "2155427951-bytt-til-pinne-5-og-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2155515730,
+      "title": "Fell av halsmaskene",
+      "type": "video",
+      "file": "2155515730-fell-av-halsmaskene.mp4"
+    },
+    {
+      "lesson_id": 2155515731,
+      "title": "Mål ermlengden din",
+      "type": "video",
+      "file": "2155515731-mal-ermlengden-din.mp4"
+    },
+    {
+      "lesson_id": 2155515733,
+      "title": "Plukk opp masker til ermet",
+      "type": "video",
+      "file": "2155515733-plukk-opp-masker-til-ermet.mp4"
+    },
+    {
+      "lesson_id": 2155515743,
+      "title": "Strikk 4 omganger glattstrikk",
+      "type": "video",
+      "file": "2155515743-strikk-4-omganger-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2155515746,
+      "title": "Fortsett med mønsterstrikk",
+      "type": "video",
+      "file": "2155515746-fortsett-med-monsterstrikk.mp4"
+    },
+    {
+      "lesson_id": 2155515748,
+      "title": "Fell på ermet",
+      "type": "video",
+      "file": "2155515748-fell-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 2155515750,
+      "title": "Bytt til strømpepinner",
+      "type": "video",
+      "file": "2155515750-bytt-til-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2155515769,
+      "title": "Strikk til det gjenstår 3 cm på ermet",
+      "type": "video",
+      "file": "2155515769-strikk-til-det-gjenstar-3-cm-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 2155515779,
+      "title": "Bytt til strømpepinner 5 mm og strikk vrangbord",
+      "type": "video",
+      "file": "2155515779-bytt-til-strompepinner-5-mm-og-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2155515797,
+      "title": "Fell av på ermet. Strikk så det andre ermet på samme måte.",
+      "type": "video",
+      "file": "2155515797-fell-av-pa-ermet-strikk-sa-det-andre-ermet-pa-samme-mate.mp4"
+    },
+    {
+      "lesson_id": 2155515798,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2155515798-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2155515802,
+      "title": "Skyll genseren og tørk den flatt",
+      "type": "video",
+      "file": "2155515802-skyll-genseren-og-tork-den-flatt.mp4"
+    }
+  ]
+}
