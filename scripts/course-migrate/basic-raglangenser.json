@@ -1,0 +1,279 @@
+{
+  "world": "sodesign.no",
+  "slug": "basic-raglangenser",
+  "title": "Basic raglangenser",
+  "album": "Basic raglangenser",
+  "folder": "kurs/basic-raglangenser",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2152738717
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/basic-raglangenser/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2169743887,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Basic raglangenser. Last den ned og ha den foran deg når du følger kurset. Gå videre i kurset for å lære å strikke Basic Raglan.\n\nLykke til!",
+      "pdf": "Basic_raglangenser.pdf"
+    },
+    {
+      "lesson_id": 2169743890,
+      "title": "Slik leser du oppskrifter",
+      "type": "video",
+      "file": "2169743890-slik-leser-du-oppskrifter.mp4"
+    },
+    {
+      "lesson_id": 2169743891,
+      "title": "Finn din størrelse",
+      "type": "video",
+      "file": "2169743891-finn-din-storrelse.mp4"
+    },
+    {
+      "lesson_id": 2169743894,
+      "title": "Utstyr",
+      "type": "video",
+      "file": "2169743894-utstyr.mp4"
+    },
+    {
+      "lesson_id": 2169744925,
+      "title": "Legg opp",
+      "type": "video",
+      "file": "2169744925-legg-opp.mp4"
+    },
+    {
+      "lesson_id": 2171410234,
+      "title": "1 vridd rett, 1 vrang",
+      "type": "video",
+      "file": "2171410234-1-vridd-rett-1-vrang.mp4"
+    },
+    {
+      "lesson_id": 2171410688,
+      "title": "Fortsett med vrangbord, se forskjell på maskene",
+      "type": "video",
+      "file": "2171410688-fortsett-med-vrangbord-se-forskjell-pa-maskene.mp4"
+    },
+    {
+      "lesson_id": 2171758525,
+      "title": "Strikk glattstrikk, bytt pinne og evt. farge",
+      "type": "video",
+      "file": "2171758525-strikk-glattstrikk-bytt-pinne-og-evt-farge.mp4"
+    },
+    {
+      "lesson_id": 2171830781,
+      "title": "Stripemønster",
+      "type": "video",
+      "file": "2171830781-stripemonster.mp4"
+    },
+    {
+      "lesson_id": 2172211272,
+      "title": "Tilpass lengden",
+      "type": "video",
+      "file": "2172211272-tilpass-lengden.mp4"
+    },
+    {
+      "lesson_id": 2172433663,
+      "title": "Fell av til ermehull",
+      "type": "video",
+      "file": "2172433663-fell-av-til-ermehull.mp4"
+    },
+    {
+      "lesson_id": 2172437341,
+      "title": "Legg opp til erm",
+      "type": "video",
+      "file": "2172437341-legg-opp-til-erm.mp4"
+    },
+    {
+      "lesson_id": 2172438247,
+      "title": "Strikk rundt på strømpepinner",
+      "type": "video",
+      "file": "2172438247-strikk-rundt-pa-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2172438670,
+      "title": "Tips: Hvordan vite hvor du er på omgangen",
+      "type": "video",
+      "file": "2172438670-tips-hvordan-vite-hvor-du-er-pa-omgangen.mp4"
+    },
+    {
+      "lesson_id": 2172908779,
+      "title": "Plasser striper på erm",
+      "type": "video",
+      "file": "2172908779-plasser-striper-pa-erm.mp4"
+    },
+    {
+      "lesson_id": 2172908883,
+      "title": "Bytt pinne og fortsett med glattstrikk",
+      "type": "video",
+      "file": "2172908883-bytt-pinne-og-fortsett-med-glattstrikk.mp4"
+    },
+    {
+      "lesson_id": 2172909198,
+      "title": "Øk masker på ermet",
+      "type": "video",
+      "file": "2172909198-ok-masker-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 2172910300,
+      "title": "Bytt til en liten rundpinne",
+      "type": "video",
+      "file": "2172910300-bytt-til-en-liten-rundpinne.mp4"
+    },
+    {
+      "lesson_id": 2172910530,
+      "title": "Når økingene på erm er ferdig",
+      "type": "video",
+      "file": "2172910530-nar-okingene-pa-erm-er-ferdig.mp4"
+    },
+    {
+      "lesson_id": 2172910697,
+      "title": "Fell av til ermehull på ermet",
+      "type": "video",
+      "file": "2172910697-fell-av-til-ermehull-pa-ermet.mp4"
+    },
+    {
+      "lesson_id": 2173086827,
+      "title": "Frigjør den lille rundpinnen til erme nummer 2",
+      "type": "video",
+      "file": "2173086827-frigjor-den-lille-rundpinnen-til-erme-nummer-2.mp4"
+    },
+    {
+      "lesson_id": 2173096955,
+      "title": "Del 1: Strikk bol og ermer inn på samme pinne, og sett 4 merker til raglan",
+      "type": "video",
+      "file": "2173096955-del-1-strikk-bol-og-ermer-inn-pa-samme-pinne-og-sett-4-merker-til-raglan.mp4"
+    },
+    {
+      "lesson_id": 2173662127,
+      "title": "Sett ermer og bol sammen Del 2",
+      "type": "video",
+      "file": "2173662127-sett-ermer-og-bol-sammen-del-2.mp4"
+    },
+    {
+      "lesson_id": 2173673594,
+      "title": "Fell til raglan",
+      "type": "video",
+      "file": "2173673594-fell-til-raglan.mp4"
+    },
+    {
+      "lesson_id": 2173720000,
+      "title": "Fell på annenhver omgang",
+      "type": "video",
+      "file": "2173720000-fell-pa-annenhver-omgang.mp4"
+    },
+    {
+      "lesson_id": 2173720690,
+      "title": "Hvordan se hvor du er i fellingen",
+      "type": "video",
+      "file": "2173720690-hvordan-se-hvor-du-er-i-fellingen.mp4"
+    },
+    {
+      "lesson_id": 2173842653,
+      "title": "Fell av masker til hals",
+      "type": "video",
+      "file": "2173842653-fell-av-masker-til-hals.mp4"
+    },
+    {
+      "lesson_id": 2173858742,
+      "title": "Flytt omgangens start",
+      "type": "video",
+      "file": "2173858742-flytt-omgangens-start.mp4"
+    },
+    {
+      "lesson_id": 2173882117,
+      "title": "Strikk frem og tilbake og fell til hals",
+      "type": "video",
+      "file": "2173882117-strikk-frem-og-tilbake-og-fell-til-hals.mp4"
+    },
+    {
+      "lesson_id": 2174164317,
+      "title": "Når raglanmaskene forsvinner",
+      "type": "video",
+      "file": "2174164317-nar-raglanmaskene-forsvinner.mp4"
+    },
+    {
+      "lesson_id": 2174169892,
+      "title": "Bytt til en liten runndpinn for hals",
+      "type": "video",
+      "file": "2174169892-bytt-til-en-liten-runndpinn-for-hals.mp4"
+    },
+    {
+      "lesson_id": 2174202969,
+      "title": "Strikk opp masker over halsfellingene",
+      "type": "video",
+      "file": "2174202969-strikk-opp-masker-over-halsfellingene.mp4"
+    },
+    {
+      "lesson_id": 2174207737,
+      "title": "Fell masker jevnt fordelt",
+      "type": "video",
+      "file": "2174207737-fell-masker-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 2174209895,
+      "title": "Hjelpevideo: Hvordan regne ut \"jevnt fordelt\"",
+      "type": "video",
+      "file": "2174209895-hjelpevideo-hvordan-regne-ut-jevnt-fordelt.mp4"
+    },
+    {
+      "lesson_id": 2174240424,
+      "title": "Strikk hals",
+      "type": "video",
+      "file": "2174240424-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2174240497,
+      "title": "Fell av alle masker",
+      "type": "video",
+      "file": "2174240497-fell-av-alle-masker.mp4"
+    },
+    {
+      "lesson_id": 2174241899,
+      "title": "Sy inn halsen",
+      "type": "video",
+      "file": "2174241899-sy-inn-halsen.mp4"
+    },
+    {
+      "lesson_id": 2174242403,
+      "title": "Sy sammen under erm Del 1",
+      "type": "video",
+      "file": "2174242403-sy-sammen-under-erm-del-1.mp4"
+    },
+    {
+      "lesson_id": 2174267771,
+      "title": "Sy sammen under erm Del 2",
+      "type": "video",
+      "file": "2174267771-sy-sammen-under-erm-del-2.mp4"
+    },
+    {
+      "lesson_id": 2174267964,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2174267964-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2174268071,
+      "title": "Damp genseren",
+      "type": "video",
+      "file": "2174268071-damp-genseren.mp4"
+    }
+  ]
+}
