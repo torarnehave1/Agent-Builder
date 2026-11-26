@@ -1,0 +1,309 @@
+{
+  "world": "sodesign.no",
+  "slug": "duppedress",
+  "title": "Duppedress strikkekurs",
+  "album": "Duppedress strikkekurs",
+  "folder": "kurs/duppedress",
+  "metaArea": "#KURS #STRIKKESKOLEN #STRIKKEKURSFRAATILÅ",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "membership",
+      "ref": "den-lille-strikkeskolen"
+    },
+    "category": [
+      "Plagg"
+    ],
+    "level": null
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 503165,
+    "product": "Den lille strikkeskolen",
+    "module": "Strikkekurs fra A til Å",
+    "category_id": 2154765799
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/den-lille-strikkeskolen/duppedress/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2176225804,
+      "title": "Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Duppedress. Last den ned og ha den tilgjengelig når du følger kurset.",
+      "pdf": "Duppedress.pdf"
+    },
+    {
+      "lesson_id": 2176225807,
+      "title": "Slik leser du oppskriften",
+      "type": "video",
+      "file": "2176225807-slik-leser-du-oppskriften.mp4"
+    },
+    {
+      "lesson_id": 2176226600,
+      "title": "Legg opp nederst på ben",
+      "type": "video",
+      "file": "2176226600-legg-opp-nederst-pa-ben.mp4"
+    },
+    {
+      "lesson_id": 2176495436,
+      "title": "Strikk vrangbord rundt på strømpepinner",
+      "type": "video",
+      "file": "2176495436-strikk-vrangbord-rundt-pa-strompepinner.mp4"
+    },
+    {
+      "lesson_id": 2176537284,
+      "title": "Bytt pinne, strikk glattstrikk og øk",
+      "type": "video",
+      "file": "2176537284-bytt-pinne-strikk-glattstrikk-og-ok.mp4"
+    },
+    {
+      "lesson_id": 2176543121,
+      "title": "Strikk mønster",
+      "type": "video",
+      "file": "2176543121-strikk-monster.mp4"
+    },
+    {
+      "lesson_id": 2176557574,
+      "title": "Øk masker oppover ben",
+      "type": "video",
+      "file": "2176557574-ok-masker-oppover-ben.mp4"
+    },
+    {
+      "lesson_id": 2176557982,
+      "title": "Strikk ferdig ben nr. 1",
+      "type": "video",
+      "file": "2176557982-strikk-ferdig-ben-nr-1.mp4"
+    },
+    {
+      "lesson_id": 2176584080,
+      "title": "Frigjør pinnene fra ben nr. 1",
+      "type": "video",
+      "file": "2176584080-frigjor-pinnene-fra-ben-nr-1.mp4"
+    },
+    {
+      "lesson_id": 2176589298,
+      "title": "Strikk begge ben inn på samme pinne",
+      "type": "video",
+      "file": "2176589298-strikk-begge-ben-inn-pa-samme-pinne.mp4"
+    },
+    {
+      "lesson_id": 2176646622,
+      "title": "Fell midt foran og midt bak",
+      "type": "video",
+      "file": "2176646622-fell-midt-foran-og-midt-bak.mp4"
+    },
+    {
+      "lesson_id": 2176694089,
+      "title": "Fell av de midterste 5 maskene",
+      "type": "video",
+      "file": "2176694089-fell-av-de-midterste-5-maskene.mp4"
+    },
+    {
+      "lesson_id": 2176694716,
+      "title": "Strikk glattstrikk frem og tilbake",
+      "type": "video",
+      "file": "2176694716-strikk-glattstrikk-frem-og-tilbake.mp4"
+    },
+    {
+      "lesson_id": 2176887887,
+      "title": "Strikk mønster, del 1",
+      "type": "video",
+      "file": "2176887887-strikk-monster-del-1.mp4"
+    },
+    {
+      "lesson_id": 2177085086,
+      "title": "Strikk mønster, del 2",
+      "type": "video",
+      "file": "2177085086-strikk-monster-del-2.mp4"
+    },
+    {
+      "lesson_id": 2177086469,
+      "title": "Strikk mønster, del 3",
+      "type": "video",
+      "file": "2177086469-strikk-monster-del-3.mp4"
+    },
+    {
+      "lesson_id": 2177129873,
+      "title": "Fell av til ermehull",
+      "type": "video",
+      "file": "2177129873-fell-av-til-ermehull.mp4"
+    },
+    {
+      "lesson_id": 2177141992,
+      "title": "Legg opp til erm og strikk vrangbord",
+      "type": "video",
+      "file": "2177141992-legg-opp-til-erm-og-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2177442259,
+      "title": "Bytt pinner og øk masker",
+      "type": "video",
+      "file": "2177442259-bytt-pinner-og-ok-masker.mp4"
+    },
+    {
+      "lesson_id": 2177455956,
+      "title": "Strikk diagrammet på erm",
+      "type": "video",
+      "file": "2177455956-strikk-diagrammet-pa-erm.mp4"
+    },
+    {
+      "lesson_id": 2177474363,
+      "title": "Øk masker oppover erm",
+      "type": "video",
+      "file": "2177474363-ok-masker-oppover-erm.mp4"
+    },
+    {
+      "lesson_id": 2178673682,
+      "title": "Strikk ferdig ermet",
+      "type": "video",
+      "file": "2178673682-strikk-ferdig-ermet.mp4"
+    },
+    {
+      "lesson_id": 2178674157,
+      "title": "Fell av til ermehull på erm",
+      "type": "video",
+      "file": "2178674157-fell-av-til-ermehull-pa-erm.mp4"
+    },
+    {
+      "lesson_id": 2178675698,
+      "title": "Strikk alt inn på samme pinne",
+      "type": "video",
+      "file": "2178675698-strikk-alt-inn-pa-samme-pinne.mp4"
+    },
+    {
+      "lesson_id": 2178911074,
+      "title": "Raglan, del 1",
+      "type": "video",
+      "file": "2178911074-raglan-del-1.mp4"
+    },
+    {
+      "lesson_id": 2179037099,
+      "title": "Raglan, del 2",
+      "type": "video",
+      "file": "2179037099-raglan-del-2.mp4"
+    },
+    {
+      "lesson_id": 2179424734,
+      "title": "Hvordan telle antall raglan",
+      "type": "video",
+      "file": "2179424734-hvordan-telle-antall-raglan.mp4"
+    },
+    {
+      "lesson_id": 2179437423,
+      "title": "Fortkortede pinner, del 1",
+      "type": "video",
+      "file": "2179437423-fortkortede-pinner-del-1.mp4"
+    },
+    {
+      "lesson_id": 2179520392,
+      "title": "Forkortede pinner, del 2",
+      "type": "video",
+      "file": "2179520392-forkortede-pinner-del-2.mp4"
+    },
+    {
+      "lesson_id": 2179520907,
+      "title": "Fell masker før hals",
+      "type": "video",
+      "file": "2179520907-fell-masker-for-hals.mp4"
+    },
+    {
+      "lesson_id": 2179522840,
+      "title": "Strikk hals",
+      "type": "video",
+      "file": "2179522840-strikk-hals.mp4"
+    },
+    {
+      "lesson_id": 2179523365,
+      "title": "Fell av alle masker",
+      "type": "video",
+      "file": "2179523365-fell-av-alle-masker.mp4"
+    },
+    {
+      "lesson_id": 2179614210,
+      "title": "Venstre stolpe: strikk opp masker",
+      "type": "video",
+      "file": "2179614210-venstre-stolpe-strikk-opp-masker.mp4"
+    },
+    {
+      "lesson_id": 2179614290,
+      "title": "Venstre stolpe: strikk vrangbord",
+      "type": "video",
+      "file": "2179614290-venstre-stolpe-strikk-vrangbord.mp4"
+    },
+    {
+      "lesson_id": 2179614399,
+      "title": "Venstre stolpe: Fell av",
+      "type": "video",
+      "file": "2179614399-venstre-stolpe-fell-av.mp4"
+    },
+    {
+      "lesson_id": 2179652889,
+      "title": "Høyre stolpe: Strikk opp og strikk 2 pinner",
+      "type": "video",
+      "file": "2179652889-hoyre-stolpe-strikk-opp-og-strikk-2-pinner.mp4"
+    },
+    {
+      "lesson_id": 2179671090,
+      "title": "Plasser knappehull, et regnestykke",
+      "type": "video",
+      "file": "2179671090-plasser-knappehull-et-regnestykke.mp4"
+    },
+    {
+      "lesson_id": 2179815753,
+      "title": "Strikk inn knappehull",
+      "type": "video",
+      "file": "2179815753-strikk-inn-knappehull.mp4"
+    },
+    {
+      "lesson_id": 2179816855,
+      "title": "Legg opp nye masker",
+      "type": "video",
+      "file": "2179816855-legg-opp-nye-masker.mp4"
+    },
+    {
+      "lesson_id": 2179817013,
+      "title": "Strikk ferdig høyre stolpe",
+      "type": "video",
+      "file": "2179817013-strikk-ferdig-hoyre-stolpe.mp4"
+    },
+    {
+      "lesson_id": 2180061158,
+      "title": "Sy sammen under ermene",
+      "type": "video",
+      "file": "2180061158-sy-sammen-under-ermene.mp4"
+    },
+    {
+      "lesson_id": 2180192103,
+      "title": "Sy fast venstre stolpe",
+      "type": "video",
+      "file": "2180192103-sy-fast-venstre-stolpe.mp4"
+    },
+    {
+      "lesson_id": 2180192241,
+      "title": "Sy sammen i skrittet",
+      "type": "video",
+      "file": "2180192241-sy-sammen-i-skrittet.mp4"
+    },
+    {
+      "lesson_id": 2180192314,
+      "title": "Sy i knapper",
+      "type": "video",
+      "file": "2180192314-sy-i-knapper.mp4"
+    },
+    {
+      "lesson_id": 2180192383,
+      "title": "Fest tråder",
+      "type": "video",
+      "file": "2180192383-fest-trader.mp4"
+    },
+    {
+      "lesson_id": 2180192481,
+      "title": "Damp dressen",
+      "type": "video",
+      "file": "2180192481-damp-dressen.mp4"
+    }
+  ]
+}
