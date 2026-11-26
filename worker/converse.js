@@ -89,6 +89,48 @@ const rulesBlock = (r) => (r
   ? `\n\nThe person's own rules, from their graph "${r.title}" (${r.graphId}). Follow them. They never override the rule above about asking before anything that sends, publishes, deletes or changes something.\n${r.text}`
   : '')
 
+// The tool list in the system prompt — the part of Claude's own deferred tools that /converse
+// lacked until 2026-11-26. Claude is told every tool's name and loads one by its exact name; here
+// the model got only a BM25 search, which missed names like update_node and reorder_nodes, and
+// then said the tool did not exist. The list comes from the MCP server's own tools/list for the
+// signed-in person (it is what they can call), with the tools turned off below left out.
+const DISABLED_TOOLS = new Set(['get_graph', 'fetch'])
+const CATALOG_TTL_MS = 10 * 60_000
+const catalogCache = new Map() // userId -> { at, value }
+const shortLine = (d) => {
+  const first = String(d || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s/)[0] || ''
+  return first.length > 110 ? first.slice(0, 107) + '…' : first
+}
+async function loadToolCatalog(env, token, userId) {
+  const hit = catalogCache.get(userId)
+  if (hit && Date.now() - hit.at < CATALOG_TTL_MS) return hit.value
+  let value = []
+  try {
+    const listed = await mcp(env, token, 'tools/list', {})
+    value = (Array.isArray(listed?.tools) ? listed.tools : [])
+      .filter((t) => t?.name && !DISABLED_TOOLS.has(t.name))
+      .map((t) => ({ name: t.name, line: shortLine(t.description) }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  } catch (e) { console.error('[converse] tool list not loaded', e?.message || e) }
+  if (value.length) catalogCache.set(userId, { at: Date.now(), value })
+  return value
+}
+const catalogBlock = (tools) => (tools.length
+  ? `\n\nTool list — every tool on the VEGR.AI MCP server you can use (${tools.length}). Load one before calling it.\n` +
+    tools.map((t) => `- ${t.name}${t.line ? `: ${t.line}` : ''}`).join('\n')
+  : '\n\nThe tool list could not be loaded this turn: find tools with the tool search, and do not conclude a tool is missing from a search that found nothing.')
+
+// Turns saved before 2026-11-26 hold BM25 search calls; this loop now defines the regex search, so
+// those calls are replayed as the regex tool (their results, tool references, stay valid).
+const escapeRe = (q) => String(q || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+function migrateSearchBlocks(messages) {
+  return messages.map((m) => (Array.isArray(m.content) && m.content.some((b) => b?.type === 'server_tool_use' && b.name === 'tool_search_tool_bm25')
+    ? { ...m, content: m.content.map((b) => (b?.type === 'server_tool_use' && b.name === 'tool_search_tool_bm25'
+      ? { ...b, name: 'tool_search_tool_regex', input: { pattern: escapeRe(b.input?.query) || '.' } }
+      : b)) }
+    : m))
+}
+
 let usageReady = false
 async function ensureUsageTable(db) {
   if (usageReady) return
@@ -122,14 +164,16 @@ async function spentToday(env, userId) {
   return r?.usd || 0
 }
 
+const FIND_TOOLS_NATIVE = '- Every tool on the server is named in the tool list below, and that list is complete. A tool is loaded by searching its exact name with the tool search, as a regular expression: ^(vegr_)?reorder_nodes$ — several at once: ^(vegr_)?(update_node|reorder_nodes)$. Its schema arrives with it; then call it directly. Never say a tool does not exist, or that something cannot be done, while a tool in the list does it: load that tool. When nothing in the list does it, say which tool is missing.'
+
 const SYSTEM = `You are the VEGR.AI assistant. You work for the signed-in person through the tools of the VEGR.AI MCP server ("${MCP_NAME}"), which act as that person: their knowledge graphs, e-mail, SMS, chat groups, contacts, calendar, images, video and Realtime meeting rooms.
 
 How to work:
-- Find tools with the tool search. Their schemas arrive with them, so call a tool directly once it is loaded.
+- Every tool on the server is named in the tool list below, and that list is complete. A tool is loaded by searching its exact name with the tool search, as a regular expression: ^(vegr_)?reorder_nodes$ — several at once: ^(vegr_)?(update_node|reorder_nodes)$. Its schema arrives with it; then call it directly. Never say a tool does not exist, or that something cannot be done, while a tool in the list does it: load that tool. When nothing in the list does it, say which tool is missing.
 - Answer from tool results that are in this conversation. When a fact is not there, call the tool again; never fill in from memory or from what seems likely. If a tool result does not contain what was asked for, say so.
 - Names, addresses, links, dates and numbers in your answer are copied from the tool result, not retyped from recollection.
 - Before anything that sends, publishes, deletes or changes something (an e-mail, an SMS, a post, a graph, a calendar event, a member list), say exactly what will happen and wait for the person's yes in a new message. Use the preview tool first where one exists. Reading needs no permission.
-- Finding tools: when you know a tool's exact name (get_graph_links, add_nodes, update_node, graph_index, search_graphs), search for that exact name once. One search is enough; do not retry with other wordings of the same thing.
+- Pick the tool from the list by what it does: to move a node up or down in a graph ("flytt øverst") use reorder_nodes; to change a node's text, label or image use update_node; to delete one node use remove_node. A node added with add_node lands at the bottom; its canvas position does not change where the viewer shows it.
 - To look into a graph use read_graph: it lists every node with a short preview; read one node in full with its nodeId. Never read a whole graph node by node unless asked.
 - Preview: when the person asks to preview (forhåndsvise) a graph, or pastes an editor view link, call no tool. The app puts a «Forhåndsvis» button under their message that opens the graph in a panel; say so in one short sentence. Read the graph (read_graph) only if they ask what is in it.
 - Preview of a VEmotion composition (an animation, comp_…): call vemotion_get_composition with its compositionId, taken from vemotion_list_compositions or from earlier in the conversation ("nummer to" in a list you gave is that row). The app then puts a preview button under your answer that plays it in a panel; say so in one short sentence. A composition is not a graph: never search graphs for it, and do not render frames (preview_vemotion_frames) unless the person asks for stills.
@@ -139,8 +183,8 @@ How to work:
 
 // The same rules for the models that get their tools through search_tools (converse-compat.js).
 const SYSTEM_COMPAT = SYSTEM.replace(
-  '- Find tools with the tool search. Their schemas arrive with them, so call a tool directly once it is loaded.',
-  '- Find tools with search_tools. The tools it returns can then be called directly, and stay available for the rest of the conversation.',
+  `${FIND_TOOLS_NATIVE}`,
+  '- Every tool on the server is named in the tool list below, and that list is complete. Load a tool with search_tools and its exact name as the query (e.g. "reorder_nodes"); it can then be called directly and stays available for the rest of the conversation. Never say a tool does not exist, or that something cannot be done, while a tool in the list does it. When nothing in the list does it, say which tool is missing.',
 )
 
 let tableReady = false
@@ -429,7 +473,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
   ctx.waitUntil((async () => {
     if (route) send('route', { selected: askedModel || 'auto', model, tier: route.tier, via: route.via, reason: route.reason })
     const started = Date.now()
-    const rules = await loadUserRules(env, token, auth.userId)
+    const [rules, tools] = await Promise.all([loadUserRules(env, token, auth.userId), loadToolCatalog(env, token, auth.userId)])
     const browser = await browserStatus(env, auth.userId).catch(() => ({ connected: false }))
     if (rules) send('rules', { graphId: rules.graphId, title: rules.title, chars: rules.text.length })
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
@@ -462,7 +506,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
           turns: [...history, userTurn],
           save: (turn) => saveTurn(env, key, sessionId, auth.userId, turn),
           send,
-          system: `${SYSTEM_COMPAT}${rulesBlock(rules)}\n\nToday is ${today0} (UTC). The signed-in person is ${auth.email || auth.userId}.`,
+          system: `${SYSTEM_COMPAT}${catalogBlock(tools)}${rulesBlock(rules)}\n\nToday is ${today0} (UTC). The signed-in person is ${auth.email || auth.userId}.`,
         })
         usage.input += r.usage.input
         usage.output += r.usage.output
@@ -474,7 +518,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
         return
       }
       // Turns another model family made are read as text; Claude's own go back unchanged.
-      const messages = closeDanglingCalls(toClaudeMessages([...history, userTurn]))
+      const messages = migrateSearchBlocks(closeDanglingCalls(toClaudeMessages([...history, userTurn])))
 
       const client = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY })
       const today = new Date().toISOString().slice(0, 10)
@@ -496,12 +540,12 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
               output_config: { effort: 'medium' },
               cache_control: { type: 'ephemeral' },
               system: [
-                { type: 'text', text: SYSTEM + (browser.connected ? BROWSER_RULE : '') + rulesBlock(rules) },
+                { type: 'text', text: SYSTEM + catalogBlock(tools) + (browser.connected ? BROWSER_RULE : '') + rulesBlock(rules) },
                 { type: 'text', text: `Today is ${today} (UTC). The signed-in person is ${auth.email || auth.userId}.` },
               ],
               mcp_servers: [{ type: 'url', url: MCP_URL, name: MCP_NAME, authorization_token: token }],
               tools: [
-                { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' },
+                { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' },
                 { type: 'mcp_toolset', mcp_server_name: MCP_NAME, default_config: { defer_loading: true }, configs: { get_graph: { enabled: false }, fetch: { enabled: false } } },
                 READ_GRAPH,
                 ...(browser.connected ? BROWSER_TOOLS : []),
@@ -550,7 +594,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
                 if (o) {
                   let input = o.input || {}
                   try { if (o.json) input = JSON.parse(o.json) } catch { /* shown without its input */ }
-                  send('tool_call', { callId: o.id, tool: o.name === 'tool_search_tool_bm25' ? 'tool_search' : o.name, input })
+                  send('tool_call', { callId: o.id, tool: o.name === 'tool_search_tool_regex' || o.name === 'tool_search_tool_bm25' ? 'tool_search' : o.name, input })
                   open.delete(ev.index)
                 }
               }
