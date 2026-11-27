@@ -12344,6 +12344,89 @@ async function executeAddContactNote(input, env) {
   return { success: true, logId: String(data._id || data.id || ''), contactId: String(row._id), name, loggedAt, note }
 }
 
+// A meeting recorded in the VEGR.AI chat (2026-11-27), saved the way ContactHub saves a recording:
+// bytes -> R2 + audio portfolio (upload_portfolio_recording), then a contact_log row of type
+// 'Meeting' carrying recording_url — on the RECORDER'S OWN contact (architect's decision: the
+// recording is filed under the person who recorded it). That contact is found by the caller's
+// verified e-mail only (a phone match can be an imported "Pappa" row); when the book has none it
+// is created from the caller's profile (name from
+// config.data.profile.name, phone from config.phone). No phone on the profile = stop, nothing
+// invented. transcribe_contact_recording then finds the interaction by its r2Url, as for any
+// ContactHub recording, and appends the transcript to its note.
+async function executeSaveMeetingRecording(input, env) {
+  const { userId, email } = input
+  if (!userId || String(userId).includes('@')) throw new Error('Saving a meeting recording requires the internal user id')
+  if (!(input.rawBytes instanceof Uint8Array) || !input.rawBytes.byteLength) throw new Error('The recording is empty — nothing was saved')
+  const { contactsTableId, logsTableId } = await resolveContactTableIds(userId, env)
+  if (!logsTableId) throw new Error('No contact_logs table found for this user. Open the Contacts app once to create it.')
+  const profile = await resolveUserProfile(userId, env)
+  const myEmail = String(profile?.email || email || '').trim().toLowerCase()
+  if (!myEmail) throw new Error('Could not resolve your e-mail — nothing was saved')
+  let extra = {}
+  try { extra = JSON.parse(profile?.data || '{}') || {} } catch { /* no profile data */ }
+  const myName = String(extra?.profile?.name || '').trim() || myEmail.split('@')[0]
+  const myPhone = String(profile?.phone || extra?.profile?.phone || '').trim()
+
+  // 1. The recorder's own contact.
+  const parseList = (v) => { try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
+  const all = await drizzleFetch(env, '/query', { tableId: contactsTableId, limit: 10000 })
+  let me = (all.records || all.rows || []).find(c => parseList(c.emails).some(e => String(e?.value || '').trim().toLowerCase() === myEmail))
+  let contactId = me ? String(me._id) : ''
+  let contactName = me ? (me.full_name || myName) : myName
+  let createdContact = false
+  if (!me) {
+    if (!myPhone) throw new Error('You are not in your own contacts yet, and your profile has no phone number to create that contact with. Add a phone number to your profile (or add yourself in Contacts) and record again. Nothing was saved.')
+    // Written directly, not through create_contact: its phone-duplicate refusal would hand back
+    // whatever imported row holds the same number (first test 2026-11-27: a row named "Pappa"),
+    // and the recording must be filed under the recorder's own name. Same row shape as create_contact.
+    const made = await drizzleFetch(env, '/insert', {
+      tableId: contactsTableId,
+      record: {
+        full_name: myName,
+        emails: JSON.stringify([{ label: 'home', value: myEmail }]),
+        phones: JSON.stringify([{ label: 'mobile', value: myPhone }]),
+        notes: 'Meg selv — opptaker av møteopptak fra VEGR.AI-chatten.',
+      },
+    })
+    contactId = String(made._id || made.id || '')
+    contactName = myName
+    createdContact = true
+  }
+  if (!contactId) throw new Error('Could not resolve your own contact — nothing was saved')
+
+  // 2. The audio, into R2 and the portfolio.
+  const now = new Date()
+  const stamp = now.toISOString().slice(0, 16).replace('T', ' ')
+  const title = String(input.title || '').trim().slice(0, 120)
+  const ext = /^(webm|m4a|mp4|ogg|wav)$/i.test(String(input.ext || '')) ? String(input.ext).toLowerCase() : 'webm'
+  const up = await executeUploadPortfolioRecording({
+    userEmail: myEmail,
+    rawBytes: input.rawBytes,
+    filename: `meeting-${now.getTime()}.${ext}`,
+    displayName: `Møteopptak ${stamp}${title ? ' — ' + title : ''} — ${contactName}`,
+    category: 'Contacts',
+    tags: ['contacts', 'meeting', 'vegrai-chat'],
+    duration: Number(input.durationSec) || 0,
+  }, env)
+  if (!up || up.success === false) throw new Error(up?.error || 'The audio upload failed — nothing was saved')
+
+  // 3. The interaction, with the recording on it.
+  const mins = Math.round((Number(input.durationSec) || 0) / 60)
+  const notes = `Møteopptak fra VEGR.AI-chatten${title ? ': ' + title : ''}${mins ? ` (${mins} min)` : ''}. Tatt opp av ${contactName}.`
+  const log = await drizzleFetch(env, '/insert', {
+    tableId: logsTableId,
+    record: { contact_id: contactId, contact_name: contactName, contact_type: 'Meeting', notes, logged_at: now.toISOString(), recording_url: up.audioUrl },
+  })
+  return {
+    success: true,
+    recordingId: up.recordingId || null,
+    logId: String(log._id || log.id || ''),
+    contactId, contactName, createdContact,
+    loggedAt: now.toISOString(),
+    sizeBytes: input.rawBytes.byteLength,
+  }
+}
+
 // Transcribe one of the user's recordings ON THE SERVER — a Contact Hub interaction's, or one
 // that is only in the audio portfolio (2026-11-15) — and keep the text in a fulltext node in a
 // graph; for an interaction also appended to its own note (what "Transkriber" in Contact Hub
@@ -14437,7 +14520,9 @@ async function executeUploadPortfolioRecording(input, env) {
   if (!env.NORWEGIAN_AUDIO) return { success: false, error: 'NORWEGIAN_AUDIO service binding is not configured' }
   if (!env.AUDIO_PORTFOLIO) return { success: false, error: 'AUDIO_PORTFOLIO service binding is not configured' }
   const { base64, sourceUrl, filename, displayName, category, tags, duration } = input || {}
-  if (!base64 && !sourceUrl) return { success: false, error: 'Provide base64 (audio bytes) OR sourceUrl (a URL to fetch the audio from).' }
+  // rawBytes: audio already in this worker (the /contacts/recordings/meeting door), never from a tool call.
+  const rawBytes = input?.rawBytes instanceof Uint8Array ? input.rawBytes : null
+  if (!base64 && !sourceUrl && !rawBytes) return { success: false, error: 'Provide base64 (audio bytes) OR sourceUrl (a URL to fetch the audio from).' }
   // Resolve the logged-in user's email (same as executeListRecordings).
   let userEmail = input.userEmail || input.userId
   if (!userEmail) return { success: false, error: 'Could not resolve user identity (no userEmail/userId).' }
@@ -14455,7 +14540,8 @@ async function executeUploadPortfolioRecording(input, env) {
   let bytes
   let upData = null
   try {
-    if (base64) bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
+    if (rawBytes) bytes = rawBytes
+    else if (base64) bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
     else {
       if (!/^https:\/\//i.test(String(sourceUrl))) return { success: false, error: 'sourceUrl must be an https URL.' }
       const r = await fetch(sourceUrl)
@@ -19628,6 +19714,8 @@ async function dispatchTool(toolName, toolInput, env, operationMap, onProgress) 
       return await executeAddContactLog(toolInput, env)
     case 'add_contact_note':
       return await executeAddContactNote(toolInput, env)
+    case 'save_meeting_recording':
+      return await executeSaveMeetingRecording(toolInput, env)
     case 'create_contact':
       return await executeCreateContact(toolInput, env)
     case 'set_meeting_report':

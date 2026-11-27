@@ -3537,6 +3537,42 @@ export default {
         }
       }
 
+      // POST /contacts/recordings/meeting — a meeting recorded in the VEGR.AI chat (2026-11-27).
+      // Body: the raw audio. Query: ext (webm|m4a|mp4|ogg|wav), durationSec, title. Saved on the
+      // caller's OWN contact (created from the profile when missing) as a 'Meeting' interaction
+      // with the recording, and in the audio portfolio; the answer carries the recordingId for
+      // transcribe_contact_recording. Whose book is written comes from the verified caller only.
+      if (pathname === '/contacts/recordings/meeting' && request.method === 'POST') {
+        const callerAuth = await resolveCallerAuth(request, env)
+        if (!callerAuth.token) {
+          return new Response(JSON.stringify({ error: callerAuth.error }), { status: 401, headers: corsHeaders })
+        }
+        const MAX = 80 * 1024 * 1024
+        const declared = Number(request.headers.get('content-length')) || 0
+        if (declared > MAX) {
+          return new Response(JSON.stringify({ success: false, error: `The recording is ${(declared / 1048576).toFixed(1)} MB; at most 80 MB. Nothing was saved.` }), { status: 413, headers: corsHeaders })
+        }
+        const bytes = new Uint8Array(await request.arrayBuffer())
+        if (bytes.byteLength > MAX) {
+          return new Response(JSON.stringify({ success: false, error: 'The recording is over 80 MB. Nothing was saved.' }), { status: 413, headers: corsHeaders })
+        }
+        const q = url.searchParams
+        try {
+          const r = await executeTool('save_meeting_recording', {
+            userId: callerAuth.userId,
+            email: callerAuth.email,
+            rawBytes: bytes,
+            ext: q.get('ext') || '',
+            durationSec: Number(q.get('durationSec')) || 0,
+            title: q.get('title') || '',
+          }, env, {})
+          return new Response(JSON.stringify(r), { headers: corsHeaders })
+        } catch (e) {
+          const status = /empty|no phone|required|contacts table|contact_logs table/i.test(e.message) ? 400 : 502
+          return new Response(JSON.stringify({ success: false, error: e.message }), { status, headers: corsHeaders })
+        }
+      }
+
       // POST /contacts/report/{set,preview,send} — ContactHub meeting reports → Enkel endring CMS.
       //
       // The MCP server's set_meeting_report / preview_meeting_report / send_meeting_report reach
