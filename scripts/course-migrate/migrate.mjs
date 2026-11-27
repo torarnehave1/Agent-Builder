@@ -226,7 +226,7 @@ async function upload(lesson, order, file) {
   const meta = {
     course: m.slug, course_title: m.title, lesson: lesson.title, lesson_id: lesson.lesson_id, order,
     duration_s: Math.round(duration(file)), sha256: digest,
-    source: `${m.source.system}:${m.source.product_id}/${m.source.category_id}/${lesson.lesson_id}`,
+    source: `${m.source.system}:${m.source.product_id}/${lesson.category_id ?? m.source.category_id}/${lesson.lesson_id}`,
   }
   let j
   if (fs.statSync(file).size > CEILING) {
@@ -432,7 +432,7 @@ async function uploadPdf(lesson, name = lesson.pdf, stateKey = lesson.lesson_id)
   const have = state.files[stateKey]
   if (have && have.sha256 === digest) { log(`PDF already uploaded: ${name}`); return have }
   const key = `${m.folder}/${slugify(name.replace(/\.pdf$/i, ''))}.pdf`
-  await uploadFile(key, file, 'application/pdf', { course: m.slug, kind: 'pdf', lesson: lesson.title, lesson_id: lesson.lesson_id, sha256: digest, source: `${m.source.system}:${m.source.product_id}/${m.source.category_id}/${lesson.lesson_id}` })
+  await uploadFile(key, file, 'application/pdf', { course: m.slug, kind: 'pdf', lesson: lesson.title, lesson_id: lesson.lesson_id, sha256: digest, source: `${m.source.system}:${m.source.product_id}/${lesson.category_id ?? m.source.category_id}/${lesson.lesson_id}` })
   state.files[stateKey] = { key, sha256: digest, bytes: fs.statSync(file).size, name }
   save()
   log(`PDF uploaded: ${key}`)

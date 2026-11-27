@@ -1,0 +1,349 @@
+{
+  "world": "sodesign.no",
+  "slug": "une-strikkekurs",
+  "title": "Strikkekurs Une-genser",
+  "album": "Strikkekurs Une-genser",
+  "folder": "kurs/une-strikkekurs",
+  "metaArea": "#KURS #UNESTRIKKEKURS",
+  "glossary": "strikking",
+  "language": "no",
+  "product": {
+    "kind": "course",
+    "status": "draft",
+    "access": {
+      "type": "product",
+      "ref": "une-strikkekurs"
+    },
+    "category": [
+      "Gensere"
+    ],
+    "level": null,
+    "prices": []
+  },
+  "source": {
+    "system": "kajabi",
+    "product_id": 2148721708,
+    "product": "Strikkekurs Une-genser",
+    "module": "Une-genser",
+    "category_id": null
+  },
+  "videoDir": "/Volumes/T7/Kajabi/video/une-strikkekurs/une-strikkekurs/Komprimert",
+  "lessons": [
+    {
+      "lesson_id": 2180480901,
+      "title": "Forberedelser – Oppskriften",
+      "type": "text",
+      "info": "Her finner du oppskriften til Une-genseren. Last den ned og ha den foran deg når du følger kurset.\n\nHopp videre for å få en gjennomgang av hvordan vi leser og forstår den første delen av strikkeoppskriften slik at vi kan starte med forberedelsene.",
+      "pdf": "Une-genser_voksen.pdf",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480902,
+      "title": "Forberedelser – Gjennomgang av oppskriften",
+      "type": "video",
+      "file": "2180480902-forberedelser-gjennomgang-av-oppskriften.mp4",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480903,
+      "title": "Forberedelser – Størrelsesguide",
+      "type": "video",
+      "file": "2180480903-forberedelser-storrelsesguide.mp4",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480900,
+      "title": "Forberedelser – Strikkefasthet",
+      "type": "video",
+      "file": "2180480900-forberedelser-strikkefasthet.mp4",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480904,
+      "title": "Forberedelser – Utstyr",
+      "type": "video",
+      "file": "2180480904-forberedelser-utstyr.mp4",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480905,
+      "title": "Forberedelser – Nøste opp ei hespe",
+      "type": "video",
+      "file": "2180480905-forberedelser-noste-opp-ei-hespe.mp4",
+      "category_id": 2155968981
+    },
+    {
+      "lesson_id": 2180480906,
+      "title": "Bol – Legg opp",
+      "type": "video",
+      "file": "2180480906-bol-legg-opp.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480907,
+      "title": "Bol – Vrangbord",
+      "type": "video",
+      "file": "2180480907-bol-vrangbord.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480908,
+      "title": "Bol – Bytt pinne",
+      "type": "video",
+      "file": "2180480908-bol-bytt-pinne.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180555215,
+      "title": "Bol – Første omgang i diagrammet",
+      "type": "video",
+      "file": "2180555215-bol-forste-omgang-i-diagrammet.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480909,
+      "title": "Bol – Mønsterstrikk, del 1",
+      "type": "video",
+      "file": "2180480909-bol-monsterstrikk-del-1.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480910,
+      "title": "Bol – Mønsterstrikk, del 2",
+      "type": "video",
+      "file": "2180480910-bol-monsterstrikk-del-2.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180564656,
+      "title": "Bol – Mønsterstrikk med 3 farger",
+      "type": "video",
+      "file": "2180564656-bol-monsterstrikk-med-3-farger.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480911,
+      "title": "Bol – Tilpass lengde",
+      "type": "video",
+      "file": "2180480911-bol-tilpass-lengde.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480912,
+      "title": "Bol – Legg opp oppklippsmasker",
+      "type": "video",
+      "file": "2180480912-bol-legg-opp-oppklippsmasker.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480913,
+      "title": "Bol – Strikke over oppklippsmaskene",
+      "type": "video",
+      "file": "2180480913-bol-strikke-over-oppklippsmaskene.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480914,
+      "title": "Bol – Fell av til hals midt foran",
+      "type": "video",
+      "file": "2180480914-bol-fell-av-til-hals-midt-foran.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180892819,
+      "title": "Bol – Flytt omgangens start",
+      "type": "video",
+      "file": "2180892819-bol-flytt-omgangens-start.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480915,
+      "title": "Bol – Fell i hver side til hals pinne 1",
+      "type": "video",
+      "file": "2180480915-bol-fell-i-hver-side-til-hals-pinne-1.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180892460,
+      "title": "Bol – Fell i hver side til hals pinne 2",
+      "type": "video",
+      "file": "2180892460-bol-fell-i-hver-side-til-hals-pinne-2.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180892792,
+      "title": "Bol – Fell i hver side til hals pinne 3 og 4",
+      "type": "video",
+      "file": "2180892792-bol-fell-i-hver-side-til-hals-pinne-3-og-4.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480916,
+      "title": "Bol – Strikk siste pinner på bol",
+      "type": "video",
+      "file": "2180480916-bol-strikk-siste-pinner-pa-bol.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480917,
+      "title": "Bol – Fell av alle masker",
+      "type": "video",
+      "file": "2180480917-bol-fell-av-alle-masker.mp4",
+      "category_id": 2155968982
+    },
+    {
+      "lesson_id": 2180480918,
+      "title": "Ermer – Legg opp på strømpepinner",
+      "type": "video",
+      "file": "2180480918-ermer-legg-opp-pa-strompepinner.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480919,
+      "title": "Ermer – Strikk rundt på strømpepinner",
+      "type": "video",
+      "file": "2180480919-ermer-strikk-rundt-pa-strompepinner.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480920,
+      "title": "Ermer – Bytt pinner og øk masker",
+      "type": "video",
+      "file": "2180480920-ermer-bytt-pinner-og-ok-masker.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180935592,
+      "title": "Ermer – 1. omgang i diagrammet",
+      "type": "video",
+      "file": "2180935592-ermer-1-omgang-i-diagrammet.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480921,
+      "title": "Ermer – Mønsterstrikk erm",
+      "type": "video",
+      "file": "2180480921-ermer-monsterstrikk-erm.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480922,
+      "title": "Ermer – Ermeøking del 1",
+      "type": "video",
+      "file": "2180480922-ermer-ermeoking-del-1.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180935273,
+      "title": "Ermer – Ermeøking del 2",
+      "type": "video",
+      "file": "2180935273-ermer-ermeoking-del-2.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480924,
+      "title": "Ermer – Bytt til en liten rundpinne",
+      "type": "video",
+      "file": "2180480924-ermer-bytt-til-en-liten-rundpinne.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480923,
+      "title": "Ermer – Øk til riktig antall",
+      "type": "video",
+      "file": "2180480923-ermer-ok-til-riktig-antall.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480925,
+      "title": "Ermer – Siste omgang på erm",
+      "type": "video",
+      "file": "2180480925-ermer-siste-omgang-pa-erm.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480927,
+      "title": "Ermer – Fell av alle masker",
+      "type": "video",
+      "file": "2180480927-ermer-fell-av-alle-masker.mp4",
+      "category_id": 2155968983
+    },
+    {
+      "lesson_id": 2180480928,
+      "title": "Montering og hals – Fest tråder",
+      "type": "video",
+      "file": "2180480928-montering-og-hals-fest-trader.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480936,
+      "title": "Montering og hals – Tråkle en tråd",
+      "type": "video",
+      "file": "2180480936-montering-og-hals-trakle-en-trad.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480929,
+      "title": "Montering og hals – Sy med symaskin",
+      "type": "video",
+      "file": "2180480929-montering-og-hals-sy-med-symaskin.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480930,
+      "title": "Montering og hals – Klipp opp ermehull",
+      "type": "video",
+      "file": "2180480930-montering-og-hals-klipp-opp-ermehull.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480931,
+      "title": "Montering og hals – Sy sammen skulder",
+      "type": "video",
+      "file": "2180480931-montering-og-hals-sy-sammen-skulder.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480932,
+      "title": "Montering og hals – Sy i ermene del 1",
+      "type": "video",
+      "file": "2180480932-montering-og-hals-sy-i-ermene-del-1.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180975637,
+      "title": "Montering og hals – Sy i ermene del 2",
+      "type": "video",
+      "file": "2180975637-montering-og-hals-sy-i-ermene-del-2.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480933,
+      "title": "Montering og hals – Strikk opp masker til hals",
+      "type": "video",
+      "file": "2180480933-montering-og-hals-strikk-opp-masker-til-hals.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480934,
+      "title": "Montering og hals – Strikk halsen",
+      "type": "video",
+      "file": "2180480934-montering-og-hals-strikk-halsen.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480935,
+      "title": "Montering og hals – Fell av alle masker",
+      "type": "video",
+      "file": "2180480935-montering-og-hals-fell-av-alle-masker.mp4",
+      "category_id": 2155968984
+    },
+    {
+      "lesson_id": 2180480937,
+      "title": "Ferdigstilling – Vask og tørk",
+      "type": "video",
+      "file": "2180480937-ferdigstilling-vask-og-tork.mp4",
+      "category_id": 2155968985
+    }
+  ]
+}
