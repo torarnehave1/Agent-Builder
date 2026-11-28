@@ -1,0 +1,41 @@
+// A turn cut off at max_tokens while the model was writing an MCP call: the stored assistant
+// turn holds an answered create_graph call and an unanswered add_nodes call. Sent back as it is,
+// the API refuses the conversation (HTTP 400, seen 2026-11-28).
+import assert from 'node:assert/strict'
+import { closeDanglingCalls } from './converse-messages.js'
+
+const cut = {
+  role: 'assistant',
+  content: [
+    { type: 'thinking', thinking: 'plan', signature: 'sig' },
+    { type: 'mcp_tool_use', id: 'mcptoolu_A', name: 'create_graph', server_name: 'vegr', input: {} },
+    { type: 'mcp_tool_result', tool_use_id: 'mcptoolu_A', is_error: false, content: [{ type: 'text', text: 'ok' }] },
+    { type: 'server_tool_use', id: 'srvtoolu_S', name: 'tool_search_tool_regex', input: { pattern: 'x' } },
+    { type: 'tool_search_tool_result', tool_use_id: 'srvtoolu_S', content: { type: 'tool_search_tool_search_result', tool_references: [] } },
+    { type: 'mcp_tool_use', id: 'mcptoolu_B', name: 'add_nodes', server_name: 'vegr', input: {} },
+  ],
+}
+const out = closeDanglingCalls([{ role: 'user', content: 'lag grafen' }, cut, { role: 'user', content: 'continue' }])
+
+assert.equal(out.length, 3, 'no message added or removed')
+const a = out[1].content
+assert.ok(!a.some((b) => b.id === 'mcptoolu_B'), 'unanswered add_nodes call dropped')
+assert.ok(a.some((b) => b.id === 'mcptoolu_A'), 'answered create_graph call kept')
+assert.ok(a.some((b) => b.tool_use_id === 'mcptoolu_A'), 'its result kept')
+assert.ok(a.some((b) => b.id === 'srvtoolu_S') && a.some((b) => b.tool_use_id === 'srvtoolu_S'), 'answered tool search kept')
+assert.equal(a[0].type, 'thinking', 'thinking block stays first')
+assert.match(a[a.length - 1].text, /add_nodes/, 'a note names the call that was not run')
+// Every server call left has its result in the same turn.
+const ids = new Set(a.filter((b) => b.tool_use_id).map((b) => b.tool_use_id))
+for (const b of a) if (b.type === 'mcp_tool_use' || b.type === 'server_tool_use') assert.ok(ids.has(b.id), `${b.id} answered`)
+
+// A turn with nothing dangling is returned as the same object.
+const clean = { role: 'assistant', content: cut.content.slice(0, 5) }
+assert.equal(closeDanglingCalls([clean])[0], clean)
+
+// Client tool_use calls are still closed with an error result, as before.
+const direct = closeDanglingCalls([{ role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_D', name: 'read_graph', input: {} }] }])
+assert.equal(direct.length, 2)
+assert.equal(direct[1].content[0].tool_use_id, 'toolu_D')
+
+console.log('test-converse-dangling-calls: ok')

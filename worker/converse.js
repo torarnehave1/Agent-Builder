@@ -18,6 +18,7 @@ import { isOpenAICompatibleModel } from './chat-providers.js'
 import { routeModel } from './model-router.js'
 import { browserCommand, browserStatus } from './browser-bridge.js'
 import { runCompat, toClaudeMessages, mcp, resultText } from './converse-compat.js'
+import { closeDanglingCalls } from './converse-messages.js'
 
 export const RULES_META_AREA = '#CHAT-REGLER'
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
@@ -404,28 +405,6 @@ async function runDirectCalls(env, token, blocks, send, userId) {
     }
   }
   return results
-}
-
-// A stored assistant turn may end in tool calls that never got their results (the turn was cut
-// off, or was made before this worker ran such calls). The API refuses a conversation like that,
-// so each one gets a result saying it was not run.
-function closeDanglingCalls(messages) {
-  const out = []
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i]
-    out.push(m)
-    if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
-    const calls = m.content.filter((b) => b && b.type === 'tool_use')
-    if (!calls.length) continue
-    const next = messages[i + 1]
-    const answered = new Set(
-      next && next.role === 'user' && Array.isArray(next.content) ? next.content.filter((b) => b && b.type === 'tool_result').map((b) => b.tool_use_id) : [],
-    )
-    const missing = calls.filter((c) => !answered.has(c.id))
-    if (missing.length)
-      out.push({ role: 'user', content: missing.map((c) => ({ type: 'tool_result', tool_use_id: c.id, is_error: true, content: 'Not run: the turn ended before this tool call was carried out. Call it again if it is still needed.' })) })
-  }
-  return out
 }
 
 const textOf = (content) =>
