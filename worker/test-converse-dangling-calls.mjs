@@ -38,6 +38,41 @@ const direct = closeDanglingCalls([{ role: 'assistant', content: [{ type: 'tool_
 assert.equal(direct.length, 2)
 assert.equal(direct[1].content[0].tool_use_id, 'toolu_D')
 
+// Session e1d1a4a4 (2026-11-28): the model called graph_index (MCP) and read_graph (this worker's
+// own tool) in one response. The API paused for read_graph and delivered graph_index's result in
+// the next assistant turn. The call must be kept: dropping it left the result orphaned and the API
+// refused the conversation ("unexpected tool_use_id found in mcp_tool_result blocks", HTTP 400).
+const split = [
+  { role: 'user', content: 'se på SODESIGN' },
+  { role: 'assistant', content: [
+    { type: 'thinking', thinking: 'p', signature: 's' },
+    { type: 'mcp_tool_use', id: 'mcptoolu_G', name: 'graph_index', server_name: 'vegr', input: {} },
+    { type: 'tool_use', id: 'toolu_R1', name: 'read_graph', input: {} },
+  ] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_R1', content: 'graph' }] },
+  { role: 'assistant', content: [
+    { type: 'mcp_tool_result', tool_use_id: 'mcptoolu_G', is_error: true, content: [{ type: 'text', text: 'INVALID_INPUT' }] },
+    { type: 'mcp_tool_use', id: 'mcptoolu_H', name: 'graph_index', server_name: 'vegr', input: {} },
+    { type: 'tool_use', id: 'toolu_R2', name: 'read_graph', input: {} },
+  ] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_R2', content: 'graph' }] },
+  { role: 'assistant', content: [
+    { type: 'mcp_tool_result', tool_use_id: 'mcptoolu_H', is_error: false, content: [{ type: 'text', text: 'ok' }] },
+    { type: 'text', text: 'svar' },
+  ] },
+  { role: 'user', content: 'A' },
+]
+const fixed = closeDanglingCalls(split)
+assert.equal(fixed.length, split.length, 'no message added or removed')
+for (let i = 0; i < split.length; i++) assert.equal(fixed[i], split[i], `turn ${i} left as it was`)
+
+// A result whose call is gone (an older, already-damaged transcript) is dropped, not sent.
+const orphan = closeDanglingCalls([
+  { role: 'user', content: 'x' },
+  { role: 'assistant', content: [{ type: 'mcp_tool_result', tool_use_id: 'mcptoolu_X', content: [] }, { type: 'text', text: 'ok' }] },
+])
+assert.deepEqual(orphan[1].content, [{ type: 'text', text: 'ok' }], 'orphaned result dropped')
+
 console.log('test-converse-dangling-calls: ok')
 
 // save_message_text picks the person's own words from the transcript, never a tool result.

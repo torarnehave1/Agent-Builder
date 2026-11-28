@@ -1,30 +1,57 @@
 // Repairs a stored /converse transcript before it is sent back to the Messages API. Kept apart
 // from converse.js so it can be tested in Node (converse.js imports cloudflare: modules).
 
-// A server-run call (mcp_tool_use, server_tool_use) carries its result in the same assistant turn.
-// A turn cut off at max_tokens can end with such a call and no result, and the API then refuses
-// every later request in the conversation (HTTP 400 "… was found without a corresponding
-// mcp_tool_result block", 2026-11-28). The unanswered call is dropped, and a line in its place
-// tells the model it was never carried out.
-export function dropUnansweredServerCalls(m) {
+// A server-run call (mcp_tool_use, server_tool_use) carries its result in an assistant turn: the
+// same one, or — when the model also called one of this worker's own tools in that response — the
+// next assistant turn, after the tool_result round (the API pauses for the direct call and delivers
+// the MCP result when it resumes; seen 2026-11-28, graph_index in turn 9, its result in turn 11).
+// A turn cut off at max_tokens can end with such a call and no result anywhere, and the API then
+// refuses every later request in the conversation (HTTP 400 "… was found without a corresponding
+// mcp_tool_result block", 2026-11-28). Only a call whose result is nowhere later is dropped, and a
+// line in its place tells the model it was never carried out.
+const isServerCall = (b) => b && (b.type === 'mcp_tool_use' || b.type === 'server_tool_use')
+const isServerResult = (b) => b && b.type !== 'tool_result' && typeof b.tool_use_id === 'string'
+
+export function dropUnansweredServerCalls(m, answered = null) {
   if (m.role !== 'assistant' || !Array.isArray(m.content)) return m
-  const answered = new Set(m.content.filter((b) => b && b.type !== 'tool_result' && typeof b.tool_use_id === 'string').map((b) => b.tool_use_id))
-  const dangling = m.content.filter((b) => b && (b.type === 'mcp_tool_use' || b.type === 'server_tool_use') && !answered.has(b.id))
+  const has = answered || new Set(m.content.filter(isServerResult).map((b) => b.tool_use_id))
+  const dangling = m.content.filter((b) => isServerCall(b) && !has.has(b.id))
   if (!dangling.length) return m
   const gone = new Set(dangling.map((b) => b.id))
-  const content = m.content.filter((b) => !(b && gone.has(b.id) && (b.type === 'mcp_tool_use' || b.type === 'server_tool_use')))
+  const content = m.content.filter((b) => !(isServerCall(b) && gone.has(b.id)))
   const names = dangling.map((b) => b.name || 'tool').join(', ')
   content.push({ type: 'text', text: `[Cut off at the length limit before this call was carried out: ${names}. It was not run. Call it again if it is still needed, with less input in one call.]` })
   return { ...m, content }
+}
+
+// The reverse guard: a server result whose call is not in this or an earlier assistant turn (the
+// call was dropped, or the turn holding it was lost) is refused by the API with "unexpected
+// tool_use_id found in mcp_tool_result blocks" (HTTP 400, 2026-11-28). Such a result is dropped.
+function dropOrphanResults(m, called) {
+  if (m.role !== 'assistant' || !Array.isArray(m.content)) return m
+  if (!m.content.some((b) => isServerResult(b) && !called.has(b.tool_use_id))) return m
+  return { ...m, content: m.content.filter((b) => !(isServerResult(b) && !called.has(b.tool_use_id))) }
 }
 
 // A stored assistant turn may end in tool calls that never got their results (the turn was cut
 // off, or was made before this worker ran such calls). The API refuses a conversation like that,
 // so each one gets a result saying it was not run.
 export function closeDanglingCalls(messages) {
+  // Server results from turn i onward: a call in turn i is answered if its result is among them.
+  const later = new Array(messages.length + 1)
+  later[messages.length] = new Set()
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    const s = new Set(later[i + 1])
+    if (m && m.role === 'assistant' && Array.isArray(m.content)) for (const b of m.content) if (isServerResult(b)) s.add(b.tool_use_id)
+    later[i] = s
+  }
+  const called = new Set()
   const out = []
   for (let i = 0; i < messages.length; i++) {
-    const m = dropUnansweredServerCalls(messages[i])
+    let m = dropUnansweredServerCalls(messages[i], later[i])
+    if (m.role === 'assistant' && Array.isArray(m.content)) for (const b of m.content) if (isServerCall(b)) called.add(b.id)
+    m = dropOrphanResults(m, called)
     out.push(m)
     if (m.role !== 'assistant' || !Array.isArray(m.content)) continue
     const calls = m.content.filter((b) => b && b.type === 'tool_use')
