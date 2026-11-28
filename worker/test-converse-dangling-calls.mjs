@@ -39,3 +39,19 @@ assert.equal(direct.length, 2)
 assert.equal(direct[1].content[0].tool_use_id, 'toolu_D')
 
 console.log('test-converse-dangling-calls: ok')
+
+// save_message_text picks the person's own words from the transcript, never a tool result.
+import { pickMessageText } from './converse-messages.js'
+const talk = [
+  { role: 'user', content: 'Lag en graf fra denne:\n\n[0:00 – 2:00] happening. So you could say\n[2:00 – 4:00] the end. Transcribed by https://otter.ai' },
+  { role: 'assistant', content: [{ type: 'text', text: 'Svar A, B eller C' }] },
+  { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't', content: '[0:00 – 2:00] fake' }] },
+  { role: 'user', content: [{ type: 'text', text: 'B' }] },
+]
+assert.equal(pickMessageText(talk, { contains: '[0:00 – 2:00]', from: '[0:00 – 2:00]' }).text, '[0:00 – 2:00] happening. So you could say\n[2:00 – 4:00] the end. Transcribed by https://otter.ai')
+assert.equal(pickMessageText(talk, { contains: 'happening', from: '[2:00', to: 'the end.' }).text, '[2:00 – 4:00] the end.')
+assert.equal(pickMessageText(talk, { contains: 'B' }).text, 'B', 'newest matching message wins')
+assert.match(pickMessageText(talk, { contains: 'nowhere' }).error, /No message/)
+assert.match(pickMessageText(talk, { contains: 'happening', from: 'zzz' }).error, /no "zzz"/)
+assert.match(pickMessageText(talk, { contains: 'happening', from: '[2:00', to: 'happening' }).error, /after the start/)
+console.log('test-converse-dangling-calls: save_message_text ok')

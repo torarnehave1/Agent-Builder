@@ -18,7 +18,7 @@ import { isOpenAICompatibleModel } from './chat-providers.js'
 import { routeModel } from './model-router.js'
 import { browserCommand, browserStatus } from './browser-bridge.js'
 import { runCompat, toClaudeMessages, mcp, resultText } from './converse-compat.js'
-import { closeDanglingCalls } from './converse-messages.js'
+import { closeDanglingCalls, pickMessageText } from './converse-messages.js'
 
 export const RULES_META_AREA = '#CHAT-REGLER'
 const MCP_URL = 'https://knowledge.vegvisr.org/mcp'
@@ -175,6 +175,7 @@ How to work:
 - Names, addresses, links, dates and numbers in your answer are copied from the tool result, not retyped from recollection.
 - Before anything that sends, publishes, deletes or changes something (an e-mail, an SMS, a post, a graph, a calendar event, a member list), say exactly what will happen and wait for the person's yes in a new message. Use the preview tool first where one exists. Reading needs no permission.
 - Pick the tool from the list by what it does: to move a node up or down in a graph ("flytt øverst") use reorder_nodes; to change a node's text, label or image use update_node; to delete one node use remove_node. A node added with add_node lands at the bottom; its canvas position does not change where the viewer shows it.
+- To put text the person wrote into a node as it stands (a transcript, an article, their notes: «med hele transkripsjonen»), use save_message_text. Never retype long text from their message into add_node, create_graph or update_node: an answer has a length limit, and a long copy is cut off before the node is made.
 - To look into a graph use read_graph: it lists every node with a short preview; read one node in full with its nodeId. Never read a whole graph node by node unless asked.
 - Preview: the app puts a «Forhåndsvis» button under your answer for every editor view link (https://editor.…/view?graphId=…) the answer contains, and under the person's message for a view link they pasted. When the person asks to preview (forhåndsvise) a graph, call no tool: write the graph's title in bold and its view link on the next line, one per graph, using the links from earlier in the conversation (several graphs listed and none named: give all of them). Then say in one short sentence that the button under your answer opens it in a panel. Never tell them to paste a link, and never say there is a button without writing the link in the same answer. If no view link for the graph is known, find it with graph_index or search first. Read the graph (read_graph) only if they ask what is in it.
 - Preview of a VEmotion composition (an animation, comp_…): call vemotion_get_composition with its compositionId, taken from vemotion_list_compositions or from earlier in the conversation ("nummer to" in a list you gave is that row). The app then puts a preview button under your answer that plays it in a panel; say so in one short sentence. A composition is not a graph: never search graphs for it, and do not render frames (preview_vemotion_frames) unless the person asks for stills.
@@ -281,6 +282,7 @@ const BROWSER_TOOLS = [
 // This one gives the server's own summary (every node with id, label, type and a short preview, and the edges), and a
 // single node in full on request. The MCP tool itself is unchanged for every other client.
 const READ_GRAPH = { name: 'read_graph', description: "Read a knowledge graph: every node with its id, label, type and a short preview, plus edges. Pass nodeId to read one node in full. Use it to look into a graph; for a long node, read that node only. Do not use it just to preview a graph or check that it exists: write the graph's view link and the app adds a preview button for it.", input_schema: { type: 'object', properties: { graphId: { type: 'string' }, nodeId: { type: 'string' } }, required: ['graphId'] } }
+const SAVE_MESSAGE_TEXT = { name: 'save_message_text', description: "Add a new fulltext node to a graph whose text is copied word for word from a message the person wrote in this conversation (a pasted transcript, article, notes). The text is copied here, so you never write it out yourself: give a short phrase from that message (contains) and, for only part of it, the exact words it starts with (from) and ends with (to). Returns the new node's id and how many characters were copied.", input_schema: { type: 'object', properties: { graphId: { type: 'string' }, label: { type: 'string', description: 'Node label' }, contains: { type: 'string', description: 'A short phrase copied exactly from the message that holds the text; the newest such message is used' }, from: { type: 'string', description: 'Exact words the part starts with (included). Left out: from the start of the message' }, to: { type: 'string', description: 'Exact words the part ends with (included). Left out: to the end of the message' }, color: { type: 'string', description: 'Hex colour, e.g. #4f6d7a' } }, required: ['graphId', 'label', 'contains'] } }
 // NotebookLM (2026-11-25): two purpose-built commands of the same extension (v0.6.0+), so the model does not have to
 // steer NotebookLM's page click by click. Tool name -> the extension's action.
 const NOTEBOOK_ACTIONS = { notebook_list: 'nb_list', notebook_ask: 'nb_ask', notebook_image: 'nb_image', notebook_create: 'nb_create', notebook_order: 'nb_order' }
@@ -323,6 +325,23 @@ async function graphRawUrls(env, graphIds) {
   return urls
 }
 
+async function runSaveMessageText(env, token, b, send, messages) {
+  const a = b.input || {}
+  let text
+  let isError = false
+  const picked = pickMessageText(messages, a)
+  if (picked.error) { text = `Nothing was added. ${picked.error}`; isError = true } else {
+    try {
+      const node = { label: String(a.label || 'Tekst'), type: 'fulltext', info: picked.text, ...(a.color ? { color: String(a.color) } : {}) }
+      const r = await mcp(env, token, 'tools/call', { name: 'add_node', arguments: { graphId: a.graphId, node } })
+      text = `${resultText(r?.content) || '(add_node returned no text)'}\nCopied ${picked.text.length} characters from the person's message.`
+      isError = !!r?.isError
+    } catch (e) { text = e?.message || String(e); isError = true }
+  }
+  send('tool_result', { callId: b.id, tool: 'save_message_text', success: !isError, summary: text.split('\n')[0].slice(0, 240), result: text.slice(0, 200000) })
+  return { type: 'tool_result', tool_use_id: b.id, content: text.slice(0, 20000), ...(isError ? { is_error: true } : {}) }
+}
+
 async function runBrowserCall(env, userId, b, name, send) {
   let input = b.input || {}
   if (name === 'notebook_create') {
@@ -351,7 +370,7 @@ async function runBrowserCall(env, userId, b, name, send) {
 // A tool call the model made directly (a `tool_use` block) rather than through the MCP connector.
 // It happens when the conversation already shows the tool in use — after a turn by another model
 // family, for one. The call is carried out here against the same MCP server, as the same person.
-async function runDirectCalls(env, token, blocks, send, userId) {
+async function runDirectCalls(env, token, blocks, send, userId, messages = []) {
   const results = []
   // A direct call is made without the tool's schema, so its arguments are a guess. The schema is
   // checked here first: a wrong guess gets the schema back at once instead of a bare refusal from
@@ -368,6 +387,7 @@ async function runDirectCalls(env, token, blocks, send, userId) {
     const name = String(b.name || '').replace(new RegExp(`^${MCP_NAME}_`), '')
     send('tool_call', { callId: b.id, tool: name, input: b.input || {} })
     if (name === 'read_graph') { results.push(await runReadGraph(env, token, b, send)); continue }
+    if (name === 'save_message_text') { results.push(await runSaveMessageText(env, token, b, send, messages)); continue }
     if (BROWSER_NAMES.has(name)) {
       try { results.push(await runBrowserCall(env, userId, b, name, send)) } catch (err) {
         const msg = err?.message || String(err)
@@ -527,6 +547,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
                 { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' },
                 { type: 'mcp_toolset', mcp_server_name: MCP_NAME, default_config: { defer_loading: true }, configs: { get_graph: { enabled: false }, fetch: { enabled: false } } },
                 READ_GRAPH,
+                SAVE_MESSAGE_TEXT,
                 ...(browser.connected ? BROWSER_TOOLS : []),
               ],
               messages,
@@ -601,7 +622,7 @@ export async function handleConverse(request, env, ctx, corsHeaders) {
         await saveTurn(env, key, sessionId, auth.userId, turn)
         const direct = final.content.filter((b) => b.type === 'tool_use')
         if (stopReason === 'tool_use' && direct.length) {
-          const results = { role: 'user', content: await runDirectCalls(env, token, direct, send, auth.userId) }
+          const results = { role: 'user', content: await runDirectCalls(env, token, direct, send, auth.userId, messages) }
           messages.push(results)
           await saveTurn(env, key, sessionId, auth.userId, results)
           said = said || final.content.some((b) => b.type === 'text' && b.text.trim())
